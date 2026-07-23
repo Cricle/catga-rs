@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
 use crate::{
     FlowContinuation, FlowDefinition, FlowScheduler, FlowState, FlowStatus, FlowStepOutcome,
-    SuspendedFlowStore,
+    SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 
 /// The observable state after starting, resuming, or recording a durable flow trigger.
@@ -92,6 +92,15 @@ where
 
     /// Resumes a previously suspended flow from its persisted named step.
     pub async fn resume(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {
+        self.resume_at(flow_id, SystemTime::now()).await
+    }
+
+    /// Resumes a flow using `now` to deterministically evaluate delay and wait deadlines.
+    pub async fn resume_at(
+        &self,
+        flow_id: &str,
+        now: SystemTime,
+    ) -> CatgaResult<FlowRuntimeResult> {
         let Some(continuation) = self.store.get(flow_id).await? else {
             return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
         };
@@ -104,7 +113,19 @@ where
                 "flow is already running",
             ));
         }
-        let running = continuation.clone().with_state(
+        if let Some(wait) = continuation.wait() {
+            match evaluate_wait(wait, now) {
+                WaitEvaluation::Pending => {
+                    return Ok(FlowRuntimeResult::new(continuation.state().clone()));
+                }
+                WaitEvaluation::Failed(error) => return self.fail(continuation, error).await,
+                WaitEvaluation::Ready => {}
+            }
+        }
+        if continuation.resume_at().is_some_and(|due_at| due_at > now) {
+            return Ok(FlowRuntimeResult::new(continuation.state().clone()));
+        }
+        let running = continuation.clone().ready().with_state(
             continuation
                 .state()
                 .clone()
@@ -115,6 +136,58 @@ where
         self.persist(continuation.state().version(), running.clone())
             .await?;
         self.drive(running).await
+    }
+
+    /// Records one successful child result and resumes when the wait policy is satisfied.
+    pub async fn record_wait_success(
+        &self,
+        flow_id: &str,
+        child_id: &str,
+        payload: Vec<u8>,
+    ) -> CatgaResult<FlowRuntimeResult> {
+        let Some(continuation) = self.store.get(flow_id).await? else {
+            return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
+        };
+        if continuation.state().status().is_terminal() {
+            return Ok(FlowRuntimeResult::new(continuation.state().clone()));
+        }
+        if !self
+            .store
+            .record_wait_success(flow_id, continuation.state().version(), child_id, payload)
+            .await?
+        {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "flow wait condition changed before the child result was saved",
+            ));
+        }
+        self.resume(flow_id).await
+    }
+
+    /// Records one failed child result and resumes when the wait policy is resolved.
+    pub async fn record_wait_failure(
+        &self,
+        flow_id: &str,
+        child_id: &str,
+        error: CatgaError,
+    ) -> CatgaResult<FlowRuntimeResult> {
+        let Some(continuation) = self.store.get(flow_id).await? else {
+            return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
+        };
+        if continuation.state().status().is_terminal() {
+            return Ok(FlowRuntimeResult::new(continuation.state().clone()));
+        }
+        if !self
+            .store
+            .record_wait_failure(flow_id, continuation.state().version(), child_id, error)
+            .await?
+        {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "flow wait condition changed before the child result was saved",
+            ));
+        }
+        self.resume(flow_id).await
     }
 
     async fn drive(&self, mut continuation: FlowContinuation) -> CatgaResult<FlowRuntimeResult> {
@@ -130,15 +203,17 @@ where
             };
             match outcome {
                 FlowStepOutcome::Advance => {
-                    let Some(next_step) = self.definition.next_step_name(continuation.step_name()) else {
-                        return self.fail(
-                            continuation,
-                            CatgaError::new(
-                                ErrorCode::Validation,
-                                "an advancing flow step requires a following step",
-                            ),
-                        )
-                        .await;
+                    let Some(next_step) = self.definition.next_step_name(continuation.step_name())
+                    else {
+                        return self
+                            .fail(
+                                continuation,
+                                CatgaError::new(
+                                    ErrorCode::Validation,
+                                    "an advancing flow step requires a following step",
+                                ),
+                            )
+                            .await;
                     };
                     let completed_steps = state.step().saturating_add(1);
                     let next = continuation
@@ -150,26 +225,23 @@ where
                     continuation = next;
                 }
                 FlowStepOutcome::SuspendUntil(resume_at) => {
-                    let Some(next_step) = self.definition.next_step_name(continuation.step_name()) else {
-                        return self.fail(
-                            continuation,
-                            CatgaError::new(
-                                ErrorCode::Validation,
-                                "a delayed flow step requires a following step",
-                            ),
-                        )
-                        .await;
+                    let Some(next_step) = self.definition.next_step_name(continuation.step_name())
+                    else {
+                        return self
+                            .fail(
+                                continuation,
+                                CatgaError::new(
+                                    ErrorCode::Validation,
+                                    "a delayed flow step requires a following step",
+                                ),
+                            )
+                            .await;
                     };
                     let completed_steps = state.step().saturating_add(1);
                     let suspended = continuation
                         .clone()
                         .at_step(next_step)
-                        .with_state(
-                            state
-                                .at_step(completed_steps)
-                                .suspended()
-                                .next_version(),
-                        )
+                        .with_state(state.at_step(completed_steps).suspended().next_version())
                         .delayed_until(resume_at);
                     self.persist(continuation.state().version(), suspended.clone())
                         .await?;
@@ -183,26 +255,23 @@ where
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
                 FlowStepOutcome::Wait(wait) => {
-                    let Some(next_step) = self.definition.next_step_name(continuation.step_name()) else {
-                        return self.fail(
-                            continuation,
-                            CatgaError::new(
-                                ErrorCode::Validation,
-                                "a waiting flow step requires a following step",
-                            ),
-                        )
-                        .await;
+                    let Some(next_step) = self.definition.next_step_name(continuation.step_name())
+                    else {
+                        return self
+                            .fail(
+                                continuation,
+                                CatgaError::new(
+                                    ErrorCode::Validation,
+                                    "a waiting flow step requires a following step",
+                                ),
+                            )
+                            .await;
                     };
                     let completed_steps = state.step().saturating_add(1);
                     let suspended = continuation
                         .clone()
                         .at_step(next_step)
-                        .with_state(
-                            state
-                                .at_step(completed_steps)
-                                .suspended()
-                                .next_version(),
-                        )
+                        .with_state(state.at_step(completed_steps).suspended().next_version())
                         .with_wait(wait);
                     self.persist(continuation.state().version(), suspended.clone())
                         .await?;
@@ -210,9 +279,9 @@ where
                 }
                 FlowStepOutcome::Complete => {
                     let completed_steps = state.step().saturating_add(1);
-                    let done = continuation.clone().with_state(
-                        state.done(completed_steps).next_version(),
-                    );
+                    let done = continuation
+                        .clone()
+                        .with_state(state.done(completed_steps).next_version());
                     self.persist(continuation.state().version(), done.clone())
                         .await?;
                     return Ok(FlowRuntimeResult::new(done.state().clone()));
@@ -227,23 +296,16 @@ where
         continuation: FlowContinuation,
         error: CatgaError,
     ) -> CatgaResult<FlowRuntimeResult> {
-        let failed = continuation.clone().with_state(
-            continuation
-                .state()
-                .clone()
-                .failed(error)
-                .next_version(),
-        );
+        let failed = continuation
+            .clone()
+            .ready()
+            .with_state(continuation.state().clone().failed(error).next_version());
         self.persist(continuation.state().version(), failed.clone())
             .await?;
         Ok(FlowRuntimeResult::new(failed.state().clone()))
     }
 
-    async fn persist(
-        &self,
-        expected_version: i64,
-        next: FlowContinuation,
-    ) -> CatgaResult<()> {
+    async fn persist(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<()> {
         if self.store.update(expected_version, next).await? {
             Ok(())
         } else {
@@ -251,6 +313,54 @@ where
                 ErrorCode::Transient,
                 "flow continuation changed before it could be persisted",
             ))
+        }
+    }
+}
+
+enum WaitEvaluation {
+    Pending,
+    Ready,
+    Failed(CatgaError),
+}
+
+fn evaluate_wait(wait: &WaitCondition, now: SystemTime) -> WaitEvaluation {
+    if wait.is_expired_at(now) {
+        return WaitEvaluation::Failed(CatgaError::new(
+            ErrorCode::Timeout,
+            "flow wait condition timed out",
+        ));
+    }
+    match wait.policy() {
+        WaitPolicy::All => {
+            if let Some(error) = wait
+                .results()
+                .iter()
+                .find_map(|result| result.error().cloned())
+            {
+                return WaitEvaluation::Failed(error);
+            }
+            if wait.completed_count() >= wait.expected_count() {
+                WaitEvaluation::Ready
+            } else {
+                WaitEvaluation::Pending
+            }
+        }
+        WaitPolicy::Any => {
+            if wait.results().iter().any(|result| result.is_success()) {
+                return WaitEvaluation::Ready;
+            }
+            if wait.completed_count() >= wait.expected_count() {
+                let error = wait
+                    .results()
+                    .last()
+                    .and_then(|result| result.error().cloned())
+                    .unwrap_or_else(|| {
+                        CatgaError::new(ErrorCode::Transient, "all flow wait children failed")
+                    });
+                WaitEvaluation::Failed(error)
+            } else {
+                WaitEvaluation::Pending
+            }
         }
     }
 }

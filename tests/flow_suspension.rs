@@ -1,8 +1,11 @@
-use std::{sync::Arc, time::{Duration, SystemTime}};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use catga_flow::{
-    FlowContinuation, FlowDefinition, FlowRuntime, FlowState, FlowStepOutcome,
-    MemoryFlowScheduler, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowContinuation, FlowDefinition, FlowRuntime, FlowState, FlowStepOutcome, MemoryFlowScheduler,
+    SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_memory::MemorySuspendedFlows;
 
@@ -82,4 +85,109 @@ async fn delayed_flow_persists_and_resumes_registered_steps() {
     assert_eq!(scheduler.take_due(SystemTime::now()).len(), 1);
 
     assert!(runtime.resume("flow-13").await.unwrap().is_success());
+}
+
+#[tokio::test]
+async fn wait_policies_resume_once_and_expire_deterministically() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let all_runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::clone(&scheduler),
+        FlowDefinition::new("all")
+            .step("wait", |_| async {
+                Ok(FlowStepOutcome::wait(WaitCondition::new(
+                    "all-wait",
+                    WaitPolicy::All,
+                    2,
+                    SystemTime::now(),
+                    Duration::from_secs(30),
+                )))
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+    assert!(
+        all_runtime
+            .start("all", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    assert!(
+        all_runtime
+            .record_wait_success("all", "one", b"one".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    assert!(
+        all_runtime
+            .record_wait_success("all", "two", b"two".to_vec())
+            .await
+            .unwrap()
+            .is_success()
+    );
+
+    let any_runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::clone(&scheduler),
+        FlowDefinition::new("any")
+            .step("wait", |_| async {
+                Ok(FlowStepOutcome::wait(WaitCondition::new(
+                    "any-wait",
+                    WaitPolicy::Any,
+                    2,
+                    SystemTime::now(),
+                    Duration::from_secs(30),
+                )))
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+    assert!(
+        any_runtime
+            .start("any", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    assert!(
+        any_runtime
+            .record_wait_success("any", "one", b"one".to_vec())
+            .await
+            .unwrap()
+            .is_success()
+    );
+
+    let expired_runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        scheduler,
+        FlowDefinition::new("expired")
+            .step("wait", |_| async {
+                Ok(FlowStepOutcome::wait(WaitCondition::new(
+                    "expired-wait",
+                    WaitPolicy::All,
+                    1,
+                    SystemTime::UNIX_EPOCH,
+                    Duration::from_secs(1),
+                )))
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+    assert!(
+        expired_runtime
+            .start("expired", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    assert!(
+        expired_runtime
+            .resume_at("expired", SystemTime::now())
+            .await
+            .unwrap()
+            .is_failure()
+    );
 }

@@ -1,4 +1,7 @@
-use std::{sync::atomic::{AtomicU64, Ordering}, time::SystemTime};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::SystemTime,
+};
 
 use async_trait::async_trait;
 use catga_core::CatgaResult;

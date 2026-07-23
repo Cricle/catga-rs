@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use catga_core::CatgaResult;
+use catga_core::{CatgaError, CatgaResult};
 
 use crate::FlowContinuation;
 
@@ -22,5 +22,14 @@ pub trait SuspendedFlowStore: Send + Sync {
         version: i64,
         child_id: &str,
         payload: Vec<u8>,
+    ) -> CatgaResult<bool>;
+
+    /// Records one failed child result without changing the business-state version.
+    async fn record_wait_failure(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        error: CatgaError,
     ) -> CatgaResult<bool>;
 }

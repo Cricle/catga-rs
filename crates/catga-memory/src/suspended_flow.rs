@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use catga_core::CatgaResult;
+use catga_core::{CatgaError, CatgaResult};
 use catga_flow::{FlowContinuation, SuspendedFlowStore};
 use dashmap::{DashMap, mapref::entry::Entry};
 
@@ -41,13 +41,15 @@ impl ContinuationSlot {
 #[async_trait]
 impl SuspendedFlowStore for MemorySuspendedFlows {
     async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
-        Ok(match self.continuations.entry(continuation.state().id().into()) {
-            Entry::Vacant(entry) => {
-                entry.insert(Arc::new(ContinuationSlot::new(continuation)));
-                true
-            }
-            Entry::Occupied(_) => false,
-        })
+        Ok(
+            match self.continuations.entry(continuation.state().id().into()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(Arc::new(ContinuationSlot::new(continuation)));
+                    true
+                }
+                Entry::Occupied(_) => false,
+            },
+        )
     }
 
     async fn get(&self, flow_id: &str) -> CatgaResult<Option<FlowContinuation>> {
@@ -103,6 +105,39 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
                 return Ok(false);
             };
             let next_wait = wait.record_success(child_id, Arc::clone(&payload));
+            if next_wait.completed_count() == wait.completed_count() {
+                return Ok(true);
+            }
+            let next = (*current).clone().with_wait(next_wait);
+            if slot.replace(&current, next).is_some() {
+                return Ok(true);
+            }
+        }
+    }
+
+    async fn record_wait_failure(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        error: CatgaError,
+    ) -> CatgaResult<bool> {
+        let Some(slot) = self
+            .continuations
+            .get(flow_id)
+            .map(|entry| Arc::clone(&entry))
+        else {
+            return Ok(false);
+        };
+        loop {
+            let current = slot.continuation.load_full();
+            if current.state().version() != version {
+                return Ok(false);
+            }
+            let Some(wait) = current.wait() else {
+                return Ok(false);
+            };
+            let next_wait = wait.record_failure(child_id, error.clone());
             if next_wait.completed_count() == wait.completed_count() {
                 return Ok(true);
             }

@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::{Duration, SystemTime}};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use catga_core::CatgaError;
 
@@ -27,6 +30,14 @@ impl WaitResult {
             child_id: child_id.into(),
             payload: Some(payload.into()),
             error: None,
+        }
+    }
+
+    fn failure(child_id: impl Into<Box<str>>, error: CatgaError) -> Self {
+        Self {
+            child_id: child_id.into(),
+            payload: None,
+            error: Some(error),
         }
     }
 
@@ -134,12 +145,35 @@ impl WaitCondition {
         payload: impl Into<Arc<[u8]>>,
     ) -> Self {
         let child_id = child_id.into();
-        if self.results.iter().any(|result| result.child_id == child_id) {
+        if self
+            .results
+            .iter()
+            .any(|result| result.child_id == child_id)
+        {
             return self.clone();
         }
         let mut results = Vec::with_capacity(self.results.len().saturating_add(1));
         results.extend(self.results.iter().cloned());
         results.push(WaitResult::success(child_id, payload));
+        Self {
+            results: Arc::from(results),
+            ..self.clone()
+        }
+    }
+
+    /// Adds a failed child result unless the child has already reported.
+    pub fn record_failure(&self, child_id: impl Into<Box<str>>, error: CatgaError) -> Self {
+        let child_id = child_id.into();
+        if self
+            .results
+            .iter()
+            .any(|result| result.child_id == child_id)
+        {
+            return self.clone();
+        }
+        let mut results = Vec::with_capacity(self.results.len().saturating_add(1));
+        results.extend(self.results.iter().cloned());
+        results.push(WaitResult::failure(child_id, error));
         Self {
             results: Arc::from(results),
             ..self.clone()
@@ -168,11 +202,7 @@ impl FlowContinuation {
     }
 
     /// Creates a continuation suspended on `wait` at `step_name`.
-    pub fn waiting(
-        state: FlowState,
-        step_name: impl Into<Box<str>>,
-        wait: WaitCondition,
-    ) -> Self {
+    pub fn waiting(state: FlowState, step_name: impl Into<Box<str>>, wait: WaitCondition) -> Self {
         Self {
             state,
             step_name: step_name.into(),
@@ -223,6 +253,15 @@ impl FlowContinuation {
     pub fn at_step(self, step_name: impl Into<Box<str>>) -> Self {
         Self {
             step_name: step_name.into(),
+            wait: None,
+            resume_at: None,
+            ..self
+        }
+    }
+
+    /// Clears delay and wait metadata before executing a ready continuation.
+    pub fn ready(self) -> Self {
+        Self {
             wait: None,
             resume_at: None,
             ..self

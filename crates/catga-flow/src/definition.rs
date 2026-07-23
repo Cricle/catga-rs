@@ -5,7 +5,8 @@ use futures::future::BoxFuture;
 
 use crate::{FlowState, WaitCondition};
 
-type StepHandler = Box<dyn Fn(FlowState) -> BoxFuture<'static, CatgaResult<FlowStepOutcome>> + Send + Sync>;
+type StepHandler =
+    Box<dyn Fn(FlowState) -> BoxFuture<'static, CatgaResult<FlowStepOutcome>> + Send + Sync>;
 
 /// The outcome returned by one registered durable flow step.
 #[derive(Clone, Debug)]
@@ -32,6 +33,11 @@ impl FlowStepOutcome {
     pub const fn complete() -> Self {
         Self::Complete
     }
+
+    /// Creates an external-result wait outcome.
+    pub fn wait(condition: WaitCondition) -> Self {
+        Self::Wait(condition)
+    }
 }
 
 /// An ordered, process-local registry of durable step handlers.
@@ -55,7 +61,11 @@ impl FlowDefinition {
     }
 
     /// Registers one named step handler.
-    pub fn step<Handler, HandlerFuture>(mut self, name: impl Into<Box<str>>, handler: Handler) -> Self
+    pub fn step<Handler, HandlerFuture>(
+        mut self,
+        name: impl Into<Box<str>>,
+        handler: Handler,
+    ) -> Self
     where
         Handler: Fn(FlowState) -> HandlerFuture + Send + Sync + 'static,
         HandlerFuture: Future<Output = CatgaResult<FlowStepOutcome>> + Send + 'static,
