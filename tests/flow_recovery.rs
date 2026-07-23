@@ -3,11 +3,73 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use async_trait::async_trait;
+use catga_core::CatgaResult;
 use catga_flow::{
     FlowContinuation, FlowDefinition, FlowRuntime, FlowScheduler, FlowState, FlowStepOutcome,
     MemoryFlowScheduler, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_memory::MemorySuspendedFlows;
+
+struct HeartbeatBeforeClaimStore {
+    inner: Arc<MemorySuspendedFlows>,
+}
+
+#[async_trait]
+impl SuspendedFlowStore for HeartbeatBeforeClaimStore {
+    async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
+        self.inner.create(continuation).await
+    }
+
+    async fn get(&self, flow_id: &str) -> CatgaResult<Option<FlowContinuation>> {
+        self.inner.get(flow_id).await
+    }
+
+    async fn update(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool> {
+        self.inner.update(expected_version, next).await
+    }
+
+    async fn claim(
+        &self,
+        expected: &FlowContinuation,
+        next: FlowContinuation,
+    ) -> CatgaResult<bool> {
+        if next.state().status() == catga_flow::FlowStatus::Running
+            && next.state().owner() == Some("node-b")
+        {
+            assert!(self.inner.heartbeat("heartbeat-race", "node-a", 0).await?);
+        }
+        self.inner.claim(expected, next).await
+    }
+
+    async fn record_wait_success(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        payload: Vec<u8>,
+    ) -> CatgaResult<bool> {
+        self.inner
+            .record_wait_success(flow_id, version, child_id, payload)
+            .await
+    }
+
+    async fn record_wait_failure(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        error: catga_core::CatgaError,
+    ) -> CatgaResult<bool> {
+        self.inner
+            .record_wait_failure(flow_id, version, child_id, error)
+            .await
+    }
+
+    async fn heartbeat(&self, flow_id: &str, owner: &str, version: i64) -> CatgaResult<bool> {
+        self.inner.heartbeat(flow_id, owner, version).await
+    }
+}
 
 #[tokio::test]
 async fn runtime_rejects_a_continuation_owned_by_a_different_definition() {
@@ -183,4 +245,35 @@ async fn heartbeat_prevents_a_live_running_continuation_from_being_reclaimed() {
 
     assert!(owner.heartbeat("live", 0).await.unwrap());
     assert!(contender.resume("live").await.unwrap().is_running());
+}
+
+#[tokio::test]
+async fn stale_claim_cannot_overwrite_a_heartbeat_that_arrives_after_the_stale_read() {
+    let inner = Arc::new(MemorySuspendedFlows::default());
+    let store = Arc::new(HeartbeatBeforeClaimStore {
+        inner: Arc::clone(&inner),
+    });
+    store
+        .create(FlowContinuation::new(
+            FlowState::new("heartbeat-race", "payment", b"input".to_vec(), "node-a")
+                .running()
+                .heartbeated_at(SystemTime::UNIX_EPOCH),
+            "finish",
+        ))
+        .await
+        .unwrap();
+    let contender = FlowRuntime::new(
+        store,
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("payment")
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-b",
+    )
+    .with_stale_after(Duration::ZERO);
+
+    let result = contender.resume("heartbeat-race").await.unwrap();
+
+    assert!(result.is_running());
+    let current = inner.get("heartbeat-race").await.unwrap().unwrap();
+    assert_eq!(current.state().owner(), Some("node-a"));
 }

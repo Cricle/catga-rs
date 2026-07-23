@@ -17,7 +17,7 @@ pub enum WaitPolicy {
 }
 
 /// One immutable child result recorded against a wait condition.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WaitResult {
     child_id: Box<str>,
     payload: Option<Arc<[u8]>>,
@@ -68,7 +68,7 @@ impl WaitResult {
 }
 
 /// Immutable persisted state for a set of child-flow results.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WaitCondition {
     correlation_id: Box<str>,
     policy: WaitPolicy,
@@ -182,7 +182,7 @@ impl WaitCondition {
 }
 
 /// Immutable flow state plus the named step needed to resume it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowContinuation {
     state: FlowState,
     step_name: Box<str>,

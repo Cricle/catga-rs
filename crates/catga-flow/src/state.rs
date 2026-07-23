@@ -25,7 +25,7 @@ impl FlowStatus {
 }
 
 /// Immutable, versioned state for one durable flow execution.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowState {
     id: Box<str>,
     flow_type: Box<str>,

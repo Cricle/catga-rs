@@ -357,7 +357,7 @@ where
         );
         Ok(self
             .store
-            .update(continuation.state().version(), running.clone())
+            .claim(&continuation, running.clone())
             .await?
             .then_some(running))
     }

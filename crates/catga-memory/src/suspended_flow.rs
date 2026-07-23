@@ -81,6 +81,34 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
         }
     }
 
+    async fn claim(
+        &self,
+        expected: &FlowContinuation,
+        next: FlowContinuation,
+    ) -> CatgaResult<bool> {
+        if next.state().id() != expected.state().id()
+            || next.state().version() != expected.state().version().saturating_add(1)
+        {
+            return Ok(false);
+        }
+        let Some(slot) = self
+            .continuations
+            .get(expected.state().id())
+            .map(|entry| Arc::clone(&entry))
+        else {
+            return Ok(false);
+        };
+        loop {
+            let current = slot.continuation.load_full();
+            if current.as_ref() != expected {
+                return Ok(false);
+            }
+            if slot.replace(&current, next.clone()).is_some() {
+                return Ok(true);
+            }
+        }
+    }
+
     async fn record_wait_success(
         &self,
         flow_id: &str,

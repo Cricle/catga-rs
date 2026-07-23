@@ -15,6 +15,13 @@ pub trait SuspendedFlowStore: Send + Sync {
     /// Replaces a continuation after a business-state version transition.
     async fn update(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool>;
 
+    /// Atomically claims a resumable continuation only when it still exactly matches `expected`.
+    ///
+    /// This guards a stale-owner takeover against a heartbeat or child-result update that keeps
+    /// the business-state version unchanged.
+    async fn claim(&self, expected: &FlowContinuation, next: FlowContinuation)
+    -> CatgaResult<bool>;
+
     /// Records one successful child payload without changing the business-state version.
     async fn record_wait_success(
         &self,
