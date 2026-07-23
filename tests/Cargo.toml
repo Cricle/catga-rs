@@ -10,7 +10,9 @@ autotests = false
 async-trait = "0.1"
 catga-core = { path = "../crates/catga-core" }
 catga-memory = { path = "../crates/catga-memory" }
+catga-robustmq = { path = "../crates/catga-robustmq" }
 futures = "0.3"
+robustmq = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [[test]]
@@ -44,3 +46,7 @@ path = "memory_transport.rs"
 [[test]]
 name = "macros"
 path = "macros.rs"
+
+[[test]]
+name = "robustmq"
+path = "robustmq.rs"

@@ -3,6 +3,7 @@ members = [
     "crates/catga-core",
     "crates/catga-macros",
     "crates/catga-memory",
+    "crates/catga-robustmq",
     "tests",
 ]
 resolver = "3"
