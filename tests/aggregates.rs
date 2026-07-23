@@ -1,8 +1,11 @@
 //! Aggregate repository contract tests.
 
+use std::time::{Duration, SystemTime};
+
 use catga_core::{
-    Aggregate, AggregateRepository, Envelope, EventCountSnapshotStrategy, EventStore,
-    MessageMetadata, SnapshotStore,
+    Aggregate, AggregateRepository, CompositeSnapshotStrategy, Envelope,
+    EventCountSnapshotStrategy, EventStore, MessageMetadata, SnapshotStore,
+    TimeBasedSnapshotStrategy,
 };
 use catga_memory::{MemoryEventStore, MemorySnapshots};
 
@@ -65,6 +68,18 @@ fn increment(id: u64, amount: u8) -> Envelope {
         vec![amount],
         MessageMetadata::new(id, None),
     )
+}
+
+#[test]
+fn time_and_composite_snapshot_strategies_trigger_without_state_or_locks() {
+    let time = TimeBasedSnapshotStrategy::new(Duration::from_secs(10));
+    let last = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+    assert!(!time.should_snapshot(last, last + Duration::from_secs(9)));
+    assert!(time.should_snapshot(last, last + Duration::from_secs(10)));
+    let composite =
+        CompositeSnapshotStrategy::new(EventCountSnapshotStrategy::new(5).unwrap(), time);
+    assert!(composite.should_snapshot(5, 0, last, last + Duration::from_secs(1)));
+    assert!(composite.should_snapshot(1, 0, last, last + Duration::from_secs(10)));
 }
 
 #[tokio::test]

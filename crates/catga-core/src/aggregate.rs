@@ -1,6 +1,10 @@
 //! Event-sourced aggregate contracts and snapshot-aware persistence.
 
-use std::{marker::PhantomData, num::NonZeroUsize};
+use std::{
+    marker::PhantomData,
+    num::NonZeroUsize,
+    time::{Duration, SystemTime},
+};
 
 use crate::{CatgaError, CatgaResult, Envelope, ErrorCode, EventStore, Snapshot, SnapshotStore};
 
@@ -56,6 +60,53 @@ impl SnapshotStrategy for EventCountSnapshotStrategy {
     fn should_snapshot(&self, current_version: i64, last_snapshot_version: i64) -> bool {
         current_version.saturating_sub(last_snapshot_version)
             >= i64::try_from(self.interval.get()).unwrap_or(i64::MAX)
+    }
+}
+
+/// Decides whether a snapshot is due after a fixed elapsed interval.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimeBasedSnapshotStrategy {
+    interval: Duration,
+}
+
+impl TimeBasedSnapshotStrategy {
+    /// Creates a time-based snapshot strategy. A zero interval snapshots immediately.
+    pub const fn new(interval: Duration) -> Self {
+        Self { interval }
+    }
+    /// Returns the configured minimum interval between snapshots.
+    pub const fn interval(&self) -> Duration {
+        self.interval
+    }
+    /// Returns whether `now` is at least one interval after the previous snapshot.
+    pub fn should_snapshot(&self, last_snapshot: SystemTime, now: SystemTime) -> bool {
+        now.duration_since(last_snapshot)
+            .is_ok_and(|elapsed| elapsed >= self.interval)
+    }
+}
+
+/// Combines event-count and elapsed-time snapshot decisions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompositeSnapshotStrategy {
+    events: EventCountSnapshotStrategy,
+    time: TimeBasedSnapshotStrategy,
+}
+
+impl CompositeSnapshotStrategy {
+    /// Creates a strategy that snapshots when either input strategy triggers.
+    pub const fn new(events: EventCountSnapshotStrategy, time: TimeBasedSnapshotStrategy) -> Self {
+        Self { events, time }
+    }
+    /// Returns whether either the version or elapsed-time threshold has been met.
+    pub fn should_snapshot(
+        &self,
+        current_version: i64,
+        last_version: i64,
+        last_snapshot: SystemTime,
+        now: SystemTime,
+    ) -> bool {
+        self.events.should_snapshot(current_version, last_version)
+            || self.time.should_snapshot(last_snapshot, now)
     }
 }
 

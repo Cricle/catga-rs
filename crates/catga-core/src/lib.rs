@@ -28,7 +28,10 @@ mod time_travel;
 mod transport;
 mod upgrading_event_store;
 
-pub use aggregate::{Aggregate, AggregateRepository, EventCountSnapshotStrategy, SnapshotStrategy};
+pub use aggregate::{
+    Aggregate, AggregateRepository, CompositeSnapshotStrategy, EventCountSnapshotStrategy,
+    SnapshotStrategy, TimeBasedSnapshotStrategy,
+};
 pub use behaviors::{
     CorrelationBehavior, DeadLetterBehavior, DeadLetterEnvelope, IdempotencyBehavior,
     IdempotencyKey, InboxBehavior, InboxKey, RetryBehavior, TimeoutBehavior,
