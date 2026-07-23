@@ -9,10 +9,13 @@ use std::{
 };
 
 use catga_core::{
-    Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport, Snapshot,
-    SnapshotStore,
+    Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport,
+    ProjectionCheckpoint, ProjectionCheckpointStore, Snapshot, SnapshotStore,
 };
-use catga_redis::{RedisConfig, RedisEventStore, RedisLeases, RedisSnapshotStore, RedisTransport};
+use catga_redis::{
+    RedisConfig, RedisEventStore, RedisLeases, RedisProjectionCheckpoints, RedisSnapshotStore,
+    RedisTransport,
+};
 use redis::AsyncCommands;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -215,6 +218,66 @@ async fn redis_snapshots_round_trip_and_reject_stale_writers_atomically() {
     );
     store.delete("orders-7").await.unwrap();
     assert!(store.load::<u64>("orders-7").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn redis_projection_checkpoints_are_isolated_by_projection_and_stream() {
+    let Some(config) = redis_config() else {
+        eprintln!("skipping Redis integration test: CATGA_REDIS_URL is unset");
+        return;
+    };
+    let checkpoints = RedisProjectionCheckpoints::connect(
+        &config.server,
+        format!("{}:projection-checkpoints", config.stream),
+    )
+    .await
+    .unwrap();
+    checkpoints
+        .save(ProjectionCheckpoint::new("orders", "order-1", 4))
+        .await
+        .unwrap();
+    checkpoints
+        .save(ProjectionCheckpoint::new("orders", "order-2", 9))
+        .await
+        .unwrap();
+    checkpoints
+        .save(ProjectionCheckpoint::new("audit", "order-1", 2))
+        .await
+        .unwrap();
+    assert_eq!(
+        checkpoints
+            .load("orders", "order-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .version(),
+        4
+    );
+    checkpoints.delete("orders", "order-1").await.unwrap();
+    assert!(
+        checkpoints
+            .load("orders", "order-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    checkpoints.delete_all("orders").await.unwrap();
+    assert!(
+        checkpoints
+            .load("orders", "order-2")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        checkpoints
+            .load("audit", "order-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .version(),
+        2
+    );
 }
 
 #[tokio::test]

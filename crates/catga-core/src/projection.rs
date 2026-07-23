@@ -32,6 +32,21 @@ impl ProjectionCheckpoint {
         }
     }
 
+    /// Restores a checkpoint with its original durable update timestamp.
+    pub fn from_persisted(
+        projection_name: impl Into<Box<str>>,
+        stream_id: impl Into<Box<str>>,
+        version: i64,
+        updated_at: SystemTime,
+    ) -> Self {
+        Self {
+            projection_name: projection_name.into(),
+            stream_id: stream_id.into(),
+            version,
+            updated_at,
+        }
+    }
+
     /// Returns the projection name that owns this checkpoint.
     pub fn projection_name(&self) -> &str {
         &self.projection_name
