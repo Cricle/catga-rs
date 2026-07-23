@@ -9,6 +9,7 @@ autotests = false
 [dependencies]
 async-trait = "0.1"
 catga-core = { path = "../crates/catga-core" }
+catga-memory = { path = "../crates/catga-memory" }
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
@@ -31,3 +32,7 @@ path = "batch_stream.rs"
 [[test]]
 name = "reliability_contracts"
 path = "reliability_contracts.rs"
+
+[[test]]
+name = "memory_outbox"
+path = "memory_outbox.rs"
