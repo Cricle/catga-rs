@@ -96,6 +96,10 @@ name = "distributed_id"
 path = "distributed_id.rs"
 
 [[test]]
+name = "leases"
+path = "leases.rs"
+
+[[test]]
 name = "message_signing"
 path = "message_signing.rs"
 
