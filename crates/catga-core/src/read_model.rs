@@ -129,6 +129,61 @@ pub struct BatchSyncStrategy<F> {
     action: F,
 }
 
+/// Runs a full ordered change set no more often than one configured interval.
+pub struct ScheduledSyncStrategy<F> {
+    interval_millis: u64,
+    action: F,
+    state: AtomicU64,
+}
+
+impl<F> ScheduledSyncStrategy<F> {
+    /// Creates a scheduled strategy. A zero interval permits every completed invocation.
+    pub fn new(interval: std::time::Duration, action: F) -> Self {
+        Self {
+            interval_millis: u64::try_from(interval.as_millis()).unwrap_or(u64::MAX),
+            action,
+            state: AtomicU64::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl<F, Fut> SyncStrategy for ScheduledSyncStrategy<F>
+where
+    F: Fn(Vec<ChangeRecord>) -> Fut + Send + Sync,
+    Fut: Future<Output = CatgaResult<()>> + Send,
+{
+    async fn execute(&self, changes: &[ChangeRecord]) -> CatgaResult<()> {
+        const BUSY: u64 = 1 << 63;
+        const TIMESTAMP: u64 = !BUSY;
+        if changes.is_empty() {
+            return Ok(());
+        }
+        loop {
+            let state = self.state.load(Ordering::Acquire);
+            if state & BUSY != 0 {
+                return Ok(());
+            }
+            let last = state & TIMESTAMP;
+            let now = now_millis();
+            if last != 0 && now.saturating_sub(last) < self.interval_millis {
+                return Ok(());
+            }
+            if self
+                .state
+                .compare_exchange(state, state | BUSY, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                continue;
+            }
+            let result = (self.action)(changes.to_vec()).await;
+            self.state
+                .store(if result.is_ok() { now } else { last }, Ordering::Release);
+            return result;
+        }
+    }
+}
+
 impl<F> BatchSyncStrategy<F> {
     /// Creates a batch strategy, or returns `None` for a zero batch size.
     pub fn new(batch_size: usize, action: F) -> Option<Self> {

@@ -1,13 +1,17 @@
 //! Incremental read-model synchronization contract tests.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
 
 use catga_core::{
     BatchSyncStrategy, CatgaError, ChangeKind, ChangeRecord, ChangeTracker, Envelope, ErrorCode,
-    MessageMetadata, ReadModelStore, ReadModelSynchronizer, RealtimeSyncStrategy, SyncStrategy,
+    MessageMetadata, ReadModelStore, ReadModelSynchronizer, RealtimeSyncStrategy,
+    ScheduledSyncStrategy, SyncStrategy,
 };
 use catga_memory::{MemoryChangeTracker, MemoryReadModels};
 
@@ -104,4 +108,30 @@ async fn batch_strategy_preserves_change_order_in_bounded_owned_batches() {
     assert_eq!(calls.load(Ordering::Relaxed), 3);
     assert_eq!(delivered.load(Ordering::Relaxed), 5);
     assert!(BatchSyncStrategy::<fn(Vec<ChangeRecord>) -> std::future::Ready<catga_core::CatgaResult<()>>>::new(0, |_| std::future::ready(Ok(()))).is_none());
+}
+
+#[tokio::test]
+async fn scheduled_strategy_runs_once_per_interval_without_a_lock() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let strategy = ScheduledSyncStrategy::new(Duration::from_secs(60), {
+        let calls = Arc::clone(&calls);
+        move |_| {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok::<(), CatgaError>(())
+            }
+        }
+    });
+    let changes = vec![ChangeRecord::new(
+        "one",
+        "order",
+        "7",
+        ChangeKind::Updated,
+        Envelope::new(1, "order.updated", vec![], MessageMetadata::new(1, None)),
+    )];
+
+    strategy.execute(&changes).await.unwrap();
+    strategy.execute(&changes).await.unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
