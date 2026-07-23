@@ -3,7 +3,10 @@ use std::{sync::Arc, time::Duration};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use catga_cluster::{ClusterCoordinator, LeaderOnlyBehavior, MemoryCluster};
+use catga_cluster::{
+    ClusterCoordinator, ClusterForwarder, ForwardToLeaderBehavior, LeaderOnlyBehavior,
+    MemoryCluster,
+};
 use catga_core::{CatgaResult, ErrorCode, Handler, Mediator, Pipeline, Registry, Request};
 
 #[tokio::test]
@@ -59,6 +62,17 @@ impl Request for LeaderWork {
 
 struct LeaderHandler(Arc<AtomicUsize>);
 
+struct TestForwarder(Arc<AtomicUsize>);
+
+#[async_trait]
+impl ClusterForwarder<LeaderWork> for TestForwarder {
+    async fn forward(&self, _: LeaderWork, leader_endpoint: &str) -> CatgaResult<u32> {
+        assert_eq!(leader_endpoint, "http://node-a");
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(99)
+    }
+}
+
 #[async_trait]
 impl Handler<LeaderWork> for LeaderHandler {
     async fn handle(&self, _: LeaderWork) -> CatgaResult<u32> {
@@ -91,4 +105,24 @@ async fn leader_only_behavior_rejects_non_leader_requests_before_the_handler_run
     let leader = Pipeline::new().with(LeaderOnlyBehavior::new(cluster.node("node-a").unwrap()));
     assert_eq!(mediator.send_with(LeaderWork, &leader).await.unwrap(), 42);
     assert_eq!(executions.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn forward_to_leader_behavior_uses_the_known_leader_without_running_the_local_handler() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let executions = Arc::new(AtomicUsize::new(0));
+    let forwards = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+        .register_request::<LeaderWork, _>(LeaderHandler(Arc::clone(&executions)))
+        .unwrap();
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(ForwardToLeaderBehavior::new(
+        cluster.node("node-b").unwrap(),
+        Arc::new(TestForwarder(Arc::clone(&forwards))),
+    ));
+
+    assert_eq!(mediator.send_with(LeaderWork, &pipeline).await.unwrap(), 99);
+    assert_eq!(forwards.load(Ordering::Relaxed), 1);
+    assert_eq!(executions.load(Ordering::Relaxed), 0);
 }
