@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use catga_core::{CatgaError, ErrorCode};
-use catga_flow::Flow;
+use catga_flow::{DslFlow, Flow};
 
 #[tokio::test]
 async fn local_flow_compensates_completed_steps_in_reverse_order() {
@@ -54,4 +54,54 @@ async fn empty_local_flow_completes_successfully() {
 
     assert!(result.is_success());
     assert_eq!(result.completed_steps(), 0);
+}
+
+#[tokio::test]
+async fn dsl_flow_runs_only_the_selected_nested_branch_against_one_state() {
+    let mut state = Vec::new();
+    let then_branch = DslFlow::new().action(|state: &mut Vec<&'static str>| {
+        Box::pin(async move {
+            state.push("then");
+            Ok(())
+        })
+    });
+    let else_branch = DslFlow::new().action(|state: &mut Vec<&'static str>| {
+        Box::pin(async move {
+            state.push("else");
+            Ok(())
+        })
+    });
+    let flow = DslFlow::new()
+        .action(|state: &mut Vec<&'static str>| {
+            Box::pin(async move {
+                state.push("start");
+                Ok(())
+            })
+        })
+        .if_else(|state| state.len() == 1, then_branch, else_branch);
+
+    flow.run(&mut state).await.unwrap();
+    assert_eq!(state, ["start", "then"]);
+}
+
+#[tokio::test]
+async fn dsl_flow_stops_before_later_steps_after_a_branch_error() {
+    let mut state = Vec::new();
+    let failed = DslFlow::new().action(|_: &mut Vec<&'static str>| {
+        Box::pin(async { Err(CatgaError::new(ErrorCode::Validation, "branch failed")) })
+    });
+    let flow = DslFlow::new()
+        .if_else(|_| true, failed, DslFlow::new())
+        .action(|state: &mut Vec<&'static str>| {
+            Box::pin(async move {
+                state.push("after");
+                Ok(())
+            })
+        });
+
+    assert_eq!(
+        flow.run(&mut state).await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    assert!(state.is_empty());
 }

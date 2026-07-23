@@ -2,6 +2,7 @@
 //! Durable and compensating flow primitives for Catga.
 
 mod definition;
+mod dsl;
 mod executor;
 mod local;
 mod runtime;
@@ -13,6 +14,7 @@ mod suspension;
 mod suspension_store;
 
 pub use definition::{FlowDefinition, FlowStepOutcome};
+pub use dsl::DslFlow;
 pub use executor::FlowExecutor;
 pub use local::{Flow, FlowResult};
 pub use runtime::{FlowRuntime, FlowRuntimeResult};
