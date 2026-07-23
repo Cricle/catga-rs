@@ -56,6 +56,10 @@ name = "outbox_processor"
 path = "outbox_processor.rs"
 
 [[test]]
+name = "event_store"
+path = "event_store.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 
