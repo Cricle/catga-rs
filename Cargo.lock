@@ -273,6 +273,7 @@ dependencies = [
 name = "catga-robustmq"
 version = "0.1.0"
 dependencies = [
+ "catga-codec-postcard",
  "catga-core",
  "robustmq",
 ]

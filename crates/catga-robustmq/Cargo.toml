@@ -10,5 +10,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+catga-codec-postcard = { path = "../catga-codec-postcard" }
 catga-core = { path = "../catga-core" }
 robustmq = "1"

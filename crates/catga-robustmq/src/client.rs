@@ -1,4 +1,5 @@
-use catga_core::{CatgaError, CatgaResult, Envelope, ErrorCode};
+use catga_codec_postcard::PostcardCodec;
+use catga_core::{CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode};
 use robustmq::{MQ9Client, Mailbox, Subscription};
 
 use crate::MailboxPriority;
@@ -58,6 +59,20 @@ impl MailboxClient {
             .map_err(map_error)
     }
 
+    /// Sends a complete Catga envelope without losing its metadata or schema version.
+    pub async fn send_envelope(
+        &self,
+        mailbox_id: &str,
+        envelope: &Envelope,
+        priority: MailboxPriority,
+    ) -> CatgaResult<()> {
+        let payload = PostcardCodec.encode(envelope)?;
+        self.client
+            .send(mailbox_id, &payload, priority.as_sdk())
+            .await
+            .map_err(map_error)
+    }
+
     /// Subscribes to push delivery for a mailbox.
     pub async fn subscribe<F, Fut>(
         &self,
@@ -79,6 +94,28 @@ impl MailboxClient {
             )
             .await
             .map_err(map_error)
+    }
+
+    /// Subscribes to complete Catga envelopes, surfacing decode failures to the callback.
+    pub async fn subscribe_envelopes<F, Fut>(
+        &self,
+        mailbox_id: &str,
+        callback: F,
+        priority: Option<MailboxPriority>,
+        queue_group: &str,
+    ) -> CatgaResult<Subscription>
+    where
+        F: Fn(CatgaResult<Envelope>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let codec = PostcardCodec;
+        self.subscribe(
+            mailbox_id,
+            move |message| callback(codec.decode(&message.payload)),
+            priority,
+            queue_group,
+        )
+        .await
     }
 }
 
