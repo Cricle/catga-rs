@@ -6,12 +6,12 @@ use std::{
 };
 
 use async_nats::{
-    header,
+    Message,
     jetstream::{
         self,
         context::Publish,
         kv,
-        stream::{self, DirectGetErrorKind, Stream},
+        stream::{self, Stream},
     },
 };
 use async_trait::async_trait;
@@ -45,24 +45,14 @@ impl NatsEventStore {
         let context = jetstream::new(client);
         let stream_name = stream_name.into();
         let subject_prefix = subject_prefix.into();
-        let mut stream = context
+        let stream = context
             .get_or_create_stream(stream::Config {
                 name: stream_name.to_string(),
                 subjects: vec![format!("{subject_prefix}.>")],
-                allow_direct: true,
                 ..Default::default()
             })
             .await
             .map_err(map_error)?;
-        let mut stream_config = stream.info().await.map_err(map_error)?.config.clone();
-        if !stream_config.allow_direct {
-            stream_config.allow_direct = true;
-            context
-                .update_stream(&stream_config)
-                .await
-                .map_err(map_error)?;
-        }
-        let stream = context.get_stream(&stream_name).await.map_err(map_error)?;
         let bucket = format!("{stream_name}_IDS");
         let ids = match context.get_key_value(&bucket).await {
             Ok(store) => store,
@@ -99,40 +89,39 @@ impl NatsEventStore {
     }
 
     async fn entries(&self, stream_id: &str) -> CatgaResult<Vec<StoredEvent>> {
-        let subject = self.subject(stream_id)?;
-        let first = match self.stream.direct_get_first_for_subject(&subject).await {
-            Ok(message) => message,
-            Err(error) if error.kind() == DirectGetErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(map_error(error)),
-        };
-        let mut entries = Vec::new();
-        let mut current = first;
-        loop {
-            let sequence = message_sequence(&current)?;
-            entries.push(self.decode_message(&current)?);
-            current = match self
-                .stream
-                .direct_get_next_for_subject(&subject, Some(sequence))
-                .await
-            {
-                Ok(message) => message,
-                Err(error) if error.kind() == DirectGetErrorKind::NotFound => break,
-                Err(error) => return Err(map_error(error)),
-            };
-        }
-        Ok(entries)
+        Ok(self
+            .raw_entries(stream_id)
+            .await?
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect())
     }
 
     async fn current(&self, stream_id: &str) -> CatgaResult<Option<(i64, u64)>> {
+        Ok(self
+            .raw_entries(stream_id)
+            .await?
+            .last()
+            .map(|(sequence, event)| (event.version(), *sequence)))
+    }
+
+    async fn raw_entries(&self, stream_id: &str) -> CatgaResult<Vec<(u64, StoredEvent)>> {
         let subject = self.subject(stream_id)?;
-        match self.stream.direct_get_last_for_subject(subject).await {
-            Ok(message) => Ok(Some((
-                message_version(&message)?,
-                message_sequence(&message)?,
-            ))),
-            Err(error) if error.kind() == DirectGetErrorKind::NotFound => Ok(None),
-            Err(error) => Err(map_error(error)),
+        let mut stream = self.stream.clone();
+        let info = stream.info().await.map_err(map_error)?;
+        let mut entries = Vec::new();
+        for sequence in info.state.first_sequence..=info.state.last_sequence {
+            let raw = self
+                .stream
+                .get_raw_message(sequence)
+                .await
+                .map_err(map_error)?;
+            if raw.subject == subject {
+                let message: Message = raw.try_into().map_err(map_error)?;
+                entries.push((sequence, self.decode_message(&message)?));
+            }
         }
+        Ok(entries)
     }
 
     fn decode_message(&self, message: &async_nats::Message) -> CatgaResult<StoredEvent> {
@@ -305,16 +294,6 @@ fn message_timestamp(message: &async_nats::Message) -> CatgaResult<u64> {
             "JetStream event has an invalid timestamp",
         )
     })
-}
-fn message_sequence(message: &async_nats::Message) -> CatgaResult<u64> {
-    message_header(message, header::NATS_SEQUENCE)?
-        .parse()
-        .map_err(|_| {
-            CatgaError::new(
-                ErrorCode::Internal,
-                "JetStream event has an invalid sequence",
-            )
-        })
 }
 fn unix_millis(time: SystemTime) -> u64 {
     u64::try_from(
