@@ -5,11 +5,12 @@ use catga_core::{Envelope, EnvelopeCodec, MessageMetadata};
 
 #[test]
 fn postcard_codec_round_trips_envelope_metadata_and_payload() {
-    let envelope = Envelope::new(
+    let envelope = Envelope::versioned(
         42,
         "order.created",
         vec![1, 2, 3],
         MessageMetadata::new(42, Some(9)),
+        4,
     );
     let codec = PostcardCodec;
 
@@ -19,4 +20,5 @@ fn postcard_codec_round_trips_envelope_metadata_and_payload() {
     assert_eq!(decoded.message_type(), "order.created");
     assert_eq!(decoded.payload(), [1, 2, 3]);
     assert_eq!(decoded.metadata(), MessageMetadata::new(42, Some(9)));
+    assert_eq!(decoded.schema_version(), 4);
 }

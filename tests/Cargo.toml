@@ -72,6 +72,10 @@ name = "aggregates"
 path = "aggregates.rs"
 
 [[test]]
+name = "event_versions"
+path = "event_versions.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 

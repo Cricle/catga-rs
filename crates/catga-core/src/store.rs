@@ -9,6 +9,7 @@ pub struct Envelope {
     message_type: Box<str>,
     payload: Vec<u8>,
     metadata: MessageMetadata,
+    schema_version: u32,
 }
 
 impl Envelope {
@@ -19,11 +20,23 @@ impl Envelope {
         payload: Vec<u8>,
         metadata: MessageMetadata,
     ) -> Self {
+        Self::versioned(id, message_type, payload, metadata, 1)
+    }
+
+    /// Creates an envelope with an explicit event schema version.
+    pub fn versioned(
+        id: u64,
+        message_type: impl Into<Box<str>>,
+        payload: Vec<u8>,
+        metadata: MessageMetadata,
+        schema_version: u32,
+    ) -> Self {
         Self {
             id,
             message_type: message_type.into(),
             payload,
             metadata,
+            schema_version,
         }
     }
 
@@ -45,6 +58,11 @@ impl Envelope {
     /// Returns the transport metadata.
     pub const fn metadata(&self) -> MessageMetadata {
         self.metadata
+    }
+
+    /// Returns the schema version used to serialize this event payload.
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
     }
 }
 
