@@ -5,11 +5,11 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
-use catga_core::{Envelope, LeaseStore, MessageMetadata, MessageTransport};
-use catga_redis::{RedisConfig, RedisLeases, RedisTransport};
+use catga_core::{Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport};
+use catga_redis::{RedisConfig, RedisEventStore, RedisLeases, RedisTransport};
 use redis::AsyncCommands;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -59,6 +59,115 @@ async fn redis_leases_compare_owner_atomically() {
             .unwrap()
     );
     assert!(leases.release("outbox", "node-a").await.unwrap());
+}
+
+#[tokio::test]
+async fn redis_event_store_appends_atomically_and_reads_versioned_history() {
+    let Some(config) = redis_config() else {
+        eprintln!("skipping Redis integration test: CATGA_REDIS_URL is unset");
+        return;
+    };
+    let store = Arc::new(
+        RedisEventStore::connect(&config.server, format!("{}:events", config.stream))
+            .await
+            .unwrap(),
+    );
+    let first = Envelope::new(1, "order.created", vec![1], MessageMetadata::new(1, None));
+    let second = Envelope::new(1, "order.paid", vec![2], MessageMetadata::new(2, Some(1)));
+
+    assert_eq!(
+        store
+            .append("orders-7", vec![first], Some(-1))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .append("orders-7", vec![second], Some(0))
+            .await
+            .unwrap(),
+        1
+    );
+    let conflict = store
+        .append(
+            "orders-7",
+            vec![Envelope::new(
+                1,
+                "order.duplicate",
+                vec![3],
+                MessageMetadata::new(3, None),
+            )],
+            Some(0),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(conflict.code(), ErrorCode::Conflict);
+
+    let stream = store.read("orders-7", 1, 1).await.unwrap();
+    assert_eq!(stream.version(), 1);
+    assert_eq!(stream.events().len(), 1);
+    assert_eq!(stream.events()[0].version(), 1);
+    assert_eq!(stream.events()[0].envelope().payload(), [2]);
+    assert_eq!(store.version("orders-7").await.unwrap(), 1);
+    assert_eq!(
+        store
+            .read_to_version("orders-7", 0)
+            .await
+            .unwrap()
+            .events()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .read_to_time("orders-7", SystemTime::now())
+            .await
+            .unwrap()
+            .events()
+            .len(),
+        2
+    );
+    let history = store.version_history("orders-7").await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[1].event_type(), "order.paid");
+    assert_eq!(store.stream_ids().await.unwrap(), ["orders-7"]);
+
+    let first_writer = Arc::clone(&store);
+    let second_writer = Arc::clone(&store);
+    let (first_result, second_result) = tokio::join!(
+        first_writer.append(
+            "orders-7",
+            vec![Envelope::new(
+                1,
+                "order.shipped",
+                vec![4],
+                MessageMetadata::new(4, None),
+            )],
+            Some(1),
+        ),
+        second_writer.append(
+            "orders-7",
+            vec![Envelope::new(
+                1,
+                "order.refunded",
+                vec![5],
+                MessageMetadata::new(5, None),
+            )],
+            Some(1),
+        ),
+    );
+    let outcomes = [first_result, second_result];
+    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .map(|error| error.code())
+            .collect::<Vec<_>>(),
+        [ErrorCode::Conflict]
+    );
+    assert_eq!(store.version("orders-7").await.unwrap(), 2);
 }
 
 #[tokio::test]
