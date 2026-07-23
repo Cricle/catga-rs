@@ -84,6 +84,10 @@ name = "time_travel"
 path = "time_travel.rs"
 
 [[test]]
+name = "distributed_id"
+path = "distributed_id.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 

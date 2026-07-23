@@ -6,6 +6,7 @@ mod behaviors;
 mod cache;
 mod codec;
 mod correlation;
+mod distributed_id;
 mod error;
 mod event_store;
 mod event_version;
@@ -33,6 +34,9 @@ pub use cache::CachedResultCodec;
 pub use catga_macros::{Message, catga_handlers};
 pub use codec::EnvelopeCodec;
 pub use correlation::{Correlated, current_correlation_id};
+pub use distributed_id::{
+    DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
+};
 pub use error::{CatgaError, CatgaResult, ErrorCode};
 pub use event_store::{EventStore, EventStream, StoredEvent, VersionInfo};
 pub use event_version::{EventUpgrader, EventVersionRegistry};
