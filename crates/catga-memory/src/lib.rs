@@ -8,6 +8,7 @@ mod idempotency;
 mod inbox;
 mod outbox;
 mod projection;
+mod snapshot;
 mod transport;
 
 pub use dead_letter::MemoryDeadLetters;
@@ -16,4 +17,5 @@ pub use idempotency::MemoryIdempotency;
 pub use inbox::MemoryInbox;
 pub use outbox::MemoryOutbox;
 pub use projection::MemoryProjectionCheckpoints;
+pub use snapshot::MemorySnapshots;
 pub use transport::MemoryTransport;

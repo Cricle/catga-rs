@@ -64,6 +64,10 @@ name = "projections"
 path = "projections.rs"
 
 [[test]]
+name = "snapshots"
+path = "snapshots.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 

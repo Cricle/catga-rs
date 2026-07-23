@@ -15,6 +15,7 @@ mod pipeline;
 mod projection;
 mod registry;
 mod reliability;
+mod snapshot;
 mod store;
 mod transport;
 
@@ -39,5 +40,6 @@ pub use projection::{
 };
 pub use registry::Registry;
 pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore, ProcessingState};
+pub use snapshot::{Snapshot, SnapshotStore};
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
 pub use transport::{Acknowledger, Delivery, MessageTransport};
