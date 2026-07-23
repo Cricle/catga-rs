@@ -7,6 +7,7 @@ mod mediator;
 mod message;
 mod registry;
 mod store;
+mod transport;
 
 pub use error::{CatgaError, CatgaResult, ErrorCode};
 pub use handler::{EventHandler, Handler};
@@ -14,3 +15,4 @@ pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};
 pub use registry::Registry;
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
+pub use transport::{Delivery, MessageTransport};

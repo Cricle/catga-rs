@@ -36,3 +36,7 @@ path = "reliability_contracts.rs"
 [[test]]
 name = "memory_outbox"
 path = "memory_outbox.rs"
+
+[[test]]
+name = "memory_transport"
+path = "memory_transport.rs"

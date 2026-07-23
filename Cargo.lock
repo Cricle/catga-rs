@@ -34,6 +34,7 @@ dependencies = [
  "async-trait",
  "catga-core",
  "dashmap",
+ "tokio",
 ]
 
 [[package]]
