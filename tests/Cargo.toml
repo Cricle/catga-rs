@@ -52,6 +52,10 @@ name = "memory_outbox"
 path = "memory_outbox.rs"
 
 [[test]]
+name = "outbox_processor"
+path = "outbox_processor.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 

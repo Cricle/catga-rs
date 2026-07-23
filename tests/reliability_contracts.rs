@@ -39,6 +39,17 @@ impl OutboxStore for RecordingOutbox {
         });
         Ok(())
     }
+
+    async fn release(&self, owner: &str, id: u64) -> CatgaResult<()> {
+        let mut messages = self.messages.lock().unwrap();
+        if let Some(message) = messages
+            .iter_mut()
+            .find(|message| message.id() == id && message.owner() == Some(owner))
+        {
+            message.release();
+        }
+        Ok(())
+    }
 }
 
 fn message(id: u64) -> OutboxMessage {

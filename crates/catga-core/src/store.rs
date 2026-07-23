@@ -95,6 +95,17 @@ impl OutboxMessage {
         self.state = OutboxState::Claimed;
         self.owner = Some(owner.into());
     }
+
+    /// Returns this message to the pending state after a failed delivery attempt.
+    pub fn release(&mut self) {
+        self.state = OutboxState::Pending;
+        self.owner = None;
+    }
+
+    /// Returns the serialized envelope that must be published.
+    pub const fn envelope(&self) -> &Envelope {
+        &self.envelope
+    }
 }
 
 /// Persists outbound messages until their transport delivery is acknowledged.
@@ -108,4 +119,7 @@ pub trait OutboxStore: Send + Sync {
 
     /// Removes a message only when its current worker acknowledges it.
     async fn ack(&self, owner: &str, id: u64) -> CatgaResult<()>;
+
+    /// Returns a worker-owned message to pending after a failed delivery attempt.
+    async fn release(&self, owner: &str, id: u64) -> CatgaResult<()>;
 }

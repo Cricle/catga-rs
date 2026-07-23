@@ -45,4 +45,13 @@ impl OutboxStore for MemoryOutbox {
         }
         Ok(())
     }
+
+    async fn release(&self, owner: &str, id: u64) -> CatgaResult<()> {
+        if let Some(mut message) = self.messages.get_mut(&id)
+            && message.owner() == Some(owner)
+        {
+            message.release();
+        }
+        Ok(())
+    }
 }
