@@ -52,6 +52,10 @@ name = "memory_transport"
 path = "memory_transport.rs"
 
 [[test]]
+name = "memory_reliability"
+path = "memory_reliability.rs"
+
+[[test]]
 name = "macros"
 path = "macros.rs"
 

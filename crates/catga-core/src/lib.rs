@@ -8,6 +8,7 @@ mod mediator;
 mod message;
 mod pipeline;
 mod registry;
+mod reliability;
 mod store;
 mod transport;
 
@@ -19,5 +20,6 @@ pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};
 pub use pipeline::{Behavior, Next, Pipeline};
 pub use registry::Registry;
+pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore, ProcessingState};
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
 pub use transport::{Acknowledger, Delivery, MessageTransport};
