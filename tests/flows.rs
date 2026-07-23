@@ -119,3 +119,78 @@ async fn dsl_action_macro_hides_the_borrowed_future_boxing() {
         .unwrap();
     assert_eq!(value, 1);
 }
+
+#[derive(Clone, Debug)]
+struct ParallelState {
+    value: u32,
+}
+
+#[tokio::test]
+async fn dsl_flow_parallel_runs_isolated_branches_concurrently_and_merges_in_definition_order() {
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let first_barrier = Arc::clone(&barrier);
+    let second_barrier = Arc::clone(&barrier);
+    let first = DslFlow::new().action(move |state: &mut ParallelState| {
+        let barrier = Arc::clone(&first_barrier);
+        Box::pin(async move {
+            state.value = 10;
+            barrier.wait().await;
+            tokio::task::yield_now().await;
+            Ok(())
+        })
+    });
+    let second = DslFlow::new().action(move |state: &mut ParallelState| {
+        let barrier = Arc::clone(&second_barrier);
+        Box::pin(async move {
+            state.value = 20;
+            barrier.wait().await;
+            Ok(())
+        })
+    });
+    let flow = DslFlow::new().parallel([first, second], |state, branch_states| {
+        state.value = branch_states
+            .iter()
+            .fold(0, |value, branch| value * 100 + branch.value);
+        Ok(())
+    });
+    let mut state = ParallelState { value: 5 };
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), flow.run(&mut state))
+        .await
+        .expect("parallel branches must reach each other")
+        .unwrap();
+
+    assert_eq!(state.value, 1020);
+}
+
+#[tokio::test]
+async fn dsl_flow_parallel_keeps_the_original_state_when_a_branch_fails() {
+    let merge_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flow = DslFlow::new().parallel(
+        [
+            DslFlow::new().action(dsl_action!(|state: &mut ParallelState| async move {
+                state.value = 10;
+                Ok(())
+            })),
+            DslFlow::new().action(dsl_action!(|state: &mut ParallelState| async move {
+                let _ = state;
+                Err(CatgaError::new(ErrorCode::Validation, "parallel failed"))
+            })),
+        ],
+        {
+            let merge_called = Arc::clone(&merge_called);
+            move |_, _: Vec<ParallelState>| {
+                merge_called.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+        },
+    );
+    let mut state = ParallelState { value: 5 };
+
+    assert_eq!(
+        flow.run(&mut state).await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(state.value, 5);
+    assert!(!merge_called.load(Ordering::Relaxed));
+}

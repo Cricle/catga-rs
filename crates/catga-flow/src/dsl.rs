@@ -5,6 +5,8 @@ use futures::future::BoxFuture;
 
 type Action<S> = Box<dyn for<'a> Fn(&'a mut S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
 type Condition<S> = Box<dyn Fn(&S) -> bool + Send + Sync>;
+type Merge<S> = Box<dyn Fn(&mut S, Vec<S>) -> CatgaResult<()> + Send + Sync>;
+type CloneState<S> = fn(&S) -> S;
 
 enum Step<S> {
     Action(Action<S>),
@@ -12,6 +14,11 @@ enum Step<S> {
         condition: Condition<S>,
         then_branch: DslFlow<S>,
         else_branch: DslFlow<S>,
+    },
+    Parallel {
+        branches: Vec<DslFlow<S>>,
+        clone_state: CloneState<S>,
+        merge: Merge<S>,
     },
 }
 
@@ -48,6 +55,24 @@ impl<S: Send> DslFlow<S> {
         self
     }
 
+    /// Appends branches that run concurrently on isolated state copies.
+    ///
+    /// The merge closure receives branch states in declaration order only after every branch
+    /// succeeds. A failed branch leaves the original state unchanged.
+    pub fn parallel<I, M>(mut self, branches: I, merge: M) -> Self
+    where
+        S: Clone,
+        I: IntoIterator<Item = Self>,
+        M: Fn(&mut S, Vec<S>) -> CatgaResult<()> + Send + Sync + 'static,
+    {
+        self.steps.push(Step::Parallel {
+            branches: branches.into_iter().collect(),
+            clone_state: Clone::clone,
+            merge: Box::new(merge),
+        });
+        self
+    }
+
     /// Runs all selected steps against one mutable state value.
     pub fn run<'a>(&'a self, state: &'a mut S) -> BoxFuture<'a, CatgaResult<()>> {
         Box::pin(async move {
@@ -64,6 +89,28 @@ impl<S: Send> DslFlow<S> {
                         } else {
                             else_branch.run(state).await?;
                         }
+                    }
+                    Step::Parallel {
+                        branches,
+                        clone_state,
+                        merge,
+                    } => {
+                        let mut branch_states = branches
+                            .iter()
+                            .map(|_| clone_state(state))
+                            .collect::<Vec<_>>();
+                        let results = futures::future::join_all(
+                            branches
+                                .iter()
+                                .zip(branch_states.iter_mut())
+                                .map(|(branch, branch_state)| branch.run(branch_state)),
+                        )
+                        .await;
+
+                        for result in results {
+                            result?;
+                        }
+                        merge(state, branch_states)?;
                     }
                 }
             }
