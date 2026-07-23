@@ -50,3 +50,7 @@ path = "macros.rs"
 [[test]]
 name = "robustmq"
 path = "robustmq.rs"
+
+[[test]]
+name = "delivery_ack"
+path = "delivery_ack.rs"

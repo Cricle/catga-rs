@@ -46,7 +46,7 @@ impl MessageTransport for MemoryTransport {
             })
     }
 
-    async fn ack(&self, _: Delivery) -> CatgaResult<()> {
-        Ok(())
+    async fn ack(&self, delivery: Delivery) -> CatgaResult<()> {
+        delivery.acknowledge().await
     }
 }

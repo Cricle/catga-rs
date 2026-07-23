@@ -16,4 +16,4 @@ pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};
 pub use registry::Registry;
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
-pub use transport::{Delivery, MessageTransport};
+pub use transport::{Acknowledger, Delivery, MessageTransport};
