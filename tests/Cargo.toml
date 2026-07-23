@@ -8,6 +8,8 @@ autotests = false
 
 [dependencies]
 async-trait = "0.1"
+axum = "0.8"
+catga-axum = { path = "../crates/catga-axum" }
 catga-core = { path = "../crates/catga-core" }
 catga-flow = { path = "../crates/catga-flow" }
 catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
@@ -40,6 +42,10 @@ path = "lifecycle.rs"
 [[test]]
 name = "cluster"
 path = "cluster.rs"
+
+[[test]]
+name = "axum"
+path = "axum.rs"
 
 [[test]]
 name = "state_machine"
