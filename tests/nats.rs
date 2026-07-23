@@ -6,11 +6,12 @@ use std::{
 };
 
 use catga_core::{
-    Envelope, ErrorCode, EventStore, IdempotencyStore, LeaseStore, MessageMetadata,
+    Envelope, ErrorCode, EventStore, IdempotencyStore, InboxStore, LeaseStore, MessageMetadata,
     MessageTransport, ProcessingState, Snapshot, SnapshotStore,
 };
 use catga_nats::{
-    NatsConfig, NatsEventStore, NatsIdempotency, NatsLeases, NatsSnapshotStore, NatsTransport,
+    NatsConfig, NatsEventStore, NatsIdempotency, NatsInbox, NatsLeases, NatsSnapshotStore,
+    NatsTransport,
 };
 
 #[tokio::test]
@@ -276,4 +277,24 @@ async fn nats_idempotency_concurrent_claims_have_exactly_one_owner() {
         owners += usize::from(claim.unwrap());
     }
     assert_eq!(owners, 1);
+}
+
+#[tokio::test]
+async fn nats_inbox_claims_exclusively_retries_failures_and_caches_results() {
+    let Some(server) = std::env::var("CATGA_NATS_URL").ok() else {
+        return;
+    };
+    let inbox = NatsInbox::connect(&server, format!("CATGA_INBOX_{}", std::process::id()))
+        .await
+        .unwrap();
+    assert!(inbox.try_claim(7).await.unwrap());
+    assert!(!inbox.try_claim(7).await.unwrap());
+    inbox.fail(7).await.unwrap();
+    assert!(inbox.try_claim(7).await.unwrap());
+    inbox.complete(7, Some(Arc::from([1_u8, 2]))).await.unwrap();
+    assert_eq!(
+        inbox.state(7).await.unwrap(),
+        Some(ProcessingState::Completed)
+    );
+    assert_eq!(inbox.result(7).await.unwrap().as_deref(), Some(&[1, 2][..]));
 }
