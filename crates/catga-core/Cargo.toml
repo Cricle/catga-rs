@@ -12,6 +12,9 @@ workspace = true
 [dependencies]
 arc-swap = "1"
 async-trait = "0.1"
+base64 = "0.22"
 catga-macros = { path = "../catga-macros" }
 futures = "0.3"
-tokio = { version = "1", features = ["time"] }
+hmac = "0.12"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt", "time"] }

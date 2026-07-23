@@ -13,6 +13,7 @@ mod event_version;
 mod handler;
 mod mediator;
 mod message;
+mod message_signing;
 mod outbox_processor;
 mod pipeline;
 mod projection;
@@ -43,6 +44,7 @@ pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use handler::{EventHandler, Handler};
 pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};
+pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use outbox_processor::{OutboxProcessor, OutboxRun};
 pub use pipeline::{Behavior, Next, Pipeline};
 pub use projection::{

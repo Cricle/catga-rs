@@ -88,6 +88,10 @@ name = "distributed_id"
 path = "distributed_id.rs"
 
 [[test]]
+name = "message_signing"
+path = "message_signing.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 
