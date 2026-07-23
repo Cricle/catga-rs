@@ -143,3 +143,11 @@ path = "flow_state.rs"
 [[test]]
 name = "flow_store"
 path = "flow_store.rs"
+
+[[test]]
+name = "flows"
+path = "flows.rs"
+
+[[test]]
+name = "flow_executor"
+path = "flow_executor.rs"
