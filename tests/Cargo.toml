@@ -44,6 +44,10 @@ name = "cluster"
 path = "cluster.rs"
 
 [[test]]
+name = "raft_cluster"
+path = "raft_cluster.rs"
+
+[[test]]
 name = "axum"
 path = "axum.rs"
 

@@ -10,8 +10,12 @@ use arc_swap::ArcSwap;
 use tokio::sync::Notify;
 
 mod leader_only;
+mod raft;
 
 pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
+pub use raft::{
+    RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftNodeError,
+};
 
 /// Read-only cluster-coordination operations available to an individual node.
 pub trait ClusterCoordinator: Send + Sync {
