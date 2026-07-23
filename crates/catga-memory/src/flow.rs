@@ -1,6 +1,9 @@
 //! Lock-free, optimistic in-memory storage for durable flow state.
 
-use std::{sync::Arc, time::{Duration, SystemTime}};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -98,7 +101,13 @@ impl FlowStore for MemoryFlows {
             return Ok(false);
         }
         Ok(slot
-            .replace(&current, (*current).clone().heartbeated_at(SystemTime::now()).next_version())
+            .replace(
+                &current,
+                (*current)
+                    .clone()
+                    .heartbeated_at(SystemTime::now())
+                    .next_version(),
+            )
             .is_some())
     }
 }

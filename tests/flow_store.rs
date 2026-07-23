@@ -14,14 +14,18 @@ async fn flow_store_uses_versions_for_updates_and_claims_stale_work() {
 
     assert!(store.create(initial.clone()).await.unwrap());
     assert!(!store.create(initial.clone()).await.unwrap());
-    assert!(store
-        .update(initial.version(), initial.clone().next_version())
-        .await
-        .unwrap());
-    assert!(!store
-        .update(initial.version(), initial.next_version())
-        .await
-        .unwrap());
+    assert!(
+        store
+            .update(initial.version(), initial.clone().next_version())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .update(initial.version(), initial.next_version())
+            .await
+            .unwrap()
+    );
 
     let stale = state("stale", "node-a").heartbeated_at(SystemTime::UNIX_EPOCH);
     assert!(store.create(stale).await.unwrap());
