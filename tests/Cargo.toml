@@ -11,6 +11,7 @@ async-trait = "0.1"
 catga-core = { path = "../crates/catga-core" }
 catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
 catga-memory = { path = "../crates/catga-memory" }
+catga-nats = { path = "../crates/catga-nats" }
 catga-robustmq = { path = "../crates/catga-robustmq" }
 futures = "0.3"
 robustmq = "1"
@@ -59,3 +60,7 @@ path = "delivery_ack.rs"
 [[test]]
 name = "codec"
 path = "codec.rs"
+
+[[test]]
+name = "nats"
+path = "nats.rs"
