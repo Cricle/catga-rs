@@ -5,6 +5,7 @@ mod aggregate;
 mod behaviors;
 mod cache;
 mod codec;
+mod compression;
 mod correlation;
 mod distributed_id;
 mod error;
@@ -39,6 +40,10 @@ pub use behaviors::{
 pub use cache::CachedResultCodec;
 pub use catga_macros::{Message, catga_handlers};
 pub use codec::EnvelopeCodec;
+pub use compression::{
+    CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
+    compress_into, decompress, decompress_limited, is_compressed,
+};
 pub use correlation::{Correlated, current_correlation_id};
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,

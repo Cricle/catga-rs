@@ -129,6 +129,10 @@ name = "codec"
 path = "codec.rs"
 
 [[test]]
+name = "compression"
+path = "compression.rs"
+
+[[test]]
 name = "nats"
 path = "nats.rs"
 

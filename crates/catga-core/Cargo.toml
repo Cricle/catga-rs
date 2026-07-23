@@ -13,7 +13,9 @@ workspace = true
 arc-swap = "1"
 async-trait = "0.1"
 base64 = "0.22"
+brotli = "8"
 catga-macros = { path = "../catga-macros" }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures = "0.3"
 hmac = "0.12"
 sha2 = "0.10"
