@@ -30,7 +30,7 @@ async fn flow_store_uses_versions_for_updates_and_claims_stale_work() {
     let stale = state("stale", "node-a").heartbeated_at(SystemTime::UNIX_EPOCH);
     assert!(store.create(stale).await.unwrap());
     let claimed = store
-        .try_claim("payment", "node-b", Duration::ZERO)
+        .try_claim("payment", "node-b", Duration::from_secs(86_400))
         .await
         .unwrap()
         .unwrap();
