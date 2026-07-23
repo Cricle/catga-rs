@@ -36,6 +36,10 @@ name = "pipeline"
 path = "pipeline.rs"
 
 [[test]]
+name = "behaviors"
+path = "behaviors.rs"
+
+[[test]]
 name = "batch_stream"
 path = "batch_stream.rs"
 
