@@ -47,7 +47,7 @@ pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
     compress_into, decompress, decompress_limited, is_compressed,
 };
-pub use correlation::{Correlated, current_correlation_id};
+pub use correlation::{Correlated, current_correlation_id, scope_correlation_id};
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
 };

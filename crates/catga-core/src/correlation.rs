@@ -15,6 +15,7 @@ pub fn current_correlation_id() -> Option<u64> {
     CORRELATION_ID.try_with(|id| *id).ok()
 }
 
-pub(crate) async fn scope<T>(correlation_id: u64, future: impl Future<Output = T>) -> T {
+/// Runs a future with `correlation_id` available to the current asynchronous task chain.
+pub async fn scope_correlation_id<T>(correlation_id: u64, future: impl Future<Output = T>) -> T {
     CORRELATION_ID.scope(correlation_id, future).await
 }

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::{Behavior, CatgaResult, Correlated, Next, Request, correlation::scope};
+use crate::{Behavior, CatgaResult, Correlated, Next, Request, correlation::scope_correlation_id};
 
 /// Propagates one request's correlation identity through its asynchronous handler chain.
 pub struct CorrelationBehavior;
@@ -13,6 +13,6 @@ where
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         let metadata = message.metadata();
         let correlation_id = metadata.correlation_id().unwrap_or(metadata.message_id());
-        scope(correlation_id, next.run(message)).await
+        scope_correlation_id(correlation_id, next.run(message)).await
     }
 }
