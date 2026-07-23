@@ -27,3 +27,7 @@ path = "mediator.rs"
 [[test]]
 name = "batch_stream"
 path = "batch_stream.rs"
+
+[[test]]
+name = "reliability_contracts"
+path = "reliability_contracts.rs"
