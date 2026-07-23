@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Axum adapters for Catga's framework-independent result types.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use axum::{
     Json,
     http::StatusCode,
@@ -8,6 +10,20 @@ use axum::{
 };
 use catga_core::{CatgaError, ErrorCode};
 use serde::Serialize;
+
+/// Header used to propagate request correlation identifiers.
+pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
+
+static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Reads a numeric correlation identifier or allocates a monotonic process-local fallback.
+pub fn correlation_id(headers: &axum::http::HeaderMap) -> u64 {
+    headers
+        .get(CORRELATION_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| NEXT_CORRELATION_ID.fetch_add(1, Ordering::Relaxed))
+}
 
 /// An Axum response wrapper for a [`CatgaError`].
 pub struct CatgaHttpError(CatgaError);
