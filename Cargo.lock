@@ -212,6 +212,7 @@ dependencies = [
  "hmac",
  "sha2",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1688,6 +1689,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

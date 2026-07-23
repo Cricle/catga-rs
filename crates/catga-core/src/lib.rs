@@ -13,6 +13,7 @@ mod event_store;
 mod event_version;
 mod handler;
 mod lease;
+mod lifecycle;
 mod mediator;
 mod message;
 mod message_signing;
@@ -54,6 +55,10 @@ pub use event_store::{EventStore, EventStream, StoredEvent, VersionInfo};
 pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use handler::{EventHandler, Handler};
 pub use lease::LeaseStore;
+pub use lifecycle::{
+    AsyncInitializable, HealthCheckable, RecoverableComponent, RecoveryManager, RecoveryResult,
+    ShutdownCoordinator, Stoppable,
+};
 pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};
 pub use message_signing::{HmacMessageSigner, MessageSigner};
