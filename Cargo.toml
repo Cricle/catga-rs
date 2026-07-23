@@ -5,6 +5,7 @@ members = [
     "crates/catga-macros",
     "crates/catga-memory",
     "crates/catga-nats",
+    "crates/catga-redis",
     "crates/catga-robustmq",
     "tests",
 ]

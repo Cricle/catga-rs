@@ -1,0 +1,16 @@
+[package]
+name = "catga-redis"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+catga-codec-postcard = { path = "../catga-codec-postcard" }
+catga-core = { path = "../catga-core" }
+redis = { version = "1", features = ["connection-manager", "tokio-comp"] }

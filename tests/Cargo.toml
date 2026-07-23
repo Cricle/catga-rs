@@ -12,9 +12,11 @@ catga-core = { path = "../crates/catga-core" }
 catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
 catga-memory = { path = "../crates/catga-memory" }
 catga-nats = { path = "../crates/catga-nats" }
+catga-redis = { path = "../crates/catga-redis" }
 catga-robustmq = { path = "../crates/catga-robustmq" }
 futures = "0.3"
 robustmq = "1"
+redis = { version = "1", features = ["tokio-comp"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [[test]]
@@ -64,3 +66,7 @@ path = "codec.rs"
 [[test]]
 name = "nats"
 path = "nats.rs"
+
+[[test]]
+name = "redis"
+path = "redis.rs"
