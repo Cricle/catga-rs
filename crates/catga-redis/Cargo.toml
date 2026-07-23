@@ -13,4 +13,5 @@ workspace = true
 async-trait = "0.1"
 catga-codec-postcard = { path = "../catga-codec-postcard" }
 catga-core = { path = "../catga-core" }
+dashmap = "6"
 redis = { version = "1", features = ["connection-manager", "tokio-comp"] }

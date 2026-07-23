@@ -1,9 +1,6 @@
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
@@ -11,6 +8,7 @@ use catga_codec_postcard::PostcardCodec;
 use catga_core::{
     CatgaError, CatgaResult, Delivery, Envelope, EnvelopeCodec, ErrorCode, MessageTransport,
 };
+use dashmap::DashSet;
 use redis::{
     AsyncCommands, AsyncConnectionConfig,
     aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection},
@@ -159,7 +157,7 @@ async fn read_entry(
 }
 
 pub(crate) struct InFlight {
-    entries: Mutex<HashSet<Box<str>>>,
+    entries: DashSet<Box<str>>,
     active_receivers: AtomicUsize,
     recovery_gate: AtomicBool,
 }
@@ -167,7 +165,7 @@ pub(crate) struct InFlight {
 impl InFlight {
     fn new() -> Self {
         Self {
-            entries: Mutex::new(HashSet::new()),
+            entries: DashSet::new(),
             active_receivers: AtomicUsize::new(0),
             recovery_gate: AtomicBool::new(false),
         }
@@ -187,12 +185,8 @@ impl InFlight {
         {
             return None;
         }
-        let can_recover = self.active_receivers.load(Ordering::SeqCst) == 1
-            && self
-                .entries
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_empty();
+        let can_recover =
+            self.active_receivers.load(Ordering::SeqCst) == 1 && self.entries.is_empty();
         if can_recover {
             Some(RecoveryGuard { in_flight: self })
         } else {
@@ -202,17 +196,11 @@ impl InFlight {
     }
 
     fn insert(&self, entry_id: &str) {
-        self.entries
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(entry_id.into());
+        self.entries.insert(entry_id.into());
     }
 
     pub(crate) fn release(&self, entry_id: &str) {
-        self.entries
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(entry_id);
+        self.entries.remove(entry_id);
     }
 }
 
