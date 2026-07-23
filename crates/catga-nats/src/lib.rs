@@ -8,6 +8,7 @@ mod event_store;
 mod idempotency;
 mod inbox;
 mod lease;
+mod outbox;
 mod snapshot;
 mod transport;
 
@@ -17,5 +18,6 @@ pub use event_store::NatsEventStore;
 pub use idempotency::NatsIdempotency;
 pub use inbox::NatsInbox;
 pub use lease::NatsLeases;
+pub use outbox::NatsOutbox;
 pub use snapshot::NatsSnapshotStore;
 pub use transport::NatsTransport;

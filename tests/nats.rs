@@ -7,11 +7,12 @@ use std::{
 
 use catga_core::{
     DeadLetter, DeadLetterStore, Envelope, ErrorCode, EventStore, IdempotencyStore, InboxStore,
-    LeaseStore, MessageMetadata, MessageTransport, ProcessingState, Snapshot, SnapshotStore,
+    LeaseStore, MessageMetadata, MessageTransport, OutboxMessage, OutboxStore, ProcessingState,
+    Snapshot, SnapshotStore,
 };
 use catga_nats::{
     NatsConfig, NatsDeadLetters, NatsEventStore, NatsIdempotency, NatsInbox, NatsLeases,
-    NatsSnapshotStore, NatsTransport,
+    NatsOutbox, NatsSnapshotStore, NatsTransport,
 };
 
 #[tokio::test]
@@ -329,4 +330,29 @@ async fn nats_dead_letters_preserve_queue_order_and_envelopes() {
     let letters = letters.list(1).await.unwrap();
     assert_eq!(letters.len(), 1);
     assert_eq!(letters[0].envelope().id(), 1);
+}
+
+#[tokio::test]
+async fn nats_outbox_claims_and_acknowledges_only_the_current_owner() {
+    let Some(server) = std::env::var("CATGA_NATS_URL").ok() else {
+        return;
+    };
+    let outbox = NatsOutbox::connect(&server, format!("CATGA_OUTBOX_{}", std::process::id()))
+        .await
+        .unwrap();
+    outbox
+        .enqueue(OutboxMessage::new(Envelope::new(
+            7,
+            "order.created",
+            vec![1],
+            MessageMetadata::new(7, None),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(outbox.claim("worker-a", 1).await.unwrap().len(), 1);
+    assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
+    outbox.ack("worker-b", 7).await.unwrap();
+    assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
+    outbox.ack("worker-a", 7).await.unwrap();
+    assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
 }
