@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::{
     Json,
-    http::StatusCode,
+    extract::Request,
+    http::{HeaderValue, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Response},
 };
 use catga_core::{CatgaError, ErrorCode};
@@ -23,6 +25,17 @@ pub fn correlation_id(headers: &axum::http::HeaderMap) -> u64 {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
         .unwrap_or_else(|| NEXT_CORRELATION_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Scopes a request correlation id through the downstream future and echoes it in the response.
+pub async fn correlation_middleware(request: Request, next: Next) -> Response {
+    let correlation_id = correlation_id(request.headers());
+    let mut response = catga_core::scope_correlation_id(correlation_id, next.run(request)).await;
+    response.headers_mut().insert(
+        CORRELATION_ID_HEADER,
+        HeaderValue::from_str(&correlation_id.to_string()).expect("u64 is a valid HTTP header"),
+    );
+    response
 }
 
 /// An Axum response wrapper for a [`CatgaError`].
