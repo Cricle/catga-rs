@@ -64,6 +64,10 @@ name = "projections"
 path = "projections.rs"
 
 [[test]]
+name = "read_models"
+path = "read_models.rs"
+
+[[test]]
 name = "snapshots"
 path = "snapshots.rs"
 

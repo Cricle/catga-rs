@@ -17,6 +17,7 @@ mod message_signing;
 mod outbox_processor;
 mod pipeline;
 mod projection;
+mod read_model;
 mod registry;
 mod reliability;
 mod snapshot;
@@ -50,6 +51,10 @@ pub use pipeline::{Behavior, Next, Pipeline};
 pub use projection::{
     CatchUpProjectionRunner, Projection, ProjectionCheckpoint, ProjectionCheckpointStore,
     ProjectionRun,
+};
+pub use read_model::{
+    ChangeKind, ChangeRecord, ChangeTracker, ReadModelStore, ReadModelSynchronizer,
+    RealtimeSyncStrategy, SyncStrategy,
 };
 pub use registry::Registry;
 pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore, ProcessingState};
