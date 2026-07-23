@@ -3,7 +3,9 @@
 
 mod acknowledgement;
 mod config;
+mod lease;
 mod transport;
 
 pub use config::NatsConfig;
+pub use lease::NatsLeases;
 pub use transport::NatsTransport;

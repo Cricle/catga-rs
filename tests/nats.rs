@@ -1,7 +1,39 @@
 //! NATS JetStream integration tests.
 
-use catga_core::{Envelope, MessageMetadata, MessageTransport};
-use catga_nats::{NatsConfig, NatsTransport};
+use std::time::Duration;
+
+use catga_core::{Envelope, LeaseStore, MessageMetadata, MessageTransport};
+use catga_nats::{NatsConfig, NatsLeases, NatsTransport};
+
+#[tokio::test]
+async fn nats_leases_compare_owner_with_kv_revisions() {
+    let Some(server) = std::env::var("CATGA_NATS_URL").ok() else {
+        return;
+    };
+    let leases = NatsLeases::connect(&server, format!("CATGA_LEASE_{}", std::process::id()))
+        .await
+        .unwrap();
+    assert!(
+        leases
+            .try_acquire("outbox", "node-a", Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !leases
+            .try_acquire("outbox", "node-b", Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+    assert!(!leases.release("outbox", "node-b").await.unwrap());
+    assert!(
+        leases
+            .renew("outbox", "node-a", Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+    assert!(leases.release("outbox", "node-a").await.unwrap());
+}
 
 #[tokio::test]
 async fn jetstream_round_trip_and_ack() {
