@@ -80,6 +80,10 @@ name = "subscriptions"
 path = "subscriptions.rs"
 
 [[test]]
+name = "time_travel"
+path = "time_travel.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 

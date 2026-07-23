@@ -20,6 +20,7 @@ mod reliability;
 mod snapshot;
 mod store;
 mod subscription;
+mod time_travel;
 mod transport;
 mod upgrading_event_store;
 
@@ -52,5 +53,6 @@ pub use subscription::{
     CompetingSubscriptionRunner, PersistentSubscription, SubscriptionCheckpoint,
     SubscriptionHandler, SubscriptionRun, SubscriptionRunner, SubscriptionStore,
 };
+pub use time_travel::{StateComparison, TimeTravelService};
 pub use transport::{Acknowledger, Delivery, MessageTransport};
 pub use upgrading_event_store::UpgradingEventStore;
