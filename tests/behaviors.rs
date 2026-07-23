@@ -10,8 +10,9 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, Handler, Mediator, Pipeline, Registry, Request,
-    RetryBehavior, TimeoutBehavior,
+    CatgaError, CatgaResult, Correlated, CorrelationBehavior, ErrorCode, Handler, Mediator,
+    MessageMetadata, Pipeline, Registry, Request, RetryBehavior, TimeoutBehavior,
+    current_correlation_id,
 };
 
 #[derive(Clone, Debug)]
@@ -52,6 +53,30 @@ impl Handler<Work> for SlowHandler {
     async fn handle(&self, _: Work) -> CatgaResult<&'static str> {
         tokio::time::sleep(Duration::from_millis(50)).await;
         Ok("late")
+    }
+}
+
+#[derive(Debug)]
+struct CorrelatedWork(MessageMetadata);
+
+impl catga_core::Message for CorrelatedWork {}
+
+impl Request for CorrelatedWork {
+    type Response = u64;
+}
+
+impl Correlated for CorrelatedWork {
+    fn metadata(&self) -> MessageMetadata {
+        self.0
+    }
+}
+
+struct CorrelationHandler;
+
+#[async_trait]
+impl Handler<CorrelatedWork> for CorrelationHandler {
+    async fn handle(&self, _: CorrelatedWork) -> CatgaResult<u64> {
+        Ok(current_correlation_id().expect("correlation is scoped"))
     }
 }
 
@@ -102,4 +127,23 @@ async fn timeout_behavior_cancels_an_overdue_handler() {
             .code(),
         ErrorCode::Timeout
     );
+}
+
+#[tokio::test]
+async fn correlation_behavior_scopes_message_metadata_and_restores_the_parent_context() {
+    let mut registry = Registry::new();
+    registry
+        .register_request::<CorrelatedWork, _>(CorrelationHandler)
+        .unwrap();
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(CorrelationBehavior);
+
+    assert_eq!(
+        mediator
+            .send_with(CorrelatedWork(MessageMetadata::new(17, Some(9))), &pipeline,)
+            .await
+            .unwrap(),
+        9
+    );
+    assert_eq!(current_correlation_id(), None);
 }

@@ -3,6 +3,7 @@
 
 mod behaviors;
 mod codec;
+mod correlation;
 mod error;
 mod handler;
 mod mediator;
@@ -13,9 +14,10 @@ mod reliability;
 mod store;
 mod transport;
 
-pub use behaviors::{RetryBehavior, TimeoutBehavior};
+pub use behaviors::{CorrelationBehavior, RetryBehavior, TimeoutBehavior};
 pub use catga_macros::{Message, catga_handlers};
 pub use codec::EnvelopeCodec;
+pub use correlation::{Correlated, current_correlation_id};
 pub use error::{CatgaError, CatgaResult, ErrorCode};
 pub use handler::{EventHandler, Handler};
 pub use mediator::Mediator;
