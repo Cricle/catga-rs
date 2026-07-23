@@ -39,7 +39,7 @@ impl NatsOutbox {
         })
     }
     fn key(id: u64) -> String {
-        format!("m{id}")
+        format!("m{id:020}")
     }
 }
 #[async_trait]

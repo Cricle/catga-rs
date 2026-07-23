@@ -349,7 +349,20 @@ async fn nats_outbox_claims_and_acknowledges_only_the_current_owner() {
         )))
         .await
         .unwrap();
-    assert_eq!(outbox.claim("worker-a", 1).await.unwrap().len(), 1);
+    outbox
+        .enqueue(OutboxMessage::new(Envelope::new(
+            10,
+            "order.created",
+            vec![2],
+            MessageMetadata::new(10, None),
+        )))
+        .await
+        .unwrap();
+    let claimed = outbox.claim("worker-a", 2).await.unwrap();
+    assert_eq!(
+        claimed.iter().map(OutboxMessage::id).collect::<Vec<_>>(),
+        [7, 10]
+    );
     assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
     outbox.ack("worker-b", 7).await.unwrap();
     assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
