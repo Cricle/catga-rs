@@ -9,6 +9,8 @@ pub enum FlowStatus {
     Running,
     /// Completed actions are being undone.
     Compensating,
+    /// The flow is persisted until an external trigger resumes it.
+    Suspended,
     /// The flow completed successfully.
     Done,
     /// The flow completed with an error.
@@ -130,6 +132,23 @@ impl FlowState {
     pub fn compensating(self) -> Self {
         Self {
             status: FlowStatus::Compensating,
+            ..self
+        }
+    }
+
+    /// Marks the flow as persisted and waiting for a later resume.
+    pub fn suspended(self) -> Self {
+        Self {
+            status: FlowStatus::Suspended,
+            owner: None,
+            ..self
+        }
+    }
+
+    /// Marks the flow as actively executing under its current owner.
+    pub fn running(self) -> Self {
+        Self {
+            status: FlowStatus::Running,
             ..self
         }
     }

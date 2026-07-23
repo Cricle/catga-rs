@@ -171,6 +171,6 @@ fn terminal_result(state: &FlowState) -> Option<CatgaResult<FlowResult>> {
                 "a failed flow has no stored error",
             )),
         }),
-        FlowStatus::Running | FlowStatus::Compensating => None,
+        FlowStatus::Running | FlowStatus::Compensating | FlowStatus::Suspended => None,
     }
 }

@@ -1,7 +1,8 @@
-use std::time::{Duration, SystemTime};
+use std::{sync::Arc, time::{Duration, SystemTime}};
 
 use catga_flow::{
-    FlowContinuation, FlowState, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowContinuation, FlowDefinition, FlowRuntime, FlowState, FlowStepOutcome,
+    MemoryFlowScheduler, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_memory::MemorySuspendedFlows;
 
@@ -63,4 +64,22 @@ async fn concurrent_wait_results_are_not_lost() {
             .completed_count(),
         2
     );
+}
+
+#[tokio::test]
+async fn delayed_flow_persists_and_resumes_registered_steps() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let definition = FlowDefinition::new("payment")
+        .step("reserve", |_| async {
+            Ok(FlowStepOutcome::suspend_until(SystemTime::now()))
+        })
+        .step("charge", |_| async { Ok(FlowStepOutcome::complete()) });
+    let runtime = FlowRuntime::new(store, Arc::clone(&scheduler), definition, "node-a");
+
+    let suspended = runtime.start("flow-13", b"input".to_vec()).await.unwrap();
+    assert!(suspended.is_suspended());
+    assert_eq!(scheduler.take_due(SystemTime::now()).len(), 1);
+
+    assert!(runtime.resume("flow-13").await.unwrap().is_success());
 }
