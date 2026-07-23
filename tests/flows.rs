@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use catga_core::{CatgaError, ErrorCode};
-use catga_flow::{DslFlow, Flow};
+use catga_flow::{DslFlow, Flow, dsl_action};
 
 #[tokio::test]
 async fn local_flow_compensates_completed_steps_in_reverse_order() {
@@ -104,4 +104,18 @@ async fn dsl_flow_stops_before_later_steps_after_a_branch_error() {
         ErrorCode::Validation
     );
     assert!(state.is_empty());
+}
+
+#[tokio::test]
+async fn dsl_action_macro_hides_the_borrowed_future_boxing() {
+    let mut value = 0_u32;
+    DslFlow::new()
+        .action(dsl_action!(|value: &mut u32| async move {
+            *value += 1;
+            Ok(())
+        }))
+        .run(&mut value)
+        .await
+        .unwrap();
+    assert_eq!(value, 1);
 }

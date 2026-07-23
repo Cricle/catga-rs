@@ -46,3 +46,15 @@ macro_rules! flow_definition {
         definition
     }};
 }
+
+/// Converts a natural async state action into a [`DslFlow`] action closure.
+///
+/// ```ignore
+/// .action(dsl_action!(|state: &mut State| async move { Ok(()) }))
+/// ```
+#[macro_export]
+macro_rules! dsl_action {
+    (|$state:ident : $state_ty:ty| async move $body:block) => {
+        |$state: $state_ty| Box::pin(async move $body)
+    };
+}
