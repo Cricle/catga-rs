@@ -37,6 +37,7 @@ catga-rs/
     catga-memory/           # In-memory transport and persistence
     catga-redis/            # Optional Redis adapter
     catga-nats/             # Optional NATS / JetStream adapter
+    catga-robustmq/         # Optional RobustMQ mq9 mailbox adapter
   tests/
     compatibility/          # Core behavioral tests derived from Catga tests
     integration/            # Redis/NATS tests, skipped without services
@@ -114,6 +115,14 @@ server when `CATGA_NATS_URL` is set.
 Integration tests skip with an explicit message if the service URL is absent;
 CI will later supply service containers so these adapters are not considered
 fully verified merely by compiling.
+
+`catga-robustmq` uses the `robustmq` Rust SDK's `MQ9Client` for persistent
+mailboxes, priority delivery, and offline recipients. It remains a transport
+adapter: Catga persistence is never coupled to RobustMQ internals. Standard
+topic dispatch uses RobustMQ's NATS-compatible endpoint through the same NATS
+transport contract; mq9 mailbox functions are an opt-in extension trait.
+Integration tests use a real broker and verify send, receive, acknowledgement,
+and redelivery.
 
 ## Reliability Pipeline
 

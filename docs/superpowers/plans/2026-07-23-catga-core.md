@@ -20,6 +20,7 @@
 | `crates/catga-memory/src/{store,transport}.rs` | Bounded transport and atomic in-memory stores |
 | `crates/catga-redis/src/lib.rs` | Redis Streams transport and idempotency store |
 | `crates/catga-nats/src/lib.rs` | JetStream transport and durable consumer |
+| `crates/catga-robustmq/src/lib.rs` | RobustMQ mq9 mailbox transport adapter |
 | `crates/*/tests/*.rs` | Package-owned behavioral and integration tests |
 
 ### Task 1: Bootstrap The Workspace And Core Result Types
