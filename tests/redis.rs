@@ -10,10 +10,11 @@ use std::{
 
 use catga_core::{
     Envelope, ErrorCode, EventStore, InboxStore, LeaseStore, MessageMetadata, MessageTransport,
-    ProjectionCheckpoint, ProjectionCheckpointStore, Snapshot, SnapshotStore,
+    OutboxMessage, OutboxStore, ProjectionCheckpoint, ProjectionCheckpointStore, Snapshot,
+    SnapshotStore,
 };
 use catga_redis::{
-    RedisConfig, RedisEventStore, RedisInbox, RedisLeases, RedisProjectionCheckpoints,
+    RedisConfig, RedisEventStore, RedisInbox, RedisLeases, RedisOutbox, RedisProjectionCheckpoints,
     RedisSnapshotStore, RedisTransport,
 };
 use redis::AsyncCommands;
@@ -299,6 +300,32 @@ async fn redis_inbox_claims_exclusively_retries_failures_and_caches_results() {
         Some(catga_core::ProcessingState::Completed)
     );
     assert_eq!(inbox.result(7).await.unwrap().as_deref(), Some(&[1, 2][..]));
+}
+
+#[tokio::test]
+async fn redis_outbox_claims_and_acknowledges_only_the_current_owner() {
+    let Some(config) = redis_config() else {
+        return;
+    };
+    let outbox = RedisOutbox::connect(&config.server, format!("{}:outbox", config.stream))
+        .await
+        .unwrap();
+    outbox
+        .enqueue(OutboxMessage::new(Envelope::new(
+            7,
+            "order.created",
+            vec![1],
+            MessageMetadata::new(7, None),
+        )))
+        .await
+        .unwrap();
+    let claimed = outbox.claim("worker-a", 1).await.unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
+    outbox.ack("worker-b", 7).await.unwrap();
+    assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
+    outbox.ack("worker-a", 7).await.unwrap();
+    assert!(outbox.claim("worker-b", 1).await.unwrap().is_empty());
 }
 
 #[tokio::test]
