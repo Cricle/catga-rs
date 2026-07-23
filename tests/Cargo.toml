@@ -9,6 +9,7 @@ autotests = false
 [dependencies]
 async-trait = "0.1"
 catga-core = { path = "../crates/catga-core" }
+catga-flow = { path = "../crates/catga-flow" }
 catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
 catga-memory = { path = "../crates/catga-memory" }
 catga-nats = { path = "../crates/catga-nats" }
@@ -134,3 +135,11 @@ path = "nats.rs"
 [[test]]
 name = "redis"
 path = "redis.rs"
+
+[[test]]
+name = "flow_state"
+path = "flow_state.rs"
+
+[[test]]
+name = "flow_store"
+path = "flow_store.rs"
