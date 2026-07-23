@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/catga-core",
+    "crates/catga-codec-postcard",
     "crates/catga-macros",
     "crates/catga-memory",
     "crates/catga-robustmq",

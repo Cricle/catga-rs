@@ -9,6 +9,7 @@ autotests = false
 [dependencies]
 async-trait = "0.1"
 catga-core = { path = "../crates/catga-core" }
+catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
 catga-memory = { path = "../crates/catga-memory" }
 catga-robustmq = { path = "../crates/catga-robustmq" }
 futures = "0.3"
@@ -54,3 +55,7 @@ path = "robustmq.rs"
 [[test]]
 name = "delivery_ack"
 path = "delivery_ack.rs"
+
+[[test]]
+name = "codec"
+path = "codec.rs"

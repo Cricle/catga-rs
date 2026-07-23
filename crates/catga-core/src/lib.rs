@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Core contracts for the Catga CQRS runtime.
 
+mod codec;
 mod error;
 mod handler;
 mod mediator;
@@ -10,6 +11,7 @@ mod store;
 mod transport;
 
 pub use catga_macros::{Message, catga_handlers};
+pub use codec::EnvelopeCodec;
 pub use error::{CatgaError, CatgaResult, ErrorCode};
 pub use handler::{EventHandler, Handler};
 pub use mediator::Mediator;
