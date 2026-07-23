@@ -31,6 +31,50 @@ async fn runtime_rejects_a_continuation_owned_by_a_different_definition() {
 }
 
 #[tokio::test]
+async fn wrong_definition_cannot_record_a_child_result() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    store
+        .create(FlowContinuation::waiting(
+            FlowState::new("wrong-wait", "payments", b"input".to_vec(), "node-a").suspended(),
+            "finish",
+            WaitCondition::new(
+                "wrong-wait-condition",
+                WaitPolicy::All,
+                1,
+                SystemTime::now(),
+                Duration::from_secs(30),
+            ),
+        ))
+        .await
+        .unwrap();
+    let runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("refunds")
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-b",
+    );
+
+    assert!(
+        runtime
+            .record_wait_success("wrong-wait", "child", b"payload".to_vec())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .get("wrong-wait")
+            .await
+            .unwrap()
+            .unwrap()
+            .wait()
+            .unwrap()
+            .completed_count(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn memory_scheduler_rejects_duplicate_flow_resumes() {
     let scheduler = MemoryFlowScheduler::default();
 
@@ -107,4 +151,36 @@ async fn runtime_claims_an_abandoned_running_continuation_after_its_stale_timeou
     .with_stale_after(Duration::ZERO);
 
     assert!(runtime.resume("abandoned").await.unwrap().is_success());
+}
+
+#[tokio::test]
+async fn heartbeat_prevents_a_live_running_continuation_from_being_reclaimed() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    store
+        .create(FlowContinuation::new(
+            FlowState::new("live", "payment", b"input".to_vec(), "node-a")
+                .running()
+                .heartbeated_at(SystemTime::UNIX_EPOCH),
+            "finish",
+        ))
+        .await
+        .unwrap();
+    let owner = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("payment")
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+    let contender = FlowRuntime::new(
+        store,
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("payment")
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-b",
+    )
+    .with_stale_after(Duration::from_secs(86_400));
+
+    assert!(owner.heartbeat("live", 0).await.unwrap());
+    assert!(contender.resume("live").await.unwrap().is_running());
 }

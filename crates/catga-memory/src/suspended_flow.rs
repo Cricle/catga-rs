@@ -1,6 +1,6 @@
 //! Lock-free in-memory persistence for suspended flow continuations.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -142,6 +142,28 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
                 return Ok(true);
             }
             let next = (*current).clone().with_wait(next_wait);
+            if slot.replace(&current, next).is_some() {
+                return Ok(true);
+            }
+        }
+    }
+
+    async fn heartbeat(&self, flow_id: &str, owner: &str, version: i64) -> CatgaResult<bool> {
+        let Some(slot) = self
+            .continuations
+            .get(flow_id)
+            .map(|entry| Arc::clone(&entry))
+        else {
+            return Ok(false);
+        };
+        loop {
+            let current = slot.continuation.load_full();
+            if current.state().owner() != Some(owner) || current.state().version() != version {
+                return Ok(false);
+            }
+            let next = (*current)
+                .clone()
+                .with_state(current.state().clone().heartbeated_at(SystemTime::now()));
             if slot.replace(&current, next).is_some() {
                 return Ok(true);
             }

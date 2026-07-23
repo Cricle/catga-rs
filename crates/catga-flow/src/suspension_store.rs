@@ -32,4 +32,7 @@ pub trait SuspendedFlowStore: Send + Sync {
         child_id: &str,
         error: CatgaError,
     ) -> CatgaResult<bool>;
+
+    /// Refreshes the current owner's liveness without changing the business-state version.
+    async fn heartbeat(&self, flow_id: &str, owner: &str, version: i64) -> CatgaResult<bool>;
 }

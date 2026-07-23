@@ -40,6 +40,11 @@ impl FlowRuntimeResult {
     pub fn is_failure(&self) -> bool {
         self.state.status() == FlowStatus::Failed
     }
+
+    /// Returns whether another executor currently owns active execution.
+    pub fn is_running(&self) -> bool {
+        self.state.status() == FlowStatus::Running
+    }
 }
 
 /// Executes named flow definitions against a durable continuation store.
@@ -116,12 +121,7 @@ where
         let Some(continuation) = self.store.get(flow_id).await? else {
             return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
         };
-        if continuation.state().flow_type() != self.definition.name() {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "flow continuation belongs to a different definition",
-            ));
-        }
+        self.ensure_definition(&continuation)?;
         if continuation.state().status().is_terminal() {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
@@ -168,6 +168,7 @@ where
         if continuation.state().status().is_terminal() {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
+        self.ensure_definition(&continuation)?;
         if !self
             .store
             .record_wait_success(flow_id, continuation.state().version(), child_id, payload)
@@ -191,6 +192,7 @@ where
         if continuation.state().status().is_terminal() {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
+        self.ensure_definition(&continuation)?;
         if !self
             .store
             .record_wait_failure(flow_id, continuation.state().version(), child_id, error)
@@ -199,6 +201,18 @@ where
             return self.current_result(flow_id).await;
         }
         self.resume(flow_id).await
+    }
+
+    /// Refreshes the caller's durable execution lease without changing its business version.
+    ///
+    /// Long-running handlers should call this more frequently than `stale_after`; handlers remain
+    /// at-least-once and must make external side effects idempotent.
+    pub async fn heartbeat(&self, flow_id: &str, version: i64) -> CatgaResult<bool> {
+        let Some(continuation) = self.store.get(flow_id).await? else {
+            return Ok(false);
+        };
+        self.ensure_definition(&continuation)?;
+        self.store.heartbeat(flow_id, &self.owner, version).await
     }
 
     async fn drive(&self, mut continuation: FlowContinuation) -> CatgaResult<FlowRuntimeResult> {
@@ -354,6 +368,17 @@ where
             .await?
             .map(|continuation| FlowRuntimeResult::new(continuation.state().clone()))
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "flow does not exist"))
+    }
+
+    fn ensure_definition(&self, continuation: &FlowContinuation) -> CatgaResult<()> {
+        if continuation.state().flow_type() == self.definition.name() {
+            Ok(())
+        } else {
+            Err(CatgaError::new(
+                ErrorCode::Validation,
+                "flow continuation belongs to a different definition",
+            ))
+        }
     }
 }
 
