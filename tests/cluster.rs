@@ -20,6 +20,10 @@ async fn cluster_publishes_leadership_changes_without_polling_or_global_locks() 
 
     assert!(node_a.is_leader());
     assert_eq!(node_a.leader_endpoint().as_deref(), Some("http://node-a"));
+    let health = catga_cluster::cluster_health(node_a.as_ref());
+    assert!(health.has_leader());
+    assert!(health.is_leader());
+    assert_eq!(health.cluster_size(), 2);
     assert!(!node_b.is_leader());
 
     let waiter = {

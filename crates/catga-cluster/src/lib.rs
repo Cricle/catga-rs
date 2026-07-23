@@ -11,11 +11,13 @@ use tokio::sync::Notify;
 
 mod execution;
 mod forward;
+mod health;
 mod leader_only;
 mod raft;
 
 pub use execution::ClusterCoordinatorExt;
 pub use forward::{ClusterForwarder, ForwardToLeaderBehavior};
+pub use health::{ClusterHealth, cluster_health};
 pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
 pub use raft::{
     RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftNodeError,
