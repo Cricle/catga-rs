@@ -26,7 +26,7 @@ pub use catga_macros::{Message, catga_handlers};
 pub use codec::EnvelopeCodec;
 pub use correlation::{Correlated, current_correlation_id};
 pub use error::{CatgaError, CatgaResult, ErrorCode};
-pub use event_store::{EventStore, EventStream, StoredEvent};
+pub use event_store::{EventStore, EventStream, StoredEvent, VersionInfo};
 pub use handler::{EventHandler, Handler};
 pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};

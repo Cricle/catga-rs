@@ -3,7 +3,7 @@ use std::{sync::Arc, time::SystemTime};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, Envelope, ErrorCode, EventStore, EventStream, StoredEvent,
+    CatgaError, CatgaResult, Envelope, ErrorCode, EventStore, EventStream, StoredEvent, VersionInfo,
 };
 use dashmap::DashMap;
 
@@ -73,6 +73,56 @@ impl EventStore for MemoryEventStore {
             .streams
             .get(stream_id)
             .map_or(-1, |stream| stream.events.load().len() as i64 - 1))
+    }
+
+    async fn read_to_version(&self, stream_id: &str, to_version: i64) -> CatgaResult<EventStream> {
+        let Some(stream) = self.streams.get(stream_id) else {
+            return Ok(EventStream::new(stream_id, -1, Vec::new()));
+        };
+        let snapshot = stream.events.load_full();
+        let count = usize::try_from(to_version.saturating_add(1))
+            .unwrap_or(0)
+            .min(snapshot.len());
+        Ok(EventStream::new(
+            stream_id,
+            count as i64 - 1,
+            snapshot[..count].to_vec(),
+        ))
+    }
+
+    async fn read_to_time(
+        &self,
+        stream_id: &str,
+        upper_bound: SystemTime,
+    ) -> CatgaResult<EventStream> {
+        let Some(stream) = self.streams.get(stream_id) else {
+            return Ok(EventStream::new(stream_id, -1, Vec::new()));
+        };
+        let snapshot = stream.events.load_full();
+        let events: Vec<_> = snapshot
+            .iter()
+            .filter(|event| event.timestamp() <= upper_bound)
+            .cloned()
+            .collect();
+        let version = events.last().map_or(-1, StoredEvent::version);
+        Ok(EventStream::new(stream_id, version, events))
+    }
+
+    async fn version_history(&self, stream_id: &str) -> CatgaResult<Vec<VersionInfo>> {
+        Ok(self.streams.get(stream_id).map_or_else(Vec::new, |stream| {
+            stream
+                .events
+                .load()
+                .iter()
+                .map(|event| {
+                    VersionInfo::new(
+                        event.version(),
+                        event.timestamp(),
+                        event.envelope().message_type(),
+                    )
+                })
+                .collect()
+        }))
     }
 
     async fn stream_ids(&self) -> CatgaResult<Vec<String>> {

@@ -46,6 +46,40 @@ pub struct EventStream {
     events: Vec<StoredEvent>,
 }
 
+/// Lightweight metadata used to inspect stream history without cloning event payloads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionInfo {
+    version: i64,
+    timestamp: SystemTime,
+    event_type: Box<str>,
+}
+
+impl VersionInfo {
+    /// Creates one version-history record.
+    pub fn new(version: i64, timestamp: SystemTime, event_type: impl Into<Box<str>>) -> Self {
+        Self {
+            version,
+            timestamp,
+            event_type: event_type.into(),
+        }
+    }
+
+    /// Returns the stream version.
+    pub const fn version(&self) -> i64 {
+        self.version
+    }
+
+    /// Returns when this version entered the stream.
+    pub const fn timestamp(&self) -> SystemTime {
+        self.timestamp
+    }
+
+    /// Returns the serialized event type name.
+    pub fn event_type(&self) -> &str {
+        &self.event_type
+    }
+}
+
 impl EventStream {
     /// Creates a stream snapshot from stored events.
     pub fn new(stream_id: impl Into<Box<str>>, version: i64, events: Vec<StoredEvent>) -> Self {
@@ -93,6 +127,19 @@ pub trait EventStore: Send + Sync {
 
     /// Returns the current stream version, or `-1` when the stream does not exist.
     async fn version(&self, stream_id: &str) -> CatgaResult<i64>;
+
+    /// Reads all events through the inclusive stream version.
+    async fn read_to_version(&self, stream_id: &str, to_version: i64) -> CatgaResult<EventStream>;
+
+    /// Reads all events stored at or before the inclusive timestamp.
+    async fn read_to_time(
+        &self,
+        stream_id: &str,
+        upper_bound: SystemTime,
+    ) -> CatgaResult<EventStream>;
+
+    /// Returns version and timestamp metadata without event payloads.
+    async fn version_history(&self, stream_id: &str) -> CatgaResult<Vec<VersionInfo>>;
 
     /// Returns every currently known stream identifier.
     async fn stream_ids(&self) -> CatgaResult<Vec<String>>;

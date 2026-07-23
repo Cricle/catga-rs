@@ -1,6 +1,7 @@
 //! Event store contract tests.
 
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use catga_core::{Envelope, EventStore, MessageMetadata};
 use catga_memory::MemoryEventStore;
@@ -63,4 +64,31 @@ async fn concurrent_appends_publish_every_immutable_event_snapshot() {
             .len(),
         64
     );
+}
+
+#[tokio::test]
+async fn event_store_supports_time_travel_and_lightweight_version_history() {
+    let store = MemoryEventStore::default();
+    store.append("history", vec![event(1)], None).await.unwrap();
+    store
+        .append("history", vec![event(2)], Some(0))
+        .await
+        .unwrap();
+
+    let at_zero = store.read_to_version("history", 0).await.unwrap();
+    assert_eq!(at_zero.version(), 0);
+    assert_eq!(at_zero.events().len(), 1);
+    assert_eq!(
+        store
+            .read_to_time("history", SystemTime::now() + Duration::from_secs(1))
+            .await
+            .unwrap()
+            .events()
+            .len(),
+        2
+    );
+    let history = store.version_history("history").await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[1].version(), 1);
+    assert_eq!(history[1].event_type(), "order.created");
 }
