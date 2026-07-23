@@ -11,7 +11,7 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, Handler, Mediator, Pipeline, Registry, Request,
-    RetryBehavior,
+    RetryBehavior, TimeoutBehavior,
 };
 
 #[derive(Clone, Debug)]
@@ -45,6 +45,16 @@ impl Handler<Work> for TerminalFailure {
     }
 }
 
+struct SlowHandler;
+
+#[async_trait]
+impl Handler<Work> for SlowHandler {
+    async fn handle(&self, _: Work) -> CatgaResult<&'static str> {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Ok("late")
+    }
+}
+
 fn pipeline() -> Pipeline<Work> {
     Pipeline::new().with(RetryBehavior::new(2, Duration::ZERO))
 }
@@ -75,4 +85,21 @@ async fn retry_behavior_replays_transient_errors_but_not_terminal_errors() {
         ErrorCode::Validation
     );
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn timeout_behavior_cancels_an_overdue_handler() {
+    let mut registry = Registry::new();
+    registry.register_request::<Work, _>(SlowHandler).unwrap();
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(TimeoutBehavior::new(Duration::from_millis(1)));
+
+    assert_eq!(
+        mediator
+            .send_with(Work, &pipeline)
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::Timeout
+    );
 }

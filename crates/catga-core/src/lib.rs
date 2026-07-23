@@ -13,7 +13,7 @@ mod reliability;
 mod store;
 mod transport;
 
-pub use behaviors::RetryBehavior;
+pub use behaviors::{RetryBehavior, TimeoutBehavior};
 pub use catga_macros::{Message, catga_handlers};
 pub use codec::EnvelopeCodec;
 pub use error::{CatgaError, CatgaResult, ErrorCode};
