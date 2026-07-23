@@ -1,9 +1,13 @@
 use std::future::IntoFuture;
 
-use axum::{Json, body::to_bytes, response::IntoResponse, routing::post};
-use catga_axum::{CORRELATION_ID_HEADER, CatgaHttpError, HttpClusterForwarder, correlation_id};
+use async_trait::async_trait;
+use axum::{body::to_bytes, response::IntoResponse};
+use catga_axum::{
+    CORRELATION_ID_HEADER, CatgaHttpError, HttpClusterForwarder, correlation_id,
+    leader_forward_route,
+};
 use catga_cluster::ClusterForwarder;
-use catga_core::{CatgaError, ErrorCode, Request};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Handler, Mediator, Registry, Request};
 use serde::{Deserialize, Serialize};
 
 #[tokio::test]
@@ -61,12 +65,22 @@ impl Request for ForwardRequest {
     type Response = u32;
 }
 
+struct ForwardHandler;
+
+#[async_trait]
+impl Handler<ForwardRequest> for ForwardHandler {
+    async fn handle(&self, request: ForwardRequest) -> CatgaResult<u32> {
+        Ok(request.value + 1)
+    }
+}
+
 #[tokio::test]
 async fn http_cluster_forwarder_posts_a_typed_request_to_the_leader() {
-    let app = axum::Router::new().route(
-        "/api/catga/forward/ForwardRequest",
-        post(|Json(request): Json<ForwardRequest>| async move { Json(request.value + 1) }),
-    );
+    let mut registry = Registry::new();
+    registry
+        .register_request::<ForwardRequest, _>(ForwardHandler)
+        .unwrap();
+    let app = leader_forward_route::<ForwardRequest>(std::sync::Arc::new(Mediator::new(registry)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(axum::serve(listener, app).into_future());

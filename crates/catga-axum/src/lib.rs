@@ -1,18 +1,22 @@
 #![forbid(unsafe_code)]
 //! Axum adapters for Catga's framework-independent result types.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::Arc,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use async_trait::async_trait;
 use axum::{
-    Json,
+    Json, Router,
     extract::Request as AxumRequest,
     http::{HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
+    routing::post,
 };
 use catga_cluster::ClusterForwarder;
-use catga_core::{CatgaError, CatgaResult, ErrorCode, Request};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Mediator, Request};
 use serde::{Serialize, de::DeserializeOwned};
 
 /// Header used to propagate request correlation identifiers.
@@ -66,6 +70,32 @@ where
             .await
             .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))
     }
+}
+
+/// Builds the leader-side forwarding route for one explicitly registered request type.
+pub fn leader_forward_route<M>(mediator: Arc<Mediator>) -> Router
+where
+    M: Request + DeserializeOwned,
+    M::Response: Serialize,
+{
+    let request_type = std::any::type_name::<M>()
+        .rsplit("::")
+        .next()
+        .unwrap_or("request");
+    let path = format!("/api/catga/forward/{request_type}");
+    Router::new().route(
+        &path,
+        post(move |Json(message): Json<M>| {
+            let mediator = Arc::clone(&mediator);
+            async move {
+                mediator
+                    .send(message)
+                    .await
+                    .map(Json)
+                    .map_err(CatgaHttpError::from)
+            }
+        }),
+    )
 }
 
 /// Reads a numeric correlation identifier or allocates a monotonic process-local fallback.
