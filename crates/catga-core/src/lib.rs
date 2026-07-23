@@ -17,8 +17,8 @@ mod store;
 mod transport;
 
 pub use behaviors::{
-    CorrelationBehavior, IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey,
-    RetryBehavior, TimeoutBehavior,
+    CorrelationBehavior, DeadLetterBehavior, DeadLetterEnvelope, IdempotencyBehavior,
+    IdempotencyKey, InboxBehavior, InboxKey, RetryBehavior, TimeoutBehavior,
 };
 pub use cache::CachedResultCodec;
 pub use catga_macros::{Message, catga_handlers};

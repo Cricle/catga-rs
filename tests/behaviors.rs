@@ -10,12 +10,12 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CachedResultCodec, CatgaError, CatgaResult, Correlated, CorrelationBehavior, ErrorCode,
-    Handler, IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey, Mediator,
-    MessageMetadata, Pipeline, Registry, Request, RetryBehavior, TimeoutBehavior,
-    current_correlation_id,
+    CachedResultCodec, CatgaError, CatgaResult, Correlated, CorrelationBehavior,
+    DeadLetterBehavior, DeadLetterEnvelope, DeadLetterStore, Envelope, ErrorCode, Handler,
+    IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey, Mediator, MessageMetadata,
+    Pipeline, Registry, Request, RetryBehavior, TimeoutBehavior, current_correlation_id,
 };
-use catga_memory::{MemoryIdempotency, MemoryInbox};
+use catga_memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox};
 
 #[derive(Clone, Debug)]
 struct Work;
@@ -145,6 +145,30 @@ impl Handler<InboxWork> for CountingHandler {
     }
 }
 
+#[derive(Clone, Debug)]
+struct DeadWork;
+
+impl catga_core::Message for DeadWork {}
+
+impl Request for DeadWork {
+    type Response = ();
+}
+
+impl DeadLetterEnvelope for DeadWork {
+    fn dead_letter_envelope(&self) -> Envelope {
+        Envelope::new(88, "dead.work", vec![8], MessageMetadata::new(88, None))
+    }
+}
+
+struct DeadHandler;
+
+#[async_trait]
+impl Handler<DeadWork> for DeadHandler {
+    async fn handle(&self, _: DeadWork) -> CatgaResult<()> {
+        Err(CatgaError::new(ErrorCode::Validation, "fatal"))
+    }
+}
+
 fn pipeline() -> Pipeline<Work> {
     Pipeline::new().with(RetryBehavior::new(2, Duration::ZERO))
 }
@@ -249,4 +273,27 @@ async fn inbox_behavior_returns_a_cached_result_without_reinvoking_the_handler()
     assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
     assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn dead_letter_behavior_records_terminal_failures_only() {
+    let mut registry = Registry::new();
+    registry
+        .register_request::<DeadWork, _>(DeadHandler)
+        .unwrap();
+    let mediator = Mediator::new(registry);
+    let store = Arc::new(MemoryDeadLetters::new(1).unwrap());
+    let pipeline = Pipeline::new().with(DeadLetterBehavior::new(Arc::clone(&store), 1));
+
+    assert_eq!(
+        mediator
+            .send_with(DeadWork, &pipeline)
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::Validation
+    );
+    let letters = store.list(1).await.unwrap();
+    assert_eq!(letters[0].envelope().id(), 88);
+    assert_eq!(letters[0].reason(), "fatal");
 }

@@ -39,6 +39,11 @@ impl CatgaError {
     pub const fn code(&self) -> ErrorCode {
         self.code
     }
+
+    /// Returns the explanatory error text.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// The result returned by Catga operations.
