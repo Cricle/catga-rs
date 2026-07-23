@@ -5,7 +5,7 @@ use std::{
 
 use futures::{Stream, StreamExt, stream};
 
-use crate::{CatgaError, CatgaResult, ErrorCode, Event, Registry, Request};
+use crate::{CatgaError, CatgaResult, ErrorCode, Event, Next, Pipeline, Registry, Request};
 
 /// Dispatches typed requests and events through an immutable handler registry.
 pub struct Mediator {
@@ -22,13 +22,28 @@ impl Mediator {
 
     /// Routes a request to its sole registered handler.
     pub async fn send<M: Request>(&self, message: M) -> CatgaResult<M::Response> {
-        let handler = self
-            .registry
-            .requests
-            .get(&TypeId::of::<M>())
-            .ok_or_else(|| {
-                CatgaError::new(ErrorCode::NotFound, "request handler is not registered")
-            })?;
+        Self::dispatch(&self.registry, message).await
+    }
+
+    /// Routes a request through a typed pipeline before its registered handler.
+    pub async fn send_with<M: Request>(
+        &self,
+        message: M,
+        pipeline: &Pipeline<M>,
+    ) -> CatgaResult<M::Response> {
+        let registry = Arc::clone(&self.registry);
+        let terminal = Next::new(move |message| {
+            let registry = Arc::clone(&registry);
+            Box::pin(async move { Self::dispatch(&registry, message).await })
+        });
+
+        pipeline.wrap(terminal).run(message).await
+    }
+
+    async fn dispatch<M: Request>(registry: &Registry, message: M) -> CatgaResult<M::Response> {
+        let handler = registry.requests.get(&TypeId::of::<M>()).ok_or_else(|| {
+            CatgaError::new(ErrorCode::NotFound, "request handler is not registered")
+        })?;
         let response = handler.handle(Box::new(message)).await?;
         response
             .downcast::<M::Response>()
