@@ -8,8 +8,8 @@ use std::{
     time::Duration,
 };
 
-use catga_core::{Envelope, MessageMetadata, MessageTransport};
-use catga_redis::{RedisConfig, RedisTransport};
+use catga_core::{Envelope, LeaseStore, MessageMetadata, MessageTransport};
+use catga_redis::{RedisConfig, RedisLeases, RedisTransport};
 use redis::AsyncCommands;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -27,6 +27,38 @@ fn redis_config() -> Option<RedisConfig> {
         group: format!("catga:{suffix}").into(),
         consumer: format!("consumer:{suffix}").into(),
     })
+}
+
+#[tokio::test]
+async fn redis_leases_compare_owner_atomically() {
+    let Some(config) = redis_config() else {
+        eprintln!("skipping Redis integration test: CATGA_REDIS_URL is unset");
+        return;
+    };
+    let leases = RedisLeases::connect(config.server, format!("{}:lease", config.stream))
+        .await
+        .unwrap();
+
+    assert!(
+        leases
+            .try_acquire("outbox", "node-a", Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !leases
+            .try_acquire("outbox", "node-b", Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+    assert!(!leases.release("outbox", "node-b").await.unwrap());
+    assert!(
+        leases
+            .renew("outbox", "node-a", Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+    assert!(leases.release("outbox", "node-a").await.unwrap());
 }
 
 #[tokio::test]

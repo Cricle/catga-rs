@@ -3,7 +3,9 @@
 
 mod acknowledgement;
 mod config;
+mod lease;
 mod transport;
 
 pub use config::RedisConfig;
+pub use lease::RedisLeases;
 pub use transport::RedisTransport;
