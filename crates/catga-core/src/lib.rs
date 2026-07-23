@@ -20,6 +20,7 @@ mod reliability;
 mod snapshot;
 mod store;
 mod transport;
+mod upgrading_event_store;
 
 pub use aggregate::{Aggregate, AggregateRepository, EventCountSnapshotStrategy, SnapshotStrategy};
 pub use behaviors::{
@@ -47,3 +48,4 @@ pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore,
 pub use snapshot::{Snapshot, SnapshotStore};
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
 pub use transport::{Acknowledger, Delivery, MessageTransport};
+pub use upgrading_event_store::UpgradingEventStore;

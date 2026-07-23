@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use catga_core::{Envelope, EventUpgrader, EventVersionRegistry, MessageMetadata};
+use catga_core::{
+    Envelope, EventStore, EventUpgrader, EventVersionRegistry, MessageMetadata, UpgradingEventStore,
+};
+use catga_memory::MemoryEventStore;
 
 struct V1ToV2;
 
@@ -84,4 +87,41 @@ fn event_version_registry_upgrades_envelopes_through_immutable_rule_snapshots() 
     assert_eq!(upgraded.payload(), [1, 2, 3]);
     assert_eq!(registry.current_version("order.created.v3"), 3);
     assert!(registry.has_upgraders("order.created.v1"));
+}
+
+#[tokio::test]
+async fn upgrading_event_store_transforms_read_views_without_mutating_history() {
+    let registry = EventVersionRegistry::default();
+    registry.register(Arc::new(V1ToV2)).unwrap();
+    let history = MemoryEventStore::default();
+    history
+        .append(
+            "orders-7",
+            vec![Envelope::versioned(
+                7,
+                "order.created.v1",
+                vec![1],
+                MessageMetadata::new(7, None),
+                1,
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+
+    let upgraded = UpgradingEventStore::new(&history, &registry);
+    let view = upgraded.read("orders-7", 0, 1).await.unwrap();
+    assert_eq!(
+        view.events()[0].envelope().message_type(),
+        "order.created.v2"
+    );
+    assert_eq!(view.events()[0].envelope().schema_version(), 2);
+    assert_eq!(view.events()[0].envelope().payload(), [1, 2]);
+
+    let original = history.read("orders-7", 0, 1).await.unwrap();
+    assert_eq!(
+        original.events()[0].envelope().message_type(),
+        "order.created.v1"
+    );
+    assert_eq!(original.events()[0].envelope().schema_version(), 1);
 }
