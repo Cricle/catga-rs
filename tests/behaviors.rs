@@ -10,10 +10,11 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, Correlated, CorrelationBehavior, ErrorCode, Handler, Mediator,
-    MessageMetadata, Pipeline, Registry, Request, RetryBehavior, TimeoutBehavior,
-    current_correlation_id,
+    CachedResultCodec, CatgaError, CatgaResult, Correlated, CorrelationBehavior, ErrorCode,
+    Handler, IdempotencyBehavior, IdempotencyKey, Mediator, MessageMetadata, Pipeline, Registry,
+    Request, RetryBehavior, TimeoutBehavior, current_correlation_id,
 };
+use catga_memory::MemoryIdempotency;
 
 #[derive(Clone, Debug)]
 struct Work;
@@ -77,6 +78,46 @@ struct CorrelationHandler;
 impl Handler<CorrelatedWork> for CorrelationHandler {
     async fn handle(&self, _: CorrelatedWork) -> CatgaResult<u64> {
         Ok(current_correlation_id().expect("correlation is scoped"))
+    }
+}
+
+#[derive(Debug)]
+struct IdempotentWork;
+
+impl catga_core::Message for IdempotentWork {}
+
+impl Request for IdempotentWork {
+    type Response = u64;
+}
+
+impl IdempotencyKey for IdempotentWork {
+    fn idempotency_key(&self) -> &str {
+        "idempotent-work"
+    }
+}
+
+struct CountingHandler(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Handler<IdempotentWork> for CountingHandler {
+    async fn handle(&self, _: IdempotentWork) -> CatgaResult<u64> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(21)
+    }
+}
+
+struct U64Codec;
+
+impl CachedResultCodec<u64> for U64Codec {
+    fn encode(&self, value: &u64) -> CatgaResult<Arc<[u8]>> {
+        Ok(Arc::from(value.to_le_bytes()))
+    }
+
+    fn decode(&self, bytes: &[u8]) -> CatgaResult<u64> {
+        bytes
+            .try_into()
+            .map(u64::from_le_bytes)
+            .map_err(|_| CatgaError::new(ErrorCode::Internal, "invalid cached u64"))
     }
 }
 
@@ -146,4 +187,26 @@ async fn correlation_behavior_scopes_message_metadata_and_restores_the_parent_co
         9
     );
     assert_eq!(current_correlation_id(), None);
+}
+
+#[tokio::test]
+async fn idempotency_behavior_returns_a_cached_result_without_reinvoking_the_handler() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+        .register_request::<IdempotentWork, _>(CountingHandler(Arc::clone(&attempts)))
+        .unwrap();
+    let mediator = Mediator::new(registry);
+    let store = Arc::new(MemoryIdempotency::default());
+    let pipeline = Pipeline::new().with(IdempotencyBehavior::new(store, U64Codec));
+
+    assert_eq!(
+        mediator.send_with(IdempotentWork, &pipeline).await.unwrap(),
+        21
+    );
+    assert_eq!(
+        mediator.send_with(IdempotentWork, &pipeline).await.unwrap(),
+        21
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
 }

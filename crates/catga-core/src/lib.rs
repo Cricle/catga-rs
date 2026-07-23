@@ -2,6 +2,7 @@
 //! Core contracts for the Catga CQRS runtime.
 
 mod behaviors;
+mod cache;
 mod codec;
 mod correlation;
 mod error;
@@ -14,7 +15,10 @@ mod reliability;
 mod store;
 mod transport;
 
-pub use behaviors::{CorrelationBehavior, RetryBehavior, TimeoutBehavior};
+pub use behaviors::{
+    CorrelationBehavior, IdempotencyBehavior, IdempotencyKey, RetryBehavior, TimeoutBehavior,
+};
+pub use cache::CachedResultCodec;
 pub use catga_macros::{Message, catga_handlers};
 pub use codec::EnvelopeCodec;
 pub use correlation::{Correlated, current_correlation_id};
