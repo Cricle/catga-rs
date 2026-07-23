@@ -2,6 +2,7 @@
 
 use std::{
     future::Future,
+    num::NonZeroUsize,
     sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -117,6 +118,38 @@ where
     async fn execute(&self, changes: &[ChangeRecord]) -> CatgaResult<()> {
         for change in changes {
             (self.action)(change).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Runs a user-supplied asynchronous action for fixed-size ordered change batches.
+pub struct BatchSyncStrategy<F> {
+    batch_size: NonZeroUsize,
+    action: F,
+}
+
+impl<F> BatchSyncStrategy<F> {
+    /// Creates a batch strategy, or returns `None` for a zero batch size.
+    pub fn new(batch_size: usize, action: F) -> Option<Self> {
+        NonZeroUsize::new(batch_size).map(|batch_size| Self { batch_size, action })
+    }
+
+    /// Returns the maximum number of changes given to one action invocation.
+    pub const fn batch_size(&self) -> NonZeroUsize {
+        self.batch_size
+    }
+}
+
+#[async_trait]
+impl<F, Fut> SyncStrategy for BatchSyncStrategy<F>
+where
+    F: Fn(Vec<ChangeRecord>) -> Fut + Send + Sync,
+    Fut: Future<Output = CatgaResult<()>> + Send,
+{
+    async fn execute(&self, changes: &[ChangeRecord]) -> CatgaResult<()> {
+        for batch in changes.chunks(self.batch_size.get()) {
+            (self.action)(batch.to_vec()).await?;
         }
         Ok(())
     }

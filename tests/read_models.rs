@@ -6,8 +6,8 @@ use std::sync::{
 };
 
 use catga_core::{
-    CatgaError, ChangeKind, ChangeRecord, ChangeTracker, Envelope, ErrorCode, MessageMetadata,
-    ReadModelStore, ReadModelSynchronizer, RealtimeSyncStrategy,
+    BatchSyncStrategy, CatgaError, ChangeKind, ChangeRecord, ChangeTracker, Envelope, ErrorCode,
+    MessageMetadata, ReadModelStore, ReadModelSynchronizer, RealtimeSyncStrategy, SyncStrategy,
 };
 use catga_memory::{MemoryChangeTracker, MemoryReadModels};
 
@@ -67,4 +67,41 @@ async fn memory_read_models_share_immutable_values() {
     assert!(Arc::ptr_eq(&model, &loaded));
     models.delete("order-7").await.unwrap();
     assert!(models.get("order-7").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn batch_strategy_preserves_change_order_in_bounded_owned_batches() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let delivered = Arc::new(AtomicUsize::new(0));
+    let strategy = BatchSyncStrategy::new(2, {
+        let calls = Arc::clone(&calls);
+        let delivered = Arc::clone(&delivered);
+        move |batch: Vec<ChangeRecord>| {
+            let calls = Arc::clone(&calls);
+            let delivered = Arc::clone(&delivered);
+            async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                delivered.fetch_add(batch.len(), Ordering::Relaxed);
+                Ok::<(), CatgaError>(())
+            }
+        }
+    })
+    .unwrap();
+    let changes = (0..5)
+        .map(|id| {
+            ChangeRecord::new(
+                id.to_string(),
+                "order",
+                "7",
+                ChangeKind::Updated,
+                Envelope::new(id, "order.updated", vec![], MessageMetadata::new(id, None)),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    strategy.execute(&changes).await.unwrap();
+
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+    assert_eq!(delivered.load(Ordering::Relaxed), 5);
+    assert!(BatchSyncStrategy::<fn(Vec<ChangeRecord>) -> std::future::Ready<catga_core::CatgaResult<()>>>::new(0, |_| std::future::ready(Ok(()))).is_none());
 }

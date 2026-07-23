@@ -58,8 +58,8 @@ pub use projection::{
     ProjectionRun,
 };
 pub use read_model::{
-    ChangeKind, ChangeRecord, ChangeTracker, ReadModelStore, ReadModelSynchronizer,
-    RealtimeSyncStrategy, SyncStrategy,
+    BatchSyncStrategy, ChangeKind, ChangeRecord, ChangeTracker, ReadModelStore,
+    ReadModelSynchronizer, RealtimeSyncStrategy, SyncStrategy,
 };
 pub use registry::Registry;
 pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore, ProcessingState};
