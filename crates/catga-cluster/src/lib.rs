@@ -16,6 +16,7 @@ mod leader_only;
 mod raft;
 mod runtime;
 mod singleton_task;
+mod state_machine;
 mod storage;
 
 pub use execution::ClusterCoordinatorExt;
@@ -23,10 +24,12 @@ pub use forward::{ClusterForwarder, ForwardToLeaderBehavior};
 pub use health::{ClusterHealth, cluster_health};
 pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
 pub use raft::{
-    RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftNodeError,
+    RaftApplicationSnapshot, RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage,
+    RaftNode, RaftNodeError,
 };
 pub use runtime::{RaftRuntime, RaftRuntimeError, RaftTransport, RaftTransportResult};
 pub use singleton_task::SingletonTaskRunner;
+pub use state_machine::{RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError};
 
 /// Read-only cluster-coordination operations available to an individual node.
 pub trait ClusterCoordinator: Send + Sync {

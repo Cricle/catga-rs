@@ -1,7 +1,8 @@
 //! Durable and in-memory persistence backends for the Raft driver.
 
-use std::{cmp, path::Path};
+use std::{cmp, path::Path, sync::Arc};
 
+use arc_swap::ArcSwapOption;
 use raft::{
     Error, Result as RaftResult, StorageError,
     eraftpb::{ConfState, Entry, HardState, Snapshot},
@@ -30,13 +31,13 @@ impl MessageExt for RaftEntry {
 /// Storage selected by the public Raft node constructors.
 #[derive(Clone)]
 pub(crate) enum RaftStorage {
-    InMemory(MemStorage),
+    InMemory(InMemoryRaftStorage),
     Persistent(PersistentRaftStorage),
 }
 
 impl RaftStorage {
     pub(crate) fn in_memory(conf_state: ConfState) -> Self {
-        Self::InMemory(MemStorage::new_with_conf_state(conf_state))
+        Self::InMemory(InMemoryRaftStorage::new(conf_state))
     }
 
     pub(crate) fn open_persistent(
@@ -54,15 +55,20 @@ impl RaftStorage {
     ) -> RaftResult<()> {
         match self {
             Self::InMemory(storage) => {
-                let mut storage = storage.wl();
+                let snapshot_to_store = snapshot.cloned();
+                let mut storage_core = storage.storage.wl();
                 if let Some(snapshot) = snapshot {
-                    storage.apply_snapshot(snapshot.clone())?;
+                    storage_core.apply_snapshot(snapshot.clone())?;
                 }
                 if !entries.is_empty() {
-                    storage.append(entries)?;
+                    storage_core.append(entries)?;
                 }
                 if let Some(hard_state) = hard_state {
-                    storage.set_hardstate(hard_state.clone());
+                    storage_core.set_hardstate(hard_state.clone());
+                }
+                drop(storage_core);
+                if let Some(snapshot) = snapshot_to_store {
+                    storage.store_snapshot(snapshot);
                 }
                 Ok(())
             }
@@ -73,7 +79,7 @@ impl RaftStorage {
     pub(crate) fn persist_commit(&self, commit: u64) -> RaftResult<()> {
         match self {
             Self::InMemory(storage) => {
-                storage.wl().mut_hard_state().set_commit(commit);
+                storage.storage.wl().mut_hard_state().set_commit(commit);
                 Ok(())
             }
             Self::Persistent(storage) => storage.persist_commit(commit),
@@ -88,6 +94,34 @@ impl RaftStorage {
             return Ok(Vec::new());
         }
         self.entries(first, commit + 1, None, GetEntriesContext::empty(false))
+    }
+
+    pub(crate) fn application_snapshot(&self) -> RaftResult<Option<Snapshot>> {
+        match self {
+            Self::InMemory(storage) => Ok(storage
+                .snapshot
+                .load_full()
+                .map(|snapshot| (*snapshot).clone())),
+            Self::Persistent(storage) => storage.stored_snapshot(),
+        }
+    }
+
+    pub(crate) fn create_snapshot(&self, index: u64, data: Vec<u8>) -> RaftResult<()> {
+        let state = self.initial_state()?;
+        if index == 0 || index > state.hard_state.commit {
+            return Err(Error::Store(StorageError::Unavailable));
+        }
+        let mut snapshot = Snapshot::default();
+        let metadata = snapshot.mut_metadata();
+        metadata.index = index;
+        metadata.term = self.term(index)?;
+        metadata.set_conf_state(state.conf_state);
+        snapshot.set_data(data.into());
+
+        match self {
+            Self::InMemory(storage) => storage.create_snapshot(snapshot),
+            Self::Persistent(storage) => storage.persist_checkpoint(&snapshot),
+        }
     }
 }
 
@@ -137,6 +171,75 @@ impl Storage for RaftStorage {
         match self {
             Self::InMemory(storage) => storage.snapshot(request_index, to),
             Self::Persistent(storage) => storage.snapshot(request_index, to),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct InMemoryRaftStorage {
+    storage: MemStorage,
+    snapshot: Arc<ArcSwapOption<Snapshot>>,
+}
+
+impl InMemoryRaftStorage {
+    fn new(conf_state: ConfState) -> Self {
+        Self {
+            storage: MemStorage::new_with_conf_state(conf_state),
+            snapshot: Arc::new(ArcSwapOption::empty()),
+        }
+    }
+
+    fn create_snapshot(&self, snapshot: Snapshot) -> RaftResult<()> {
+        let index = snapshot.get_metadata().index;
+        self.storage.wl().compact(index.saturating_add(1))?;
+        self.store_snapshot(snapshot);
+        Ok(())
+    }
+
+    fn store_snapshot(&self, snapshot: Snapshot) {
+        self.snapshot.store(Some(Arc::new(snapshot)));
+    }
+}
+
+impl Storage for InMemoryRaftStorage {
+    fn initial_state(&self) -> RaftResult<RaftState> {
+        self.storage.initial_state()
+    }
+
+    fn entries(
+        &self,
+        low: u64,
+        high: u64,
+        max_size: impl Into<Option<u64>>,
+        context: GetEntriesContext,
+    ) -> RaftResult<Vec<Entry>> {
+        self.storage.entries(low, high, max_size, context)
+    }
+
+    fn term(&self, index: u64) -> RaftResult<u64> {
+        if let Some(snapshot) = self.snapshot.load_full()
+            && snapshot.get_metadata().index == index
+        {
+            return Ok(snapshot.get_metadata().term);
+        }
+        self.storage.term(index)
+    }
+
+    fn first_index(&self) -> RaftResult<u64> {
+        self.storage.first_index()
+    }
+
+    fn last_index(&self) -> RaftResult<u64> {
+        self.storage.last_index()
+    }
+
+    fn snapshot(&self, request_index: u64, to: u64) -> RaftResult<Snapshot> {
+        match self.snapshot.load_full() {
+            Some(snapshot) if snapshot.get_metadata().index >= request_index => {
+                Ok((*snapshot).clone())
+            }
+            Some(_) => Err(Error::Store(StorageError::SnapshotTemporarilyUnavailable)),
+            None => self.storage.snapshot(request_index, to),
         }
     }
 }
@@ -247,6 +350,31 @@ impl PersistentRaftStorage {
         }
         self.engine.write(&mut batch, true).map_err(engine_error)?;
         Ok(())
+    }
+
+    fn persist_checkpoint(&self, snapshot: &Snapshot) -> RaftResult<()> {
+        let metadata = snapshot.get_metadata();
+        let mut batch = LogBatch::default();
+        batch
+            .put_message(RAFT_GROUP_ID, SNAPSHOT_KEY.to_vec(), snapshot)
+            .map_err(engine_error)?;
+        batch
+            .put_message(
+                RAFT_GROUP_ID,
+                CONF_STATE_KEY.to_vec(),
+                metadata.get_conf_state(),
+            )
+            .map_err(engine_error)?;
+        batch.add_command(
+            RAFT_GROUP_ID,
+            Command::Compact {
+                index: metadata.index + 1,
+            },
+        );
+        self.engine
+            .write(&mut batch, true)
+            .map(|_| ())
+            .map_err(engine_error)
     }
 
     fn persist_commit(&self, commit: u64) -> RaftResult<()> {

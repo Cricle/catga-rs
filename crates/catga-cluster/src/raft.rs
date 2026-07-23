@@ -58,6 +58,15 @@ pub struct RaftCommittedEntry {
     pub data: Vec<u8>,
 }
 
+/// A durable application state snapshot embedded in a native Raft snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RaftApplicationSnapshot {
+    /// The last application command included in the snapshot.
+    pub index: u64,
+    /// Application-owned, opaque snapshot bytes.
+    pub data: Vec<u8>,
+}
+
 /// Errors raised while building a Raft node.
 #[derive(Debug)]
 pub enum RaftNodeError {
@@ -202,6 +211,7 @@ pub struct RaftNode {
     coordinator: Arc<RaftClusterNode>,
     outbox: Vec<RaftMessage>,
     committed: Vec<RaftCommittedEntry>,
+    installed_snapshots: Vec<RaftApplicationSnapshot>,
 }
 
 impl RaftNode {
@@ -277,6 +287,7 @@ impl RaftNode {
             coordinator,
             outbox: Vec::new(),
             committed: Vec::new(),
+            installed_snapshots: Vec::new(),
         })
     }
 
@@ -324,6 +335,27 @@ impl RaftNode {
         mem::take(&mut self.committed)
     }
 
+    /// Takes application snapshots installed from incoming Raft messages.
+    pub fn drain_installed_snapshots(&mut self) -> Vec<RaftApplicationSnapshot> {
+        mem::take(&mut self.installed_snapshots)
+    }
+
+    /// Returns the durable application snapshot, if this node has one.
+    pub fn application_snapshot(&self) -> raft::Result<Option<RaftApplicationSnapshot>> {
+        Ok(self
+            .storage
+            .application_snapshot()?
+            .map(application_snapshot))
+    }
+
+    /// Persists application snapshot bytes and compacts entries through `index`.
+    ///
+    /// The caller must only use an index whose command has been successfully
+    /// applied to the application state machine.
+    pub fn checkpoint(&mut self, index: u64, data: Vec<u8>) -> raft::Result<()> {
+        self.storage.create_snapshot(index, data)
+    }
+
     /// Returns the durable, uncompacted normal entries at or below the Raft
     /// commit index without marking them as newly applied.
     ///
@@ -338,12 +370,14 @@ impl RaftNode {
         while self.raw.has_ready() {
             let mut ready = self.raw.ready();
             self.outbox.extend(ready.take_messages());
+            let snapshot = (!ready.snapshot().is_empty()).then(|| ready.snapshot().clone());
 
-            self.storage.persist(
-                (!ready.snapshot().is_empty()).then_some(ready.snapshot()),
-                ready.entries(),
-                ready.hs(),
-            )?;
+            self.storage
+                .persist(snapshot.as_ref(), ready.entries(), ready.hs())?;
+            if let Some(snapshot) = snapshot {
+                self.installed_snapshots
+                    .push(application_snapshot(snapshot));
+            }
             self.outbox.extend(ready.take_persisted_messages());
             self.record_committed(ready.take_committed_entries());
 
@@ -372,6 +406,13 @@ impl RaftNode {
                 .store(Arc::new(RaftCoordinatorState { leader_id }));
             self.coordinator.inner.changed.notify_waiters();
         }
+    }
+}
+
+fn application_snapshot(snapshot: raft::eraftpb::Snapshot) -> RaftApplicationSnapshot {
+    RaftApplicationSnapshot {
+        index: snapshot.get_metadata().index,
+        data: snapshot.data.to_vec(),
     }
 }
 

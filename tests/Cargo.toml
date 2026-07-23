@@ -56,6 +56,10 @@ name = "raft_runtime"
 path = "raft_runtime.rs"
 
 [[test]]
+name = "raft_state_machine"
+path = "raft_state_machine.rs"
+
+[[test]]
 name = "axum"
 path = "axum.rs"
 
