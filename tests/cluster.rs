@@ -5,9 +5,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use catga_cluster::{
     ClusterCoordinator, ClusterForwarder, ForwardToLeaderBehavior, LeaderOnlyBehavior,
-    MemoryCluster,
+    MemoryCluster, SingletonTaskRunner,
 };
 use catga_core::{CatgaResult, ErrorCode, Handler, Mediator, Pipeline, Registry, Request};
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn cluster_publishes_leadership_changes_without_polling_or_global_locks() {
@@ -129,4 +131,61 @@ async fn forward_to_leader_behavior_uses_the_known_leader_without_running_the_lo
     assert_eq!(mediator.send_with(LeaderWork, &pipeline).await.unwrap(), 99);
     assert_eq!(forwards.load(Ordering::Relaxed), 1);
     assert_eq!(executions.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn singleton_task_runner_cancels_on_leadership_loss_and_restarts_when_elected_again() {
+    let cluster = Arc::new(MemoryCluster::new("node-a", ["node-a", "node-b"]));
+    let coordinator = cluster.node("node-a").unwrap();
+    let runner = SingletonTaskRunner::new(coordinator);
+    let shutdown = CancellationToken::new();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let cancellations = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(Notify::new());
+    let stopped = Arc::new(Notify::new());
+
+    let task = tokio::spawn({
+        let starts = Arc::clone(&starts);
+        let cancellations = Arc::clone(&cancellations);
+        let started = Arc::clone(&started);
+        let stopped = Arc::clone(&stopped);
+        let shutdown = shutdown.clone();
+        async move {
+            runner
+                .run(shutdown, move |leadership_lost| {
+                    let starts = Arc::clone(&starts);
+                    let cancellations = Arc::clone(&cancellations);
+                    let started = Arc::clone(&started);
+                    let stopped = Arc::clone(&stopped);
+                    async move {
+                        starts.fetch_add(1, Ordering::SeqCst);
+                        started.notify_one();
+                        leadership_lost.cancelled().await;
+                        cancellations.fetch_add(1, Ordering::SeqCst);
+                        stopped.notify_one();
+                    }
+                })
+                .await;
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), started.notified())
+        .await
+        .unwrap();
+    cluster.elect("node-b").unwrap();
+    tokio::time::timeout(Duration::from_secs(1), stopped.notified())
+        .await
+        .unwrap();
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(cancellations.load(Ordering::SeqCst), 1);
+
+    cluster.elect("node-a").unwrap();
+    tokio::time::timeout(Duration::from_secs(1), started.notified())
+        .await
+        .unwrap();
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+
+    shutdown.cancel();
+    task.await.unwrap();
+    assert_eq!(cancellations.load(Ordering::SeqCst), 2);
 }

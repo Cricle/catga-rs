@@ -14,6 +14,7 @@ mod forward;
 mod health;
 mod leader_only;
 mod raft;
+mod singleton_task;
 mod storage;
 
 pub use execution::ClusterCoordinatorExt;
@@ -23,6 +24,7 @@ pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
 pub use raft::{
     RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftNodeError,
 };
+pub use singleton_task::SingletonTaskRunner;
 
 /// Read-only cluster-coordination operations available to an individual node.
 pub trait ClusterCoordinator: Send + Sync {
@@ -38,6 +40,11 @@ pub trait ClusterCoordinator: Send + Sync {
     fn wait_for_leadership(
         &self,
         timeout: Duration,
+    ) -> impl std::future::Future<Output = bool> + Send;
+    /// Waits until this node's leadership state differs from `was_leader`.
+    fn wait_for_leadership_change(
+        &self,
+        was_leader: bool,
     ) -> impl std::future::Future<Output = bool> + Send;
 }
 
@@ -166,6 +173,17 @@ impl ClusterCoordinator for MemoryClusterNode {
             if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
                 return self.is_leader();
             }
+        }
+    }
+
+    async fn wait_for_leadership_change(&self, was_leader: bool) -> bool {
+        loop {
+            let notified = self.inner.changed.notified();
+            let is_leader = self.is_leader();
+            if is_leader != was_leader {
+                return is_leader;
+            }
+            notified.await;
         }
     }
 }

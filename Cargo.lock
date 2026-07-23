@@ -306,6 +306,7 @@ dependencies = [
  "raft-engine",
  "slog",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -419,6 +420,7 @@ dependencies = [
  "serde",
  "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

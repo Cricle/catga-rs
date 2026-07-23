@@ -178,6 +178,17 @@ impl ClusterCoordinator for RaftClusterNode {
             }
         }
     }
+
+    async fn wait_for_leadership_change(&self, was_leader: bool) -> bool {
+        loop {
+            let notified = self.inner.changed.notified();
+            let is_leader = self.is_leader();
+            if is_leader != was_leader {
+                return is_leader;
+            }
+            notified.await;
+        }
+    }
 }
 
 /// Owns one `raft-rs` [`RawNode`] and must be driven by exactly one task or thread.
