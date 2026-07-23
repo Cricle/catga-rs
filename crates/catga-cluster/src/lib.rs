@@ -14,6 +14,7 @@ mod forward;
 mod health;
 mod leader_only;
 mod raft;
+mod storage;
 
 pub use execution::ClusterCoordinatorExt;
 pub use forward::{ClusterForwarder, ForwardToLeaderBehavior};

@@ -62,6 +62,48 @@ fn raft_node_elects_and_commits_a_single_node_proposal() {
 }
 
 #[test]
+fn persistent_raft_node_recovers_committed_log_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let members = vec![RaftMember::new(1, "http://node-1")];
+
+    {
+        let mut node =
+            RaftNode::open_persistent(1, "http://node-1", members.clone(), directory.path())
+                .unwrap();
+        node.campaign().unwrap();
+        node.propose(b"create-order:8").unwrap();
+        assert_eq!(
+            node.drain_committed()
+                .into_iter()
+                .map(|entry| entry.data)
+                .collect::<Vec<_>>(),
+            [b"create-order:8".to_vec()]
+        );
+    }
+
+    let mut restarted =
+        RaftNode::open_persistent(1, "http://node-1", members, directory.path()).unwrap();
+    assert_eq!(
+        restarted
+            .persisted_committed_entries()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.data)
+            .collect::<Vec<_>>(),
+        [b"create-order:8".to_vec()]
+    );
+
+    restarted.campaign().unwrap();
+    restarted.propose(b"create-order:9").unwrap();
+    assert!(
+        restarted
+            .drain_committed()
+            .into_iter()
+            .any(|entry| entry.data == b"create-order:9")
+    );
+}
+
+#[test]
 fn raft_nodes_replicate_a_proposal_and_publish_the_elected_leader() {
     let cluster_members = members();
     let mut nodes = cluster_members

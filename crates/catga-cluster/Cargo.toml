@@ -14,5 +14,6 @@ arc-swap = "1"
 async-trait = "0.1"
 catga-core = { path = "../catga-core" }
 raft = { version = "0.7", default-features = false, features = ["protobuf-codec"] }
+raft-engine = { version = "0.4", default-features = false }
 slog = "2"
 tokio = { version = "1", features = ["sync", "time"] }

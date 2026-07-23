@@ -4,6 +4,7 @@ use std::{
     collections::HashSet,
     error::Error,
     fmt, mem,
+    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -12,12 +13,11 @@ use arc_swap::ArcSwap;
 use raft::{
     Config, RawNode,
     eraftpb::{ConfState, Entry, EntryType, Message},
-    storage::MemStorage,
 };
 use slog::Logger;
 use tokio::sync::Notify;
 
-use crate::ClusterCoordinator;
+use crate::{ClusterCoordinator, storage::RaftStorage};
 
 /// A wire-level Raft protocol message for a caller-provided transport.
 pub type RaftMessage = Message;
@@ -78,6 +78,10 @@ pub enum RaftNodeError {
     },
     /// `raft-rs` rejected the supplied Raft configuration.
     Raft(raft::Error),
+    /// `raft-engine` could not open or durably write the Raft log.
+    RaftEngine(raft_engine::Error),
+    /// The persisted voter configuration differs from the supplied members.
+    PersistedConfStateMismatch,
 }
 
 impl fmt::Display for RaftNodeError {
@@ -92,6 +96,10 @@ impl fmt::Display for RaftNodeError {
                 "local endpoint {local} does not match configured member endpoint {member}"
             ),
             Self::Raft(error) => error.fmt(formatter),
+            Self::RaftEngine(error) => error.fmt(formatter),
+            Self::PersistedConfStateMismatch => {
+                formatter.write_str("persisted Raft voters differ from the configured members")
+            }
         }
     }
 }
@@ -100,6 +108,7 @@ impl Error for RaftNodeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Raft(error) => Some(error),
+            Self::RaftEngine(error) => Some(error),
             _ => None,
         }
     }
@@ -108,6 +117,12 @@ impl Error for RaftNodeError {
 impl From<raft::Error> for RaftNodeError {
     fn from(error: raft::Error) -> Self {
         Self::Raft(error)
+    }
+}
+
+impl From<raft_engine::Error> for RaftNodeError {
+    fn from(error: raft_engine::Error) -> Self {
+        Self::RaftEngine(error)
     }
 }
 
@@ -171,8 +186,8 @@ impl ClusterCoordinator for RaftClusterNode {
 /// [`RaftClusterNode`] returned by [`Self::coordinator`] is independently
 /// shareable and reads its leadership state without taking a mutex.
 pub struct RaftNode {
-    raw: RawNode<MemStorage>,
-    storage: MemStorage,
+    raw: RawNode<RaftStorage>,
+    storage: RaftStorage,
     coordinator: Arc<RaftClusterNode>,
     outbox: Vec<RaftMessage>,
     committed: Vec<RaftCommittedEntry>,
@@ -191,9 +206,35 @@ impl RaftNode {
     ) -> Result<Self, RaftNodeError> {
         let endpoint = endpoint.into();
         validate_members(id, &endpoint, &members)?;
+        let storage = RaftStorage::in_memory(conf_state(&members));
+        Self::from_storage(id, endpoint, members, storage)
+    }
+
+    /// Opens a Raft node whose protocol state survives process restarts.
+    ///
+    /// The directory is exclusively owned by this node. It stores the Raft
+    /// log, hard state, membership state, and received snapshots through
+    /// `raft-engine`; application state must be snapshotted atomically by the
+    /// caller before the corresponding Raft log is compacted.
+    pub fn open_persistent(
+        id: u64,
+        endpoint: impl Into<Arc<str>>,
+        members: Vec<RaftMember>,
+        directory: impl AsRef<Path>,
+    ) -> Result<Self, RaftNodeError> {
+        let endpoint = endpoint.into();
+        validate_members(id, &endpoint, &members)?;
+        let storage = RaftStorage::open_persistent(directory.as_ref(), conf_state(&members))?;
+        Self::from_storage(id, endpoint, members, storage)
+    }
+
+    fn from_storage(
+        id: u64,
+        _endpoint: Arc<str>,
+        members: Vec<RaftMember>,
+        storage: RaftStorage,
+    ) -> Result<Self, RaftNodeError> {
         let members: Arc<[RaftMember]> = members.into();
-        let voters = members.iter().map(RaftMember::id).collect::<Vec<_>>();
-        let storage = MemStorage::new_with_conf_state(ConfState::from((voters, Vec::new())));
         let config = Config {
             id,
             election_tick: 10,
@@ -272,26 +313,32 @@ impl RaftNode {
         mem::take(&mut self.committed)
     }
 
+    /// Returns the durable, uncompacted normal entries at or below the Raft
+    /// commit index without marking them as newly applied.
+    ///
+    /// This is intended for application recovery. Callers must keep their own
+    /// applied-index checkpoint to avoid applying an already materialized
+    /// business command twice.
+    pub fn persisted_committed_entries(&self) -> raft::Result<Vec<RaftCommittedEntry>> {
+        Ok(committed_entries(self.storage.committed_entries()?))
+    }
+
     fn drive_ready(&mut self) -> raft::Result<()> {
         while self.raw.has_ready() {
             let mut ready = self.raw.ready();
             self.outbox.extend(ready.take_messages());
 
-            if !ready.snapshot().is_empty() {
-                self.storage.wl().apply_snapshot(ready.snapshot().clone())?;
-            }
-            if !ready.entries().is_empty() {
-                self.storage.wl().append(ready.entries())?;
-            }
-            if let Some(hard_state) = ready.hs() {
-                self.storage.wl().set_hardstate(hard_state.clone());
-            }
+            self.storage.persist(
+                (!ready.snapshot().is_empty()).then_some(ready.snapshot()),
+                ready.entries(),
+                ready.hs(),
+            )?;
             self.outbox.extend(ready.take_persisted_messages());
             self.record_committed(ready.take_committed_entries());
 
             let mut light_ready = self.raw.advance(ready);
             if let Some(commit) = light_ready.commit_index() {
-                self.storage.wl().mut_hard_state().set_commit(commit);
+                self.storage.persist_commit(commit)?;
             }
             self.outbox.extend(light_ready.take_messages());
             self.record_committed(light_ready.take_committed_entries());
@@ -302,15 +349,7 @@ impl RaftNode {
     }
 
     fn record_committed(&mut self, entries: Vec<Entry>) {
-        self.committed
-            .extend(entries.into_iter().filter_map(|entry| {
-                (entry.get_entry_type() == EntryType::EntryNormal && !entry.data.is_empty()).then(
-                    || RaftCommittedEntry {
-                        index: entry.index,
-                        data: entry.data.to_vec(),
-                    },
-                )
-            }));
+        self.committed.extend(committed_entries(entries));
     }
 
     fn publish_coordinator_state(&self) {
@@ -323,6 +362,27 @@ impl RaftNode {
             self.coordinator.inner.changed.notify_waiters();
         }
     }
+}
+
+fn committed_entries(entries: impl IntoIterator<Item = Entry>) -> Vec<RaftCommittedEntry> {
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            (entry.get_entry_type() == EntryType::EntryNormal && !entry.data.is_empty()).then(
+                || RaftCommittedEntry {
+                    index: entry.index,
+                    data: entry.data.to_vec(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn conf_state(members: &[RaftMember]) -> ConfState {
+    ConfState::from((
+        members.iter().map(RaftMember::id).collect::<Vec<_>>(),
+        Vec::new(),
+    ))
 }
 
 fn validate_members(
