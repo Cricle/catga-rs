@@ -9,12 +9,12 @@ use std::{
 };
 
 use catga_core::{
-    Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport,
+    Envelope, ErrorCode, EventStore, InboxStore, LeaseStore, MessageMetadata, MessageTransport,
     ProjectionCheckpoint, ProjectionCheckpointStore, Snapshot, SnapshotStore,
 };
 use catga_redis::{
-    RedisConfig, RedisEventStore, RedisLeases, RedisProjectionCheckpoints, RedisSnapshotStore,
-    RedisTransport,
+    RedisConfig, RedisEventStore, RedisInbox, RedisLeases, RedisProjectionCheckpoints,
+    RedisSnapshotStore, RedisTransport,
 };
 use redis::AsyncCommands;
 
@@ -278,6 +278,27 @@ async fn redis_projection_checkpoints_are_isolated_by_projection_and_stream() {
             .version(),
         2
     );
+}
+
+#[tokio::test]
+async fn redis_inbox_claims_exclusively_retries_failures_and_caches_results() {
+    let Some(config) = redis_config() else {
+        eprintln!("skipping Redis integration test: CATGA_REDIS_URL is unset");
+        return;
+    };
+    let inbox = RedisInbox::connect(&config.server, format!("{}:inbox", config.stream))
+        .await
+        .unwrap();
+    assert!(inbox.try_claim(7).await.unwrap());
+    assert!(!inbox.try_claim(7).await.unwrap());
+    inbox.fail(7).await.unwrap();
+    assert!(inbox.try_claim(7).await.unwrap());
+    inbox.complete(7, Some(Arc::from([1_u8, 2]))).await.unwrap();
+    assert_eq!(
+        inbox.state(7).await.unwrap(),
+        Some(catga_core::ProcessingState::Completed)
+    );
+    assert_eq!(inbox.result(7).await.unwrap().as_deref(), Some(&[1, 2][..]));
 }
 
 #[tokio::test]
