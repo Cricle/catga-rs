@@ -191,7 +191,10 @@ impl InMemoryRaftStorage {
 
     fn create_snapshot(&self, snapshot: Snapshot) -> RaftResult<()> {
         let index = snapshot.get_metadata().index;
-        self.storage.wl().compact(index.saturating_add(1))?;
+        if index != self.storage.last_index()? {
+            return Err(Error::Store(StorageError::Unavailable));
+        }
+        self.storage.wl().apply_snapshot(snapshot.clone())?;
         self.store_snapshot(snapshot);
         Ok(())
     }
@@ -217,11 +220,6 @@ impl Storage for InMemoryRaftStorage {
     }
 
     fn term(&self, index: u64) -> RaftResult<u64> {
-        if let Some(snapshot) = self.snapshot.load_full()
-            && snapshot.get_metadata().index == index
-        {
-            return Ok(snapshot.get_metadata().term);
-        }
         self.storage.term(index)
     }
 

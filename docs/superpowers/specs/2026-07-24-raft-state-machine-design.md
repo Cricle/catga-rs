@@ -23,6 +23,12 @@ compacts the covered log entries in the same synchronous `raft-engine` write.
 If snapshot encoding fails, no Raft data is changed. A failed persistence write
 does not mark the checkpoint as installed.
 
+The production `raft-engine` backend preserves a later log suffix while it
+compacts the snapshot prefix. `raft-rs`'s `MemStorage` cannot safely install a
+snapshot while retaining that suffix, so the in-memory backend accepts only a
+checkpoint at its durable log tip. This keeps the test backend correct without
+duplicating a Raft log implementation.
+
 ## API boundary
 
 `RaftStateMachine` has `apply`, `snapshot`, and `restore`; each returns

@@ -83,7 +83,8 @@ where
     M: RaftStateMachine,
 {
     /// Recovers the persisted snapshot and committed suffix before returning.
-    pub fn new(node: RaftNode, machine: M) -> Result<Self, RaftStateMachineError> {
+    pub fn new(mut node: RaftNode, machine: M) -> Result<Self, RaftStateMachineError> {
+        node.defer_application_acknowledgement();
         let mut driver = Self {
             node,
             machine,
@@ -174,6 +175,9 @@ where
             self.applied_index = entry.index;
             self.pending_entries.pop_front();
             applied += 1;
+        }
+        if self.pending_entries.is_empty() {
+            self.node.acknowledge_all_committed()?;
         }
         Ok(applied)
     }

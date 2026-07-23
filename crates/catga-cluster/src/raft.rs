@@ -212,6 +212,9 @@ pub struct RaftNode {
     outbox: Vec<RaftMessage>,
     committed: Vec<RaftCommittedEntry>,
     installed_snapshots: Vec<RaftApplicationSnapshot>,
+    auto_acknowledge_apply: bool,
+    last_acknowledged_index: u64,
+    last_committed_index: u64,
 }
 
 impl RaftNode {
@@ -288,6 +291,9 @@ impl RaftNode {
             outbox: Vec::new(),
             committed: Vec::new(),
             installed_snapshots: Vec::new(),
+            auto_acknowledge_apply: true,
+            last_acknowledged_index: 0,
+            last_committed_index: 0,
         })
     }
 
@@ -351,9 +357,20 @@ impl RaftNode {
     /// Persists application snapshot bytes and compacts entries through `index`.
     ///
     /// The caller must only use an index whose command has been successfully
-    /// applied to the application state machine.
+    /// applied to the application state machine. The in-memory backend only
+    /// accepts a checkpoint at its durable log tip; persistent nodes support
+    /// compaction while retaining a later Raft log suffix.
     pub fn checkpoint(&mut self, index: u64, data: Vec<u8>) -> raft::Result<()> {
         self.storage.create_snapshot(index, data)
+    }
+
+    pub(crate) fn defer_application_acknowledgement(&mut self) {
+        self.auto_acknowledge_apply = false;
+    }
+
+    pub(crate) fn acknowledge_all_committed(&mut self) -> raft::Result<()> {
+        self.acknowledge_committed();
+        self.drive_ready()
     }
 
     /// Returns the durable, uncompacted normal entries at or below the Raft
@@ -375,26 +392,40 @@ impl RaftNode {
             self.storage
                 .persist(snapshot.as_ref(), ready.entries(), ready.hs())?;
             if let Some(snapshot) = snapshot {
+                self.last_committed_index =
+                    self.last_committed_index.max(snapshot.get_metadata().index);
                 self.installed_snapshots
                     .push(application_snapshot(snapshot));
             }
             self.outbox.extend(ready.take_persisted_messages());
             self.record_committed(ready.take_committed_entries());
 
-            let mut light_ready = self.raw.advance(ready);
+            let mut light_ready = self.raw.advance_append(ready);
             if let Some(commit) = light_ready.commit_index() {
                 self.storage.persist_commit(commit)?;
             }
             self.outbox.extend(light_ready.take_messages());
             self.record_committed(light_ready.take_committed_entries());
-            self.raw.advance_apply();
+            if self.auto_acknowledge_apply {
+                self.acknowledge_committed();
+            }
         }
         self.publish_coordinator_state();
         Ok(())
     }
 
     fn record_committed(&mut self, entries: Vec<Entry>) {
+        if let Some(entry) = entries.last() {
+            self.last_committed_index = self.last_committed_index.max(entry.index);
+        }
         self.committed.extend(committed_entries(entries));
+    }
+
+    fn acknowledge_committed(&mut self) {
+        if self.last_acknowledged_index < self.last_committed_index {
+            self.raw.advance_apply_to(self.last_committed_index);
+            self.last_acknowledged_index = self.last_committed_index;
+        }
     }
 
     fn publish_coordinator_state(&self) {

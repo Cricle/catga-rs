@@ -86,7 +86,7 @@ fn create_snapshot(&self, index: u64, data: Vec<u8>) -> raft::Result<()>;
 fn stored_snapshot(&self) -> raft::Result<Option<Snapshot>>;
 ```
 
-Build metadata from the index term and current `ConfState`; reject indices above the durable commit index. Use `PersistentRaftStorage::persist(Some(&snapshot), &[], None)` so snapshot data and `Command::Compact` share one sync write.
+Build metadata from the index term and current `ConfState`; reject indices above the durable commit index. Use a dedicated persistent checkpoint batch so snapshot data and `Command::Compact` share one sync write without decreasing a later commit index. The in-memory backend must reject a checkpoint before its log tip because `MemStorage::apply_snapshot` cannot retain a suffix safely.
 
 - [ ] **Step 4: Verify green.**
 
