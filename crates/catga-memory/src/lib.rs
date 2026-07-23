@@ -14,6 +14,7 @@ mod projection;
 mod read_model;
 mod snapshot;
 mod subscription;
+mod suspended_flow;
 mod transport;
 
 pub use dead_letter::MemoryDeadLetters;
@@ -28,4 +29,5 @@ pub use projection::MemoryProjectionCheckpoints;
 pub use read_model::{MemoryChangeTracker, MemoryReadModels};
 pub use snapshot::MemorySnapshots;
 pub use subscription::MemorySubscriptions;
+pub use suspended_flow::MemorySuspendedFlows;
 pub use transport::MemoryTransport;
