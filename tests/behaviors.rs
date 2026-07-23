@@ -11,10 +11,11 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{
     CachedResultCodec, CatgaError, CatgaResult, Correlated, CorrelationBehavior, ErrorCode,
-    Handler, IdempotencyBehavior, IdempotencyKey, Mediator, MessageMetadata, Pipeline, Registry,
-    Request, RetryBehavior, TimeoutBehavior, current_correlation_id,
+    Handler, IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey, Mediator,
+    MessageMetadata, Pipeline, Registry, Request, RetryBehavior, TimeoutBehavior,
+    current_correlation_id,
 };
-use catga_memory::MemoryIdempotency;
+use catga_memory::{MemoryIdempotency, MemoryInbox};
 
 #[derive(Clone, Debug)]
 struct Work;
@@ -121,6 +122,29 @@ impl CachedResultCodec<u64> for U64Codec {
     }
 }
 
+#[derive(Debug)]
+struct InboxWork;
+
+impl catga_core::Message for InboxWork {}
+
+impl Request for InboxWork {
+    type Response = u64;
+}
+
+impl InboxKey for InboxWork {
+    fn inbox_message_id(&self) -> u64 {
+        404
+    }
+}
+
+#[async_trait]
+impl Handler<InboxWork> for CountingHandler {
+    async fn handle(&self, _: InboxWork) -> CatgaResult<u64> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(21)
+    }
+}
+
 fn pipeline() -> Pipeline<Work> {
     Pipeline::new().with(RetryBehavior::new(2, Duration::ZERO))
 }
@@ -208,5 +232,21 @@ async fn idempotency_behavior_returns_a_cached_result_without_reinvoking_the_han
         mediator.send_with(IdempotentWork, &pipeline).await.unwrap(),
         21
     );
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn inbox_behavior_returns_a_cached_result_without_reinvoking_the_handler() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+        .register_request::<InboxWork, _>(CountingHandler(Arc::clone(&attempts)))
+        .unwrap();
+    let mediator = Mediator::new(registry);
+    let store = Arc::new(MemoryInbox::default());
+    let pipeline = Pipeline::new().with(InboxBehavior::new(store, U64Codec));
+
+    assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
+    assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
 }
