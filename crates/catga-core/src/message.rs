@@ -16,7 +16,7 @@ pub trait Request: Message {
 pub trait Command: Message {}
 
 /// A message delivered to zero or more subscribers.
-pub trait Event: Message {}
+pub trait Event: Message + Clone {}
 
 /// Identifiers propagated with a message through a distributed operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
