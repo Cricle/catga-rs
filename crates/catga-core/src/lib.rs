@@ -37,8 +37,9 @@ pub use aggregate::{
     SnapshotStrategy, TimeBasedSnapshotStrategy,
 };
 pub use behaviors::{
-    CorrelationBehavior, DeadLetterBehavior, DeadLetterEnvelope, IdempotencyBehavior,
-    IdempotencyKey, InboxBehavior, InboxKey, RetryBehavior, TimeoutBehavior,
+    CorrelationBehavior, DeadLetterBehavior, DeadLetterEnvelope, DistributedLockBehavior,
+    DistributedLockKey, IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey,
+    RetryBehavior, TimeoutBehavior,
 };
 pub use cache::CachedResultCodec;
 pub use catga_macros::{Message, catga_handlers};
