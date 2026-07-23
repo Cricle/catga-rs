@@ -163,6 +163,7 @@ dependencies = [
  "async-trait",
  "catga-macros",
  "futures",
+ "tokio",
 ]
 
 [[package]]
