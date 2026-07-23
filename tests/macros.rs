@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Event, EventHandler, Handler, Mediator, Message, Request};
+use catga_flow::{FlowDefinition, FlowStepOutcome};
 
 #[derive(catga_core::Message)]
 struct Ping;
@@ -44,4 +45,15 @@ async fn derive_and_registration_macros_keep_setup_explicit_and_short() {
     assert_eq!(Ping.message_type(), "Ping");
     assert_eq!(mediator.send(Ping).await.unwrap(), "pong");
     mediator.publish(Notified).await.unwrap();
+}
+
+#[test]
+fn flow_definition_macro_registers_named_async_steps() {
+    let definition: FlowDefinition = catga_flow::flow_definition! {
+        "macro-flow";
+        "choose" => |_| async { Ok(FlowStepOutcome::goto("done")) };
+        "done" => |_| async { Ok(FlowStepOutcome::complete()) };
+    };
+
+    assert_eq!(definition.name(), "macro-flow");
 }
