@@ -68,6 +68,10 @@ name = "snapshots"
 path = "snapshots.rs"
 
 [[test]]
+name = "enhanced_snapshots"
+path = "enhanced_snapshots.rs"
+
+[[test]]
 name = "aggregates"
 path = "aggregates.rs"
 

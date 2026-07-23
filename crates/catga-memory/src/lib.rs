@@ -3,6 +3,7 @@
 
 mod claim;
 mod dead_letter;
+mod enhanced_snapshot;
 mod event_store;
 mod idempotency;
 mod inbox;
@@ -13,6 +14,7 @@ mod subscription;
 mod transport;
 
 pub use dead_letter::MemoryDeadLetters;
+pub use enhanced_snapshot::MemoryEnhancedSnapshots;
 pub use event_store::MemoryEventStore;
 pub use idempotency::MemoryIdempotency;
 pub use inbox::MemoryInbox;
