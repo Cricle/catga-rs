@@ -60,6 +60,10 @@ name = "event_store"
 path = "event_store.rs"
 
 [[test]]
+name = "projections"
+path = "projections.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 

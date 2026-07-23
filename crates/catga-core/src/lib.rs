@@ -12,6 +12,7 @@ mod mediator;
 mod message;
 mod outbox_processor;
 mod pipeline;
+mod projection;
 mod registry;
 mod reliability;
 mod store;
@@ -32,6 +33,10 @@ pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};
 pub use outbox_processor::{OutboxProcessor, OutboxRun};
 pub use pipeline::{Behavior, Next, Pipeline};
+pub use projection::{
+    CatchUpProjectionRunner, Projection, ProjectionCheckpoint, ProjectionCheckpointStore,
+    ProjectionRun,
+};
 pub use registry::Registry;
 pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore, ProcessingState};
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
