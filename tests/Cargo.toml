@@ -11,6 +11,7 @@ async-trait = "0.1"
 catga-core = { path = "../crates/catga-core" }
 catga-flow = { path = "../crates/catga-flow" }
 catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
+catga-cluster = { path = "../crates/catga-cluster" }
 catga-memory = { path = "../crates/catga-memory" }
 catga-nats = { path = "../crates/catga-nats" }
 catga-redis = { path = "../crates/catga-redis" }
@@ -35,6 +36,10 @@ path = "message_types.rs"
 [[test]]
 name = "lifecycle"
 path = "lifecycle.rs"
+
+[[test]]
+name = "cluster"
+path = "cluster.rs"
 
 [[test]]
 name = "state_machine"

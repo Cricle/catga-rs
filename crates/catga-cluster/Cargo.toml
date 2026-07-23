@@ -1,0 +1,15 @@
+[package]
+name = "catga-cluster"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+arc-swap = "1"
+catga-core = { path = "../catga-core" }
+tokio = { version = "1", features = ["sync", "time"] }

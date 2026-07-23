@@ -190,6 +190,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "catga-cluster"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "catga-core",
+ "tokio",
+]
+
+[[package]]
 name = "catga-codec-postcard"
 version = "0.1.0"
 dependencies = [
@@ -283,6 +292,7 @@ name = "catga-tests"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "catga-cluster",
  "catga-codec-postcard",
  "catga-core",
  "catga-flow",
