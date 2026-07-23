@@ -45,7 +45,7 @@ impl NatsEventStore {
         let context = jetstream::new(client);
         let stream_name = stream_name.into();
         let subject_prefix = subject_prefix.into();
-        let stream = context
+        let mut stream = context
             .get_or_create_stream(stream::Config {
                 name: stream_name.to_string(),
                 subjects: vec![format!("{subject_prefix}.>")],
@@ -54,6 +54,15 @@ impl NatsEventStore {
             })
             .await
             .map_err(map_error)?;
+        let mut stream_config = stream.info().await.map_err(map_error)?.config.clone();
+        if !stream_config.allow_direct {
+            stream_config.allow_direct = true;
+            context
+                .update_stream(&stream_config)
+                .await
+                .map_err(map_error)?;
+        }
+        let stream = context.get_stream(&stream_name).await.map_err(map_error)?;
         let bucket = format!("{stream_name}_IDS");
         let ids = match context.get_key_value(&bucket).await {
             Ok(store) => store,
