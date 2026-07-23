@@ -54,11 +54,15 @@ impl FlowStore for MemoryFlows {
         let Some(slot) = self.flows.get(next.id()).map(|entry| Arc::clone(&entry)) else {
             return Ok(false);
         };
-        let current = slot.state.load_full();
-        if current.version() != expected_version {
-            return Ok(false);
+        loop {
+            let current = slot.state.load_full();
+            if current.version() != expected_version {
+                return Ok(false);
+            }
+            if slot.replace(&current, next.clone()).is_some() {
+                return Ok(true);
+            }
         }
-        Ok(slot.replace(&current, next).is_some())
     }
 
     async fn get(&self, id: &str) -> CatgaResult<Option<FlowState>> {
@@ -79,7 +83,6 @@ impl FlowStore for MemoryFlows {
             let current = slot.state.load_full();
             if current.flow_type() != flow_type
                 || current.status() != FlowStatus::Running
-                || current.owner() == Some(owner)
                 || !is_stale(current.heartbeat(), now, stale_after)
             {
                 continue;
@@ -96,19 +99,21 @@ impl FlowStore for MemoryFlows {
         let Some(slot) = self.flows.get(id).map(|entry| Arc::clone(&entry)) else {
             return Ok(false);
         };
-        let current = slot.state.load_full();
-        if current.owner() != Some(owner) || current.version() != version {
-            return Ok(false);
+        loop {
+            let current = slot.state.load_full();
+            if current.owner() != Some(owner) || current.version() != version {
+                return Ok(false);
+            }
+            if slot
+                .replace(
+                    &current,
+                    (*current).clone().heartbeated_at(SystemTime::now()),
+                )
+                .is_some()
+            {
+                return Ok(true);
+            }
         }
-        Ok(slot
-            .replace(
-                &current,
-                (*current)
-                    .clone()
-                    .heartbeated_at(SystemTime::now())
-                    .next_version(),
-            )
-            .is_some())
     }
 }
 

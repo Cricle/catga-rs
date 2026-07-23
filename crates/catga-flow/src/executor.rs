@@ -33,7 +33,11 @@ where
         }
     }
 
-    /// Executes `run` once for a newly-created or stale-and-claimed flow.
+    /// Executes `run` at least once for a newly-created or stale-and-claimed flow.
+    ///
+    /// Call [`Self::heartbeat`] more often than `stale_after` while a long-running action is
+    /// active, and make action side effects idempotent. A process that stops heartbeating can
+    /// have its flow claimed and retried by another executor.
     pub async fn execute<Run, RunFuture>(
         &self,
         id: impl Into<Box<str>>,
@@ -60,7 +64,11 @@ where
             Err(error) => FlowResult::failure(state.step(), error),
         };
         let next = match result.error() {
-            Some(error) => state.clone().failed(error.clone()).next_version(),
+            Some(error) => state
+                .clone()
+                .at_step(result.completed_steps())
+                .failed(error.clone())
+                .next_version(),
             None => state.clone().done(result.completed_steps()).next_version(),
         };
         if self.store.update(state.version(), next).await? {

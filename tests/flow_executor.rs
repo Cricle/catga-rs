@@ -93,6 +93,60 @@ async fn executor_heartbeat_advances_version_only_for_its_current_owner() {
     let executor = FlowExecutor::new(Arc::clone(&store), "node-a", Duration::from_secs(30));
 
     assert!(executor.heartbeat("flow-9", 0).await.unwrap());
-    assert!(!executor.heartbeat("flow-9", 0).await.unwrap());
-    assert_eq!(store.get("flow-9").await.unwrap().unwrap().version(), 1);
+    assert!(executor.heartbeat("flow-9", 0).await.unwrap());
+    assert_eq!(store.get("flow-9").await.unwrap().unwrap().version(), 0);
+}
+
+#[tokio::test]
+async fn executor_completes_after_an_inflight_heartbeat() {
+    let store = Arc::new(MemoryFlows::default());
+    let executor = Arc::new(FlowExecutor::new(
+        Arc::clone(&store),
+        "node-a",
+        Duration::from_secs(30),
+    ));
+    let heartbeater = Arc::clone(&executor);
+
+    let result = executor
+        .execute("flow-10", "payment", b"input".to_vec(), move |state| {
+            let executor = Arc::clone(&heartbeater);
+            async move {
+                assert!(executor.heartbeat("flow-10", state.version()).await?);
+                Ok(FlowResult::success(1))
+            }
+        })
+        .await
+        .unwrap();
+
+    assert!(result.is_success());
+    assert_eq!(
+        store.get("flow-10").await.unwrap().unwrap().status(),
+        FlowStatus::Done
+    );
+}
+
+#[tokio::test]
+async fn executor_replays_failed_completed_steps_from_persistent_state() {
+    let store = Arc::new(MemoryFlows::default());
+    let executor = FlowExecutor::new(Arc::clone(&store), "node-a", Duration::from_secs(30));
+
+    let first = executor
+        .execute("flow-11", "payment", b"input".to_vec(), |_| async {
+            Ok(FlowResult::failure(
+                2,
+                CatgaError::new(ErrorCode::Transient, "charge failed"),
+            ))
+        })
+        .await
+        .unwrap();
+    let replayed = executor
+        .execute("flow-11", "payment", b"input".to_vec(), |_| async {
+            Ok(FlowResult::success(99))
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(first.completed_steps(), 2);
+    assert_eq!(replayed.completed_steps(), 2);
+    assert_eq!(replayed.error().unwrap().message(), "charge failed");
 }
