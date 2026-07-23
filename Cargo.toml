@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/catga-core",
+    "crates/catga-macros",
     "crates/catga-memory",
     "tests",
 ]

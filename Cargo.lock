@@ -24,7 +24,17 @@ name = "catga-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "catga-macros",
  "futures",
+]
+
+[[package]]
+name = "catga-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

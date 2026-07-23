@@ -40,3 +40,7 @@ path = "memory_outbox.rs"
 [[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
+
+[[test]]
+name = "macros"
+path = "macros.rs"

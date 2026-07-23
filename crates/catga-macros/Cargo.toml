@@ -1,15 +1,15 @@
 [package]
-name = "catga-core"
+name = "catga-macros"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lints]
-workspace = true
+[lib]
+proc-macro = true
 
 [dependencies]
-async-trait = "0.1"
-catga-macros = { path = "../catga-macros" }
-futures = "0.3"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
