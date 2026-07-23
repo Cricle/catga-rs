@@ -37,6 +37,10 @@ name = "lifecycle"
 path = "lifecycle.rs"
 
 [[test]]
+name = "state_machine"
+path = "state_machine.rs"
+
+[[test]]
 name = "mediator"
 path = "mediator.rs"
 

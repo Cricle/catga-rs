@@ -7,6 +7,7 @@ mod local;
 mod runtime;
 mod scheduler;
 mod state;
+mod state_machine;
 mod store;
 mod suspension;
 mod suspension_store;
@@ -17,6 +18,11 @@ pub use local::{Flow, FlowResult};
 pub use runtime::{FlowRuntime, FlowRuntimeResult};
 pub use scheduler::{FlowScheduler, MemoryFlowScheduler, ScheduledResume};
 pub use state::{FlowState, FlowStatus};
+pub use state_machine::{StateMachine, StateMachineResult};
+pub use state_machine::{
+    StateMachineBuilder, StateMachineEventRouter, StateMachineExecutor, StateMachineSnapshot,
+    StateMachineState, StateMachineStore,
+};
 pub use store::FlowStore;
 pub use suspension::{FlowContinuation, WaitCondition, WaitPolicy, WaitResult};
 pub use suspension_store::SuspendedFlowStore;
