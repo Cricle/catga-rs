@@ -20,15 +20,14 @@
 | `crates/catga-memory/src/{store,transport}.rs` | Bounded transport and atomic in-memory stores |
 | `crates/catga-redis/src/lib.rs` | Redis Streams transport and idempotency store |
 | `crates/catga-nats/src/lib.rs` | JetStream transport and durable consumer |
-| `tests/compatibility/*.rs` | Core semantics derived from upstream tests |
-| `tests/integration/{redis,nats}.rs` | Real-service adapter tests |
+| `crates/*/tests/*.rs` | Package-owned behavioral and integration tests |
 
 ### Task 1: Bootstrap The Workspace And Core Result Types
 
 **Files:**
 - Create: `Cargo.toml`, `rustfmt.toml`, `clippy.toml`
 - Create: `crates/catga-core/Cargo.toml`, `crates/catga-core/src/lib.rs`, `crates/catga-core/src/error.rs`
-- Create: `tests/compatibility/result.rs`
+- Create: `crates/catga-core/tests/result.rs`
 
 - [ ] **Step 1: Write the failing result test**
 
@@ -80,14 +79,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add Cargo.toml rustfmt.toml clippy.toml crates/catga-core tests/compatibility/result.rs && git commit -m "feat: bootstrap Catga core workspace"`
+Run: `git add Cargo.toml rustfmt.toml clippy.toml crates/catga-core && git commit -m "feat: bootstrap Catga core workspace"`
 
 ### Task 2: Add Message Metadata And Typed Handler Contracts
 
 **Files:**
 - Create: `crates/catga-core/src/message.rs`, `crates/catga-core/src/handler.rs`
 - Modify: `crates/catga-core/src/lib.rs`
-- Create: `tests/compatibility/message.rs`
+- Create: `crates/catga-core/tests/message.rs`
 
 - [ ] **Step 1: Write the failing message metadata test**
 
@@ -131,14 +130,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-core tests/compatibility/message.rs && git commit -m "feat: add typed message contracts"`
+Run: `git add crates/catga-core && git commit -m "feat: add typed message contracts"`
 
 ### Task 3: Build Explicit Registration, Typed Send, And Event Fan-Out
 
 **Files:**
 - Create: `crates/catga-core/src/{registry,mediator}.rs`
 - Modify: `crates/catga-core/src/{handler,lib}.rs`
-- Create: `tests/compatibility/mediator.rs`
+- Create: `crates/catga-core/tests/mediator.rs`
 
 - [ ] **Step 1: Write failing mediator tests**
 
@@ -181,14 +180,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-core tests/compatibility/mediator.rs && git commit -m "feat: add typed mediator routing"`
+Run: `git add crates/catga-core && git commit -m "feat: add typed mediator routing"`
 
 ### Task 4: Add Ordered Pipeline, Batch, Streaming, And Cancellation
 
 **Files:**
 - Create: `crates/catga-core/src/pipeline.rs`
 - Modify: `crates/catga-core/src/mediator.rs`
-- Create: `tests/compatibility/{pipeline,batch_stream}.rs`
+- Create: `crates/catga-core/tests/{pipeline,batch_stream}.rs`
 
 - [ ] **Step 1: Write failing behavior-order and batch-bound tests**
 
@@ -227,14 +226,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-core tests/compatibility/pipeline.rs tests/compatibility/batch_stream.rs && git commit -m "feat: add mediator pipeline and batch APIs"`
+Run: `git add crates/catga-core && git commit -m "feat: add mediator pipeline and batch APIs"`
 
 ### Task 5: Create Reliability Store And Transport Contracts
 
 **Files:**
 - Create: `crates/catga-core/src/{store,transport}.rs`
 - Modify: `crates/catga-core/src/lib.rs`
-- Create: `tests/compatibility/reliability_contracts.rs`
+- Create: `crates/catga-core/tests/reliability_contracts.rs`
 
 - [ ] **Step 1: Write failing state-transition tests**
 
@@ -273,13 +272,13 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-core tests/compatibility/reliability_contracts.rs && git commit -m "feat: add transport and reliability contracts"`
+Run: `git add crates/catga-core && git commit -m "feat: add transport and reliability contracts"`
 
 ### Task 6: Implement In-Memory Stores And Bounded Transport
 
 **Files:**
 - Create: `crates/catga-memory/{Cargo.toml,src/lib.rs,src/store.rs,src/transport.rs}`
-- Create: `tests/compatibility/memory.rs`
+- Create: `crates/catga-memory/tests/memory.rs`
 
 - [ ] **Step 1: Write failing atomicity and backpressure tests**
 
@@ -318,14 +317,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-memory tests/compatibility/memory.rs && git commit -m "feat: add in-memory Catga adapters"`
+Run: `git add crates/catga-memory && git commit -m "feat: add in-memory Catga adapters"`
 
 ### Task 7: Implement The Macro Ergonomics
 
 **Files:**
 - Create: `crates/catga-macros/{Cargo.toml,src/lib.rs}`
 - Modify: `crates/catga-core/src/lib.rs`
-- Create: `tests/compatibility/macros.rs`, `tests/ui/duplicate_handler.rs`
+- Create: `crates/catga-core/tests/macros.rs`, `crates/catga-macros/tests/ui/duplicate_handler.rs`
 
 - [ ] **Step 1: Write failing compile and runtime macro tests**
 
@@ -363,14 +362,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-macros crates/catga-core tests/compatibility/macros.rs tests/ui && git commit -m "feat: add Catga registration macros"`
+Run: `git add crates/catga-macros crates/catga-core && git commit -m "feat: add Catga registration macros"`
 
 ### Task 8: Add Retry, Timeout, Correlation, Idempotency, And Dead-Letter Behaviors
 
 **Files:**
 - Create: `crates/catga-core/src/behaviors/{mod,retry,timeout,correlation,idempotency,dead_letter}.rs`
 - Modify: `crates/catga-core/src/{lib,pipeline}.rs`
-- Create: `tests/compatibility/behaviors.rs`
+- Create: `crates/catga-core/tests/behaviors.rs`
 
 - [ ] **Step 1: Write failing behavior tests**
 
@@ -410,13 +409,13 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-core tests/compatibility/behaviors.rs && git commit -m "feat: add reliability pipeline behaviors"`
+Run: `git add crates/catga-core && git commit -m "feat: add reliability pipeline behaviors"`
 
 ### Task 9: Implement Redis Streams Adapter
 
 **Files:**
 - Create: `crates/catga-redis/{Cargo.toml,src/lib.rs,src/transport.rs,src/store.rs}`
-- Create: `tests/integration/redis.rs`
+- Create: `crates/catga-redis/tests/redis.rs`
 - Modify: `.github/workflows/ci.yml`
 
 - [ ] **Step 1: Write failing Redis integration tests**
@@ -458,13 +457,13 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-redis tests/integration/redis.rs .github/workflows/ci.yml && git commit -m "feat: add Redis Streams adapter"`
+Run: `git add crates/catga-redis .github/workflows/ci.yml && git commit -m "feat: add Redis Streams adapter"`
 
 ### Task 10: Implement NATS JetStream Adapter
 
 **Files:**
 - Create: `crates/catga-nats/{Cargo.toml,src/lib.rs,src/transport.rs}`
-- Create: `tests/integration/nats.rs`
+- Create: `crates/catga-nats/tests/nats.rs`
 - Modify: `.github/workflows/ci.yml`
 
 - [ ] **Step 1: Write failing NATS integration test**
@@ -504,12 +503,12 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run: `git add crates/catga-nats tests/integration/nats.rs .github/workflows/ci.yml && git commit -m "feat: add NATS JetStream adapter"`
+Run: `git add crates/catga-nats .github/workflows/ci.yml && git commit -m "feat: add NATS JetStream adapter"`
 
 ### Task 11: Add Cross-Adapter Contract Tests, Benchmarks, And Release Gates
 
 **Files:**
-- Create: `tests/compatibility/transport_contract.rs`, `benches/mediator.rs`, `.github/workflows/ci.yml`
+- Create: `crates/catga-memory/tests/transport_contract.rs`, `crates/catga-core/benches/mediator.rs`, `.github/workflows/ci.yml`
 - Modify: `README.md`, `Cargo.toml`
 
 - [ ] **Step 1: Write failing cross-adapter contract test**
@@ -525,7 +524,7 @@ async fn transport_contract<T: MessageTransport>(transport: T) {
 
 - [ ] **Step 2: Run the test to verify it fails for an adapter**
 
-Run: `cargo test --test transport_contract`
+Run: `cargo test -p catga-memory --test transport_contract`
 
 Expected: FAIL until every adapter exposes identical acknowledgement semantics.
 
@@ -547,7 +546,7 @@ Expected: PASS. Run service tests with their corresponding URLs before declaring
 
 - [ ] **Step 5: Commit**
 
-Run: `git add tests benches .github README.md Cargo.toml && git commit -m "test: add Catga compatibility release gates"`
+Run: `git add crates/catga-memory crates/catga-core .github README.md Cargo.toml && git commit -m "test: add Catga compatibility release gates"`
 
 ## Plan Self-Review
 
