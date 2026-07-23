@@ -3,6 +3,7 @@
 
 mod acknowledgement;
 mod config;
+mod dead_letter;
 mod event_store;
 mod inbox;
 mod lease;
@@ -12,6 +13,7 @@ mod snapshot;
 mod transport;
 
 pub use config::RedisConfig;
+pub use dead_letter::RedisDeadLetters;
 pub use event_store::RedisEventStore;
 pub use inbox::RedisInbox;
 pub use lease::RedisLeases;

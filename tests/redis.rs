@@ -9,17 +9,46 @@ use std::{
 };
 
 use catga_core::{
-    Envelope, ErrorCode, EventStore, InboxStore, LeaseStore, MessageMetadata, MessageTransport,
-    OutboxMessage, OutboxStore, ProjectionCheckpoint, ProjectionCheckpointStore, Snapshot,
-    SnapshotStore,
+    DeadLetter, DeadLetterStore, Envelope, ErrorCode, EventStore, InboxStore, LeaseStore,
+    MessageMetadata, MessageTransport, OutboxMessage, OutboxStore, ProjectionCheckpoint,
+    ProjectionCheckpointStore, Snapshot, SnapshotStore,
 };
 use catga_redis::{
-    RedisConfig, RedisEventStore, RedisInbox, RedisLeases, RedisOutbox, RedisProjectionCheckpoints,
-    RedisSnapshotStore, RedisTransport,
+    RedisConfig, RedisDeadLetters, RedisEventStore, RedisInbox, RedisLeases, RedisOutbox,
+    RedisProjectionCheckpoints, RedisSnapshotStore, RedisTransport,
 };
 use redis::AsyncCommands;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+#[tokio::test]
+async fn redis_dead_letters_preserve_queue_order_and_envelopes() {
+    let Some(config) = redis_config() else {
+        return;
+    };
+    let letters =
+        RedisDeadLetters::connect(&config.server, format!("{}:dead-letters", config.stream))
+            .await
+            .unwrap();
+    for id in [1_u64, 2] {
+        letters
+            .enqueue(DeadLetter::new(
+                Envelope::new(
+                    id,
+                    "order.failed",
+                    vec![id as u8],
+                    MessageMetadata::new(id, None),
+                ),
+                "failed",
+                3,
+            ))
+            .await
+            .unwrap();
+    }
+    let letters = letters.list(1).await.unwrap();
+    assert_eq!(letters.len(), 1);
+    assert_eq!(letters[0].envelope().id(), 1);
+}
 
 fn redis_config() -> Option<RedisConfig> {
     let server = std::env::var("CATGA_REDIS_URL").ok()?;
