@@ -3,6 +3,7 @@
 
 mod acknowledgement;
 mod config;
+mod dead_letter;
 mod event_store;
 mod idempotency;
 mod inbox;
@@ -11,6 +12,7 @@ mod snapshot;
 mod transport;
 
 pub use config::NatsConfig;
+pub use dead_letter::NatsDeadLetters;
 pub use event_store::NatsEventStore;
 pub use idempotency::NatsIdempotency;
 pub use inbox::NatsInbox;

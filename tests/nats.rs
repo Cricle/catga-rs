@@ -6,12 +6,12 @@ use std::{
 };
 
 use catga_core::{
-    Envelope, ErrorCode, EventStore, IdempotencyStore, InboxStore, LeaseStore, MessageMetadata,
-    MessageTransport, ProcessingState, Snapshot, SnapshotStore,
+    DeadLetter, DeadLetterStore, Envelope, ErrorCode, EventStore, IdempotencyStore, InboxStore,
+    LeaseStore, MessageMetadata, MessageTransport, ProcessingState, Snapshot, SnapshotStore,
 };
 use catga_nats::{
-    NatsConfig, NatsEventStore, NatsIdempotency, NatsInbox, NatsLeases, NatsSnapshotStore,
-    NatsTransport,
+    NatsConfig, NatsDeadLetters, NatsEventStore, NatsIdempotency, NatsInbox, NatsLeases,
+    NatsSnapshotStore, NatsTransport,
 };
 
 #[tokio::test]
@@ -297,4 +297,36 @@ async fn nats_inbox_claims_exclusively_retries_failures_and_caches_results() {
         Some(ProcessingState::Completed)
     );
     assert_eq!(inbox.result(7).await.unwrap().as_deref(), Some(&[1, 2][..]));
+}
+
+#[tokio::test]
+async fn nats_dead_letters_preserve_queue_order_and_envelopes() {
+    let Some(server) = std::env::var("CATGA_NATS_URL").ok() else {
+        return;
+    };
+    let letters = NatsDeadLetters::connect(
+        &server,
+        format!("CATGA_DLQ_{}", std::process::id()),
+        format!("catga.dlq.{}", std::process::id()),
+    )
+    .await
+    .unwrap();
+    for id in [1_u64, 2] {
+        letters
+            .enqueue(DeadLetter::new(
+                Envelope::new(
+                    id,
+                    "order.failed",
+                    vec![id as u8],
+                    MessageMetadata::new(id, None),
+                ),
+                "failed",
+                3,
+            ))
+            .await
+            .unwrap();
+    }
+    let letters = letters.list(1).await.unwrap();
+    assert_eq!(letters.len(), 1);
+    assert_eq!(letters[0].envelope().id(), 1);
 }
