@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use catga_core::{CatgaError, ErrorCode};
-use catga_flow::{DslFlow, Flow, dsl_action};
+use catga_flow::{DslFlow, Flow, dsl_action, dsl_each_action};
 
 #[tokio::test]
 async fn local_flow_compensates_completed_steps_in_reverse_order() {
@@ -193,4 +193,63 @@ async fn dsl_flow_parallel_keeps_the_original_state_when_a_branch_fails() {
     );
     assert_eq!(state.value, 5);
     assert!(!merge_called.load(Ordering::Relaxed));
+}
+
+#[derive(Debug)]
+struct BatchState {
+    items: Vec<u32>,
+    processed: Vec<u32>,
+}
+
+#[tokio::test]
+async fn dsl_flow_for_each_processes_selected_items_in_order_before_later_steps() {
+    let flow = DslFlow::new()
+        .for_each(
+            |state: &BatchState| state.items.clone(),
+            dsl_each_action!(|state: &mut BatchState, item: u32| async move {
+                state.processed.push(item);
+                Ok(())
+            }),
+        )
+        .action(dsl_action!(|state: &mut BatchState| async move {
+            state.processed.push(99);
+            Ok(())
+        }));
+    let mut state = BatchState {
+        items: vec![3, 5, 8],
+        processed: Vec::new(),
+    };
+
+    flow.run(&mut state).await.unwrap();
+
+    assert_eq!(state.processed, [3, 5, 8, 99]);
+}
+
+#[tokio::test]
+async fn dsl_flow_for_each_stops_before_later_items_and_steps_after_an_error() {
+    let flow = DslFlow::new()
+        .for_each(
+            |state: &BatchState| state.items.clone(),
+            dsl_each_action!(|state: &mut BatchState, item: u32| async move {
+                state.processed.push(item);
+                if item == 5 {
+                    return Err(CatgaError::new(ErrorCode::Validation, "bad item"));
+                }
+                Ok(())
+            }),
+        )
+        .action(dsl_action!(|state: &mut BatchState| async move {
+            state.processed.push(99);
+            Ok(())
+        }));
+    let mut state = BatchState {
+        items: vec![3, 5, 8],
+        processed: Vec::new(),
+    };
+
+    assert_eq!(
+        flow.run(&mut state).await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(state.processed, [3, 5]);
 }

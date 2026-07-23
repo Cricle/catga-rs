@@ -1,5 +1,7 @@
 //! Typed, state-owning flow DSL primitives.
 
+use std::sync::Arc;
+
 use catga_core::CatgaResult;
 use futures::future::BoxFuture;
 
@@ -70,6 +72,31 @@ impl<S: Send> DslFlow<S> {
             clone_state: Clone::clone,
             merge: Box::new(merge),
         });
+        self
+    }
+
+    /// Appends an action that runs sequentially for every item selected from the state.
+    ///
+    /// The selector returns an owned collection before item actions begin, so no immutable state
+    /// borrow remains while an action mutates the state asynchronously.
+    pub fn for_each<T, Select, F>(mut self, select: Select, action: F) -> Self
+    where
+        T: Send + 'static,
+        Select: Fn(&S) -> Vec<T> + Send + Sync + 'static,
+        F: for<'a> Fn(&'a mut S, T) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync + 'static,
+    {
+        let select = Arc::new(select);
+        let action = Arc::new(action);
+        self.steps.push(Step::Action(Box::new(move |state| {
+            let select = Arc::clone(&select);
+            let action = Arc::clone(&action);
+            Box::pin(async move {
+                for item in select(state) {
+                    action(state, item).await?;
+                }
+                Ok(())
+            })
+        })));
         self
     }
 

@@ -58,3 +58,17 @@ macro_rules! dsl_action {
         |$state: $state_ty| Box::pin(async move $body)
     };
 }
+
+/// Converts a natural async item action into a [`DslFlow::for_each`] action closure.
+///
+/// ```ignore
+/// .for_each(|state| state.items.clone(), dsl_each_action!(|state: &mut State, item: Item| async move {
+///     Ok(())
+/// }))
+/// ```
+#[macro_export]
+macro_rules! dsl_each_action {
+    (|$state:ident : $state_ty:ty, $item:ident : $item_ty:ty| async move $body:block) => {
+        |$state: $state_ty, $item: $item_ty| Box::pin(async move $body)
+    };
+}
