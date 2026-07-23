@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/catga-core",
+    "tests",
 ]
 resolver = "3"
 

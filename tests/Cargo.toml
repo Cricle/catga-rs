@@ -1,0 +1,29 @@
+[package]
+name = "catga-tests"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+autotests = false
+
+[dependencies]
+async-trait = "0.1"
+catga-core = { path = "../crates/catga-core" }
+futures = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[[test]]
+name = "result"
+path = "result.rs"
+
+[[test]]
+name = "message"
+path = "message.rs"
+
+[[test]]
+name = "mediator"
+path = "mediator.rs"
+
+[[test]]
+name = "batch_stream"
+path = "batch_stream.rs"

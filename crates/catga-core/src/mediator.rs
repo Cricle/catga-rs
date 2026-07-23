@@ -3,6 +3,8 @@ use std::{
     sync::Arc,
 };
 
+use futures::{Stream, StreamExt, stream};
+
 use crate::{CatgaError, CatgaResult, ErrorCode, Event, Registry, Request};
 
 /// Dispatches typed requests and events through an immutable handler registry.
@@ -37,6 +39,41 @@ impl Mediator {
                     "request handler returned an invalid response type",
                 )
             })
+    }
+
+    /// Routes requests concurrently while preserving their input order.
+    pub async fn send_batch<M>(
+        &self,
+        messages: impl IntoIterator<Item = M>,
+        concurrency_limit: usize,
+    ) -> CatgaResult<Vec<CatgaResult<M::Response>>>
+    where
+        M: Request,
+    {
+        if concurrency_limit == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "batch concurrency limit must be greater than zero",
+            ));
+        }
+
+        Ok(stream::iter(messages)
+            .map(|message| self.send(message))
+            .buffered(concurrency_limit)
+            .collect()
+            .await)
+    }
+
+    /// Lazily routes every request produced by a stream.
+    pub fn send_stream<'a, M, S>(
+        &'a self,
+        messages: S,
+    ) -> impl Stream<Item = CatgaResult<M::Response>> + 'a
+    where
+        M: Request,
+        S: Stream<Item = M> + Send + 'a,
+    {
+        messages.then(move |message| self.send(message))
     }
 
     /// Delivers an event to every registered handler in registration order.

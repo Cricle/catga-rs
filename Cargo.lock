@@ -19,6 +19,15 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+]
+
+[[package]]
+name = "catga-tests"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "catga-core",
+ "futures",
  "tokio",
 ]
 
