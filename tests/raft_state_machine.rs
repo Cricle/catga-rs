@@ -167,8 +167,14 @@ fn persistent_checkpoint_recovers_before_replaying_later_commands() {
     }
 
     let node = RaftNode::open_persistent(1, "http://node-1", members, directory.path()).unwrap();
-    let driver = RaftStateMachineDriver::new(node, Counter::default()).unwrap();
+    let mut driver = RaftStateMachineDriver::new(node, Counter::default()).unwrap();
 
     assert_eq!(driver.machine().applications, 1);
     assert_eq!(driver.machine().value, 12);
+
+    driver.checkpoint().unwrap();
+    driver.campaign().unwrap();
+    driver.propose(1_u64.to_le_bytes()).unwrap();
+    assert_eq!(driver.apply_committed().unwrap(), 1);
+    assert_eq!(driver.machine().value, 13);
 }

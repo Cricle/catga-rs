@@ -11,7 +11,7 @@ use std::{
 
 use arc_swap::ArcSwap;
 use raft::{
-    Config, RawNode,
+    Config, RawNode, Storage,
     eraftpb::{ConfState, Entry, EntryType, Message},
 };
 use slog::Logger;
@@ -370,6 +370,19 @@ impl RaftNode {
 
     pub(crate) fn acknowledge_all_committed(&mut self) -> raft::Result<()> {
         self.acknowledge_committed();
+        self.drive_ready()
+    }
+
+    pub(crate) fn acknowledge_recovered(&mut self, index: u64) -> raft::Result<()> {
+        if index == 0 {
+            return Ok(());
+        }
+        if index > self.storage.initial_state()?.hard_state.commit {
+            return Err(raft::Error::Store(raft::StorageError::Unavailable));
+        }
+        self.raw.advance_apply_to(index);
+        self.last_acknowledged_index = self.last_acknowledged_index.max(index);
+        self.last_committed_index = self.last_committed_index.max(index);
         self.drive_ready()
     }
 

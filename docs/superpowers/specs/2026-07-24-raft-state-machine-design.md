@@ -23,6 +23,10 @@ compacts the covered log entries in the same synchronous `raft-engine` write.
 If snapshot encoding fails, no Raft data is changed. A failed persistence write
 does not mark the checkpoint as installed.
 
+After recovery replay succeeds, the driver advances `RawNode`'s apply progress
+to the same index before accepting further Raft work. This prevents a later
+checkpoint from compacting entries that `raft-rs` still considers unapplied.
+
 The production `raft-engine` backend preserves a later log suffix while it
 compacts the snapshot prefix. `raft-rs`'s `MemStorage` cannot safely install a
 snapshot while retaining that suffix, so the in-memory backend accepts only a

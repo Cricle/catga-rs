@@ -99,6 +99,7 @@ where
             .pending_entries
             .extend(driver.node.persisted_committed_entries()?);
         driver.apply_available()?;
+        driver.node.acknowledge_recovered(driver.applied_index)?;
         Ok(driver)
     }
 

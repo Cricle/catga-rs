@@ -92,7 +92,7 @@ Build metadata from the index term and current `ConfState`; reject indices above
 
 Run: `rtk proxy env CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -p catga-tests --test raft_state_machine`
 
-Expected: checkpoint recovery restores the snapshot and only replays later entries.
+Expected: checkpoint recovery restores the snapshot and only replays later entries; after a restart, another checkpoint followed by election and proposal remains valid because RawNode apply progress is acknowledged after replay.
 
 ### Task 3: Verify the complete cluster surface
 
