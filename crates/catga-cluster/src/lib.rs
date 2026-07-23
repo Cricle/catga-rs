@@ -9,6 +9,10 @@ use std::{
 use arc_swap::ArcSwap;
 use tokio::sync::Notify;
 
+mod leader_only;
+
+pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
+
 /// Read-only cluster-coordination operations available to an individual node.
 pub trait ClusterCoordinator: Send + Sync {
     /// Returns this node's stable identifier.

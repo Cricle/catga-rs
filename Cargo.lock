@@ -194,6 +194,7 @@ name = "catga-cluster"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "async-trait",
  "catga-core",
  "tokio",
 ]
