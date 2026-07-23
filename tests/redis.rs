@@ -10,16 +10,63 @@ use std::{
 
 use catga_core::{
     DeadLetter, DeadLetterStore, Envelope, ErrorCode, EventStore, InboxStore, LeaseStore,
-    MessageMetadata, MessageTransport, OutboxMessage, OutboxStore, ProjectionCheckpoint,
-    ProjectionCheckpointStore, Snapshot, SnapshotStore,
+    MessageMetadata, MessageTransport, OutboxMessage, OutboxStore, PersistentSubscription,
+    ProjectionCheckpoint, ProjectionCheckpointStore, Snapshot, SnapshotStore,
+    SubscriptionCheckpoint, SubscriptionStore,
 };
 use catga_redis::{
     RedisConfig, RedisDeadLetters, RedisEventStore, RedisInbox, RedisLeases, RedisOutbox,
-    RedisProjectionCheckpoints, RedisSnapshotStore, RedisTransport,
+    RedisProjectionCheckpoints, RedisSnapshotStore, RedisSubscriptions, RedisTransport,
 };
 use redis::AsyncCommands;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+#[tokio::test]
+async fn redis_subscriptions_persist_definitions_checkpoints_and_owner_leases() {
+    let Some(config) = redis_config() else {
+        return;
+    };
+    let store =
+        RedisSubscriptions::connect(&config.server, format!("{}:subscriptions", config.stream))
+            .await
+            .unwrap();
+    store
+        .save(PersistentSubscription::new("orders", "order-*").with_event_types(["created"]))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load("orders")
+            .await
+            .unwrap()
+            .unwrap()
+            .event_types()
+            .iter()
+            .map(|value| value.as_ref())
+            .collect::<Vec<_>>(),
+        ["created"]
+    );
+    store
+        .save_checkpoint(SubscriptionCheckpoint::new("orders", "order-7", 4))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load_checkpoint("orders", "order-7")
+            .await
+            .unwrap()
+            .unwrap()
+            .version(),
+        4
+    );
+    assert!(store.try_acquire("orders", "worker-a").await.unwrap());
+    assert!(!store.try_acquire("orders", "worker-b").await.unwrap());
+    store.release("orders", "worker-b").await.unwrap();
+    assert!(!store.try_acquire("orders", "worker-b").await.unwrap());
+    store.release("orders", "worker-a").await.unwrap();
+    assert!(store.try_acquire("orders", "worker-b").await.unwrap());
+}
 
 #[tokio::test]
 async fn redis_dead_letters_preserve_queue_order_and_envelopes() {

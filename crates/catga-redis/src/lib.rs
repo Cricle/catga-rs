@@ -10,6 +10,7 @@ mod lease;
 mod outbox;
 mod projection;
 mod snapshot;
+mod subscription;
 mod transport;
 
 pub use config::RedisConfig;
@@ -20,4 +21,5 @@ pub use lease::RedisLeases;
 pub use outbox::RedisOutbox;
 pub use projection::RedisProjectionCheckpoints;
 pub use snapshot::RedisSnapshotStore;
+pub use subscription::RedisSubscriptions;
 pub use transport::RedisTransport;
