@@ -1,4 +1,6 @@
-use catga_cluster::{ClusterCoordinator, RaftMember, RaftMessage, RaftNode};
+use std::sync::Arc;
+
+use catga_cluster::{ClusterCoordinator, ClusterCoordinatorExt, RaftMember, RaftMessage, RaftNode};
 use catga_core::{CatgaResult, Handler, Mediator, Pipeline, Registry, Request};
 
 use async_trait::async_trait;
@@ -127,10 +129,17 @@ async fn raft_coordinator_enables_leader_only_pipeline_after_election() {
         .register_request::<RaftLeaderWork, _>(RaftLeaderHandler)
         .unwrap();
     let mediator = Mediator::new(registry);
-    let pipeline = Pipeline::new().with(catga_cluster::LeaderOnlyBehavior::new(coordinator));
+    let pipeline = Pipeline::new().with(catga_cluster::LeaderOnlyBehavior::new(Arc::clone(
+        &coordinator,
+    )));
 
     assert_eq!(
         mediator.send_with(RaftLeaderWork, &pipeline).await.unwrap(),
         42
+    );
+
+    assert_eq!(
+        ClusterCoordinatorExt::execute_if_leader(coordinator.as_ref(), || async { 7_u8 }).await,
+        Some(7)
     );
 }

@@ -9,9 +9,11 @@ use std::{
 use arc_swap::ArcSwap;
 use tokio::sync::Notify;
 
+mod execution;
 mod leader_only;
 mod raft;
 
+pub use execution::ClusterCoordinatorExt;
 pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
 pub use raft::{
     RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftNodeError,
