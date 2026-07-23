@@ -1,5 +1,5 @@
 use catga_cluster::{
-    RaftCommittedEntry, RaftMember, RaftNode, RaftStateMachine, RaftStateMachineDriver,
+    RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftStateMachine, RaftStateMachineDriver,
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
@@ -79,6 +79,35 @@ fn member() -> RaftMember {
     RaftMember::new(1, "http://node-1")
 }
 
+fn members() -> Vec<RaftMember> {
+    vec![
+        RaftMember::new(1, "http://node-1"),
+        RaftMember::new(2, "http://node-2"),
+        RaftMember::new(3, "http://node-3"),
+    ]
+}
+
+fn relay(drivers: &mut [RaftStateMachineDriver<Counter>]) {
+    for _ in 0..100 {
+        let messages: Vec<RaftMessage> = drivers
+            .iter_mut()
+            .flat_map(RaftStateMachineDriver::drain_messages)
+            .collect();
+        if messages.is_empty() {
+            return;
+        }
+        for message in messages {
+            drivers
+                .iter_mut()
+                .find(|driver| driver.id() == message.to)
+                .expect("Raft must only address configured peers")
+                .step(message)
+                .unwrap();
+        }
+    }
+    panic!("Raft messages did not quiesce");
+}
+
 #[test]
 fn state_machine_driver_applies_committed_commands_in_log_order() {
     let node = RaftNode::new(1, "http://node-1", vec![member()]).unwrap();
@@ -91,6 +120,32 @@ fn state_machine_driver_applies_committed_commands_in_log_order() {
     assert_eq!(driver.apply_committed().unwrap(), 2);
     assert_eq!(driver.machine().applications, 2);
     assert_eq!(driver.machine().value, 7);
+}
+
+#[test]
+fn state_machine_drivers_apply_the_same_replicated_command_once_per_node() {
+    let cluster_members = members();
+    let mut drivers = cluster_members
+        .iter()
+        .map(|member| {
+            RaftStateMachineDriver::new(
+                RaftNode::new(member.id(), member.endpoint(), cluster_members.clone()).unwrap(),
+                Counter::default(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    drivers[0].campaign().unwrap();
+    relay(&mut drivers);
+    drivers[0].propose(11_u64.to_le_bytes()).unwrap();
+    relay(&mut drivers);
+
+    for driver in &mut drivers {
+        assert_eq!(driver.apply_committed().unwrap(), 1);
+        assert_eq!(driver.machine().applications, 1);
+        assert_eq!(driver.machine().value, 11);
+    }
 }
 
 #[test]

@@ -108,6 +108,11 @@ where
         &self.machine
     }
 
+    /// Returns the numeric identifier of the owned Raft node.
+    pub fn id(&self) -> u64 {
+        self.node.id()
+    }
+
     /// Returns the greatest log index that this driver has successfully applied.
     pub const fn applied_index(&self) -> u64 {
         self.applied_index
