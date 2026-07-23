@@ -2,6 +2,8 @@
 //! Axum adapters for Catga's framework-independent result types.
 
 use std::{
+    collections::HashMap,
+    io,
     sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -9,18 +11,26 @@ use std::{
 use async_trait::async_trait;
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::Request as AxumRequest,
     http::{HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::post,
 };
-use catga_cluster::ClusterForwarder;
+use catga_cluster::{
+    ClusterForwarder, RaftMember, RaftMessage, RaftTransport, RaftTransportResult,
+};
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Mediator, Request};
+use protobuf::Message as ProtobufMessage;
 use serde::{Serialize, de::DeserializeOwned};
+use tokio::sync::mpsc;
 
 /// Header used to propagate request correlation identifiers.
 pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
+
+/// HTTP endpoint used to receive raw protobuf Raft protocol messages.
+pub const RAFT_MESSAGE_PATH: &str = "/api/catga/raft";
 
 static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -70,6 +80,79 @@ where
             .await
             .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))
     }
+}
+
+/// HTTP implementation of [`RaftTransport`] using compact protobuf protocol frames.
+pub struct HttpRaftTransport {
+    client: reqwest::Client,
+    endpoints: Arc<HashMap<u64, Arc<str>>>,
+}
+
+impl HttpRaftTransport {
+    /// Creates a transport whose immutable member map routes Raft IDs to endpoints.
+    pub fn new<I>(client: reqwest::Client, members: I) -> Self
+    where
+        I: IntoIterator<Item = RaftMember>,
+    {
+        Self {
+            client,
+            endpoints: Arc::new(
+                members
+                    .into_iter()
+                    .map(|member| (member.id(), Arc::from(member.endpoint())))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+#[async_trait]
+impl RaftTransport for HttpRaftTransport {
+    async fn send(&self, message: RaftMessage) -> RaftTransportResult {
+        let endpoint = self
+            .endpoints
+            .get(&message.to)
+            .ok_or_else(|| io::Error::other(format!("unknown Raft peer {}", message.to)))?;
+        let response = self
+            .client
+            .post(format!(
+                "{}{RAFT_MESSAGE_PATH}",
+                endpoint.trim_end_matches('/')
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
+            .body(message.write_to_bytes()?)
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("Raft peer returned HTTP {}", response.status())).into())
+        }
+    }
+}
+
+/// Builds the server route that decodes protobuf Raft frames into a runtime inbox.
+///
+/// A full inbox returns HTTP 429 immediately so the sender can apply transport
+/// backpressure instead of creating unbounded request tasks.
+pub fn raft_message_route(inbox: mpsc::Sender<RaftMessage>) -> Router {
+    Router::new().route(
+        RAFT_MESSAGE_PATH,
+        post(move |body: Bytes| {
+            let inbox = inbox.clone();
+            async move {
+                let message = match RaftMessage::parse_from_bytes(&body) {
+                    Ok(message) => message,
+                    Err(_) => return StatusCode::BAD_REQUEST,
+                };
+                match inbox.try_send(message) {
+                    Ok(()) => StatusCode::NO_CONTENT,
+                    Err(mpsc::error::TrySendError::Full(_)) => StatusCode::TOO_MANY_REQUESTS,
+                    Err(mpsc::error::TrySendError::Closed(_)) => StatusCode::SERVICE_UNAVAILABLE,
+                }
+            }
+        }),
+    )
 }
 
 /// Builds the leader-side forwarding route for one explicitly registered request type.

@@ -3,12 +3,13 @@ use std::future::IntoFuture;
 use async_trait::async_trait;
 use axum::{body::to_bytes, response::IntoResponse};
 use catga_axum::{
-    CORRELATION_ID_HEADER, CatgaHttpError, HttpClusterForwarder, correlation_id,
-    leader_forward_route,
+    CORRELATION_ID_HEADER, CatgaHttpError, HttpClusterForwarder, HttpRaftTransport, correlation_id,
+    leader_forward_route, raft_message_route,
 };
-use catga_cluster::ClusterForwarder;
+use catga_cluster::{ClusterForwarder, RaftMember, RaftMessage, RaftTransport};
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Handler, Mediator, Registry, Request};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn axum_error_response_uses_stable_status_codes_and_compact_json() {
@@ -92,4 +93,26 @@ async fn http_cluster_forwarder_posts_a_typed_request_to_the_leader() {
     server.abort();
 
     assert_eq!(result, 42);
+}
+
+#[tokio::test]
+async fn http_raft_transport_posts_a_protobuf_frame_to_the_runtime_inbox() {
+    let (inbox, mut receiver) = mpsc::channel(1);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(axum::serve(listener, raft_message_route(inbox)).into_future());
+    let transport = HttpRaftTransport::new(
+        reqwest::Client::new(),
+        [RaftMember::new(1, endpoint.clone())],
+    );
+    let message = RaftMessage {
+        from: 2,
+        to: 1,
+        ..RaftMessage::default()
+    };
+
+    transport.send(message.clone()).await.unwrap();
+    server.abort();
+
+    assert_eq!(receiver.recv().await, Some(message));
 }

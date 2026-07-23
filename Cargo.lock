@@ -291,8 +291,10 @@ dependencies = [
  "axum",
  "catga-cluster",
  "catga-core",
+ "protobuf",
  "reqwest",
  "serde",
+ "tokio",
 ]
 
 [[package]]
