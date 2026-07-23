@@ -52,6 +52,10 @@ name = "raft_cluster"
 path = "raft_cluster.rs"
 
 [[test]]
+name = "raft_runtime"
+path = "raft_runtime.rs"
+
+[[test]]
 name = "axum"
 path = "axum.rs"
 

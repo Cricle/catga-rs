@@ -14,6 +14,7 @@ mod forward;
 mod health;
 mod leader_only;
 mod raft;
+mod runtime;
 mod singleton_task;
 mod storage;
 
@@ -24,6 +25,7 @@ pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
 pub use raft::{
     RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftNodeError,
 };
+pub use runtime::{RaftRuntime, RaftRuntimeError, RaftTransport, RaftTransportResult};
 pub use singleton_task::SingletonTaskRunner;
 
 /// Read-only cluster-coordination operations available to an individual node.
