@@ -29,6 +29,10 @@ name = "message"
 path = "message.rs"
 
 [[test]]
+name = "message_types"
+path = "message_types.rs"
+
+[[test]]
 name = "mediator"
 path = "mediator.rs"
 

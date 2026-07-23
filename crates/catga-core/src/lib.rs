@@ -16,6 +16,7 @@ mod lease;
 mod mediator;
 mod message;
 mod message_signing;
+mod message_type;
 mod outbox_processor;
 mod pipeline;
 mod projection;
@@ -56,6 +57,7 @@ pub use lease::LeaseStore;
 pub use mediator::Mediator;
 pub use message::{Command, Event, Message, MessageMetadata, Request};
 pub use message_signing::{HmacMessageSigner, MessageSigner};
+pub use message_type::MessageTypeRegistry;
 pub use outbox_processor::{OutboxProcessor, OutboxRun};
 pub use pipeline::{Behavior, Next, Pipeline};
 pub use projection::{
