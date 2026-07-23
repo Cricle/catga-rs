@@ -3,7 +3,10 @@
 
 mod wire;
 
-use catga_core::{CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode};
+use std::marker::PhantomData;
+
+use catga_core::{CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, SnapshotCodec};
+use serde::{Serialize, de::DeserializeOwned};
 use wire::EnvelopeWire;
 
 /// A compact binary envelope codec backed by Postcard.
@@ -19,6 +22,31 @@ impl EnvelopeCodec for PostcardCodec {
         postcard::from_bytes::<EnvelopeWire>(bytes)
             .map(Envelope::from)
             .map_err(map_error)
+    }
+}
+
+/// Compact Postcard codec for one explicit persistent snapshot state type.
+#[derive(Clone, Copy, Debug)]
+pub struct PostcardSnapshotCodec<S> {
+    state: PhantomData<fn() -> S>,
+}
+
+impl<S> Default for PostcardSnapshotCodec<S> {
+    fn default() -> Self {
+        Self { state: PhantomData }
+    }
+}
+
+impl<S> SnapshotCodec<S> for PostcardSnapshotCodec<S>
+where
+    S: DeserializeOwned + Serialize + Send + Sync,
+{
+    fn encode_state(&self, state: &S) -> CatgaResult<Vec<u8>> {
+        postcard::to_allocvec(state).map_err(map_error)
+    }
+
+    fn decode_state(&self, bytes: &[u8]) -> CatgaResult<S> {
+        postcard::from_bytes(bytes).map_err(map_error)
     }
 }
 

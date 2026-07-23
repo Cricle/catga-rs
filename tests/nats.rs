@@ -5,8 +5,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_core::{Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport};
-use catga_nats::{NatsConfig, NatsEventStore, NatsLeases, NatsTransport};
+use catga_core::{
+    Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport, Snapshot,
+    SnapshotStore,
+};
+use catga_nats::{NatsConfig, NatsEventStore, NatsLeases, NatsSnapshotStore, NatsTransport};
 
 #[tokio::test]
 async fn nats_leases_compare_owner_with_kv_revisions() {
@@ -162,4 +165,62 @@ async fn nats_event_store_persists_versioned_history_with_subject_cas() {
         "order.paid"
     );
     assert_eq!(store.stream_ids().await.unwrap(), ["orders-7"]);
+}
+
+#[tokio::test]
+async fn nats_snapshots_round_trip_and_reject_stale_writers_with_kv_revisions() {
+    let Some(server) = std::env::var("CATGA_NATS_URL").ok() else {
+        eprintln!("skipping NATS integration test: CATGA_NATS_URL is unset");
+        return;
+    };
+    let suffix = format!("{}", std::process::id());
+    let store = Arc::new(
+        NatsSnapshotStore::<u64>::connect(&server, format!("CATGA_SNAPSHOTS_{suffix}"))
+            .await
+            .unwrap(),
+    );
+    store
+        .save(Snapshot::new("orders-7", 10_u64, 4))
+        .await
+        .unwrap();
+    let loaded = store.load::<u64>("orders-7").await.unwrap().unwrap();
+    assert_eq!(*loaded.state(), 10);
+    assert_eq!(loaded.version(), 4);
+
+    let first_writer = Arc::clone(&store);
+    let second_writer = Arc::clone(&store);
+    let (first, second) = tokio::join!(
+        first_writer.save(Snapshot::new("orders-7", 11_u64, 5)),
+        second_writer.save(Snapshot::new("orders-7", 12_u64, 3)),
+    );
+    assert!(first.is_ok());
+    assert_eq!(second.unwrap_err().code(), ErrorCode::Conflict);
+    assert_eq!(
+        *store
+            .load::<u64>("orders-7")
+            .await
+            .unwrap()
+            .unwrap()
+            .state(),
+        11
+    );
+    assert_eq!(
+        store.load::<String>("orders-7").await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    store.delete("orders-7").await.unwrap();
+    assert!(store.load::<u64>("orders-7").await.unwrap().is_none());
+    store
+        .save(Snapshot::new("orders-7", 13_u64, 6))
+        .await
+        .unwrap();
+    assert_eq!(
+        *store
+            .load::<u64>("orders-7")
+            .await
+            .unwrap()
+            .unwrap()
+            .state(),
+        13
+    );
 }

@@ -25,6 +25,7 @@ mod read_model;
 mod registry;
 mod reliability;
 mod snapshot;
+mod snapshot_codec;
 mod store;
 mod subscription;
 mod time_travel;
@@ -76,6 +77,7 @@ pub use read_model::{
 pub use registry::Registry;
 pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore, ProcessingState};
 pub use snapshot::{EnhancedSnapshotStore, Snapshot, SnapshotInfo, SnapshotStore};
+pub use snapshot_codec::SnapshotCodec;
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
 pub use subscription::{
     CompetingSubscriptionRunner, PersistentSubscription, SubscriptionCheckpoint,

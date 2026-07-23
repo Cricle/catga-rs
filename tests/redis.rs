@@ -8,8 +8,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_core::{Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport};
-use catga_redis::{RedisConfig, RedisEventStore, RedisLeases, RedisTransport};
+use catga_core::{
+    Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport, Snapshot,
+    SnapshotStore,
+};
+use catga_redis::{RedisConfig, RedisEventStore, RedisLeases, RedisSnapshotStore, RedisTransport};
 use redis::AsyncCommands;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -168,6 +171,50 @@ async fn redis_event_store_appends_atomically_and_reads_versioned_history() {
         [ErrorCode::Conflict]
     );
     assert_eq!(store.version("orders-7").await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn redis_snapshots_round_trip_and_reject_stale_writers_atomically() {
+    let Some(config) = redis_config() else {
+        eprintln!("skipping Redis integration test: CATGA_REDIS_URL is unset");
+        return;
+    };
+    let store = Arc::new(
+        RedisSnapshotStore::<u64>::connect(&config.server, format!("{}:snapshots", config.stream))
+            .await
+            .unwrap(),
+    );
+    store
+        .save(Snapshot::new("orders-7", 10_u64, 4))
+        .await
+        .unwrap();
+    let loaded = store.load::<u64>("orders-7").await.unwrap().unwrap();
+    assert_eq!(*loaded.state(), 10);
+    assert_eq!(loaded.version(), 4);
+
+    let first_writer = Arc::clone(&store);
+    let second_writer = Arc::clone(&store);
+    let (first, second) = tokio::join!(
+        first_writer.save(Snapshot::new("orders-7", 11_u64, 5)),
+        second_writer.save(Snapshot::new("orders-7", 12_u64, 3)),
+    );
+    assert!(first.is_ok());
+    assert_eq!(second.unwrap_err().code(), ErrorCode::Conflict);
+    assert_eq!(
+        *store
+            .load::<u64>("orders-7")
+            .await
+            .unwrap()
+            .unwrap()
+            .state(),
+        11
+    );
+    assert_eq!(
+        store.load::<String>("orders-7").await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    store.delete("orders-7").await.unwrap();
+    assert!(store.load::<u64>("orders-7").await.unwrap().is_none());
 }
 
 #[tokio::test]

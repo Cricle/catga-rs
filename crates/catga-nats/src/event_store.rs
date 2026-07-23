@@ -109,6 +109,9 @@ impl NatsEventStore {
         let subject = self.subject(stream_id)?;
         let mut stream = self.stream.clone();
         let info = stream.info().await.map_err(map_error)?;
+        if info.state.messages == 0 {
+            return Ok(Vec::new());
+        }
         let mut entries = Vec::new();
         for sequence in info.state.first_sequence..=info.state.last_sequence {
             let raw = self
