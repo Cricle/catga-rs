@@ -151,3 +151,7 @@ path = "flows.rs"
 [[test]]
 name = "flow_executor"
 path = "flow_executor.rs"
+
+[[test]]
+name = "flow_suspension"
+path = "flow_suspension.rs"
