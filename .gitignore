@@ -1,3 +1,4 @@
 /upstream-catga/
+/.worktrees/
 /target/
 **/*.rs.bk
