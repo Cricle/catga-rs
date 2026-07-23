@@ -41,6 +41,11 @@ impl FlowRuntimeResult {
         self.state.status() == FlowStatus::Failed
     }
 
+    /// Returns whether cancellation reached a terminal flow state.
+    pub fn is_cancelled(&self) -> bool {
+        self.state.status() == FlowStatus::Cancelled
+    }
+
     /// Returns whether another executor currently owns active execution.
     pub fn is_running(&self) -> bool {
         self.state.status() == FlowStatus::Running
@@ -110,6 +115,33 @@ where
     /// Resumes a previously suspended flow from its persisted named step.
     pub async fn resume(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {
         self.resume_at(flow_id, SystemTime::now()).await
+    }
+
+    /// Cancels a durable flow unless it has already reached a terminal state.
+    ///
+    /// A handler that was already executing can still complete external effects; its stale
+    /// continuation version cannot persist a later flow state after this cancellation wins.
+    pub async fn cancel(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {
+        let Some(continuation) = self.store.get(flow_id).await? else {
+            return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
+        };
+        self.ensure_definition(&continuation)?;
+        if continuation.state().status().is_terminal() {
+            return Ok(FlowRuntimeResult::new(continuation.state().clone()));
+        }
+        let cancelled = continuation
+            .clone()
+            .ready()
+            .with_state(continuation.state().clone().cancelled().next_version());
+        if self
+            .store
+            .update(continuation.state().version(), cancelled.clone())
+            .await?
+        {
+            Ok(FlowRuntimeResult::new(cancelled.state().clone()))
+        } else {
+            self.current_result(flow_id).await
+        }
     }
 
     /// Resumes a flow using `now` to deterministically evaluate delay and wait deadlines.

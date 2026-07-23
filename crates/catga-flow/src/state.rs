@@ -15,12 +15,14 @@ pub enum FlowStatus {
     Done,
     /// The flow completed with an error.
     Failed,
+    /// The flow was stopped before it reached another terminal outcome.
+    Cancelled,
 }
 
 impl FlowStatus {
     /// Returns whether this phase is terminal.
     pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Done | Self::Failed)
+        matches!(self, Self::Done | Self::Failed | Self::Cancelled)
     }
 }
 
@@ -170,6 +172,16 @@ impl FlowState {
             status: FlowStatus::Failed,
             owner: None,
             error: Some(error),
+            ..self
+        }
+    }
+
+    /// Marks the flow as cancelled and clears active ownership.
+    pub fn cancelled(self) -> Self {
+        Self {
+            status: FlowStatus::Cancelled,
+            owner: None,
+            error: None,
             ..self
         }
     }

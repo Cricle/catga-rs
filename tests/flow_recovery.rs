@@ -277,3 +277,26 @@ async fn stale_claim_cannot_overwrite_a_heartbeat_that_arrives_after_the_stale_r
     let current = inner.get("heartbeat-race").await.unwrap().unwrap();
     assert_eq!(current.state().owner(), Some("node-a"));
 }
+
+#[tokio::test]
+async fn cancellation_is_terminal_and_resume_is_idempotent() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    store
+        .create(FlowContinuation::new(
+            FlowState::new("cancel", "payment", b"input".to_vec(), "node-a").suspended(),
+            "finish",
+        ))
+        .await
+        .unwrap();
+    let runtime = FlowRuntime::new(
+        store,
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("payment")
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-b",
+    );
+
+    assert!(runtime.cancel("cancel").await.unwrap().is_cancelled());
+    assert!(runtime.cancel("cancel").await.unwrap().is_cancelled());
+    assert!(runtime.resume("cancel").await.unwrap().is_cancelled());
+}
