@@ -9,6 +9,7 @@ mod inbox;
 mod outbox;
 mod projection;
 mod snapshot;
+mod subscription;
 mod transport;
 
 pub use dead_letter::MemoryDeadLetters;
@@ -18,4 +19,5 @@ pub use inbox::MemoryInbox;
 pub use outbox::MemoryOutbox;
 pub use projection::MemoryProjectionCheckpoints;
 pub use snapshot::MemorySnapshots;
+pub use subscription::MemorySubscriptions;
 pub use transport::MemoryTransport;

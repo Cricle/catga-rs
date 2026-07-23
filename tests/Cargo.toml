@@ -76,6 +76,10 @@ name = "event_versions"
 path = "event_versions.rs"
 
 [[test]]
+name = "subscriptions"
+path = "subscriptions.rs"
+
+[[test]]
 name = "memory_transport"
 path = "memory_transport.rs"
 

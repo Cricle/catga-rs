@@ -19,6 +19,7 @@ mod registry;
 mod reliability;
 mod snapshot;
 mod store;
+mod subscription;
 mod transport;
 mod upgrading_event_store;
 
@@ -47,5 +48,9 @@ pub use registry::Registry;
 pub use reliability::{DeadLetter, DeadLetterStore, IdempotencyStore, InboxStore, ProcessingState};
 pub use snapshot::{Snapshot, SnapshotStore};
 pub use store::{Envelope, OutboxMessage, OutboxState, OutboxStore};
+pub use subscription::{
+    CompetingSubscriptionRunner, PersistentSubscription, SubscriptionCheckpoint,
+    SubscriptionHandler, SubscriptionRun, SubscriptionRunner, SubscriptionStore,
+};
 pub use transport::{Acknowledger, Delivery, MessageTransport};
 pub use upgrading_event_store::UpgradingEventStore;
