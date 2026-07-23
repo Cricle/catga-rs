@@ -6,10 +6,12 @@ use std::{
 };
 
 use catga_core::{
-    Envelope, ErrorCode, EventStore, LeaseStore, MessageMetadata, MessageTransport, Snapshot,
-    SnapshotStore,
+    Envelope, ErrorCode, EventStore, IdempotencyStore, LeaseStore, MessageMetadata,
+    MessageTransport, ProcessingState, Snapshot, SnapshotStore,
 };
-use catga_nats::{NatsConfig, NatsEventStore, NatsLeases, NatsSnapshotStore, NatsTransport};
+use catga_nats::{
+    NatsConfig, NatsEventStore, NatsIdempotency, NatsLeases, NatsSnapshotStore, NatsTransport,
+};
 
 #[tokio::test]
 async fn nats_leases_compare_owner_with_kv_revisions() {
@@ -223,4 +225,55 @@ async fn nats_snapshots_round_trip_and_reject_stale_writers_with_kv_revisions() 
             .state(),
         13
     );
+}
+
+#[tokio::test]
+async fn nats_idempotency_claims_exclusively_retries_failures_and_caches_results() {
+    let Some(server) = std::env::var("CATGA_NATS_URL").ok() else {
+        eprintln!("skipping NATS integration test: CATGA_NATS_URL is unset");
+        return;
+    };
+    let store = NatsIdempotency::connect(&server, format!("CATGA_IDEMP_{}", std::process::id()))
+        .await
+        .unwrap();
+    assert!(store.try_claim("create:7").await.unwrap());
+    assert!(!store.try_claim("create:7").await.unwrap());
+    store.fail("create:7").await.unwrap();
+    assert!(store.try_claim("create:7").await.unwrap());
+    store
+        .complete("create:7", Some(Arc::from([9_u8, 8])))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.state("create:7").await.unwrap(),
+        Some(ProcessingState::Completed)
+    );
+    assert_eq!(
+        store.result("create:7").await.unwrap().as_deref(),
+        Some(&[9, 8][..])
+    );
+    assert!(!store.try_claim("create:7").await.unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nats_idempotency_concurrent_claims_have_exactly_one_owner() {
+    let Some(server) = std::env::var("CATGA_NATS_URL").ok() else {
+        eprintln!("skipping NATS integration test: CATGA_NATS_URL is unset");
+        return;
+    };
+    let store = Arc::new(
+        NatsIdempotency::connect(&server, format!("CATGA_IDEMP_RACE_{}", std::process::id()))
+            .await
+            .unwrap(),
+    );
+    let mut claims = tokio::task::JoinSet::new();
+    for _ in 0..32 {
+        let store = Arc::clone(&store);
+        claims.spawn(async move { store.try_claim("create:race").await.unwrap() });
+    }
+    let mut owners = 0;
+    while let Some(claim) = claims.join_next().await {
+        owners += usize::from(claim.unwrap());
+    }
+    assert_eq!(owners, 1);
 }
