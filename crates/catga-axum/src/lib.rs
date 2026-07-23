@@ -3,20 +3,70 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use async_trait::async_trait;
 use axum::{
     Json,
-    extract::Request,
+    extract::Request as AxumRequest,
     http::{HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use catga_core::{CatgaError, ErrorCode};
-use serde::Serialize;
+use catga_cluster::ClusterForwarder;
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Request};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Header used to propagate request correlation identifiers.
 pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
 
 static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// HTTP implementation of [`ClusterForwarder`] for Serde request and response types.
+pub struct HttpClusterForwarder {
+    client: reqwest::Client,
+}
+
+impl HttpClusterForwarder {
+    /// Creates a forwarder using the supplied reusable HTTP client.
+    pub const fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl<M> ClusterForwarder<M> for HttpClusterForwarder
+where
+    M: Request + Serialize,
+    M::Response: DeserializeOwned,
+{
+    async fn forward(&self, request: M, leader_endpoint: &str) -> CatgaResult<M::Response> {
+        let request_type = request
+            .message_type()
+            .rsplit("::")
+            .next()
+            .unwrap_or("request");
+        let url = format!(
+            "{}/api/catga/forward/{request_type}",
+            leader_endpoint.trim_end_matches('/')
+        );
+        let response = self
+            .client
+            .post(url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?;
+        if !response.status().is_success() {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                format!("leader forwarding failed with status {}", response.status()),
+            ));
+        }
+        response
+            .json()
+            .await
+            .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))
+    }
+}
 
 /// Reads a numeric correlation identifier or allocates a monotonic process-local fallback.
 pub fn correlation_id(headers: &axum::http::HeaderMap) -> u64 {
@@ -28,7 +78,7 @@ pub fn correlation_id(headers: &axum::http::HeaderMap) -> u64 {
 }
 
 /// Scopes a request correlation id through the downstream future and echoes it in the response.
-pub async fn correlation_middleware(request: Request, next: Next) -> Response {
+pub async fn correlation_middleware(request: AxumRequest, next: Next) -> Response {
     let correlation_id = correlation_id(request.headers());
     let mut response = catga_core::scope_correlation_id(correlation_id, next.run(request)).await;
     response.headers_mut().insert(
