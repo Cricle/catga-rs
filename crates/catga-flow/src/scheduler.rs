@@ -5,7 +5,7 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::CatgaResult;
-use dashmap::DashMap;
+use dashmap::{DashMap, mapref::entry::Entry};
 
 /// Schedules durable flow resumption without coupling flows to a job system.
 #[async_trait]
@@ -47,6 +47,7 @@ impl ScheduledResume {
 pub struct MemoryFlowScheduler {
     next_id: AtomicU64,
     schedules: DashMap<Box<str>, ScheduledResume>,
+    flow_schedules: DashMap<Box<str>, Box<str>>,
 }
 
 impl MemoryFlowScheduler {
@@ -60,7 +61,17 @@ impl MemoryFlowScheduler {
             .collect();
         due_ids
             .into_iter()
-            .filter_map(|id| self.schedules.remove(&id).map(|(_, schedule)| schedule))
+            .filter_map(|id| {
+                let (_, schedule) = self.schedules.remove(&id)?;
+                let is_current = self
+                    .flow_schedules
+                    .get(schedule.flow_id())
+                    .is_some_and(|mapped| mapped.as_ref() == schedule.schedule_id());
+                if is_current {
+                    self.flow_schedules.remove(schedule.flow_id());
+                }
+                Some(schedule)
+            })
             .collect()
     }
 }
@@ -68,13 +79,25 @@ impl MemoryFlowScheduler {
 #[async_trait]
 impl FlowScheduler for MemoryFlowScheduler {
     async fn schedule_resume(&self, flow_id: &str, due_at: SystemTime) -> CatgaResult<Box<str>> {
+        let flow_id: Box<str> = flow_id.into();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let schedule_id: Box<str> = format!("flow-resume-{id}").into();
+        match self.flow_schedules.entry(flow_id.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(schedule_id.clone());
+            }
+            Entry::Occupied(_) => {
+                return Err(catga_core::CatgaError::new(
+                    catga_core::ErrorCode::Conflict,
+                    "a resume is already scheduled for this flow",
+                ));
+            }
+        }
         self.schedules.insert(
             schedule_id.clone(),
             ScheduledResume {
                 schedule_id: schedule_id.clone(),
-                flow_id: flow_id.into(),
+                flow_id,
                 due_at,
             },
         );
@@ -82,6 +105,16 @@ impl FlowScheduler for MemoryFlowScheduler {
     }
 
     async fn cancel_resume(&self, schedule_id: &str) -> CatgaResult<bool> {
-        Ok(self.schedules.remove(schedule_id).is_some())
+        let Some((_, schedule)) = self.schedules.remove(schedule_id) else {
+            return Ok(false);
+        };
+        let is_current = self
+            .flow_schedules
+            .get(schedule.flow_id())
+            .is_some_and(|mapped| mapped.as_ref() == schedule.schedule_id());
+        if is_current {
+            self.flow_schedules.remove(schedule.flow_id());
+        }
+        Ok(true)
     }
 }

@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::SystemTime};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
@@ -45,6 +48,7 @@ pub struct FlowRuntime<S: ?Sized, H: ?Sized> {
     scheduler: Arc<H>,
     definition: FlowDefinition,
     owner: Box<str>,
+    stale_after: Duration,
 }
 
 impl<S, H> FlowRuntime<S, H>
@@ -64,7 +68,14 @@ where
             scheduler,
             definition,
             owner: owner.into(),
+            stale_after: Duration::from_secs(30),
         }
+    }
+
+    /// Sets how long an unheartbeated running continuation remains exclusively owned.
+    pub fn with_stale_after(mut self, stale_after: Duration) -> Self {
+        self.stale_after = stale_after;
+        self
     }
 
     /// Starts a new flow and executes until it suspends or reaches a terminal state.
@@ -79,7 +90,8 @@ where
                 "a flow definition requires at least one registered step",
             ));
         };
-        let state = FlowState::new(flow_id, self.definition.name(), data, self.owner.clone());
+        let state =
+            FlowState::new(flow_id, self.definition.name(), data, self.owner.clone()).suspended();
         let continuation = FlowContinuation::new(state, first_step);
         if !self.store.create(continuation.clone()).await? {
             return Err(CatgaError::new(
@@ -87,7 +99,7 @@ where
                 "a flow with this identity already exists",
             ));
         }
-        self.drive(continuation).await
+        self.resume(continuation.state().id()).await
     }
 
     /// Resumes a previously suspended flow from its persisted named step.
@@ -104,16 +116,27 @@ where
         let Some(continuation) = self.store.get(flow_id).await? else {
             return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
         };
+        if continuation.state().flow_type() != self.definition.name() {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "flow continuation belongs to a different definition",
+            ));
+        }
         if continuation.state().status().is_terminal() {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
-        if continuation.state().status() != FlowStatus::Suspended {
+        let is_stale_running = continuation.state().status() == FlowStatus::Running
+            && is_stale(continuation.state().heartbeat(), now, self.stale_after);
+        if continuation.state().status() == FlowStatus::Running && !is_stale_running {
+            return Ok(FlowRuntimeResult::new(continuation.state().clone()));
+        }
+        if continuation.state().status() != FlowStatus::Suspended && !is_stale_running {
             return Err(CatgaError::new(
-                ErrorCode::Transient,
-                "flow is already running",
+                ErrorCode::Validation,
+                "flow is not resumable",
             ));
         }
-        if let Some(wait) = continuation.wait() {
+        if !is_stale_running && let Some(wait) = continuation.wait() {
             match evaluate_wait(wait, now) {
                 WaitEvaluation::Pending => {
                     return Ok(FlowRuntimeResult::new(continuation.state().clone()));
@@ -122,20 +145,14 @@ where
                 WaitEvaluation::Ready => {}
             }
         }
-        if continuation.resume_at().is_some_and(|due_at| due_at > now) {
+        if !is_stale_running && continuation.resume_at().is_some_and(|due_at| due_at > now) {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
-        let running = continuation.clone().ready().with_state(
-            continuation
-                .state()
-                .clone()
-                .claimed_by(self.owner.clone())
-                .running()
-                .next_version(),
-        );
-        self.persist(continuation.state().version(), running.clone())
-            .await?;
-        self.drive(running).await
+        if let Some(running) = self.claim(continuation).await? {
+            self.drive(running).await
+        } else {
+            self.current_result(flow_id).await
+        }
     }
 
     /// Records one successful child result and resumes when the wait policy is satisfied.
@@ -156,10 +173,7 @@ where
             .record_wait_success(flow_id, continuation.state().version(), child_id, payload)
             .await?
         {
-            return Err(CatgaError::new(
-                ErrorCode::Transient,
-                "flow wait condition changed before the child result was saved",
-            ));
+            return self.current_result(flow_id).await;
         }
         self.resume(flow_id).await
     }
@@ -182,10 +196,7 @@ where
             .record_wait_failure(flow_id, continuation.state().version(), child_id, error)
             .await?
         {
-            return Err(CatgaError::new(
-                ErrorCode::Transient,
-                "flow wait condition changed before the child result was saved",
-            ));
+            return self.current_result(flow_id).await;
         }
         self.resume(flow_id).await
     }
@@ -219,10 +230,15 @@ where
                     let next = continuation
                         .clone()
                         .at_step(next_step)
-                        .with_state(state.at_step(completed_steps).next_version());
+                        .with_state(state.at_step(completed_steps).suspended().next_version());
                     self.persist(continuation.state().version(), next.clone())
                         .await?;
-                    continuation = next;
+                    let next_flow_id: Box<str> = next.state().id().into();
+                    if let Some(running) = self.claim(next).await? {
+                        continuation = running;
+                    } else {
+                        return self.current_result(&next_flow_id).await;
+                    }
                 }
                 FlowStepOutcome::SuspendUntil(resume_at) => {
                     let Some(next_step) = self.definition.next_step_name(continuation.step_name())
@@ -315,6 +331,30 @@ where
             ))
         }
     }
+
+    async fn claim(&self, continuation: FlowContinuation) -> CatgaResult<Option<FlowContinuation>> {
+        let running = continuation.clone().ready().with_state(
+            continuation
+                .state()
+                .clone()
+                .claimed_by(self.owner.clone())
+                .running()
+                .next_version(),
+        );
+        Ok(self
+            .store
+            .update(continuation.state().version(), running.clone())
+            .await?
+            .then_some(running))
+    }
+
+    async fn current_result(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {
+        self.store
+            .get(flow_id)
+            .await?
+            .map(|continuation| FlowRuntimeResult::new(continuation.state().clone()))
+            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "flow does not exist"))
+    }
 }
 
 enum WaitEvaluation {
@@ -363,4 +403,9 @@ fn evaluate_wait(wait: &WaitCondition, now: SystemTime) -> WaitEvaluation {
             }
         }
     }
+}
+
+fn is_stale(heartbeat: SystemTime, now: SystemTime, stale_after: Duration) -> bool {
+    now.duration_since(heartbeat)
+        .is_ok_and(|elapsed| elapsed >= stale_after)
 }

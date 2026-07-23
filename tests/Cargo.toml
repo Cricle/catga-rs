@@ -159,3 +159,7 @@ path = "flow_suspension.rs"
 [[test]]
 name = "flow_wait_policies"
 path = "flow_wait_policies.rs"
+
+[[test]]
+name = "flow_recovery"
+path = "flow_recovery.rs"
