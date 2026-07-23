@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Core contracts for the Catga CQRS runtime.
 
+mod aggregate;
 mod behaviors;
 mod cache;
 mod codec;
@@ -19,6 +20,7 @@ mod snapshot;
 mod store;
 mod transport;
 
+pub use aggregate::{Aggregate, AggregateRepository, EventCountSnapshotStrategy, SnapshotStrategy};
 pub use behaviors::{
     CorrelationBehavior, DeadLetterBehavior, DeadLetterEnvelope, IdempotencyBehavior,
     IdempotencyKey, InboxBehavior, InboxKey, RetryBehavior, TimeoutBehavior,
