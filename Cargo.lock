@@ -199,7 +199,6 @@ dependencies = [
  "catga-codec-postcard",
  "catga-core",
  "futures",
- "tokio",
 ]
 
 [[package]]

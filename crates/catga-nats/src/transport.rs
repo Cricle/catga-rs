@@ -1,13 +1,16 @@
-use std::sync::Arc;
+use std::time::Duration;
 
-use async_nats::jetstream::{self, consumer::pull, stream};
+use async_nats::jetstream::{
+    self,
+    consumer::{self, pull},
+    stream,
+};
 use async_trait::async_trait;
 use catga_codec_postcard::PostcardCodec;
 use catga_core::{
     CatgaError, CatgaResult, Delivery, Envelope, EnvelopeCodec, ErrorCode, MessageTransport,
 };
 use futures::StreamExt;
-use tokio::sync::Mutex;
 
 use crate::{NatsConfig, acknowledgement::NatsAcknowledger};
 
@@ -16,7 +19,7 @@ pub struct NatsTransport {
     context: jetstream::Context,
     subject: Box<str>,
     codec: PostcardCodec,
-    messages: Arc<Mutex<pull::Stream>>,
+    consumer: consumer::PullConsumer,
 }
 
 impl NatsTransport {
@@ -45,12 +48,11 @@ impl NatsTransport {
             )
             .await
             .map_err(map_error)?;
-        let messages = consumer.messages().await.map_err(map_error)?;
         Ok(Self {
             context,
             subject: config.subject,
             codec: PostcardCodec,
-            messages: Arc::new(Mutex::new(messages)),
+            consumer,
         })
     }
 }
@@ -69,19 +71,25 @@ impl MessageTransport for NatsTransport {
     }
 
     async fn receive(&self) -> CatgaResult<Delivery> {
-        let message = self
-            .messages
-            .lock()
-            .await
-            .next()
-            .await
-            .ok_or_else(|| CatgaError::new(ErrorCode::Transient, "JetStream consumer closed"))
-            .and_then(|message| message.map_err(map_error))?;
-        let envelope = self.codec.decode(&message.payload)?;
-        Ok(Delivery::with_acknowledger(
-            envelope,
-            Box::new(NatsAcknowledger(message)),
-        ))
+        loop {
+            let mut batch = self
+                .consumer
+                .batch()
+                .max_messages(1)
+                .expires(Duration::from_secs(30))
+                .messages()
+                .await
+                .map_err(map_error)?;
+            let Some(message) = batch.next().await else {
+                continue;
+            };
+            let message = message.map_err(map_error)?;
+            let envelope = self.codec.decode(&message.payload)?;
+            return Ok(Delivery::with_acknowledger(
+                envelope,
+                Box::new(NatsAcknowledger(message)),
+            ));
+        }
     }
 }
 
