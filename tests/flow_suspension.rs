@@ -1,5 +1,8 @@
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -190,4 +193,50 @@ async fn wait_policies_resume_once_and_expire_deterministically() {
             .unwrap()
             .is_failure()
     );
+}
+
+#[tokio::test]
+async fn named_transition_persists_the_selected_branch_and_executes_only_that_handler() {
+    let selected = Arc::new(AtomicUsize::new(0));
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let definition = FlowDefinition::new("payment")
+        .step("choose", |_| async {
+            Ok(FlowStepOutcome::goto("accepted"))
+        })
+        .step("rejected", {
+            let rejected = Arc::clone(&rejected);
+            move |_| {
+                let rejected = Arc::clone(&rejected);
+                async move {
+                    rejected.fetch_add(1, Ordering::SeqCst);
+                    Ok(FlowStepOutcome::complete())
+                }
+            }
+        })
+        .step("accepted", {
+            let selected = Arc::clone(&selected);
+            move |_| {
+                let selected = Arc::clone(&selected);
+                async move {
+                    selected.fetch_add(1, Ordering::SeqCst);
+                    Ok(FlowStepOutcome::complete())
+                }
+            }
+        });
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        definition,
+        "node-a",
+    );
+
+    assert!(
+        runtime
+            .start("branch", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_success()
+    );
+    assert_eq!(selected.load(Ordering::SeqCst), 1);
+    assert_eq!(rejected.load(Ordering::SeqCst), 0);
 }

@@ -13,6 +13,8 @@ type StepHandler =
 pub enum FlowStepOutcome {
     /// Continue with the following registered step.
     Advance,
+    /// Persist and execute the specified registered step.
+    Goto(Box<str>),
     /// Persist the next step until `resume_at`.
     SuspendUntil(std::time::SystemTime),
     /// Persist the next step until a wait condition is complete.
@@ -24,6 +26,11 @@ pub enum FlowStepOutcome {
 }
 
 impl FlowStepOutcome {
+    /// Creates a durable transition to a named registered step.
+    pub fn goto(step_name: impl Into<Box<str>>) -> Self {
+        Self::Goto(step_name.into())
+    }
+
     /// Creates a delayed-suspension outcome.
     pub const fn suspend_until(resume_at: std::time::SystemTime) -> Self {
         Self::SuspendUntil(resume_at)
@@ -92,6 +99,10 @@ impl FlowDefinition {
             .position(|step| step.name.as_ref() == name)
             .and_then(|index| self.steps.get(index.saturating_add(1)))
             .map(|step| step.name.as_ref())
+    }
+
+    pub(crate) fn has_step(&self, name: &str) -> bool {
+        self.steps.iter().any(|step| step.name.as_ref() == name)
     }
 
     pub(crate) async fn execute(

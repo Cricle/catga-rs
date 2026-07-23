@@ -240,18 +240,34 @@ where
                             )
                             .await;
                     };
-                    let completed_steps = state.step().saturating_add(1);
-                    let next = continuation
-                        .clone()
-                        .at_step(next_step)
-                        .with_state(state.at_step(completed_steps).suspended().next_version());
-                    self.persist(continuation.state().version(), next.clone())
-                        .await?;
-                    let next_flow_id: Box<str> = next.state().id().into();
-                    if let Some(running) = self.claim(next).await? {
+                    let flow_id: Box<str> = continuation.state().id().into();
+                    if let Some(running) =
+                        self.transition_to(continuation, state, next_step).await?
+                    {
                         continuation = running;
                     } else {
-                        return self.current_result(&next_flow_id).await;
+                        return self.current_result(&flow_id).await;
+                    }
+                }
+                FlowStepOutcome::Goto(next_step) => {
+                    if !self.definition.has_step(&next_step) {
+                        return self
+                            .fail(
+                                continuation,
+                                CatgaError::new(
+                                    ErrorCode::NotFound,
+                                    "a flow transition references an unregistered step",
+                                ),
+                            )
+                            .await;
+                    }
+                    let flow_id: Box<str> = continuation.state().id().into();
+                    if let Some(running) =
+                        self.transition_to(continuation, state, &next_step).await?
+                    {
+                        continuation = running;
+                    } else {
+                        return self.current_result(&flow_id).await;
                     }
                 }
                 FlowStepOutcome::SuspendUntil(resume_at) => {
@@ -333,6 +349,22 @@ where
         self.persist(continuation.state().version(), failed.clone())
             .await?;
         Ok(FlowRuntimeResult::new(failed.state().clone()))
+    }
+
+    async fn transition_to(
+        &self,
+        continuation: FlowContinuation,
+        state: FlowState,
+        next_step: &str,
+    ) -> CatgaResult<Option<FlowContinuation>> {
+        let completed_steps = state.step().saturating_add(1);
+        let next = continuation
+            .clone()
+            .at_step(next_step)
+            .with_state(state.at_step(completed_steps).suspended().next_version());
+        self.persist(continuation.state().version(), next.clone())
+            .await?;
+        self.claim(next).await
     }
 
     async fn persist(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<()> {
