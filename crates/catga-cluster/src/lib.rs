@@ -9,6 +9,7 @@ use std::{
 use arc_swap::ArcSwap;
 use tokio::sync::Notify;
 
+mod config;
 mod execution;
 mod forward;
 mod health;
@@ -19,6 +20,7 @@ mod singleton_task;
 mod state_machine;
 mod storage;
 
+pub use config::{RaftClusterConfig, RaftClusterConfigError, RaftClusterMemberConfig, RaftTiming};
 pub use execution::ClusterCoordinatorExt;
 pub use forward::{ClusterForwarder, ForwardToLeaderBehavior};
 pub use health::{ClusterHealth, cluster_health};

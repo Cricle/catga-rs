@@ -17,7 +17,7 @@ use raft::{
 use slog::Logger;
 use tokio::sync::Notify;
 
-use crate::{ClusterCoordinator, storage::RaftStorage};
+use crate::{ClusterCoordinator, RaftTiming, storage::RaftStorage};
 
 /// A wire-level Raft protocol message for a caller-provided transport.
 pub type RaftMessage = Message;
@@ -228,10 +228,20 @@ impl RaftNode {
         endpoint: impl Into<Arc<str>>,
         members: Vec<RaftMember>,
     ) -> Result<Self, RaftNodeError> {
+        Self::new_with_timing(id, endpoint, members, RaftTiming::default_node())
+    }
+
+    /// Builds an in-memory Raft node using validated logical timing.
+    pub fn new_with_timing(
+        id: u64,
+        endpoint: impl Into<Arc<str>>,
+        members: Vec<RaftMember>,
+        timing: RaftTiming,
+    ) -> Result<Self, RaftNodeError> {
         let endpoint = endpoint.into();
         validate_members(id, &endpoint, &members)?;
         let storage = RaftStorage::in_memory(conf_state(&members));
-        Self::from_storage(id, endpoint, members, storage)
+        Self::from_storage(id, endpoint, members, storage, timing)
     }
 
     /// Opens a Raft node whose protocol state survives process restarts.
@@ -246,10 +256,27 @@ impl RaftNode {
         members: Vec<RaftMember>,
         directory: impl AsRef<Path>,
     ) -> Result<Self, RaftNodeError> {
+        Self::open_persistent_with_timing(
+            id,
+            endpoint,
+            members,
+            directory,
+            RaftTiming::default_node(),
+        )
+    }
+
+    /// Opens a persistent Raft node using validated logical timing.
+    pub fn open_persistent_with_timing(
+        id: u64,
+        endpoint: impl Into<Arc<str>>,
+        members: Vec<RaftMember>,
+        directory: impl AsRef<Path>,
+        timing: RaftTiming,
+    ) -> Result<Self, RaftNodeError> {
         let endpoint = endpoint.into();
         validate_members(id, &endpoint, &members)?;
         let storage = RaftStorage::open_persistent(directory.as_ref(), conf_state(&members))?;
-        Self::from_storage(id, endpoint, members, storage)
+        Self::from_storage(id, endpoint, members, storage, timing)
     }
 
     fn from_storage(
@@ -257,12 +284,13 @@ impl RaftNode {
         _endpoint: Arc<str>,
         members: Vec<RaftMember>,
         storage: RaftStorage,
+        timing: RaftTiming,
     ) -> Result<Self, RaftNodeError> {
         let members: Arc<[RaftMember]> = members.into();
         let config = Config {
             id,
-            election_tick: 10,
-            heartbeat_tick: 1,
+            election_tick: timing.election_ticks(),
+            heartbeat_tick: timing.heartbeat_ticks(),
             check_quorum: true,
             pre_vote: true,
             max_size_per_msg: 1024 * 1024,
