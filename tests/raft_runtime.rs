@@ -2,7 +2,8 @@ use std::{collections::HashMap, io, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use catga_cluster::{
-    ClusterCoordinator, RaftMember, RaftMessage, RaftNode, RaftRuntime, RaftTransport,
+    ClusterCoordinator, RaftMember, RaftMessage, RaftNode, RaftRuntime, RaftRuntimeError,
+    RaftTransport,
 };
 use tokio::sync::{RwLock, mpsc};
 
@@ -46,6 +47,17 @@ fn members() -> Vec<RaftMember> {
     ]
 }
 
+#[test]
+fn raft_runtime_rejects_a_zero_tick_interval() {
+    let cluster_members = members();
+    let node = RaftNode::new(1, "http://node-1", cluster_members).unwrap();
+
+    assert!(matches!(
+        RaftRuntime::spawn(node, Arc::new(ChannelTransport::default()), Duration::ZERO),
+        Err(RaftRuntimeError::InvalidTickInterval)
+    ));
+}
+
 #[tokio::test]
 async fn raft_runtime_owns_ticks_transport_and_committed_entries_without_external_relay() {
     let transport = ChannelTransport::default();
@@ -59,7 +71,8 @@ async fn raft_runtime_owns_ticks_transport_and_committed_entries_without_externa
                 Duration::from_millis(2),
             )
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     for runtime in &runtimes {
         transport.register(runtime).await;
     }

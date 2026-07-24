@@ -31,6 +31,8 @@ pub trait RaftTransport: Send + Sync {
 /// Errors returned while operating or joining a [`RaftRuntime`].
 #[derive(Debug)]
 pub enum RaftRuntimeError {
+    /// The configured logical Raft clock interval was zero.
+    InvalidTickInterval,
     /// The owner task exited before it could handle a request.
     Stopped,
     /// `raft-rs` rejected an operation or an inbound protocol message.
@@ -44,6 +46,9 @@ pub enum RaftRuntimeError {
 impl fmt::Display for RaftRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidTickInterval => {
+                formatter.write_str("Raft runtime tick interval must be non-zero")
+            }
             Self::Stopped => formatter.write_str("Raft runtime stopped"),
             Self::Raft(error) => error.fmt(formatter),
             Self::Transport(error) => error.fmt(formatter),
@@ -58,7 +63,7 @@ impl Error for RaftRuntimeError {
             Self::Raft(error) => Some(error),
             Self::Transport(error) => Some(error.as_ref()),
             Self::Task(error) => Some(error),
-            Self::Stopped => None,
+            Self::InvalidTickInterval | Self::Stopped => None,
         }
     }
 }
@@ -82,14 +87,17 @@ impl RaftRuntime {
     ///
     /// `tick_interval` must be non-zero. The runtime stops on a Raft or transport
     /// failure; [`Self::join`] returns that terminal error.
-    pub fn spawn<T>(node: RaftNode, transport: Arc<T>, tick_interval: Duration) -> Self
+    pub fn spawn<T>(
+        node: RaftNode,
+        transport: Arc<T>,
+        tick_interval: Duration,
+    ) -> Result<Self, RaftRuntimeError>
     where
         T: RaftTransport + 'static,
     {
-        assert!(
-            !tick_interval.is_zero(),
-            "Raft runtime tick interval must be non-zero"
-        );
+        if tick_interval.is_zero() {
+            return Err(RaftRuntimeError::InvalidTickInterval);
+        }
         let id = node.id();
         let coordinator = node.coordinator();
         let (inbox, inbound) = mpsc::channel(INBOUND_BUFFER);
@@ -105,14 +113,14 @@ impl RaftRuntime {
             requests,
             runtime_shutdown,
         ));
-        Self {
+        Ok(Self {
             id,
             coordinator,
             inbox,
             commands,
             shutdown,
             task,
-        }
+        })
     }
 
     /// Returns this runtime's Raft member identifier.
