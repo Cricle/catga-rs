@@ -18,6 +18,7 @@ mod raft;
 mod runtime;
 mod singleton_task;
 mod state_machine;
+mod state_machine_runtime;
 mod storage;
 
 pub use config::{RaftClusterConfig, RaftClusterConfigError, RaftClusterMemberConfig, RaftTiming};
@@ -32,6 +33,7 @@ pub use raft::{
 pub use runtime::{RaftRuntime, RaftRuntimeError, RaftTransport, RaftTransportResult};
 pub use singleton_task::SingletonTaskRunner;
 pub use state_machine::{RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError};
+pub use state_machine_runtime::{RaftStateMachineRuntime, RaftStateMachineRuntimeError};
 
 /// Read-only cluster-coordination operations available to an individual node.
 pub trait ClusterCoordinator: Send + Sync {

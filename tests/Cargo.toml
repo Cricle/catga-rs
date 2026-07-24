@@ -61,6 +61,10 @@ name = "raft_state_machine"
 path = "raft_state_machine.rs"
 
 [[test]]
+name = "raft_state_machine_runtime"
+path = "raft_state_machine_runtime.rs"
+
+[[test]]
 name = "raft_config"
 path = "raft_config.rs"
 
