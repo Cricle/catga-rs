@@ -417,6 +417,7 @@ dependencies = [
  "catga-redis",
  "catga-robustmq",
  "futures",
+ "raft",
  "redis",
  "reqwest",
  "robustmq",

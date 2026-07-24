@@ -14,6 +14,7 @@ use catga_cluster::{
     RaftStateMachineDriver, RaftStateMachineRuntime, RaftTransport, RaftTransportResult,
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use raft::eraftpb::{ConfState, MessageType, Snapshot};
 use tokio::sync::{RwLock, mpsc};
 
 #[derive(Default)]
@@ -146,6 +147,65 @@ async fn state_machine_runtime_stops_before_acknowledging_a_failed_application()
         runtime.join().await,
         Err(catga_cluster::RaftStateMachineRuntimeError::StateMachine(_))
     ));
+}
+
+#[tokio::test]
+async fn state_machine_runtime_restores_an_incoming_snapshot_before_later_commands() {
+    let value = Arc::new(AtomicU64::new(0));
+    let directory = tempfile::tempdir().unwrap();
+    let node = RaftNode::open_persistent(
+        1,
+        "http://node-1",
+        vec![RaftMember::new(1, "http://node-1")],
+        directory.path(),
+    )
+    .unwrap();
+    let driver = RaftStateMachineDriver::new(
+        node,
+        SharedCounter {
+            value: Arc::clone(&value),
+        },
+    )
+    .unwrap();
+    let runtime =
+        RaftStateMachineRuntime::spawn(driver, Arc::new(SinkTransport), Duration::from_millis(1))
+            .unwrap();
+
+    let mut snapshot = Snapshot::default();
+    snapshot.mut_metadata().index = 1;
+    snapshot.mut_metadata().term = 1;
+    snapshot
+        .mut_metadata()
+        .set_conf_state(ConfState::from((vec![1], Vec::new())));
+    snapshot.set_data(10_u64.to_le_bytes().to_vec().into());
+    let mut message = RaftMessage::default();
+    message.set_msg_type(MessageType::MsgSnapshot);
+    message.from = 2;
+    message.to = 1;
+    message.term = 1;
+    message.set_snapshot(snapshot);
+    runtime.inbox().send(message).await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while value.load(Ordering::Relaxed) != 10 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    runtime.campaign().await.unwrap();
+    runtime.propose(2_u64.to_le_bytes()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while value.load(Ordering::Relaxed) != 12 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    runtime.shutdown();
+    runtime.join().await.unwrap();
 }
 
 #[tokio::test]
