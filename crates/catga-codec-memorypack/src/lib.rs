@@ -6,6 +6,7 @@ mod fixtures;
 mod limits;
 mod reader;
 mod records;
+mod value;
 mod writer;
 
 pub use limits::MemoryPackLimits;
@@ -14,6 +15,7 @@ pub use records::{
     DeadLetterMessageRecord, FlowStateRecord, ForEachProgressRecord, InboxMessageRecord,
     NatsStoredSnapshotRecord, OutboxMessageRecord, StoredSnapshotMetadataRecord,
 };
+pub use value::{MemoryPackValueCodec, decode_value, encode_value};
 pub use writer::MemoryPackWriter;
 
 #[cfg(test)]

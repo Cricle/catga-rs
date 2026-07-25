@@ -255,6 +255,14 @@ name = "testing_harness"
 path = "testing/harness.rs"
 
 [[test]]
+name = "testing_aggregate"
+path = "testing/aggregate.rs"
+
+[[test]]
+name = "testing_flow"
+path = "testing/flow.rs"
+
+[[test]]
 name = "memory_reliability"
 path = "memory_reliability.rs"
 

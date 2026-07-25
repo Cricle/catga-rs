@@ -1,6 +1,7 @@
 //! JetStream-backed optimistic event persistence.
 
 use std::{
+    collections::BinaryHeap,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -17,8 +18,9 @@ use async_nats::{
 use async_trait::async_trait;
 use catga_codec_postcard::PostcardCodec;
 use catga_core::{
-    CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventStore, EventStream,
-    StoredEvent, VersionInfo, telemetry,
+    CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
+    EventStream, StoredEvent, StreamIdsPage, VersionHistoryPage, VersionInfo, telemetry,
+    validate_event_store_page_size,
 };
 use futures::{
     Stream as FuturesStream, StreamExt, TryStream, TryStreamExt, stream as futures_stream,
@@ -105,10 +107,6 @@ impl NatsEventStore {
             ));
         }
         Ok(format!("{}.{}", self.subject_prefix, stream_id))
-    }
-
-    async fn entries(&self, stream_id: &str) -> CatgaResult<Vec<StoredEvent>> {
-        self.entries_from(stream_id, 0, usize::MAX).await
     }
 
     async fn current(&self, stream_id: &str) -> CatgaResult<Option<(i64, u64)>> {
@@ -237,18 +235,27 @@ impl EventStore for NatsEventStore {
         .await
     }
 
-    async fn read(
+    async fn read_page(
         &self,
         stream_id: &str,
         from_version: u64,
         max_count: usize,
-    ) -> CatgaResult<EventStream> {
-        telemetry::record_persistence("nats", "event_store", "read", async {
+    ) -> CatgaResult<EventPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("nats", "event_store", "read_page", async {
             let version = self.version(stream_id).await?;
             let events = self
                 .entries_from(stream_id, from_version, max_count)
                 .await?;
-            Ok(EventStream::new(stream_id, version, events))
+            let next_version = events.last().and_then(|event| {
+                (event.version() < version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            Ok(EventPage::new(
+                EventStream::new(stream_id, version, events),
+                next_version,
+            ))
         })
         .await
     }
@@ -260,67 +267,129 @@ impl EventStore for NatsEventStore {
         .await
     }
 
-    async fn read_to_version(&self, stream_id: &str, to_version: i64) -> CatgaResult<EventStream> {
-        telemetry::record_persistence("nats", "event_store", "read_to_version", async {
+    async fn read_to_version_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        to_version: i64,
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("nats", "event_store", "read_to_version_page", async {
+            let stream_version = self.version(stream_id).await?;
             let events: Vec<_> = self
-                .entries(stream_id)
+                .entries_from(stream_id, from_version, max_count)
                 .await?
                 .into_iter()
-                .filter(|event| event.version() <= to_version)
+                .take_while(|event| event.version() <= to_version)
                 .collect();
             let version = events.last().map_or(-1, StoredEvent::version);
-            Ok(EventStream::new(stream_id, version, events))
+            let next_version = events.last().and_then(|event| {
+                (event.version() < to_version && event.version() < stream_version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            Ok(EventPage::new(
+                EventStream::new(stream_id, version, events),
+                next_version,
+            ))
         })
         .await
     }
 
-    async fn read_to_time(
+    async fn read_to_time_page(
         &self,
         stream_id: &str,
+        from_version: u64,
         upper_bound: SystemTime,
-    ) -> CatgaResult<EventStream> {
-        telemetry::record_persistence("nats", "event_store", "read_to_time", async {
-            let events: Vec<_> = self
-                .entries(stream_id)
-                .await?
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("nats", "event_store", "read_to_time_page", async {
+            let stream_version = self.version(stream_id).await?;
+            let scanned = self
+                .entries_from(stream_id, from_version, max_count)
+                .await?;
+            let next_version = scanned.last().and_then(|event| {
+                (event.version() < stream_version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            let events: Vec<_> = scanned
                 .into_iter()
                 .filter(|event| event.timestamp() <= upper_bound)
                 .collect();
             let version = events.last().map_or(-1, StoredEvent::version);
-            Ok(EventStream::new(stream_id, version, events))
+            Ok(EventPage::new(
+                EventStream::new(stream_id, version, events),
+                next_version,
+            ))
         })
         .await
     }
 
-    async fn version_history(&self, stream_id: &str) -> CatgaResult<Vec<VersionInfo>> {
-        telemetry::record_persistence("nats", "event_store", "version_history", async {
-            self.entries(stream_id)
-                .await?
+    async fn version_history_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        max_count: usize,
+    ) -> CatgaResult<VersionHistoryPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("nats", "event_store", "version_history_page", async {
+            let stream_version = self.version(stream_id).await?;
+            let events = self
+                .entries_from(stream_id, from_version, max_count)
+                .await?;
+            let next_version = events.last().and_then(|event| {
+                (event.version() < stream_version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            let entries = events
                 .into_iter()
                 .map(|event| {
-                    Ok(VersionInfo::new(
+                    VersionInfo::new(
                         event.version(),
                         event.timestamp(),
                         event.envelope().message_type(),
-                    ))
+                    )
                 })
-                .collect()
+                .collect();
+            Ok(VersionHistoryPage::new(entries, next_version))
         })
         .await
     }
 
-    async fn stream_ids(&self) -> CatgaResult<Vec<String>> {
-        telemetry::record_persistence("nats", "event_store", "stream_ids", async {
-            let mut ids: Vec<_> = self
-                .ids
-                .keys()
-                .await
-                .map_err(map_error)?
-                .try_collect()
-                .await
-                .map_err(map_error)?;
+    async fn stream_ids_page(
+        &self,
+        after: Option<&str>,
+        max_count: usize,
+    ) -> CatgaResult<StreamIdsPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("nats", "event_store", "stream_ids_page", async {
+            let keys = self.ids.keys().await.map_err(map_error)?;
+            futures::pin_mut!(keys);
+            let mut ids = BinaryHeap::with_capacity(max_count);
+            let mut has_more = false;
+            while let Some(key) = keys.try_next().await.map_err(map_error)? {
+                if after.is_some_and(|cursor| key.as_str() <= cursor) {
+                    continue;
+                }
+                if ids.len() < max_count {
+                    ids.push(key);
+                } else {
+                    has_more = true;
+                    let largest = ids.peek().map(String::as_str);
+                    if largest.is_some_and(|largest| key.as_str() < largest) {
+                        let _ = ids.pop();
+                        ids.push(key);
+                    }
+                }
+            }
+            let mut ids = ids.into_vec();
             ids.sort_unstable();
-            Ok(ids)
+            let next_stream_id = has_more.then(|| ids.last().cloned()).flatten();
+            Ok(StreamIdsPage::new(ids, next_stream_id))
         })
         .await
     }

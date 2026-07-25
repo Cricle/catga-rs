@@ -707,7 +707,8 @@ async fn redis_event_store_appends_atomically_and_reads_versioned_history() {
         .unwrap_err();
     assert_eq!(conflict.code(), ErrorCode::Conflict);
 
-    let stream = store.read("orders-7", 1, 1).await.unwrap();
+    let stream = store.read_page("orders-7", 1, 1).await.unwrap();
+    let stream = stream.stream();
     assert_eq!(stream.version(), 1);
     assert_eq!(stream.events().len(), 1);
     assert_eq!(stream.events()[0].version(), 1);
@@ -715,26 +716,31 @@ async fn redis_event_store_appends_atomically_and_reads_versioned_history() {
     assert_eq!(store.version("orders-7").await.unwrap(), 1);
     assert_eq!(
         store
-            .read_to_version("orders-7", 0)
+            .read_to_version_page("orders-7", 0, 0, 2)
             .await
             .unwrap()
+            .stream()
             .events()
             .len(),
         1
     );
     assert_eq!(
         store
-            .read_to_time("orders-7", SystemTime::now())
+            .read_to_time_page("orders-7", 0, SystemTime::now(), 2)
             .await
             .unwrap()
+            .stream()
             .events()
             .len(),
         2
     );
-    let history = store.version_history("orders-7").await.unwrap();
-    assert_eq!(history.len(), 2);
-    assert_eq!(history[1].event_type(), "order.paid");
-    assert_eq!(store.stream_ids().await.unwrap(), ["orders-7"]);
+    let history = store.version_history_page("orders-7", 0, 2).await.unwrap();
+    assert_eq!(history.entries().len(), 2);
+    assert_eq!(history.entries()[1].event_type(), "order.paid");
+    assert_eq!(
+        store.stream_ids_page(None, 2).await.unwrap().ids(),
+        ["orders-7"]
+    );
 
     let first_writer = Arc::clone(&store);
     let second_writer = Arc::clone(&store);

@@ -10,9 +10,10 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, CompetingSubscriptionRunner, Envelope, ErrorCode, EventStore,
-    EventStream, MessageMetadata, PersistentSubscription, StoredEvent, SubscriptionHandler,
-    SubscriptionLoopOptions, SubscriptionRunner, SubscriptionStore, VersionInfo,
+    CatgaError, CatgaResult, CompetingSubscriptionRunner, Envelope, ErrorCode, EventPage,
+    EventStore, MessageMetadata, PersistentSubscription, StoredEvent, StreamIdsPage,
+    SubscriptionHandler, SubscriptionLoopOptions, SubscriptionRunner, SubscriptionStore,
+    VersionHistoryPage,
 };
 use catga_memory::{MemoryEventStore, MemorySubscriptions};
 use tokio::time::timeout;
@@ -38,16 +39,15 @@ impl EventStore for StaticEventStore {
         ))
     }
 
-    async fn read(
+    async fn read_page(
         &self,
         stream_id: &str,
         _from_version: u64,
         _max_count: usize,
-    ) -> CatgaResult<EventStream> {
-        Ok(EventStream::new(
-            stream_id,
-            self.event.version(),
-            vec![self.event.clone()],
+    ) -> CatgaResult<EventPage> {
+        Ok(EventPage::new(
+            catga_core::EventStream::new(stream_id, self.event.version(), vec![self.event.clone()]),
+            None,
         ))
     }
 
@@ -55,28 +55,48 @@ impl EventStore for StaticEventStore {
         Ok(self.event.version())
     }
 
-    async fn read_to_version(&self, stream_id: &str, _to_version: i64) -> CatgaResult<EventStream> {
-        self.read(stream_id, 0, 1).await
-    }
-
-    async fn read_to_time(
+    async fn read_to_version_page(
         &self,
         stream_id: &str,
+        from_version: u64,
+        _to_version: i64,
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        self.read_page(stream_id, from_version, max_count).await
+    }
+
+    async fn read_to_time_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
         _upper_bound: SystemTime,
-    ) -> CatgaResult<EventStream> {
-        self.read(stream_id, 0, 1).await
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        self.read_page(stream_id, from_version, max_count).await
     }
 
-    async fn version_history(&self, _stream_id: &str) -> CatgaResult<Vec<VersionInfo>> {
-        Ok(vec![VersionInfo::new(
-            self.event.version(),
-            self.event.timestamp(),
-            self.event.envelope().message_type(),
-        )])
+    async fn version_history_page(
+        &self,
+        _stream_id: &str,
+        _from_version: u64,
+        _max_count: usize,
+    ) -> CatgaResult<VersionHistoryPage> {
+        Ok(VersionHistoryPage::new(
+            vec![catga_core::VersionInfo::new(
+                self.event.version(),
+                self.event.timestamp(),
+                self.event.envelope().message_type(),
+            )],
+            None,
+        ))
     }
 
-    async fn stream_ids(&self) -> CatgaResult<Vec<String>> {
-        Ok(vec![String::from("orders-a")])
+    async fn stream_ids_page(
+        &self,
+        _after: Option<&str>,
+        _max_count: usize,
+    ) -> CatgaResult<StreamIdsPage> {
+        Ok(StreamIdsPage::new(vec![String::from("orders-a")], None))
     }
 }
 

@@ -62,6 +62,54 @@ fn raft_node_elects_and_commits_a_single_node_proposal() {
 }
 
 #[test]
+fn raft_node_applies_backpressure_before_pending_commits_grow_unbounded() {
+    let mut node = RaftNode::new_with_pending_commit_capacity(
+        1,
+        "http://node-1",
+        vec![RaftMember::new(1, "http://node-1")],
+        1,
+    )
+    .unwrap();
+
+    node.campaign().unwrap();
+    node.propose(b"first").unwrap();
+    assert_eq!(node.pending_commit_count(), 1);
+
+    assert!(matches!(
+        node.try_propose(b"second"),
+        Err(catga_cluster::RaftNodeError::PendingCommitCapacity { capacity: 1 })
+    ));
+    assert_eq!(node.pending_commit_count(), 1);
+    assert_eq!(node.next_committed().unwrap().data, b"first");
+}
+
+#[test]
+fn raft_node_pages_peer_commits_without_losing_a_durable_overflow() {
+    let cluster_members = vec![
+        RaftMember::new(1, "http://node-1"),
+        RaftMember::new(2, "http://node-2"),
+    ];
+    let mut nodes = vec![
+        RaftNode::new(1, "http://node-1", cluster_members.clone()).unwrap(),
+        RaftNode::new_with_pending_commit_capacity(2, "http://node-2", cluster_members, 1).unwrap(),
+    ];
+
+    nodes[0].campaign().unwrap();
+    relay(&mut nodes);
+    nodes[0].propose(b"first").unwrap();
+    nodes[0].propose(b"second").unwrap();
+    relay(&mut nodes);
+
+    let follower = &mut nodes[1];
+    assert_eq!(follower.pending_commit_count(), 1);
+    assert_eq!(follower.next_committed().unwrap().data, b"first");
+    assert_eq!(
+        follower.try_next_committed().unwrap().unwrap().data,
+        b"second"
+    );
+}
+
+#[test]
 fn persistent_raft_node_recovers_committed_log_after_restart() {
     let directory = tempfile::tempdir().unwrap();
     let members = vec![RaftMember::new(1, "http://node-1")];

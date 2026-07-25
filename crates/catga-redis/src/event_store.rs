@@ -8,8 +8,9 @@ use std::{
 use async_trait::async_trait;
 use catga_codec_postcard::PostcardCodec;
 use catga_core::{
-    CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventStore, EventStream,
-    StoredEvent, VersionInfo, telemetry,
+    CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
+    EventStream, StoredEvent, StreamIdsPage, VersionHistoryPage, VersionInfo, telemetry,
+    validate_event_store_page_size,
 };
 use redis::{
     AsyncCommands, Script,
@@ -32,7 +33,7 @@ for i = 1, count do
     redis.call('XADD', KEYS[2], tostring(current + 1) .. '-0', 'version', current, 'payload', ARGV[offset], 'timestamp', ARGV[offset + 1])
 end
 redis.call('SET', KEYS[1], current)
-redis.call('SADD', KEYS[3], ARGV[3 + count * 2])
+redis.call('ZADD', KEYS[3], 0, ARGV[3 + count * 2])
 return current
 "#;
 
@@ -75,19 +76,6 @@ impl RedisEventStore {
         format!("{}:ids", self.prefix)
     }
 
-    async fn entries(&self, stream_id: &str) -> CatgaResult<Vec<StoredEvent>> {
-        let mut connection = self.connection.clone();
-        let reply: StreamRangeReply = connection
-            .xrange_all(self.stream_key(stream_id))
-            .await
-            .map_err(map_error)?;
-        reply
-            .ids
-            .iter()
-            .map(|entry| self.decode_entry(entry))
-            .collect()
-    }
-
     async fn entries_from(
         &self,
         stream_id: &str,
@@ -110,14 +98,21 @@ impl RedisEventStore {
             .collect()
     }
 
-    async fn entries_to(&self, stream_id: &str, to_version: i64) -> CatgaResult<Vec<StoredEvent>> {
-        if to_version < 0 {
+    async fn entries_between(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        to_version: i64,
+        max_count: usize,
+    ) -> CatgaResult<Vec<StoredEvent>> {
+        if to_version < 0 || max_count == 0 {
             return Ok(Vec::new());
         }
         let mut connection = self.connection.clone();
+        let start = stream_entry_id(from_version)?;
         let end = stream_entry_id(u64::try_from(to_version).unwrap_or(u64::MAX))?;
         let reply: StreamRangeReply = connection
-            .xrange(self.stream_key(stream_id), "-", end)
+            .xrange_count(self.stream_key(stream_id), start, end, max_count)
             .await
             .map_err(map_error)?;
         reply
@@ -198,18 +193,27 @@ impl EventStore for RedisEventStore {
         .await
     }
 
-    async fn read(
+    async fn read_page(
         &self,
         stream_id: &str,
         from_version: u64,
         max_count: usize,
-    ) -> CatgaResult<EventStream> {
-        telemetry::record_persistence("redis", "event_store", "read", async {
+    ) -> CatgaResult<EventPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("redis", "event_store", "read_page", async {
             let version = self.version(stream_id).await?;
             let events = self
                 .entries_from(stream_id, from_version, max_count)
                 .await?;
-            Ok(EventStream::new(stream_id, version, events))
+            let next_version = events.last().and_then(|event| {
+                (event.version() < version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            Ok(EventPage::new(
+                EventStream::new(stream_id, version, events),
+                next_version,
+            ))
         })
         .await
     }
@@ -226,59 +230,120 @@ impl EventStore for RedisEventStore {
         .await
     }
 
-    async fn read_to_version(&self, stream_id: &str, to_version: i64) -> CatgaResult<EventStream> {
-        telemetry::record_persistence("redis", "event_store", "read_to_version", async {
-            let events = self.entries_to(stream_id, to_version).await?;
+    async fn read_to_version_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        to_version: i64,
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("redis", "event_store", "read_to_version_page", async {
+            let events = self
+                .entries_between(stream_id, from_version, to_version, max_count)
+                .await?;
             let version = events.last().map_or(-1, StoredEvent::version);
-            Ok(EventStream::new(stream_id, version, events))
+            let stream_version = self.version(stream_id).await?;
+            let next_version = events.last().and_then(|event| {
+                (event.version() < to_version && event.version() < stream_version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            Ok(EventPage::new(
+                EventStream::new(stream_id, version, events),
+                next_version,
+            ))
         })
         .await
     }
 
-    async fn read_to_time(
+    async fn read_to_time_page(
         &self,
         stream_id: &str,
+        from_version: u64,
         upper_bound: SystemTime,
-    ) -> CatgaResult<EventStream> {
-        telemetry::record_persistence("redis", "event_store", "read_to_time", async {
-            let events: Vec<_> = self
-                .entries(stream_id)
-                .await?
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("redis", "event_store", "read_to_time_page", async {
+            let stream_version = self.version(stream_id).await?;
+            let scanned = self
+                .entries_from(stream_id, from_version, max_count)
+                .await?;
+            let next_version = scanned.last().and_then(|event| {
+                (event.version() < stream_version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            let events: Vec<_> = scanned
                 .into_iter()
                 .filter(|event| event.timestamp() <= upper_bound)
                 .collect();
             let version = events.last().map_or(-1, StoredEvent::version);
-            Ok(EventStream::new(stream_id, version, events))
+            Ok(EventPage::new(
+                EventStream::new(stream_id, version, events),
+                next_version,
+            ))
         })
         .await
     }
 
-    async fn version_history(&self, stream_id: &str) -> CatgaResult<Vec<VersionInfo>> {
-        telemetry::record_persistence("redis", "event_store", "version_history", async {
-            self.entries(stream_id)
-                .await?
+    async fn version_history_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        max_count: usize,
+    ) -> CatgaResult<VersionHistoryPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("redis", "event_store", "version_history_page", async {
+            let stream_version = self.version(stream_id).await?;
+            let events = self
+                .entries_from(stream_id, from_version, max_count)
+                .await?;
+            let next_version = events.last().and_then(|event| {
+                (event.version() < stream_version)
+                    .then(|| u64::try_from(event.version().saturating_add(1)).ok())
+                    .flatten()
+            });
+            let entries = events
                 .into_iter()
                 .map(|event| {
-                    Ok(VersionInfo::new(
+                    VersionInfo::new(
                         event.version(),
                         event.timestamp(),
                         event.envelope().message_type(),
-                    ))
+                    )
                 })
-                .collect()
+                .collect();
+            Ok(VersionHistoryPage::new(entries, next_version))
         })
         .await
     }
 
-    async fn stream_ids(&self) -> CatgaResult<Vec<String>> {
-        telemetry::record_persistence("redis", "event_store", "stream_ids", async {
+    async fn stream_ids_page(
+        &self,
+        after: Option<&str>,
+        max_count: usize,
+    ) -> CatgaResult<StreamIdsPage> {
+        validate_event_store_page_size(max_count)?;
+        telemetry::record_persistence("redis", "event_store", "stream_ids_page", async {
+            let minimum = after.map_or_else(|| String::from("-"), |cursor| format!("({cursor}"));
             let mut connection = self.connection.clone();
-            let mut ids: Vec<String> = connection
-                .smembers(self.ids_key())
+            let ids: Vec<String> = connection
+                .zrangebylex_limit(self.ids_key(), minimum, "+", 0, max_count as isize)
                 .await
                 .map_err(map_error)?;
-            ids.sort_unstable();
-            Ok(ids)
+            let next_stream_id = match ids.last() {
+                Some(last) => {
+                    let following: Vec<String> = connection
+                        .zrangebylex_limit(self.ids_key(), format!("({last}"), "+", 0, 1)
+                        .await
+                        .map_err(map_error)?;
+                    (!following.is_empty()).then(|| last.clone())
+                }
+                None => None,
+            };
+            Ok(StreamIdsPage::new(ids, next_stream_id))
         })
         .await
     }

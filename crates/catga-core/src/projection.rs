@@ -4,7 +4,7 @@ use std::{num::NonZeroUsize, time::SystemTime};
 
 use async_trait::async_trait;
 
-use crate::{CatgaResult, EventStore, StoredEvent};
+use crate::{CatgaResult, EventStore, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent};
 
 const DEFAULT_BATCH_SIZE: usize = 256;
 
@@ -169,7 +169,9 @@ where
     }
 
     /// Creates a runner with an explicit bounded event-store page size.
-    pub const fn with_batch_size(
+    ///
+    /// Values above [`MAX_EVENT_STORE_PAGE_SIZE`] are capped to the store-wide limit.
+    pub fn with_batch_size(
         events: &'a E,
         checkpoints: &'a C,
         projection: &'a P,
@@ -179,19 +181,31 @@ where
             events,
             checkpoints,
             projection,
-            batch_size,
+            batch_size: NonZeroUsize::new(batch_size.get().min(MAX_EVENT_STORE_PAGE_SIZE))
+                .unwrap_or(NonZeroUsize::MIN),
         }
     }
 
     /// Applies events that were not yet included in each stream checkpoint.
     pub async fn run(&self) -> CatgaResult<ProjectionRun> {
-        let streams = self.events.stream_ids().await?;
         let mut run = ProjectionRun {
             applied: 0,
-            streams: streams.len(),
+            streams: 0,
         };
-        for stream_id in streams {
-            self.run_stream(&stream_id, &mut run).await?;
+        let mut after = None;
+        loop {
+            let page = self
+                .events
+                .stream_ids_page(after.as_deref(), MAX_EVENT_STORE_PAGE_SIZE)
+                .await?;
+            for stream_id in page.ids() {
+                run.streams += 1;
+                self.run_stream(stream_id, &mut run).await?;
+            }
+            let Some(next) = page.next_stream_id() else {
+                break;
+            };
+            after = Some(next.to_owned());
         }
         Ok(run)
     }
@@ -210,18 +224,18 @@ where
             .await?;
         let mut next_version = checkpoint.map_or(0, |checkpoint| checkpoint.version() + 1);
         loop {
-            let stream = self
+            let page = self
                 .events
-                .read(
+                .read_page(
                     stream_id,
                     u64::try_from(next_version).unwrap_or(0),
                     self.batch_size.get(),
                 )
                 .await?;
-            if stream.events().is_empty() {
+            if page.stream().events().is_empty() {
                 return Ok(());
             }
-            for event in stream.events() {
+            for event in page.stream().events() {
                 self.projection.apply(event).await?;
                 self.checkpoints
                     .save(ProjectionCheckpoint::new(
@@ -233,7 +247,7 @@ where
                 next_version = event.version() + 1;
                 run.applied += 1;
             }
-            if stream.events().len() < self.batch_size.get() {
+            if page.next_version().is_none() {
                 return Ok(());
             }
         }

@@ -171,7 +171,8 @@ async fn upgrading_event_store_transforms_read_views_without_mutating_history() 
         .unwrap();
 
     let upgraded = UpgradingEventStore::new(&history, &registry);
-    let view = upgraded.read("orders-7", 0, 1).await.unwrap();
+    let view = upgraded.read_page("orders-7", 0, 1).await.unwrap();
+    let view = view.stream();
     assert_eq!(
         view.events()[0].envelope().message_type(),
         "order.created.v2"
@@ -179,7 +180,8 @@ async fn upgrading_event_store_transforms_read_views_without_mutating_history() 
     assert_eq!(view.events()[0].envelope().schema_version(), 2);
     assert_eq!(view.events()[0].envelope().payload(), [1, 2]);
 
-    let original = history.read("orders-7", 0, 1).await.unwrap();
+    let original = history.read_page("orders-7", 0, 1).await.unwrap();
+    let original = original.stream();
     assert_eq!(
         original.events()[0].envelope().message_type(),
         "order.created.v1"

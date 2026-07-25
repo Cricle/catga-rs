@@ -6,18 +6,18 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 
 | Upstream area | Rust replacement | Evidence | Status |
 | --- | --- | --- | --- |
-| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-postcard` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel}` | Migrated; public Rustdoc is checked with warnings denied, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience with rolling failure-ratio circuits and atomic full jitter, and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
+| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-postcard` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel,event_store}` | Migrated; public Rustdoc is checked with warnings denied, event-store reads use validated cursor pages of at most 1,024 records, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience with rolling failure-ratio circuits and atomic full jitter, and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
 | HTTP integration (11 C# files) | `catga-axum` | `tests/axum.rs` | Migrated with typed and arbitrary-signature static Axum routes instead of reflection discovery; leader forwarding and the generic `propagate_correlation_header` helper retain ambient correlation across HTTP hops without a global client wrapper, `EndpointValidation` maps input errors to the stable Catga validation result, `IntoCatgaHttpResponse` replaces overlapping mutable C# result builders with one allocation-conscious result-to-response trait, and opt-in `endpoint_panic_middleware` replaces endpoint exception handling without exposing panic payloads |
-| Cluster coordination (10 C# files) | `catga-cluster`, Axum raft transport | `tests/{cluster,raft_cluster,raft_runtime,raft_state_machine_runtime}.rs` | Migrated |
+| Cluster coordination (10 C# files) | `catga-cluster`, Axum raft transport | `tests/{cluster,raft_cluster,raft_runtime,raft_state_machine_runtime}.rs` | Migrated; committed application entries use a bounded in-memory page and resume from durable Raft storage without discarding overflow |
 | Flow and state machines (67 C# files) | `catga-flow`, Memory/Redis/NATS flow stores | `tests/flow`, `tests/state_machine*.rs`, `tests/observability.rs` | Migrated; durable DSL recovery uses bounded nested conditional paths, explicitly replayable ForEach item snapshots, branch-local parallel cursors, and a persisted `when_any` winner. Async top-level lifecycle hooks are serial, caller-owned, and emitted before successful checkpoint persistence, preserving documented at-least-once replay. The same recovery contract is exercised in memory and compiled through explicit Redis/NATS service-gated tests |
 | In-memory persistence (17 C# files) | `catga-memory` | `tests/{memory_reliability,event_sourcing,flow}` | Migrated |
 | NATS persistence and transport (24 C# files) | `catga-nats` | `tests/{nats,nats_request}.rs` | Migrated; real Core NATS and JetStream regressions include explicit QoS separation and native redelivery-attempt reporting |
 | Redis persistence and transport (26 C# files) | `catga-redis` | `tests/redis.rs`, `tests/state_machine_persistence.rs` | Migrated; real Redis regression covers Streams queues, ephemeral Pub/Sub broadcasts, stores, historical enhanced snapshots, durable DSL step progress, native redelivery-attempt reporting, and bounded group-wide idle-delivery recovery |
 | External job schedulers (6 C# files) | `FlowDueService`, `DueFlowScheduler`, Memory/Redis/NATS schedulers | `tests/flow`, `tests/redis.rs`, `tests/nats.rs` | Replaced with lease-aware pure-Rust scheduling, including bounded claims and recovery |
 | Binary serialization (4 C# files) | `catga-codec-postcard` | `tests/codec.rs` | Replaced with compact Postcard codec, reusable encode buffers, and `PostcardTransport` typed publication, destination delivery, bounded batches, acknowledgement-owning decoded deliveries, and caller-owned one-delivery processing |
-| Catga-owned MemoryPack persistence records | `catga-codec-memorypack` | immutable `tests/fixtures/memorypack/v1`, `tests/memorypack.rs` | Migrated for the seven fixed Catga formatter layouts with strict bounded decoding and golden byte round trips; generic application-owned DTO schemas remain deliberately out of scope |
+| Catga-owned MemoryPack persistence records | `catga-codec-memorypack` | immutable `tests/fixtures/memorypack/v1`, `tests/memorypack.rs` | Migrated for the seven fixed Catga formatter layouts with strict bounded decoding and golden byte round trips; application-owned values use explicit `MemoryPackValueCodec` schemas rather than C# reflection |
 | Source generation (15 C# files) | `catga-macros` | `tests/macros.rs`, `docs/source-generator-mapping.md` | Replaced with proc macros, trait bounds, and compile-time handler validation |
-| Testing helpers (5 C# files) | `catga-testing` | `tests/testing/{helpers,harness}.rs` | Migrated; spies cover concrete handlers, async actions, explicit missing-handler failures, ordered captures, and assertion helpers |
+| Testing helpers (5 C# files) | `catga-testing` | `tests/testing/{helpers,harness,aggregate,flow}.rs` | Migrated; spies cover concrete handlers, async actions, explicit missing-handler failures, ordered captures, and assertion helpers, while typed aggregate scenarios and Flow contexts use real bounded in-memory dependencies |
 | In-memory transport (3 C# files) | `catga-memory::{MemoryTransport, MemoryPubSubTransport}` | `tests/{memory_transport,delivery_ack,observability}.rs` | Migrated with distinct bounded queue and broadcast adapters plus drain tracking; real queue and Pub/Sub publications emit bounded producer metrics |
 | Destination send/subscribe transport contract | `DestinationTransport` plus Memory/Redis/NATS adapters | `tests/transport/destination.rs`, `tests/{redis,nats}.rs` | Migrated; Memory, Redis, and JetStream paths verified |
 | Transport-context metadata and header destination routing | `catga-core::{EnvelopeHeaders, MessageRouter}` and `catga-codec-postcard` | `tests/{message,codec,routing}.rs` | Migrated with bounded immutable headers, allocation-free routing, and backward-compatible Postcard propagation |
@@ -43,6 +43,19 @@ documentation/performance artifacts, not runtime contracts.
   production paths do not use panic-prone `unwrap` or `expect` calls.
 * Public API documentation is compiled with warnings denied, so broken links and
   documentation warnings fail the quality gate instead of reaching consumers.
+* EventStore has no whole-history or whole-catalog read API. Consumers follow
+  validated event, metadata, and lexical stream-ID cursors, applying a page before
+  requesting the next one. Redis uses bounded stream ranges and a sorted index;
+  JetStream collects no more than one page; the in-memory implementation retains
+  only the page's selected IDs while traversing its map.
+* Raft retains only its configured number of unapplied application commands in
+  memory. A peer that commits more commands leaves the overflow in the durable
+  Raft log; callers consume a page and resume without data loss. State-machine
+  acknowledgement advances only through commands successfully applied to business
+  state.
+* `MemoryPackValueCodec<T>` is an explicit, caller-defined application schema
+  boundary. Its exact-frame helpers preserve the reader and writer allocation,
+  nesting, and trailing-input checks without runtime type lookup or reflection.
 * Transport operations consume caller-owned envelopes and use bounded futures
   or queues rather than task collections sized by input batches.
 * Source generic transport calls map to `PostcardTransport`: ordinary messages

@@ -2,9 +2,10 @@ use std::{fs, path::Path};
 
 use catga_codec_memorypack::{
     DeadLetterMessageRecord, FlowStateRecord, ForEachProgressRecord, InboxMessageRecord,
-    MemoryPackLimits, NatsStoredSnapshotRecord, OutboxMessageRecord, StoredSnapshotMetadataRecord,
+    MemoryPackLimits, MemoryPackReader, MemoryPackValueCodec, MemoryPackWriter,
+    NatsStoredSnapshotRecord, OutboxMessageRecord, StoredSnapshotMetadataRecord,
 };
-use catga_core::ErrorCode;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -28,6 +29,91 @@ struct FixtureEntry {
     file: String,
     byte_length: usize,
     sha256: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Order {
+    id: i64,
+    reference: Box<str>,
+    description: Box<str>,
+}
+
+struct OrderCodec;
+
+impl MemoryPackValueCodec<Order> for OrderCodec {
+    fn encode(&self, value: &Order, writer: &mut MemoryPackWriter) -> CatgaResult<()> {
+        writer.write_object_header(3)?;
+        writer.write_i64(value.id)?;
+        writer.write_string(Some(&value.reference))?;
+        writer.write_string(Some(&value.description))?;
+        writer.finish_object()
+    }
+
+    fn decode(&self, reader: &mut MemoryPackReader<'_>) -> CatgaResult<Order> {
+        if !reader.read_object_header(3)? {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "Order payload must not be null",
+            ));
+        }
+        let value = Order {
+            id: reader.read_i64()?,
+            reference: reader
+                .read_string()?
+                .ok_or_else(|| CatgaError::new(ErrorCode::Validation, "Order reference is null"))?,
+            description: reader.read_string()?.ok_or_else(|| {
+                CatgaError::new(ErrorCode::Validation, "Order description is null")
+            })?,
+        };
+        reader.finish_object()?;
+        Ok(value)
+    }
+}
+
+#[test]
+fn explicit_value_codecs_round_trip_and_reject_invalid_frames_and_budgets() {
+    let codec = OrderCodec;
+    let order = Order {
+        id: 42,
+        reference: Box::from("A1"),
+        description: Box::from("ok"),
+    };
+    let bytes = codec
+        .encode_value(&order, MemoryPackLimits::default())
+        .expect("encode explicit value");
+
+    assert_eq!(
+        codec
+            .decode_value(&bytes, MemoryPackLimits::default())
+            .expect("decode explicit value"),
+        order
+    );
+
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert_eq!(
+        codec
+            .decode_value(&trailing, MemoryPackLimits::default())
+            .expect_err("trailing bytes are rejected")
+            .code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(
+        codec
+            .decode_value(&[3], MemoryPackLimits::default())
+            .expect_err("truncated object is rejected")
+            .code(),
+        ErrorCode::Validation
+    );
+
+    let allocation_limited = MemoryPackLimits::new(64, 2, 2, 64, 4).expect("valid limits");
+    assert_eq!(
+        codec
+            .decode_value(&bytes, allocation_limited)
+            .expect_err("cumulative string allocation is bounded")
+            .code(),
+        ErrorCode::Validation
+    );
 }
 
 #[test]

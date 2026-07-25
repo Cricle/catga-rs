@@ -760,45 +760,55 @@ async fn nats_event_store_persists_versioned_history_with_subject_cas() {
             .code(),
         ErrorCode::Conflict
     );
-    let page = tokio::time::timeout(Duration::from_secs(1), store.read("orders-7", 0, 2))
+    let page = tokio::time::timeout(Duration::from_secs(1), store.read_page("orders-7", 0, 2))
         .await
         .expect("bounded NATS event read must finish")
         .unwrap();
     assert_eq!(
-        page.events()
+        page.stream()
+            .events()
             .iter()
             .map(|event| event.version())
             .collect::<Vec<_>>(),
         [0, 1]
     );
-    assert_eq!(page.events()[1].envelope().payload(), [2]);
-    let through_version_zero =
-        tokio::time::timeout(Duration::from_secs(1), store.read_to_version("orders-7", 0))
-            .await
-            .expect("version-bounded NATS event history read must finish")
-            .unwrap();
-    assert_eq!(through_version_zero.events().len(), 1);
+    assert_eq!(page.stream().events()[1].envelope().payload(), [2]);
+    let through_version_zero = tokio::time::timeout(
+        Duration::from_secs(1),
+        store.read_to_version_page("orders-7", 0, 0, 3),
+    )
+    .await
+    .expect("version-bounded NATS event history read must finish")
+    .unwrap();
+    assert_eq!(through_version_zero.stream().events().len(), 1);
     let history = tokio::time::timeout(
         Duration::from_secs(1),
-        store.read_to_time("orders-7", SystemTime::now()),
+        store.read_to_time_page("orders-7", 0, SystemTime::now(), 3),
     )
     .await
     .expect("full NATS event history read must finish")
     .unwrap();
     assert_eq!(
         history
+            .stream()
             .events()
             .iter()
             .map(|event| event.version())
             .collect::<Vec<_>>(),
         [0, 1, 2]
     );
-    let versions = tokio::time::timeout(Duration::from_secs(1), store.version_history("orders-7"))
-        .await
-        .expect("NATS version history read must finish")
-        .unwrap();
-    assert_eq!(versions[2].event_type(), "order.shipped");
-    assert_eq!(store.stream_ids().await.unwrap(), ["orders-7"]);
+    let versions = tokio::time::timeout(
+        Duration::from_secs(1),
+        store.version_history_page("orders-7", 0, 3),
+    )
+    .await
+    .expect("NATS version history read must finish")
+    .unwrap();
+    assert_eq!(versions.entries()[2].event_type(), "order.shipped");
+    assert_eq!(
+        store.stream_ids_page(None, 3).await.unwrap().ids(),
+        ["orders-7"]
+    );
 }
 
 #[tokio::test]

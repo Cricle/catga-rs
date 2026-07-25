@@ -4,7 +4,10 @@ use std::{collections::VecDeque, error::Error, fmt, sync::Arc};
 
 use catga_core::{CatgaError, CatgaResult};
 
-use crate::{RaftApplicationSnapshot, RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode};
+use crate::{
+    RaftApplicationSnapshot, RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode,
+    RaftNodeError,
+};
 
 const RECOVERY_PAGE_ENTRIES: usize = 128;
 
@@ -29,6 +32,8 @@ pub enum RaftStateMachineError {
     Application(CatgaError),
     /// Raft storage could not read or write protocol state.
     Raft(raft::Error),
+    /// The owned Raft node could not page committed application commands.
+    Node(RaftNodeError),
     /// A checkpoint was requested before any command had been applied.
     NothingApplied,
 }
@@ -40,6 +45,7 @@ impl fmt::Display for RaftStateMachineError {
                 write!(formatter, "application state machine: {}", error.message())
             }
             Self::Raft(error) => error.fmt(formatter),
+            Self::Node(error) => error.fmt(formatter),
             Self::NothingApplied => {
                 formatter.write_str("cannot checkpoint before applying a Raft command")
             }
@@ -52,6 +58,7 @@ impl Error for RaftStateMachineError {
         match self {
             Self::Application(_) | Self::NothingApplied => None,
             Self::Raft(error) => Some(error),
+            Self::Node(error) => Some(error),
         }
     }
 }
@@ -65,6 +72,12 @@ impl From<CatgaError> for RaftStateMachineError {
 impl From<raft::Error> for RaftStateMachineError {
     fn from(error: raft::Error) -> Self {
         Self::Raft(error)
+    }
+}
+
+impl From<RaftNodeError> for RaftStateMachineError {
+    fn from(error: RaftNodeError) -> Self {
+        Self::Node(error)
     }
 }
 
@@ -153,8 +166,20 @@ where
     pub fn apply_committed(&mut self) -> Result<usize, RaftStateMachineError> {
         self.pending_snapshots
             .extend(self.node.drain_installed_snapshots());
-        self.pending_entries.extend(self.node.drain_committed());
-        self.apply_available()
+        let mut applied = 0;
+        self.apply_snapshots()?;
+        loop {
+            if !self.pending_entries.is_empty() {
+                applied += self.apply_available()?;
+                continue;
+            }
+            let entries = self.node.try_drain_committed()?;
+            if entries.is_empty() {
+                self.node.acknowledge_applied_through(self.applied_index)?;
+                return Ok(applied);
+            }
+            self.pending_entries.extend(entries);
+        }
     }
 
     /// Snapshots the state at the last successfully applied command and compacts
@@ -180,9 +205,6 @@ where
             self.applied_index = entry.index;
             self.pending_entries.pop_front();
             applied += 1;
-        }
-        if self.pending_entries.is_empty() {
-            self.node.acknowledge_all_committed()?;
         }
         Ok(applied)
     }

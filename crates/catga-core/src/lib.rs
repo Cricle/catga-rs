@@ -74,7 +74,10 @@ pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
 };
 pub use error::{CatgaError, CatgaResult, ErrorCode};
-pub use event_store::{EventStore, EventStream, StoredEvent, VersionInfo};
+pub use event_store::{
+    EventPage, EventStore, EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage,
+    VersionHistoryPage, VersionInfo, validate_event_store_page_size,
+};
 pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
 pub use handler::{EventHandler, Handler};

@@ -805,7 +805,7 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
         .expect("nonempty event batch succeeds");
     assert!(events.append("order-73", Vec::new(), None).await.is_err());
     events
-        .read("order-73", 0, 8)
+        .read_page("order-73", 0, 8)
         .await
         .expect("event read succeeds");
     events
@@ -813,19 +813,19 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
         .await
         .expect("event version succeeds");
     events
-        .read_to_version("order-73", 0)
+        .read_to_version_page("order-73", 0, 0, 8)
         .await
         .expect("historical event read succeeds");
     events
-        .read_to_time("order-73", std::time::SystemTime::now())
+        .read_to_time_page("order-73", 0, std::time::SystemTime::now(), 8)
         .await
         .expect("time-bounded event read succeeds");
     events
-        .version_history("order-73")
+        .version_history_page("order-73", 0, 8)
         .await
         .expect("version history succeeds");
     events
-        .stream_ids()
+        .stream_ids_page(None, 8)
         .await
         .expect("stream enumeration succeeds");
 

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Lightweight test helpers for Catga applications.
 
+mod aggregate;
+mod flow;
 mod harness;
 
 use std::{future::Future, marker::PhantomData, sync::Arc};
@@ -10,6 +12,8 @@ use catga_core::{CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handle
 use dashmap::DashMap;
 use futures::future::BoxFuture;
 
+pub use aggregate::{AggregateScenario, ReplayedAggregate};
+pub use flow::FlowTestContext;
 pub use harness::{CatgaTestHarness, RunningCatgaTestHarness};
 
 /// A request-handler wrapper that retains received messages for assertions.

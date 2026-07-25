@@ -6,7 +6,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{CatgaError, CatgaResult, Envelope, ErrorCode, EventStore, Snapshot, SnapshotStore};
+use crate::{
+    CatgaError, CatgaResult, Envelope, ErrorCode, EventStore, MAX_EVENT_STORE_PAGE_SIZE, Snapshot,
+    SnapshotStore,
+};
 
 /// An event-sourced aggregate with locally managed state and version.
 pub trait Aggregate: Clone + Send + Sync + 'static {
@@ -156,25 +159,30 @@ where
             }
             None => (A::new(id), 0),
         };
-        let stream = self
-            .events
-            .read(
-                &stream_id,
-                u64::try_from(from_version).unwrap_or(0),
-                usize::MAX,
-            )
-            .await?;
-        if !has_snapshot && stream.events().is_empty() {
-            return Ok(None);
-        }
-        for stored in stream.events() {
-            aggregate.apply(stored.envelope())?;
-            if aggregate.version() != stored.version() {
-                return Err(CatgaError::new(
-                    ErrorCode::Validation,
-                    "aggregate apply did not advance to the stored event version",
-                ));
+        let mut next_version = u64::try_from(from_version).unwrap_or(0);
+        let mut found_event = false;
+        loop {
+            let page = self
+                .events
+                .read_page(&stream_id, next_version, MAX_EVENT_STORE_PAGE_SIZE)
+                .await?;
+            for stored in page.stream().events() {
+                found_event = true;
+                aggregate.apply(stored.envelope())?;
+                if aggregate.version() != stored.version() {
+                    return Err(CatgaError::new(
+                        ErrorCode::Validation,
+                        "aggregate apply did not advance to the stored event version",
+                    ));
+                }
             }
+            let Some(next) = page.next_version() else {
+                break;
+            };
+            next_version = next;
+        }
+        if !has_snapshot && !found_event {
+            return Ok(None);
         }
         Ok(Some(aggregate))
     }

@@ -8,7 +8,9 @@ use std::{
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::{CatgaError, CatgaResult, ErrorCode, EventStore, StoredEvent};
+use crate::{
+    CatgaError, CatgaResult, ErrorCode, EventStore, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent,
+};
 
 const DEFAULT_BATCH_SIZE: usize = 256;
 
@@ -246,7 +248,9 @@ where
     }
 
     /// Creates a runner with an explicit bounded read page size.
-    pub const fn with_batch_size(
+    ///
+    /// Values above [`MAX_EVENT_STORE_PAGE_SIZE`] are capped to the store-wide limit.
+    pub fn with_batch_size(
         events: &'a E,
         subscriptions: &'a S,
         handler: &'a H,
@@ -256,7 +260,8 @@ where
             events,
             subscriptions,
             handler,
-            batch_size,
+            batch_size: NonZeroUsize::new(batch_size.get().min(MAX_EVENT_STORE_PAGE_SIZE))
+                .unwrap_or(NonZeroUsize::MIN),
         }
     }
 
@@ -271,15 +276,25 @@ where
             .load(subscription_name)
             .await?
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "subscription does not exist"))?;
-        let mut stream_ids = self.events.stream_ids().await?;
-        stream_ids.sort_unstable();
         let mut run = SubscriptionRun::default();
-        for stream_id in stream_ids
-            .into_iter()
-            .filter(|stream_id| subscription.matches_stream(stream_id))
-        {
-            run.streams += 1;
-            run.handled += self.run_stream(&subscription, &stream_id).await?;
+        let mut after = None;
+        loop {
+            let page = self
+                .events
+                .stream_ids_page(after.as_deref(), MAX_EVENT_STORE_PAGE_SIZE)
+                .await?;
+            for stream_id in page
+                .ids()
+                .iter()
+                .filter(|stream_id| subscription.matches_stream(stream_id))
+            {
+                run.streams += 1;
+                run.handled += self.run_stream(&subscription, stream_id).await?;
+            }
+            let Some(next) = page.next_stream_id() else {
+                break;
+            };
+            after = Some(next.to_owned());
         }
         Ok(run)
     }
@@ -323,18 +338,18 @@ where
             return Ok(handled);
         };
         loop {
-            let stream = self
+            let page = self
                 .events
-                .read(
+                .read_page(
                     stream_id,
                     u64::try_from(next_version).unwrap_or(0),
                     self.batch_size.get(),
                 )
                 .await?;
-            if stream.events().is_empty() {
+            if page.stream().events().is_empty() {
                 return Ok(handled);
             }
-            for event in stream.events() {
+            for event in page.stream().events() {
                 if subscription.matches_event_type(event.envelope().message_type()) {
                     self.handler.handle(event).await?;
                     handled += 1;
@@ -351,7 +366,7 @@ where
                 };
                 next_version = next;
             }
-            if stream.events().len() < self.batch_size.get() {
+            if page.next_version().is_none() {
                 return Ok(handled);
             }
         }
@@ -363,15 +378,25 @@ where
             .load(subscription_name)
             .await?
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "subscription does not exist"))?;
-        let mut stream_ids = self.events.stream_ids().await?;
-        stream_ids.sort_unstable();
-        for stream_id in stream_ids
-            .into_iter()
-            .filter(|stream_id| subscription.matches_stream(stream_id))
-        {
-            if self.run_next_in_stream(&subscription, &stream_id).await? {
-                return Ok(true);
+        let mut after = None;
+        loop {
+            let page = self
+                .events
+                .stream_ids_page(after.as_deref(), MAX_EVENT_STORE_PAGE_SIZE)
+                .await?;
+            for stream_id in page
+                .ids()
+                .iter()
+                .filter(|stream_id| subscription.matches_stream(stream_id))
+            {
+                if self.run_next_in_stream(&subscription, stream_id).await? {
+                    return Ok(true);
+                }
             }
+            let Some(next) = page.next_stream_id() else {
+                break;
+            };
+            after = Some(next.to_owned());
         }
         Ok(false)
     }
@@ -391,18 +416,18 @@ where
             return Ok(false);
         };
         loop {
-            let stream = self
+            let page = self
                 .events
-                .read(
+                .read_page(
                     stream_id,
                     u64::try_from(next_version).unwrap_or(0),
                     self.batch_size.get(),
                 )
                 .await?;
-            if stream.events().is_empty() {
+            if page.stream().events().is_empty() {
                 return Ok(false);
             }
-            for event in stream.events() {
+            for event in page.stream().events() {
                 let selected = subscription.matches_event_type(event.envelope().message_type());
                 if selected {
                     self.handler.handle(event).await?;
@@ -422,7 +447,7 @@ where
                 };
                 next_version = next;
             }
-            if stream.events().len() < self.batch_size.get() {
+            if page.next_version().is_none() {
                 return Ok(false);
             }
         }

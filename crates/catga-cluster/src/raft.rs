@@ -1,7 +1,7 @@
 //! A single-owner `raft-rs` driver with a lock-free coordinator view.
 
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     error::Error,
     fmt, mem,
     path::Path,
@@ -18,6 +18,8 @@ use slog::Logger;
 use tokio::sync::Notify;
 
 use crate::{ClusterCoordinator, RaftTiming, storage::RaftStorage};
+
+const DEFAULT_PENDING_COMMIT_CAPACITY: usize = 1_024;
 
 /// A wire-level Raft protocol message for a caller-provided transport.
 pub type RaftMessage = Message;
@@ -101,6 +103,13 @@ pub enum RaftNodeError {
     RaftEngine(raft_engine::Error),
     /// The persisted voter configuration differs from the supplied members.
     PersistedConfStateMismatch,
+    /// The configured number of retained, unapplied application commands was zero.
+    ZeroPendingCommitCapacity,
+    /// Accepting another application proposal would exceed the bounded pending-commit queue.
+    PendingCommitCapacity {
+        /// Maximum number of committed application commands retained for the caller.
+        capacity: usize,
+    },
 }
 
 impl fmt::Display for RaftNodeError {
@@ -119,6 +128,13 @@ impl fmt::Display for RaftNodeError {
             Self::PersistedConfStateMismatch => {
                 formatter.write_str("persisted Raft voters differ from the configured members")
             }
+            Self::ZeroPendingCommitCapacity => {
+                formatter.write_str("Raft pending application commit capacity must be non-zero")
+            }
+            Self::PendingCommitCapacity { capacity } => write!(
+                formatter,
+                "Raft pending application commit capacity of {capacity} has been reached"
+            ),
         }
     }
 }
@@ -128,7 +144,14 @@ impl Error for RaftNodeError {
         match self {
             Self::Raft(error) => Some(error),
             Self::RaftEngine(error) => Some(error),
-            _ => None,
+            Self::EmptyMembers
+            | Self::ZeroMemberId
+            | Self::DuplicateMemberId(_)
+            | Self::LocalMemberMissing(_)
+            | Self::LocalEndpointMismatch { .. }
+            | Self::PersistedConfStateMismatch
+            | Self::ZeroPendingCommitCapacity
+            | Self::PendingCommitCapacity { .. } => None,
         }
     }
 }
@@ -220,7 +243,9 @@ pub struct RaftNode {
     storage: RaftStorage,
     coordinator: Arc<RaftClusterNode>,
     outbox: Vec<RaftMessage>,
-    committed: Vec<RaftCommittedEntry>,
+    committed: VecDeque<RaftCommittedEntry>,
+    pending_commit_capacity: usize,
+    next_unqueued_commit_index: u64,
     installed_snapshots: Vec<RaftApplicationSnapshot>,
     auto_acknowledge_apply: bool,
     last_acknowledged_index: u64,
@@ -238,7 +263,29 @@ impl RaftNode {
         endpoint: impl Into<Arc<str>>,
         members: Vec<RaftMember>,
     ) -> Result<Self, RaftNodeError> {
-        Self::new_with_timing(id, endpoint, members, RaftTiming::default_node())
+        Self::new_with_timing_and_pending_commit_capacity(
+            id,
+            endpoint,
+            members,
+            RaftTiming::default_node(),
+            DEFAULT_PENDING_COMMIT_CAPACITY,
+        )
+    }
+
+    /// Builds an in-memory node with a bounded queue for committed application commands.
+    pub fn new_with_pending_commit_capacity(
+        id: u64,
+        endpoint: impl Into<Arc<str>>,
+        members: Vec<RaftMember>,
+        pending_commit_capacity: usize,
+    ) -> Result<Self, RaftNodeError> {
+        Self::new_with_timing_and_pending_commit_capacity(
+            id,
+            endpoint,
+            members,
+            RaftTiming::default_node(),
+            pending_commit_capacity,
+        )
     }
 
     /// Builds an in-memory Raft node using validated logical timing.
@@ -248,10 +295,34 @@ impl RaftNode {
         members: Vec<RaftMember>,
         timing: RaftTiming,
     ) -> Result<Self, RaftNodeError> {
+        Self::new_with_timing_and_pending_commit_capacity(
+            id,
+            endpoint,
+            members,
+            timing,
+            DEFAULT_PENDING_COMMIT_CAPACITY,
+        )
+    }
+
+    /// Builds an in-memory node using validated timing and a bounded commit queue.
+    pub fn new_with_timing_and_pending_commit_capacity(
+        id: u64,
+        endpoint: impl Into<Arc<str>>,
+        members: Vec<RaftMember>,
+        timing: RaftTiming,
+        pending_commit_capacity: usize,
+    ) -> Result<Self, RaftNodeError> {
         let endpoint = endpoint.into();
         validate_members(id, &endpoint, &members)?;
         let storage = RaftStorage::in_memory(conf_state(&members));
-        Self::from_storage(id, endpoint, members, storage, timing)
+        Self::from_storage(
+            id,
+            endpoint,
+            members,
+            storage,
+            timing,
+            pending_commit_capacity,
+        )
     }
 
     /// Opens a Raft node whose protocol state survives process restarts.
@@ -286,7 +357,14 @@ impl RaftNode {
         let endpoint = endpoint.into();
         validate_members(id, &endpoint, &members)?;
         let storage = RaftStorage::open_persistent(directory.as_ref(), conf_state(&members))?;
-        Self::from_storage(id, endpoint, members, storage, timing)
+        Self::from_storage(
+            id,
+            endpoint,
+            members,
+            storage,
+            timing,
+            DEFAULT_PENDING_COMMIT_CAPACITY,
+        )
     }
 
     fn from_storage(
@@ -295,7 +373,11 @@ impl RaftNode {
         members: Vec<RaftMember>,
         storage: RaftStorage,
         timing: RaftTiming,
+        pending_commit_capacity: usize,
     ) -> Result<Self, RaftNodeError> {
+        if pending_commit_capacity == 0 {
+            return Err(RaftNodeError::ZeroPendingCommitCapacity);
+        }
         let members: Arc<[RaftMember]> = members.into();
         let config = Config {
             id,
@@ -327,7 +409,9 @@ impl RaftNode {
             storage,
             coordinator,
             outbox: Vec::new(),
-            committed: Vec::new(),
+            committed: VecDeque::new(),
+            pending_commit_capacity,
+            next_unqueued_commit_index: 1,
             installed_snapshots: Vec::new(),
             auto_acknowledge_apply: true,
             last_acknowledged_index: 0,
@@ -365,8 +449,24 @@ impl RaftNode {
 
     /// Proposes an application command on the current leader.
     pub fn propose(&mut self, data: impl Into<Vec<u8>>) -> raft::Result<()> {
+        self.try_propose(data)
+            .map_err(|_| raft::Error::Store(raft::StorageError::Unavailable))
+    }
+
+    /// Proposes one application command unless the bounded pending-commit queue is full.
+    ///
+    /// Callers that need to distinguish Raft protocol failures from application backpressure
+    /// should use this method instead of [`Self::propose`].
+    pub fn try_propose(&mut self, data: impl Into<Vec<u8>>) -> Result<(), RaftNodeError> {
+        self.refill_committed()?;
+        if self.committed.len() >= self.pending_commit_capacity {
+            return Err(RaftNodeError::PendingCommitCapacity {
+                capacity: self.pending_commit_capacity,
+            });
+        }
         self.raw.propose(Vec::new(), data.into())?;
-        self.drive_ready()
+        self.drive_ready()?;
+        Ok(())
     }
 
     /// Takes outbound Raft protocol messages for delivery by the caller's transport.
@@ -376,7 +476,34 @@ impl RaftNode {
 
     /// Takes committed non-empty normal entries for application to business state.
     pub fn drain_committed(&mut self) -> Vec<RaftCommittedEntry> {
-        mem::take(&mut self.committed)
+        self.committed.drain(..).collect()
+    }
+
+    /// Takes at most the configured pending-commit capacity of application commands.
+    ///
+    /// Commands beyond the in-memory page remain in the durable Raft log until a
+    /// later call. This makes repeated calls suitable for consumers that require
+    /// a fixed memory bound even when a peer commits a large batch at once.
+    pub fn try_drain_committed(&mut self) -> Result<Vec<RaftCommittedEntry>, RaftNodeError> {
+        self.refill_committed()?;
+        Ok(self.drain_committed())
+    }
+
+    /// Returns and removes one committed application command, if one is pending.
+    pub fn next_committed(&mut self) -> Option<RaftCommittedEntry> {
+        self.committed.pop_front()
+    }
+
+    /// Returns and removes one committed application command after refilling the
+    /// bounded in-memory page from durable Raft storage when needed.
+    pub fn try_next_committed(&mut self) -> Result<Option<RaftCommittedEntry>, RaftNodeError> {
+        self.refill_committed()?;
+        Ok(self.next_committed())
+    }
+
+    /// Returns the number of bounded, unapplied application commands retained locally.
+    pub fn pending_commit_count(&self) -> usize {
+        self.committed.len()
     }
 
     /// Takes application snapshots installed from incoming Raft messages.
@@ -406,8 +533,11 @@ impl RaftNode {
         self.auto_acknowledge_apply = false;
     }
 
-    pub(crate) fn acknowledge_all_committed(&mut self) -> raft::Result<()> {
-        self.acknowledge_committed();
+    pub(crate) fn acknowledge_applied_through(&mut self, index: u64) -> raft::Result<()> {
+        if self.last_acknowledged_index < index {
+            self.raw.advance_apply_to(index);
+            self.last_acknowledged_index = index;
+        }
         self.drive_ready()
     }
 
@@ -477,6 +607,8 @@ impl RaftNode {
             }
             self.outbox.extend(light_ready.take_messages());
             self.record_committed(light_ready.take_committed_entries());
+            self.refill_committed()
+                .map_err(|_| raft::Error::Store(raft::StorageError::Unavailable))?;
             if self.auto_acknowledge_apply {
                 self.acknowledge_committed();
             }
@@ -489,7 +621,47 @@ impl RaftNode {
         if let Some(entry) = entries.last() {
             self.last_committed_index = self.last_committed_index.max(entry.index);
         }
-        self.committed.extend(committed_entries(entries));
+        for entry in entries {
+            if entry.index < self.next_unqueued_commit_index {
+                continue;
+            }
+            if entry.get_entry_type() == EntryType::EntryNormal
+                && !entry.data.is_empty()
+                && self.committed.len() == self.pending_commit_capacity
+            {
+                return;
+            }
+            self.next_unqueued_commit_index = entry.index.saturating_add(1);
+            if entry.get_entry_type() == EntryType::EntryNormal && !entry.data.is_empty() {
+                self.committed.push_back(RaftCommittedEntry {
+                    index: entry.index,
+                    data: entry.data.to_vec(),
+                });
+            }
+        }
+    }
+
+    fn refill_committed(&mut self) -> Result<(), RaftNodeError> {
+        while self.committed.len() < self.pending_commit_capacity
+            && self.next_unqueued_commit_index <= self.last_committed_index
+        {
+            let available = self.pending_commit_capacity - self.committed.len();
+            let (entries, next_index) = self
+                .storage
+                .committed_entries_page(self.next_unqueued_commit_index, available)?;
+            if entries.is_empty() {
+                self.next_unqueued_commit_index = self.last_committed_index.saturating_add(1);
+                break;
+            }
+            self.record_committed(entries);
+            if next_index.is_none()
+                && self.next_unqueued_commit_index <= self.last_committed_index
+                && self.committed.len() < self.pending_commit_capacity
+            {
+                self.next_unqueued_commit_index = self.last_committed_index.saturating_add(1);
+            }
+        }
+        Ok(())
     }
 
     fn acknowledge_committed(&mut self) {

@@ -5,7 +5,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
-    CatgaResult, Envelope, EventStore, EventStream, EventVersionRegistry, StoredEvent, VersionInfo,
+    CatgaResult, Envelope, EventPage, EventStore, EventStream, EventVersionRegistry, StoredEvent,
+    StreamIdsPage, VersionHistoryPage,
 };
 
 /// Applies registered event schema upgrades to read results without rewriting history.
@@ -35,37 +36,77 @@ where
         self.inner.append(stream_id, events, expected_version).await
     }
 
-    async fn read(
+    async fn read_page(
         &self,
         stream_id: &str,
         from_version: u64,
         max_count: usize,
-    ) -> CatgaResult<EventStream> {
-        self.upgrade(self.inner.read(stream_id, from_version, max_count).await?)
+    ) -> CatgaResult<EventPage> {
+        let page = self
+            .inner
+            .read_page(stream_id, from_version, max_count)
+            .await?;
+        Ok(EventPage::new(
+            self.upgrade(page.stream().clone())?,
+            page.next_version(),
+        ))
     }
 
     async fn version(&self, stream_id: &str) -> CatgaResult<i64> {
         self.inner.version(stream_id).await
     }
 
-    async fn read_to_version(&self, stream_id: &str, to_version: i64) -> CatgaResult<EventStream> {
-        self.upgrade(self.inner.read_to_version(stream_id, to_version).await?)
-    }
-
-    async fn read_to_time(
+    async fn read_to_version_page(
         &self,
         stream_id: &str,
+        from_version: u64,
+        to_version: i64,
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        let page = self
+            .inner
+            .read_to_version_page(stream_id, from_version, to_version, max_count)
+            .await?;
+        Ok(EventPage::new(
+            self.upgrade(page.stream().clone())?,
+            page.next_version(),
+        ))
+    }
+
+    async fn read_to_time_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
         upper_bound: std::time::SystemTime,
-    ) -> CatgaResult<EventStream> {
-        self.upgrade(self.inner.read_to_time(stream_id, upper_bound).await?)
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        let page = self
+            .inner
+            .read_to_time_page(stream_id, from_version, upper_bound, max_count)
+            .await?;
+        Ok(EventPage::new(
+            self.upgrade(page.stream().clone())?,
+            page.next_version(),
+        ))
     }
 
-    async fn version_history(&self, stream_id: &str) -> CatgaResult<Vec<VersionInfo>> {
-        self.inner.version_history(stream_id).await
+    async fn version_history_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        max_count: usize,
+    ) -> CatgaResult<VersionHistoryPage> {
+        self.inner
+            .version_history_page(stream_id, from_version, max_count)
+            .await
     }
 
-    async fn stream_ids(&self) -> CatgaResult<Vec<String>> {
-        self.inner.stream_ids().await
+    async fn stream_ids_page(
+        &self,
+        after: Option<&str>,
+        max_count: usize,
+    ) -> CatgaResult<StreamIdsPage> {
+        self.inner.stream_ids_page(after, max_count).await
     }
 }
 
