@@ -1,6 +1,7 @@
 //! Redis Streams-backed optimistic event persistence.
 
 use std::{
+    collections::BinaryHeap,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -15,6 +16,7 @@ use catga_core::{
 use redis::{
     AsyncCommands, Script,
     aio::{ConnectionManager, ConnectionManagerConfig},
+    cmd,
     streams::{StreamId, StreamRangeReply},
 };
 
@@ -33,7 +35,7 @@ for i = 1, count do
     redis.call('XADD', KEYS[2], tostring(current + 1) .. '-0', 'version', current, 'payload', ARGV[offset], 'timestamp', ARGV[offset + 1])
 end
 redis.call('SET', KEYS[1], current)
-redis.call('ZADD', KEYS[3], 0, ARGV[3 + count * 2])
+redis.call('SADD', KEYS[3], ARGV[3 + count * 2])
 return current
 "#;
 
@@ -327,22 +329,42 @@ impl EventStore for RedisEventStore {
     ) -> CatgaResult<StreamIdsPage> {
         validate_event_store_page_size(max_count)?;
         telemetry::record_persistence("redis", "event_store", "stream_ids_page", async {
-            let minimum = after.map_or_else(|| String::from("-"), |cursor| format!("({cursor}"));
             let mut connection = self.connection.clone();
-            let ids: Vec<String> = connection
-                .zrangebylex_limit(self.ids_key(), minimum, "+", 0, max_count as isize)
-                .await
-                .map_err(map_error)?;
-            let next_stream_id = match ids.last() {
-                Some(last) => {
-                    let following: Vec<String> = connection
-                        .zrangebylex_limit(self.ids_key(), format!("({last}"), "+", 0, 1)
-                        .await
-                        .map_err(map_error)?;
-                    (!following.is_empty()).then(|| last.clone())
+            let mut scan_cursor = 0_u64;
+            let mut ids = BinaryHeap::with_capacity(max_count);
+            let mut has_more = false;
+            loop {
+                let (next_cursor, scanned): (u64, Vec<String>) = cmd("SSCAN")
+                    .arg(self.ids_key())
+                    .arg(scan_cursor)
+                    .arg("COUNT")
+                    .arg(max_count)
+                    .query_async(&mut connection)
+                    .await
+                    .map_err(map_error)?;
+                for id in scanned {
+                    if after.is_some_and(|cursor| id.as_str() <= cursor) {
+                        continue;
+                    }
+                    if ids.len() < max_count {
+                        ids.push(id);
+                    } else {
+                        has_more = true;
+                        let largest = ids.peek().map(String::as_str);
+                        if largest.is_some_and(|largest| id.as_str() < largest) {
+                            let _ = ids.pop();
+                            ids.push(id);
+                        }
+                    }
                 }
-                None => None,
-            };
+                if next_cursor == 0 {
+                    break;
+                }
+                scan_cursor = next_cursor;
+            }
+            let mut ids = ids.into_vec();
+            ids.sort_unstable();
+            let next_stream_id = has_more.then(|| ids.last().cloned()).flatten();
             Ok(StreamIdsPage::new(ids, next_stream_id))
         })
         .await
