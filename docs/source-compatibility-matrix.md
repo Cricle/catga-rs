@@ -41,6 +41,15 @@ documentation/performance artifacts, not runtime contracts.
 
 * Public Rust APIs use `CatgaResult` for invalid input and operational errors;
   production paths do not use panic-prone `unwrap` or `expect` calls.
+* Source `ErrorInfo` maps to a typed `CatgaError` category, bounded optional
+  diagnostic details (at most 1 KiB without splitting UTF-8), and explicit
+  retryability. `Transient`, `Timeout`, and `Unavailable` derive retryability;
+  source `TRANSPORT_FAILED` and `SERIALIZATION_FAILED` are accepted as typed
+  input aliases. New Postcard RPC errors preserve these fields. The two-field
+  historical RPC error layout is accepted only through an exact, full-frame
+  fallback after a current decode reaches end-of-frame; generic error decoding
+  remains strict so truncated or malformed current frames cannot masquerade as
+  legacy traffic.
 * Public API documentation is compiled with warnings denied, so broken links and
   documentation warnings fail the quality gate instead of reaching consumers.
 * EventStore has no whole-history or whole-catalog read API. Consumers follow

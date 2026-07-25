@@ -180,6 +180,7 @@ enum Step<S> {
     ReplayableForEach(ReplayableForEach<S>),
     StreamForEach(Action<S>),
     ConcurrentForEach(Action<S>),
+    ConcurrentStreamForEach(Action<S>),
     Retry {
         action: Action<S>,
         max_retries: usize,
@@ -761,6 +762,98 @@ impl<S: Send> DslFlow<S> {
         self
     }
 
+    /// Runs a lazily selected stream in bounded concurrent batches and reduces each batch in
+    /// source order.
+    ///
+    /// At most `limit` stream items, work futures, and completed values are retained at once.
+    /// Work observes immutable state, so each completed batch is drained before `reduce` receives
+    /// mutable state; this preserves Rust's aliasing rules without locks or an unbounded result
+    /// collection. The operation is process-local and is rejected by [`DslFlow::run_checkpointed`]
+    /// because a generic stream has no durable replay cursor.
+    pub fn for_each_stream_concurrent<T, R, Select, Work, Reduce>(
+        mut self,
+        limit: usize,
+        select: Select,
+        work: Work,
+        reduce: Reduce,
+    ) -> CatgaResult<Self>
+    where
+        S: Sync,
+        T: Send + 'static,
+        R: Send + 'static,
+        Select: Fn(&S) -> futures::stream::BoxStream<'static, T> + Send + Sync + 'static,
+        Work: for<'a> Fn(&'a S, T) -> BoxFuture<'a, CatgaResult<R>> + Send + Sync + 'static,
+        Reduce: Fn(&mut S, R) -> CatgaResult<()> + Send + Sync + 'static,
+    {
+        if limit == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "concurrent stream for_each limit must be greater than zero",
+            ));
+        }
+        let select = Arc::new(select);
+        let work = Arc::new(work);
+        let reduce = Arc::new(reduce);
+        self.steps
+            .push(Step::ConcurrentStreamForEach(Box::new(move |state| {
+                let select = Arc::clone(&select);
+                let work = Arc::clone(&work);
+                let reduce = Arc::clone(&reduce);
+                Box::pin(async move {
+                    let metrics = ForEachMetrics::new("concurrent_stream");
+                    let mut items = select(state);
+                    let mut next_index = 0_usize;
+                    loop {
+                        let mut completed = {
+                            let state: &S = state;
+                            let mut batch = FuturesUnordered::new();
+                            for _ in 0..limit {
+                                let Some(item) = items.next().await else {
+                                    break;
+                                };
+                                let index = next_index;
+                                next_index = next_index.checked_add(1).ok_or_else(|| {
+                                    CatgaError::new(
+                                        ErrorCode::Internal,
+                                        "concurrent stream item index exceeds usize",
+                                    )
+                                })?;
+                                let work = Arc::clone(&work);
+                                let metrics = Arc::clone(&metrics);
+                                batch.push(async move {
+                                    let item_metrics = metrics.begin_item();
+                                    match work(state, item).await {
+                                        Ok(result) => {
+                                            item_metrics.complete(true);
+                                            Ok((index, result))
+                                        }
+                                        Err(error) => {
+                                            item_metrics.complete(false);
+                                            Err(error)
+                                        }
+                                    }
+                                });
+                            }
+                            let mut results = Vec::with_capacity(batch.len());
+                            while let Some(result) = batch.next().await {
+                                results.push(result?);
+                            }
+                            results
+                        };
+                        if completed.is_empty() {
+                            break;
+                        }
+                        completed.sort_unstable_by_key(|(index, _)| *index);
+                        for (_, result) in completed {
+                            reduce(state, result)?;
+                        }
+                    }
+                    Ok(())
+                })
+            })));
+        Ok(self)
+    }
+
     /// Runs selected items concurrently without permitting concurrent mutation of the flow state.
     ///
     /// Work functions observe `&S` and return one result per item. Once all work has succeeded,
@@ -1024,6 +1117,12 @@ impl<S: Send> DslFlow<S> {
                     return Err(CatgaError::new(
                         ErrorCode::Validation,
                         "checkpointed for_each_concurrent requires a result cursor",
+                    ));
+                }
+                Step::ConcurrentStreamForEach(_) => {
+                    return Err(CatgaError::new(
+                        ErrorCode::Validation,
+                        "checkpointed concurrent stream for_each requires a replay cursor",
                     ));
                 }
                 Step::ForEach { .. } => {
@@ -1300,7 +1399,9 @@ impl<S: Send> DslFlow<S> {
                         .await?;
                         continue;
                     }
-                    Step::StreamForEach(_) | Step::ConcurrentForEach(_) => {
+                    Step::StreamForEach(_)
+                    | Step::ConcurrentForEach(_)
+                    | Step::ConcurrentStreamForEach(_) => {
                         return Err(CatgaError::new(
                             ErrorCode::Validation,
                             "checkpointed nested foreach operation has no replay cursor",
@@ -1477,6 +1578,7 @@ impl<S: Send> DslFlow<S> {
                 }
                 Step::StreamForEach(action) => action(state).await,
                 Step::ConcurrentForEach(action) => action(state).await,
+                Step::ConcurrentStreamForEach(action) => action(state).await,
                 Step::Retry {
                     action,
                     max_retries,

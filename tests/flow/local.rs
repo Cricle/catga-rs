@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
 };
 
@@ -1152,6 +1152,65 @@ async fn dsl_flow_for_each_concurrent_limits_work_and_merges_results_in_input_or
 
     assert_eq!(maximum.load(Ordering::Acquire), 2);
     assert_eq!(state.processed, [30, 50, 80]);
+}
+
+#[tokio::test]
+async fn dsl_flow_for_each_stream_concurrent_bounds_each_batch_and_reduces_in_input_order() {
+    let started = Arc::new(AtomicUsize::new(0));
+    let release_first_batch = Arc::new(AtomicBool::new(false));
+    let first_batch_started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let flow = Arc::new(
+        DslFlow::new()
+            .for_each_stream_concurrent(
+                4,
+                |_: &Vec<u8>| stream::iter(0_u8..10).boxed(),
+                {
+                    let started = Arc::clone(&started);
+                    let release_first_batch = Arc::clone(&release_first_batch);
+                    let first_batch_started = Arc::clone(&first_batch_started);
+                    let release = Arc::clone(&release);
+                    move |_: &Vec<u8>, item| {
+                        let started = Arc::clone(&started);
+                        let release_first_batch = Arc::clone(&release_first_batch);
+                        let first_batch_started = Arc::clone(&first_batch_started);
+                        let release = Arc::clone(&release);
+                        Box::pin(async move {
+                            let position = started.fetch_add(1, Ordering::AcqRel);
+                            if position < 4 {
+                                if position == 3 {
+                                    first_batch_started.notify_one();
+                                }
+                                while !release_first_batch.load(Ordering::Acquire) {
+                                    release.notified().await;
+                                }
+                            }
+                            Ok(item)
+                        })
+                    }
+                },
+                |state, item| {
+                    state.push(item);
+                    Ok(())
+                },
+            )
+            .expect("positive concurrency is valid"),
+    );
+
+    let task = tokio::spawn({
+        let flow = Arc::clone(&flow);
+        async move {
+            let mut state = Vec::new();
+            flow.run(&mut state).await?;
+            Ok::<_, CatgaError>(state)
+        }
+    });
+    first_batch_started.notified().await;
+    assert_eq!(started.load(Ordering::Acquire), 4);
+
+    release_first_batch.store(true, Ordering::Release);
+    release.notify_waiters();
+    assert_eq!(task.await.unwrap().unwrap(), (0_u8..10).collect::<Vec<_>>());
 }
 
 #[tokio::test]

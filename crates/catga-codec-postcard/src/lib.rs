@@ -86,6 +86,26 @@ impl PostcardCodec {
         postcard::from_bytes(bytes).map_err(map_value_error)
     }
 
+    /// Decodes a typed RPC response, accepting the exact two-field error layout emitted before
+    /// structured error details were added.
+    ///
+    /// The compatibility fallback runs only when the current response reaches end-of-frame while
+    /// reading its trailing error fields, and it requires the legacy response to consume every
+    /// input byte. Generic [`Self::decode_value`] remains strict so a malformed current error
+    /// cannot be silently classified as a legacy frame.
+    pub fn decode_rpc_response<T: DeserializeOwned>(
+        &self,
+        bytes: &[u8],
+    ) -> CatgaResult<PostcardRpcResponse<T>> {
+        match postcard::from_bytes(bytes) {
+            Ok(response) => Ok(response),
+            Err(error) if error == postcard::Error::DeserializeUnexpectedEnd => {
+                decode_legacy_rpc_response(bytes, error)
+            }
+            Err(error) => Err(map_value_error(error)),
+        }
+    }
+
     /// Builds a typed successful response with request correlation and priority propagated.
     pub fn typed_success<T: Serialize>(
         &self,
@@ -118,6 +138,33 @@ pub enum PostcardRpcResponse<T> {
     Success(T),
     /// A structured remote Catga failure.
     Failure(CatgaError),
+}
+
+#[derive(Deserialize)]
+enum LegacyPostcardRpcResponse<T> {
+    Success(T),
+    Failure(LegacyPostcardError),
+}
+
+#[derive(Deserialize)]
+struct LegacyPostcardError {
+    code: ErrorCode,
+    message: Box<str>,
+}
+
+fn decode_legacy_rpc_response<T: DeserializeOwned>(
+    bytes: &[u8],
+    current_error: postcard::Error,
+) -> CatgaResult<PostcardRpcResponse<T>> {
+    match postcard::take_from_bytes::<LegacyPostcardRpcResponse<T>>(bytes) {
+        Ok((LegacyPostcardRpcResponse::Success(value), [])) => {
+            Ok(PostcardRpcResponse::Success(value))
+        }
+        Ok((LegacyPostcardRpcResponse::Failure(error), [])) => Ok(PostcardRpcResponse::Failure(
+            CatgaError::new(error.code, error.message),
+        )),
+        Ok(_) | Err(_) => Err(map_value_error(current_error)),
+    }
 }
 
 /// Serializes typed values and delegates their delivery to one envelope transport.
@@ -1118,7 +1165,7 @@ where
                 "response correlation does not match the request",
             ));
         }
-        match self.codec.decode_value(response.payload())? {
+        match self.codec.decode_rpc_response(response.payload())? {
             PostcardRpcResponse::Success(response) => Ok(response),
             PostcardRpcResponse::Failure(error) => Err(error),
         }
