@@ -21,27 +21,32 @@ be represented as Redis milliseconds, and a zero or oversized scan limit with
 
 ## Receive Algorithm
 
-When the per-stream recovery gate is held and no local delivery is in flight,
-the transport first reads one pending entry assigned to its own consumer.  If
-none is available, it calls `XAUTOCLAIM` for the configured consumer with
-`COUNT 1`.  Each command therefore claims at most one entry.  A small cursor
-per stream records Redis's next scan ID, so repeated receives eventually cover
+When the per-stream recovery gate is held, the transport first reads one
+pending entry assigned to its own consumer. If none is available, it reads one
+`XPENDING` record and conditionally issues one `XCLAIM` only when the record is
+idle and belongs to a different consumer. Each scan therefore examines and
+claims at most one entry. A small cursor per stream records the next pending
+range, so repeated receives eventually cover
 the group pending list instead of repeatedly examining only its prefix.
 
 The receive attempt executes at most the configured number of reclaim scans.
 It immediately returns the first claimed entry, preserving its broker delivery
-attempt count.  If nothing can be reclaimed, the transport retains the existing
-blocking `XREADGROUP >` path for new messages.  The recovery gate prevents two
-local receivers from reclaiming the same stream concurrently.
+attempt count.  If nothing can be reclaimed, `XREADGROUP >` waits for a short,
+fixed interval before retrying the bounded reclaim pass.  This eventually walks
+a large pending list even when no new message arrives.  The recovery gate
+prevents two local receivers from reclaiming the same stream concurrently.
 
 ## Memory and Concurrency
 
-The implementation retains only the single `StreamId` returned by one
-`XAUTOCLAIM` command and one boxed cursor per stream already represented in the
-transport's in-flight map.  It does not enumerate a `XPENDING` result set,
+The implementation retains only one pending metadata record, the single
+`StreamId` returned by one `XCLAIM` command, and one boxed cursor per stream
+already represented in the transport's in-flight map. It does not enumerate a
+`XPENDING` result set,
 collect a batch, spawn retry tasks, or hold a DashMap guard across an await.
-The acknowledgement token continues to own removal from the local in-flight
-set, so a failed acknowledgement leaves the broker entry recoverable.
+The acknowledgement token carries the delivery consumer name. A short Redis
+Lua script atomically verifies that name against the current pending owner
+before issuing `XACK`, so a stale delivery cannot acknowledge a later claim.
+Failed acknowledgements leave the broker entry recoverable.
 
 ## Error Handling and Tests
 
