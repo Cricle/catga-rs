@@ -102,6 +102,20 @@ struct RawHeaderWire {
 }
 
 #[derive(Serialize)]
+struct LegacyCatgaErrorWire {
+    code: ErrorCode,
+    message: Box<str>,
+}
+
+#[derive(Serialize)]
+struct UnboundedCatgaErrorWire {
+    code: ErrorCode,
+    message: Box<str>,
+    details: Option<Box<str>>,
+    retryable: Option<bool>,
+}
+
+#[derive(Serialize)]
 struct HeaderEnvelopeWire {
     id: u64,
     message_type: String,
@@ -356,6 +370,69 @@ fn postcard_codec_builds_correlated_typed_success_and_failure_envelopes() {
         codec.decode_value::<PostcardRpcResponse<()>>(failure.payload()).unwrap(),
         PostcardRpcResponse::Failure(error) if error.code() == ErrorCode::Conflict
     ));
+}
+
+#[test]
+fn postcard_rpc_failure_round_trip_retains_error_details_and_retryability() {
+    let codec = PostcardCodec;
+    let response = PostcardRpcResponse::<()>::Failure(
+        CatgaError::new(ErrorCode::Timeout, "upstream timed out")
+            .with_details("retry after 1 second"),
+    );
+
+    let bytes = codec.encode_value(&response).unwrap();
+    let decoded = codec
+        .decode_value::<PostcardRpcResponse<()>>(&bytes)
+        .unwrap();
+
+    match decoded {
+        PostcardRpcResponse::Failure(error) => {
+            assert_eq!(error.code(), ErrorCode::Timeout);
+            assert_eq!(error.message(), "upstream timed out");
+            assert_eq!(error.details(), Some("retry after 1 second"));
+            assert!(error.is_retryable());
+        }
+        PostcardRpcResponse::Success(()) => panic!("expected a failure response"),
+    }
+}
+
+#[test]
+fn postcard_codec_decodes_legacy_error_without_new_wire_fields() {
+    let codec = PostcardCodec;
+    let bytes = postcard::to_allocvec(&LegacyCatgaErrorWire {
+        code: ErrorCode::Unavailable,
+        message: "legacy transport failure".into(),
+    })
+    .unwrap();
+
+    let decoded = codec.decode_value::<CatgaError>(&bytes).unwrap();
+
+    assert_eq!(decoded.code(), ErrorCode::Unavailable);
+    assert_eq!(decoded.message(), "legacy transport failure");
+    assert_eq!(decoded.details(), None);
+    assert!(decoded.is_retryable());
+}
+
+#[test]
+fn postcard_codec_bounds_received_error_details() {
+    let codec = PostcardCodec;
+    let bytes = postcard::to_allocvec(&UnboundedCatgaErrorWire {
+        code: ErrorCode::Internal,
+        message: "invalid payload".into(),
+        details: Some("é".repeat(513).into()),
+        retryable: Some(false),
+    })
+    .unwrap();
+
+    let decoded = codec.decode_value::<CatgaError>(&bytes).unwrap();
+
+    assert!(decoded.details().unwrap().len() <= catga_core::MAX_ERROR_DETAILS_BYTES);
+    assert!(
+        decoded
+            .details()
+            .unwrap()
+            .is_char_boundary(decoded.details().unwrap().len())
+    );
 }
 
 #[tokio::test]

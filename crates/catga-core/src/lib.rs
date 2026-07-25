@@ -73,7 +73,7 @@ pub use correlation::{
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
 };
-pub use error::{CatgaError, CatgaResult, ErrorCode};
+pub use error::{CatgaError, CatgaResult, ErrorCode, MAX_ERROR_DETAILS_BYTES};
 pub use event_store::{
     EventPage, EventStore, EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage,
     VersionHistoryPage, VersionInfo, validate_event_store_page_size,
