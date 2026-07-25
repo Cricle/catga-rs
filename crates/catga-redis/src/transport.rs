@@ -14,11 +14,15 @@ use dashmap::{DashMap, DashSet};
 use redis::{
     AsyncCommands, AsyncConnectionConfig,
     aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection},
-    streams::{StreamId, StreamPendingCountReply, StreamReadOptions, StreamReadReply},
+    streams::{
+        StreamClaimReply, StreamId, StreamPendingCountReply, StreamReadOptions, StreamReadReply,
+    },
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{RedisConfig, acknowledgement::RedisAcknowledger};
+use crate::{RedisConfig, RedisPendingReclaimOptions, acknowledgement::RedisAcknowledger};
+
+const RECLAIM_POLL_MILLIS: usize = 1_000;
 
 /// Redis Streams-backed at-least-once transport with explicit acknowledgement.
 pub struct RedisTransport {
@@ -27,6 +31,7 @@ pub struct RedisTransport {
     stream: Box<str>,
     group: Box<str>,
     consumer: Box<str>,
+    reclaim_options: RedisPendingReclaimOptions,
     codec: PostcardCodec,
     in_flight: Arc<InFlight>,
     operations: OperationTracker,
@@ -34,8 +39,20 @@ pub struct RedisTransport {
 }
 
 impl RedisTransport {
-    /// Connects and idempotently provisions the configured stream and consumer group.
+    /// Connects with the default bounded cross-consumer pending-delivery recovery policy.
     pub async fn connect(config: RedisConfig) -> CatgaResult<Self> {
+        Self::connect_with_reclaim_options(config, RedisPendingReclaimOptions::default()).await
+    }
+
+    /// Connects and idempotently provisions the configured stream and consumer group.
+    ///
+    /// `reclaim_options` controls how an idle delivery left by another consumer can be moved to
+    /// this consumer. Recovery is bounded to one claimed entry per Redis command and never
+    /// materializes the group pending list in memory.
+    pub async fn connect_with_reclaim_options(
+        config: RedisConfig,
+        reclaim_options: RedisPendingReclaimOptions,
+    ) -> CatgaResult<Self> {
         let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
         let manager_config = ConnectionManagerConfig::new().set_response_timeout(None);
         let mut commands = client
@@ -58,6 +75,7 @@ impl RedisTransport {
             stream: config.stream,
             group: config.group,
             consumer: config.consumer,
+            reclaim_options,
             codec: PostcardCodec,
             in_flight: Arc::new(InFlight::new()),
             operations: OperationTracker::default(),
@@ -114,47 +132,94 @@ impl RedisTransport {
         })
     }
 
+    async fn reclaim_idle_entry(
+        &self,
+        connection: &mut MultiplexedConnection,
+        stream: &str,
+    ) -> CatgaResult<Option<StreamId>> {
+        for _ in 0..self.reclaim_options.max_scans() {
+            let cursor = self.in_flight.reclaim_cursor(stream);
+            let pending: StreamPendingCountReply = connection
+                .xpending_count(stream, self.group.as_ref(), cursor.as_ref(), "+", 1)
+                .await
+                .map_err(map_error)?;
+            let Some(pending) = pending.ids.into_iter().next() else {
+                self.in_flight.set_reclaim_cursor(stream, "-".into());
+                return Ok(None);
+            };
+            self.in_flight
+                .set_reclaim_cursor(stream, format!("({}", pending.id).into());
+            let idle_millis = u64::try_from(pending.last_delivered_ms)
+                .map_or(u64::MAX, |idle_millis| idle_millis);
+            if pending.consumer == self.consumer.as_ref()
+                || idle_millis < self.reclaim_options.minimum_idle_millis()
+            {
+                continue;
+            }
+            let claimed: StreamClaimReply = connection
+                .xclaim(
+                    stream,
+                    self.group.as_ref(),
+                    self.consumer.as_ref(),
+                    self.reclaim_options.minimum_idle_millis(),
+                    &[pending.id.as_str()],
+                )
+                .await
+                .map_err(map_error)?;
+            if let Some(entry) = claimed.ids.into_iter().next() {
+                return Ok(Some(entry));
+            }
+        }
+        Ok(None)
+    }
+
     async fn receive_stream(&self, stream: Box<str>) -> CatgaResult<Delivery> {
         let _receiving = self.in_flight.begin_receive(stream.as_ref());
         let mut connection = self.blocking_connection().await?;
-        let pending = if let Some(_recovery) = self.in_flight.try_start_recovery(stream.as_ref()) {
-            read_entry(
+        let (entry, attempts) = loop {
+            let pending =
+                if let Some(_recovery) = self.in_flight.try_start_recovery(stream.as_ref()) {
+                    let owned_pending = if self.in_flight.can_read_owned_pending(stream.as_ref()) {
+                        read_entry(
+                            &mut connection,
+                            stream.as_ref(),
+                            self.group.as_ref(),
+                            self.consumer.as_ref(),
+                            "0",
+                            None,
+                        )
+                        .await?
+                    } else {
+                        None
+                    };
+                    match owned_pending {
+                        Some(entry) => Some(entry),
+                        None => {
+                            self.reclaim_idle_entry(&mut connection, stream.as_ref())
+                                .await?
+                        }
+                    }
+                } else {
+                    None
+                };
+            if let Some(entry) = pending {
+                let attempts = self
+                    .pending_attempts(stream.as_ref(), entry.id.as_str())
+                    .await?;
+                break (entry, attempts);
+            }
+            if let Some(entry) = read_entry(
                 &mut connection,
                 stream.as_ref(),
                 self.group.as_ref(),
                 self.consumer.as_ref(),
-                "0",
-                false,
+                ">",
+                Some(RECLAIM_POLL_MILLIS),
             )
             .await?
-        } else {
-            None
-        };
-        let (entry, attempts) = match pending {
-            Some(entry) => {
-                let attempts = self
-                    .pending_attempts(stream.as_ref(), entry.id.as_str())
-                    .await?;
-                (entry, attempts)
+            {
+                break (entry, 1);
             }
-            None => (
-                read_entry(
-                    &mut connection,
-                    stream.as_ref(),
-                    self.group.as_ref(),
-                    self.consumer.as_ref(),
-                    ">",
-                    true,
-                )
-                .await?
-                .ok_or_else(|| {
-                    CatgaError::new(
-                        ErrorCode::Transient,
-                        "Redis stream read returned no entries",
-                    )
-                })?,
-                1,
-            ),
         };
         let payload = entry.get::<Vec<u8>>("payload").ok_or_else(|| {
             CatgaError::new(ErrorCode::Internal, "Redis stream entry is missing payload")
@@ -168,6 +233,7 @@ impl RedisTransport {
                 connection: self.commands.clone(),
                 stream,
                 group: self.group.clone(),
+                consumer: self.consumer.clone(),
                 entry_id: entry.id.into_boxed_str(),
                 in_flight: Arc::clone(&self.in_flight),
                 _operation: self.operations.begin_operation(),
@@ -276,10 +342,14 @@ async fn read_entry(
     group: &str,
     consumer: &str,
     entry_id: &str,
-    block: bool,
+    block_millis: Option<usize>,
 ) -> CatgaResult<Option<StreamId>> {
     let options = StreamReadOptions::default().group(group, consumer).count(1);
-    let options = if block { options.block(0) } else { options };
+    let options = if let Some(block_millis) = block_millis {
+        options.block(block_millis)
+    } else {
+        options
+    };
     let reply: Option<StreamReadReply> = connection
         .xread_options::<_, _, Option<StreamReadReply>>(&[stream], &[entry_id], &options)
         .await
@@ -295,6 +365,7 @@ async fn read_entry(
 
 pub(crate) struct InFlight {
     streams: DashMap<Box<str>, Arc<InFlightStream>>,
+    reclaim_cursors: DashMap<Box<str>, Box<str>>,
 }
 
 struct InFlightStream {
@@ -307,6 +378,7 @@ impl InFlight {
     fn new() -> Self {
         Self {
             streams: DashMap::new(),
+            reclaim_cursors: DashMap::new(),
         }
     }
 
@@ -331,26 +403,35 @@ impl InFlight {
 
     fn try_start_recovery(&self, stream: &str) -> Option<RecoveryGuard> {
         let in_flight = self.stream(stream);
-        if in_flight.active_receivers.load(Ordering::SeqCst) != 1
-            || in_flight
-                .recovery_gate
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
+        if in_flight
+            .recovery_gate
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
         {
             return None;
         }
-        let can_recover =
-            in_flight.active_receivers.load(Ordering::SeqCst) == 1 && in_flight.entries.is_empty();
-        if can_recover {
-            Some(RecoveryGuard { in_flight })
-        } else {
-            in_flight.recovery_gate.store(false, Ordering::SeqCst);
-            None
-        }
+        Some(RecoveryGuard { in_flight })
     }
 
     fn insert(&self, stream: &str, entry_id: &str) {
         self.stream(stream).entries.insert(entry_id.into());
+    }
+
+    fn can_read_owned_pending(&self, stream: &str) -> bool {
+        self.streams
+            .get(stream)
+            .is_none_or(|in_flight| in_flight.entries.is_empty())
+    }
+
+    fn reclaim_cursor(&self, stream: &str) -> Box<str> {
+        self.reclaim_cursors
+            .get(stream)
+            .map(|cursor| cursor.value().clone())
+            .unwrap_or_else(|| "-".into())
+    }
+
+    fn set_reclaim_cursor(&self, stream: &str, cursor: Box<str>) {
+        self.reclaim_cursors.insert(stream.into(), cursor);
     }
 
     pub(crate) fn release(&self, stream: &str, entry_id: &str) {
@@ -384,4 +465,26 @@ impl Drop for RecoveryGuard {
 
 pub(crate) fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InFlight;
+
+    #[test]
+    fn recovery_gate_allows_one_reclaimer_while_multiple_receivers_wait() {
+        let in_flight = InFlight::new();
+        let _first = in_flight.begin_receive("orders");
+        let _second = in_flight.begin_receive("orders");
+
+        assert!(in_flight.try_start_recovery("orders").is_some());
+    }
+
+    #[test]
+    fn recovery_skips_owned_pending_entries_while_a_local_delivery_is_in_flight() {
+        let in_flight = InFlight::new();
+        in_flight.insert("orders", "1-0");
+
+        assert!(!in_flight.can_read_owned_pending("orders"));
+    }
 }

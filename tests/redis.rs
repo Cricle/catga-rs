@@ -23,11 +23,11 @@ use catga_flow::{
     FlowState, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_redis::{
-    RedisConfig, RedisDeadLetters, RedisDslStepProgress, RedisEnhancedSnapshots, RedisEventStore,
-    RedisFlowScheduler, RedisIdempotency, RedisInbox, RedisLeases, RedisOutbox,
-    RedisProjectionCheckpoints, RedisPubSubConfig, RedisPubSubTransport, RedisRequestClient,
-    RedisRequestServer, RedisSnapshotStore, RedisSubscriptions, RedisSuspendedFlows,
-    RedisTransport,
+    MAX_REDIS_PENDING_RECLAIM_SCANS, RedisConfig, RedisDeadLetters, RedisDslStepProgress,
+    RedisEnhancedSnapshots, RedisEventStore, RedisFlowScheduler, RedisIdempotency, RedisInbox,
+    RedisLeases, RedisOutbox, RedisPendingReclaimOptions, RedisProjectionCheckpoints,
+    RedisPubSubConfig, RedisPubSubTransport, RedisRequestClient, RedisRequestServer,
+    RedisSnapshotStore, RedisSubscriptions, RedisSuspendedFlows, RedisTransport,
 };
 use redis::AsyncCommands;
 use tokio_util::sync::CancellationToken;
@@ -322,6 +322,159 @@ fn redis_config() -> RedisConfig {
         group: format!("catga:{suffix}").into(),
         consumer: format!("consumer:{suffix}").into(),
     }
+}
+
+#[test]
+fn redis_pending_reclaim_options_reject_zero_idle() {
+    let error = RedisPendingReclaimOptions::new(Duration::ZERO, 1)
+        .expect_err("zero reclaim idle duration must be rejected");
+    assert_eq!(error.code(), ErrorCode::Validation);
+}
+
+#[test]
+fn redis_pending_reclaim_options_bound_scan_work() {
+    for max_scans in [0, MAX_REDIS_PENDING_RECLAIM_SCANS + 1] {
+        let error = RedisPendingReclaimOptions::new(Duration::from_millis(1), max_scans)
+            .expect_err("an unbounded reclaim scan limit must be rejected");
+        assert_eq!(error.code(), ErrorCode::Validation);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_transport_reclaim_fences_a_stale_acknowledgement() -> CatgaResult<()> {
+    let first_config = redis_config();
+    let second_config = RedisConfig {
+        server: first_config.server.clone(),
+        stream: first_config.stream.clone(),
+        group: first_config.group.clone(),
+        consumer: format!(
+            "reclaimer:{}",
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        )
+        .into(),
+    };
+    let reclaim = RedisPendingReclaimOptions::new(Duration::from_millis(1), 1)?;
+    let first = RedisTransport::connect_with_reclaim_options(first_config, reclaim.clone()).await?;
+    let second = RedisTransport::connect_with_reclaim_options(second_config, reclaim).await?;
+    let envelope = Envelope::new(
+        302,
+        "order.reclaim",
+        vec![3, 0, 2],
+        MessageMetadata::new(302, None),
+    );
+
+    first.publish(envelope.clone()).await?;
+    let stale_delivery = first.receive().await?;
+    assert_eq!(stale_delivery.envelope().id(), envelope.id());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let reclaimed = tokio::time::timeout(Duration::from_secs(1), second.receive())
+        .await
+        .map_err(|_| {
+            CatgaError::new(ErrorCode::Timeout, "Redis idle delivery was not reclaimed")
+        })??;
+    assert_eq!(reclaimed.envelope().id(), envelope.id());
+    assert!(reclaimed.attempts() >= 2);
+    let stale_ack = first
+        .ack(stale_delivery)
+        .await
+        .expect_err("a former Redis consumer must not acknowledge a reclaimed delivery");
+    assert_eq!(stale_ack.code(), ErrorCode::Transient);
+    second.ack(reclaimed).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_transport_reclaims_idle_delivery_with_multiple_receivers() -> CatgaResult<()> {
+    let first_config = redis_config();
+    let second_config = RedisConfig {
+        server: first_config.server.clone(),
+        stream: first_config.stream.clone(),
+        group: first_config.group.clone(),
+        consumer: format!(
+            "concurrent-reclaimer:{}",
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        )
+        .into(),
+    };
+    let reclaim = RedisPendingReclaimOptions::new(Duration::from_millis(100), 1)?;
+    let first = RedisTransport::connect_with_reclaim_options(first_config, reclaim.clone()).await?;
+    let second =
+        Arc::new(RedisTransport::connect_with_reclaim_options(second_config, reclaim).await?);
+    let envelope = Envelope::new(
+        303,
+        "order.concurrent-reclaim",
+        vec![3, 0, 3],
+        MessageMetadata::new(303, None),
+    );
+
+    first.publish(envelope.clone()).await?;
+    let abandoned = first.receive().await?;
+    let first_waiter = {
+        let transport = Arc::clone(&second);
+        tokio::spawn(async move { transport.receive().await })
+    };
+    let second_waiter = {
+        let transport = Arc::clone(&second);
+        tokio::spawn(async move { transport.receive().await })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    drop(abandoned);
+    tokio::time::sleep(Duration::from_millis(120)).await;
+
+    let mut first_waiter = first_waiter;
+    let mut second_waiter = second_waiter;
+    let reclaimed = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            result = &mut first_waiter => result.expect("first Redis receiver task must not panic"),
+            result = &mut second_waiter => result.expect("second Redis receiver task must not panic"),
+        }
+    })
+    .await
+    .map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Timeout,
+            "no concurrent Redis receiver reclaimed the idle delivery",
+        )
+    })??;
+    first_waiter.abort();
+    second_waiter.abort();
+    assert_eq!(reclaimed.envelope().id(), envelope.id());
+    second.ack(reclaimed).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_transport_does_not_redeliver_a_local_in_flight_delivery() -> CatgaResult<()> {
+    let transport = RedisTransport::connect(redis_config()).await?;
+    let first_envelope = Envelope::new(
+        304,
+        "order.local-in-flight",
+        vec![3, 0, 4],
+        MessageMetadata::new(304, None),
+    );
+    let second_envelope = Envelope::new(
+        305,
+        "order.next",
+        vec![3, 0, 5],
+        MessageMetadata::new(305, None),
+    );
+
+    transport.publish(first_envelope.clone()).await?;
+    transport.publish(second_envelope.clone()).await?;
+    let first = transport.receive().await?;
+    let second = tokio::time::timeout(Duration::from_secs(1), transport.receive())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "second Redis delivery timed out"))??;
+
+    assert_eq!(first.envelope().id(), first_envelope.id());
+    assert_eq!(second.envelope().id(), second_envelope.id());
+    transport.ack(first).await?;
+    transport.ack(second).await?;
+    Ok(())
 }
 
 #[tokio::test]
