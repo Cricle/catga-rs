@@ -7,7 +7,9 @@ use std::sync::{
 use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
-use catga_codec_postcard::{PostcardCodec, PostcardRpcResponse, PostcardTransport};
+use catga_codec_postcard::{
+    PostcardCodec, PostcardProcessOutcome, PostcardRpcResponse, PostcardTransport,
+};
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, Delivery, DeliveryMode, Destination,
     DestinationTransport, Envelope, EnvelopeCodec, EnvelopeHeaders, ErrorCode, Event, Message,
@@ -662,6 +664,119 @@ async fn typed_postcard_decode_failure_negative_acknowledges_the_delivery() {
     assert_eq!(error.code(), ErrorCode::Validation);
     assert!(!acknowledged.load(Ordering::Acquire));
     assert!(negatively_acknowledged.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn typed_postcard_process_next_acknowledges_a_successful_handler() {
+    let acknowledged = Arc::new(AtomicBool::new(false));
+    let negatively_acknowledged = Arc::new(AtomicBool::new(false));
+    let codec = PostcardCodec;
+    let backend = Arc::new(SingleDeliveryTransport::new(Delivery::with_acknowledger(
+        Envelope::new(
+            46,
+            "best-effort",
+            codec
+                .encode_value(&BestEffortEvent(7))
+                .expect("serializable event"),
+            MessageMetadata::new(46, None),
+        ),
+        Box::new(RecordingAcknowledger {
+            acknowledged: Arc::clone(&acknowledged),
+            negatively_acknowledged: Arc::clone(&negatively_acknowledged),
+        }),
+    )));
+    let ids = Arc::new(
+        SnowflakeIdGenerator::new(1, SnowflakeLayout::default())
+            .expect("valid Snowflake configuration"),
+    );
+    let transport = PostcardTransport::new(backend, ids);
+
+    let outcome = transport
+        .process_next::<BestEffortEvent, _>(|message| {
+            Box::pin(async move {
+                assert_eq!(message.0, 7);
+                Ok(())
+            })
+        })
+        .await
+        .expect("processing succeeds");
+
+    assert_eq!(outcome, PostcardProcessOutcome::Acknowledged);
+    assert!(acknowledged.load(Ordering::Acquire));
+    assert!(!negatively_acknowledged.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn typed_postcard_process_next_returns_a_rejected_business_error_after_nack() {
+    let acknowledged = Arc::new(AtomicBool::new(false));
+    let negatively_acknowledged = Arc::new(AtomicBool::new(false));
+    let codec = PostcardCodec;
+    let backend = Arc::new(SingleDeliveryTransport::new(Delivery::with_acknowledger(
+        Envelope::new(
+            47,
+            "best-effort",
+            codec
+                .encode_value(&BestEffortEvent(8))
+                .expect("serializable event"),
+            MessageMetadata::new(47, None),
+        ),
+        Box::new(RecordingAcknowledger {
+            acknowledged: Arc::clone(&acknowledged),
+            negatively_acknowledged: Arc::clone(&negatively_acknowledged),
+        }),
+    )));
+    let ids = Arc::new(
+        SnowflakeIdGenerator::new(1, SnowflakeLayout::default())
+            .expect("valid Snowflake configuration"),
+    );
+    let transport = PostcardTransport::new(backend, ids);
+
+    let outcome = transport
+        .process_next::<BestEffortEvent, _>(|_| {
+            Box::pin(async { Err(CatgaError::new(ErrorCode::Validation, "business rejection")) })
+        })
+        .await
+        .expect("negative acknowledgement succeeds");
+
+    assert_eq!(
+        outcome,
+        PostcardProcessOutcome::Rejected(CatgaError::new(
+            ErrorCode::Validation,
+            "business rejection",
+        ))
+    );
+    assert!(!acknowledged.load(Ordering::Acquire));
+    assert!(negatively_acknowledged.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn typed_postcard_process_next_from_acknowledges_the_selected_destination() {
+    let backend = Arc::new(MemoryTransport::new(2).expect("valid memory transport"));
+    let destination = Destination::parse("orders").expect("valid destination");
+    backend
+        .declare_destination(destination)
+        .expect("destination is declared");
+    let ids = Arc::new(
+        SnowflakeIdGenerator::new(1, SnowflakeLayout::default())
+            .expect("valid Snowflake configuration"),
+    );
+    let transport = PostcardTransport::new(Arc::clone(&backend), ids);
+    transport
+        .send_to("orders", &BestEffortEvent(9))
+        .await
+        .expect("destination message is sent");
+
+    let outcome = transport
+        .process_next_from::<BestEffortEvent, _>("orders", |message| {
+            Box::pin(async move {
+                assert_eq!(message.0, 9);
+                Ok(())
+            })
+        })
+        .await
+        .expect("destination processing succeeds");
+
+    assert_eq!(outcome, PostcardProcessOutcome::Acknowledged);
 }
 
 #[tokio::test]
