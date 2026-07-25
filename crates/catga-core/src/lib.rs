@@ -30,6 +30,7 @@ mod registry;
 mod reliability;
 mod request_client;
 mod resilience;
+mod retry_jitter;
 mod routing;
 mod security;
 mod snapshot;
@@ -49,12 +50,12 @@ pub use aggregate::{
 pub use auto_snapshot::AutoSnapshotManager;
 pub use behaviors::{
     AuthorizationBehavior, AuthorizationPolicies, AuthorizationPolicy, AutoBatchingBehavior,
-    AutoBatchingRunner, BatchOptions, CircuitBreakerBehavior, CompensationBehavior,
-    CompensationPublisher, CorrelationBehavior, DeadLetterBehavior, DeadLetterEnvelope,
-    DistributedLockBehavior, DistributedLockKey, EventCompensationPublisher, FaultPublisher,
-    FaultPublishingBehavior, IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey,
-    LoggingBehavior, OutboxBehavior, OutboxEnvelope, RetryBehavior, TimeoutBehavior,
-    TracingBehavior, ValidationBehavior, Validator,
+    AutoBatchingRunner, BatchOptions, CircuitBreakerBehavior, CircuitBreakerOptions,
+    CircuitBreakerOptionsBuilder, CompensationBehavior, CompensationPublisher, CorrelationBehavior,
+    DeadLetterBehavior, DeadLetterEnvelope, DistributedLockBehavior, DistributedLockKey,
+    EventCompensationPublisher, FaultPublisher, FaultPublishingBehavior, IdempotencyBehavior,
+    IdempotencyKey, InboxBehavior, InboxKey, LoggingBehavior, OutboxBehavior, OutboxEnvelope,
+    RetryBehavior, TimeoutBehavior, TracingBehavior, ValidationBehavior, Validator,
 };
 pub use cache::CachedResultCodec;
 pub use catga_macros::{Message, catga_handlers};
@@ -81,7 +82,7 @@ pub use lease::LeaseStore;
 pub use lifecycle::{
     AcceptanceGate, AsyncInitializable, AutoRecoveryOptions, HealthCheckable, OperationGuard,
     OperationTracker, RecoverableComponent, RecoveryManager, RecoveryResult, ShutdownCoordinator,
-    Stoppable, Waitable,
+    Stoppable, TransportLifecycle, TransportLifecycleOptions, TransportShutdown, Waitable,
 };
 pub use mediator::{Mediator, MediatorHandle};
 pub use message::{
@@ -103,17 +104,20 @@ pub use read_model::{
 };
 pub use registry::Registry;
 pub use reliability::{
-    DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_INBOX_CLAIM_LEASE, DeadLetter, DeadLetterStore,
-    IdempotencyStore, InboxStore, MAX_RETENTION_CLEANUP_LIMIT, ProcessingState,
+    DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_INBOX_CLAIM_LEASE, DeadLetter, DeadLetterDiagnostics,
+    DeadLetterStore, IdempotencyStore, InboxStore, MAX_DEAD_LETTER_DESCRIPTION_BYTES,
+    MAX_DEAD_LETTER_STAGE_BYTES, MAX_RETENTION_CLEANUP_LIMIT, ProcessingState,
     inbox_claim_expires_at, validate_completed_retention, validate_inbox_claim_lease,
     validate_retention_cleanup_limit,
 };
 pub use request_client::{EnvelopeRequestClient, RemoteRequest, RequestClient, RequestTransport};
 pub use resilience::{ResilienceExecutor, ResilienceOptions};
+pub use retry_jitter::RetryJitter;
 pub use routing::MessageRouter;
 pub use security::{
-    AuthorizationRequirements, AuthorizedRequest, SecurityIdentity, current_security_identity,
-    scope_security_identity,
+    AuthorizationRequirements, AuthorizedRequest, MAX_SECURITY_CLAIM_KEY_BYTES,
+    MAX_SECURITY_CLAIM_VALUE_BYTES, MAX_SECURITY_CLAIMS, SecurityClaim, SecurityClaims,
+    SecurityIdentity, current_security_identity, scope_security_identity,
 };
 pub use snapshot::{EnhancedSnapshotStore, Snapshot, SnapshotInfo, SnapshotStore};
 pub use snapshot_codec::SnapshotCodec;

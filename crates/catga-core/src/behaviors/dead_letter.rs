@@ -38,11 +38,12 @@ where
         match next.run(message).await {
             Err(error) if error.code() != ErrorCode::Transient => {
                 self.store
-                    .enqueue(DeadLetter::new(
+                    .enqueue(DeadLetter::from_failure(
                         original.dead_letter_envelope(),
-                        error.message(),
+                        &error,
                         self.attempts,
-                    ))
+                        "behavior.dead_letter",
+                    )?)
                     .await?;
                 Err(error)
             }

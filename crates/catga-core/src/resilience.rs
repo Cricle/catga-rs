@@ -1,9 +1,10 @@
 //! Explicit, bounded resilience execution for transport and persistence calls.
 
 use std::{
+    collections::VecDeque,
     future::Future,
     sync::{
-        Arc,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -16,7 +17,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    CatgaError, CatgaResult, ErrorCode,
+    CatgaError, CatgaResult, CircuitBreakerOptions, ErrorCode, RetryJitter,
+    retry_jitter::RetryJitterState,
     telemetry::{RESILIENCE_CIRCUIT_OPENED, RESILIENCE_RETRIES},
 };
 
@@ -70,13 +72,10 @@ impl ResilienceOptions {
                 "resilience max_queued requires max_concurrent",
             ));
         }
-        if self.timeout.is_zero()
-            || self.circuit_reset_timeout.is_zero()
-            || self.circuit_failure_threshold == 0
-        {
+        if self.timeout.is_zero() {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
-                "resilience timeout and circuit limits must be positive",
+                "resilience timeout must be positive",
             ));
         }
         Ok(())
@@ -97,18 +96,45 @@ pub struct ResilienceExecutor {
     options: ResilienceOptions,
     permits: Option<Arc<Semaphore>>,
     waiting: AtomicUsize,
+    retry_jitter: RetryJitterState,
     circuit: Circuit,
 }
 
 impl ResilienceExecutor {
     /// Creates an executor after validating admission and timing bounds.
     pub fn new(options: ResilienceOptions) -> CatgaResult<Self> {
+        Self::with_jitter(options, RetryJitter::None)
+    }
+
+    /// Creates an executor with an explicit bounded retry-jitter policy.
+    ///
+    /// [`RetryJitter::None`] preserves the delay behavior of [`Self::new`].
+    pub fn with_jitter(options: ResilienceOptions, retry_jitter: RetryJitter) -> CatgaResult<Self> {
+        let circuit = CircuitBreakerOptions::builder(
+            options.circuit_failure_threshold,
+            options.circuit_reset_timeout,
+        )
+        .build()?;
+        Self::with_policies(options, circuit, retry_jitter)
+    }
+
+    /// Creates an executor with explicit circuit and retry-jitter policies.
+    ///
+    /// The supplied circuit options replace the compatibility circuit fields in
+    /// [`ResilienceOptions`], while admission, timeout, and retry limits still
+    /// come from `options`.
+    pub fn with_policies(
+        options: ResilienceOptions,
+        circuit_options: CircuitBreakerOptions,
+        retry_jitter: RetryJitter,
+    ) -> CatgaResult<Self> {
         options.validate()?;
         Ok(Self {
             permits: (options.max_concurrent != 0)
                 .then(|| Arc::new(Semaphore::new(options.max_concurrent))),
             waiting: AtomicUsize::new(0),
-            circuit: Circuit::new(options),
+            retry_jitter: RetryJitterState::new(retry_jitter),
+            circuit: Circuit::new(circuit_options),
             options,
         })
     }
@@ -196,7 +222,7 @@ impl ResilienceExecutor {
             match result {
                 Err(error) if retry < self.options.max_retries && recoverable(&error) => {
                     metrics::counter!(RESILIENCE_RETRIES).increment(1);
-                    let delay = self.options.retry_delay(retry);
+                    let delay = self.retry_jitter.delay(self.options.retry_delay(retry));
                     if !delay.is_zero() {
                         tokio::select! { _ = cancellation.cancelled() => return Err(cancelled()), _ = sleep(delay) => {} }
                     }
@@ -212,24 +238,28 @@ impl ResilienceExecutor {
 }
 
 struct Circuit {
-    failures: AtomicUsize,
+    outcomes: Mutex<OutcomeWindow>,
     state: AtomicU8,
     opened_at_ns: AtomicU64,
     half_open_probe: AtomicBool,
-    failure_threshold: usize,
+    minimum_throughput: usize,
+    failure_ratio_numerator: u32,
+    failure_ratio_denominator: u32,
     reset_timeout: Duration,
     started_at: Instant,
 }
 
 impl Circuit {
-    fn new(options: ResilienceOptions) -> Self {
+    fn new(options: CircuitBreakerOptions) -> Self {
         Self {
-            failures: AtomicUsize::new(0),
+            outcomes: Mutex::new(OutcomeWindow::new(options.sampling_window())),
             state: AtomicU8::new(CLOSED),
             opened_at_ns: AtomicU64::new(0),
             half_open_probe: AtomicBool::new(false),
-            failure_threshold: options.circuit_failure_threshold,
-            reset_timeout: options.circuit_reset_timeout,
+            minimum_throughput: options.minimum_throughput(),
+            failure_ratio_numerator: options.failure_ratio_numerator(),
+            failure_ratio_denominator: options.failure_ratio_denominator(),
+            reset_timeout: options.reset_timeout(),
             started_at: Instant::now(),
         }
     }
@@ -271,22 +301,38 @@ impl Circuit {
 
     fn complete<T>(&self, probe: bool, result: Result<&T, &CatgaError>) {
         match result {
-            Ok(_) => self.close(),
-            Err(error) if !recoverable(error) => self.close(),
+            Ok(_) => self.record_success(probe),
+            Err(error) if !recoverable(error) && probe => self.record_success(true),
+            Err(error) if !recoverable(error) => {}
             Err(_) if probe => self.open(),
-            Err(_)
-                if self.failures.fetch_add(1, Ordering::AcqRel) + 1 >= self.failure_threshold =>
-            {
-                self.open()
-            }
-            Err(_) => {}
+            Err(_) => self.record_failure(),
         }
     }
 
-    fn close(&self) {
-        self.failures.store(0, Ordering::Release);
-        self.half_open_probe.store(false, Ordering::Release);
-        self.state.store(CLOSED, Ordering::Release);
+    fn record_success(&self, probe: bool) {
+        let mut outcomes = self.lock_outcomes();
+        if probe {
+            outcomes.clear();
+            self.half_open_probe.store(false, Ordering::Release);
+            self.state.store(CLOSED, Ordering::Release);
+        } else {
+            outcomes.push(true);
+        }
+    }
+
+    fn record_failure(&self) {
+        let opens = {
+            let mut outcomes = self.lock_outcomes();
+            outcomes.push(false);
+            outcomes.len() >= self.minimum_throughput
+                && (outcomes.failures() as u128)
+                    .saturating_mul(u128::from(self.failure_ratio_denominator))
+                    >= (outcomes.len() as u128)
+                        .saturating_mul(u128::from(self.failure_ratio_numerator))
+        };
+        if opens {
+            self.open();
+        }
     }
 
     fn open(&self) {
@@ -309,6 +355,52 @@ impl Circuit {
             .elapsed()
             .as_nanos()
             .min(u128::from(u64::MAX)) as u64
+    }
+
+    fn lock_outcomes(&self) -> MutexGuard<'_, OutcomeWindow> {
+        match self.outcomes.lock() {
+            Ok(outcomes) => outcomes,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+struct OutcomeWindow {
+    outcomes: VecDeque<bool>,
+    failures: usize,
+    limit: usize,
+}
+
+impl OutcomeWindow {
+    fn new(limit: usize) -> Self {
+        Self {
+            outcomes: VecDeque::with_capacity(limit),
+            failures: 0,
+            limit,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.outcomes.clear();
+        self.failures = 0;
+    }
+
+    fn push(&mut self, success: bool) {
+        if self.outcomes.len() == self.limit && self.outcomes.pop_front() == Some(false) {
+            self.failures = self.failures.saturating_sub(1);
+        }
+        if !success {
+            self.failures = self.failures.saturating_add(1);
+        }
+        self.outcomes.push_back(success);
+    }
+
+    fn len(&self) -> usize {
+        self.outcomes.len()
+    }
+
+    fn failures(&self) -> usize {
+        self.failures
     }
 }
 

@@ -5,8 +5,11 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{DslFlow, DslStateCodec, DslStepProgress, DslStepProgressStore};
+use catga_flow::{
+    DslFlow, DslFlowLifecycleHooks, DslStateCodec, DslStepProgress, DslStepProgressStore,
+};
 use catga_memory::MemoryDslStepProgress;
 
 #[path = "dsl_progress_contract.rs"]
@@ -45,6 +48,36 @@ impl DslStateCodec<u32> for U32Codec {
             .try_into()
             .map(u32::from_be_bytes)
             .map_err(|_| CatgaError::new(ErrorCode::Internal, "bad checkpoint"))
+    }
+}
+
+struct FailFirstCreateProgressStore {
+    inner: MemoryDslStepProgress,
+    creates: AtomicUsize,
+}
+
+#[async_trait]
+impl DslStepProgressStore for FailFirstCreateProgressStore {
+    async fn create(&self, progress: DslStepProgress) -> CatgaResult<bool> {
+        if self.creates.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Unavailable,
+                "progress unavailable",
+            ));
+        }
+        self.inner.create(progress).await
+    }
+
+    async fn update(&self, expected_version: i64, next: DslStepProgress) -> CatgaResult<bool> {
+        self.inner.update(expected_version, next).await
+    }
+
+    async fn get(&self, flow_id: &str, step_index: u32) -> CatgaResult<Option<DslStepProgress>> {
+        self.inner.get(flow_id, step_index).await
+    }
+
+    async fn delete(&self, flow_id: &str, step_index: u32) -> CatgaResult<bool> {
+        self.inner.delete(flow_id, step_index).await
     }
 }
 
@@ -114,6 +147,55 @@ async fn checkpointed_dsl_saves_only_successful_top_level_steps() {
         1_u32.to_be_bytes()
     );
     assert!(store.get("payment/7", 1).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn checkpointed_dsl_runs_success_hook_before_persist_and_retries_it_after_persist_failure() {
+    let store = FailFirstCreateProgressStore {
+        inner: MemoryDslStepProgress::default(),
+        creates: AtomicUsize::new(0),
+    };
+    let hook_count = Arc::new(AtomicUsize::new(0));
+    let action_count = Arc::new(AtomicUsize::new(0));
+    let hook_count_for_hook = Arc::clone(&hook_count);
+    let action_count_for_action = Arc::clone(&action_count);
+    let flow = DslFlow::new()
+        .with_lifecycle_hooks(DslFlowLifecycleHooks::new().on_step_succeeded(
+            move |state: &u32, step_index| {
+                let hook_count = Arc::clone(&hook_count_for_hook);
+                Box::pin(async move {
+                    assert_eq!(step_index, 0);
+                    assert_eq!(*state, 1);
+                    hook_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            },
+        ))
+        .action(move |value: &mut u32| {
+            let action_count = Arc::clone(&action_count_for_action);
+            Box::pin(async move {
+                action_count.fetch_add(1, Ordering::SeqCst);
+                *value += 1;
+                Ok(())
+            })
+        });
+
+    assert_eq!(
+        flow.run_checkpointed("payment/hooks-before-persist", 0, &store, &U32Codec)
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::Unavailable
+    );
+    assert_eq!(hook_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        flow.run_checkpointed("payment/hooks-before-persist", 0, &store, &U32Codec)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(action_count.load(Ordering::SeqCst), 2);
+    assert_eq!(hook_count.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

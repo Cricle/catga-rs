@@ -2,7 +2,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use catga_core::{CatgaError, ErrorCode, ResilienceExecutor, ResilienceOptions};
+use catga_core::{
+    CatgaError, CircuitBreakerOptions, ErrorCode, ResilienceExecutor, ResilienceOptions,
+    RetryJitter,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -16,6 +19,49 @@ fn options() -> ResilienceOptions {
         circuit_failure_threshold: 2,
         circuit_reset_timeout: Duration::from_secs(1),
     }
+}
+
+#[test]
+fn jitter_is_bounded_and_fixed_jitter_is_predictable() {
+    let base = Duration::from_millis(100);
+    let full = RetryJitter::full(17);
+
+    assert_eq!(full.delay_for_sample(base, 0), Duration::ZERO);
+    assert_eq!(full.delay_for_sample(base, u64::MAX), base);
+    assert!(full.delay_for_sample(base, 7).as_nanos() <= base.as_nanos());
+    assert_eq!(
+        RetryJitter::fixed(Duration::from_millis(7)).delay_for_sample(base, 99),
+        Duration::from_millis(7)
+    );
+}
+
+#[tokio::test]
+async fn executor_uses_injected_fixed_jitter_without_blocking_a_runtime_thread() {
+    let mut configured = options();
+    configured.retry_delay = Duration::from_secs(1);
+    let executor = ResilienceExecutor::with_jitter(configured, RetryJitter::fixed(Duration::ZERO))
+        .expect("valid fixed-jitter executor");
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let retry_attempts = Arc::clone(&attempts);
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        executor.execute(CancellationToken::new(), move |_| {
+            let attempts = Arc::clone(&retry_attempts);
+            async move {
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    Err(CatgaError::new(ErrorCode::Transient, "retry me"))
+                } else {
+                    Ok(42_u8)
+                }
+            }
+        }),
+    )
+    .await
+    .expect("fixed zero jitter avoids the one-second base delay");
+
+    assert_eq!(result, Ok(42));
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 2);
 }
 
 #[tokio::test]
@@ -127,5 +173,47 @@ async fn executor_cancels_timed_out_attempts_and_opens_after_failed_operations()
         })
         .await
         .expect_err("open circuit rejects before calling the operation");
+    assert_eq!(rejected.code(), ErrorCode::Transient);
+}
+
+#[tokio::test]
+async fn executor_circuit_uses_failure_ratio_after_minimum_throughput() {
+    let circuit = CircuitBreakerOptions::builder(2, Duration::from_secs(1))
+        .sampling_window(4)
+        .minimum_throughput(4)
+        .failure_ratio(1, 2)
+        .build()
+        .expect("valid circuit options");
+    let executor =
+        ResilienceExecutor::with_policies(options(), circuit, RetryJitter::fixed(Duration::ZERO))
+            .expect("valid resilience policies");
+    let outcomes = [true, false, true, true];
+
+    for fails in outcomes {
+        let result = executor
+            .execute(CancellationToken::new(), move |_| async move {
+                if fails {
+                    Err(CatgaError::new(ErrorCode::Transient, "backend unavailable"))
+                } else {
+                    Ok(())
+                }
+            })
+            .await;
+        if fails {
+            assert_eq!(
+                result.expect_err("transient failure").code(),
+                ErrorCode::Transient
+            );
+        } else {
+            assert_eq!(result, Ok(()));
+        }
+    }
+
+    let rejected = executor
+        .execute(CancellationToken::new(), |_| async {
+            Ok::<(), CatgaError>(())
+        })
+        .await
+        .expect_err("three failures from four outcomes open the circuit");
     assert_eq!(rejected.code(), ErrorCode::Transient);
 }

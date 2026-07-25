@@ -12,8 +12,8 @@ use catga_core::{
     RequestClient,
 };
 use catga_flow::{
-    DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleObserver, Flow, FlowTagPolicy, FlowThrottle,
-    dsl_action, dsl_each_action,
+    DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver, Flow,
+    FlowTagPolicy, FlowThrottle, dsl_action, dsl_each_action,
 };
 use futures::{StreamExt, stream};
 use metrics::{
@@ -251,6 +251,22 @@ impl DslFlowLifecycleObserver for RecordedDslLifecycle {
     }
 }
 
+struct TracingDslLifecycleObserver {
+    trace: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl DslFlowLifecycleObserver for TracingDslLifecycleObserver {
+    fn observe(&self, event: &DslFlowLifecycleEvent) {
+        let event = match event {
+            DslFlowLifecycleEvent::StepSucceeded { .. } => "observer-step-succeeded",
+            DslFlowLifecycleEvent::StepFailed { .. } => "observer-step-failed",
+            DslFlowLifecycleEvent::FlowSucceeded => "observer-flow-succeeded",
+            DslFlowLifecycleEvent::FlowFailed { .. } => "observer-flow-failed",
+        };
+        self.trace.lock().expect("lifecycle trace lock").push(event);
+    }
+}
+
 #[tokio::test]
 async fn dsl_flow_notifies_configured_lifecycle_observer_for_step_and_flow_outcomes() {
     let observer = Arc::new(RecordedDslLifecycle::default());
@@ -274,6 +290,254 @@ async fn dsl_flow_notifies_configured_lifecycle_observer_for_step_and_flow_outco
     assert_eq!(
         *observer.events.lock().expect("lifecycle test lock"),
         ["step-succeeded", "step-failed", "flow-failed"]
+    );
+}
+
+#[tokio::test]
+async fn dsl_flow_awaits_step_succeeded_hook_after_synchronous_observer() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::new(TracingDslLifecycleObserver {
+        trace: Arc::clone(&trace),
+    });
+    let hook_trace = Arc::clone(&trace);
+    let flow_hook_trace = Arc::clone(&trace);
+    let action_trace = Arc::clone(&trace);
+    let flow = DslFlow::new()
+        .with_lifecycle_observer(observer)
+        .with_lifecycle_hooks(
+            DslFlowLifecycleHooks::new()
+                .on_step_succeeded(move |state: &u32, step_index| {
+                    let hook_trace = Arc::clone(&hook_trace);
+                    Box::pin(async move {
+                        assert_eq!(step_index, 0);
+                        assert_eq!(*state, 1);
+                        hook_trace
+                            .lock()
+                            .expect("lifecycle trace lock")
+                            .push("hook-step-succeeded");
+                        Ok(())
+                    })
+                })
+                .on_flow_succeeded(move |_: &u32| {
+                    let flow_hook_trace = Arc::clone(&flow_hook_trace);
+                    Box::pin(async move {
+                        flow_hook_trace
+                            .lock()
+                            .expect("lifecycle trace lock")
+                            .push("hook-flow-succeeded");
+                        Ok(())
+                    })
+                }),
+        )
+        .action(move |state: &mut u32| {
+            let action_trace = Arc::clone(&action_trace);
+            Box::pin(async move {
+                *state = 1;
+                action_trace
+                    .lock()
+                    .expect("lifecycle trace lock")
+                    .push("action");
+                Ok(())
+            })
+        });
+
+    flow.run(&mut 0).await.unwrap();
+
+    assert_eq!(
+        *trace.lock().expect("lifecycle trace lock"),
+        [
+            "action",
+            "observer-step-succeeded",
+            "hook-step-succeeded",
+            "observer-flow-succeeded",
+            "hook-flow-succeeded",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn dsl_flow_runs_failure_hooks_after_observers_in_order() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::new(TracingDslLifecycleObserver {
+        trace: Arc::clone(&trace),
+    });
+    let step_hook_trace = Arc::clone(&trace);
+    let flow_hook_trace = Arc::clone(&trace);
+    let flow_failed_hook_trace = Arc::clone(&trace);
+    let first_action_trace = Arc::clone(&trace);
+    let second_action_trace = Arc::clone(&trace);
+    let flow = DslFlow::new()
+        .with_lifecycle_observer(observer)
+        .with_lifecycle_hooks(
+            DslFlowLifecycleHooks::new()
+                .on_step_succeeded(move |_: &(), _| {
+                    let trace = Arc::clone(&step_hook_trace);
+                    Box::pin(async move {
+                        trace
+                            .lock()
+                            .expect("lifecycle trace lock")
+                            .push("hook-step-succeeded");
+                        Ok(())
+                    })
+                })
+                .on_step_failed(move |_: &(), _, _| {
+                    let trace = Arc::clone(&flow_hook_trace);
+                    Box::pin(async move {
+                        trace
+                            .lock()
+                            .expect("lifecycle trace lock")
+                            .push("hook-step-failed");
+                        Ok(())
+                    })
+                })
+                .on_flow_failed(move |_: &(), _| {
+                    let trace = Arc::clone(&flow_failed_hook_trace);
+                    Box::pin(async move {
+                        trace
+                            .lock()
+                            .expect("lifecycle trace lock")
+                            .push("hook-flow-failed");
+                        Ok(())
+                    })
+                }),
+        )
+        .action(move |_: &mut ()| {
+            let trace = Arc::clone(&first_action_trace);
+            Box::pin(async move {
+                trace.lock().expect("lifecycle trace lock").push("first");
+                Ok(())
+            })
+        })
+        .action(move |_: &mut ()| {
+            let trace = Arc::clone(&second_action_trace);
+            Box::pin(async move {
+                trace.lock().expect("lifecycle trace lock").push("second");
+                Err(CatgaError::new(ErrorCode::Validation, "declined"))
+            })
+        });
+
+    assert_eq!(
+        flow.run(&mut ()).await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(
+        *trace.lock().expect("lifecycle trace lock"),
+        [
+            "first",
+            "observer-step-succeeded",
+            "hook-step-succeeded",
+            "second",
+            "observer-step-failed",
+            "hook-step-failed",
+            "observer-flow-failed",
+            "hook-flow-failed",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn dsl_flow_hook_error_short_circuits_following_steps_and_failure_events() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let hook_trace = Arc::clone(&trace);
+    let second_action_trace = Arc::clone(&trace);
+    let flow = DslFlow::new()
+        .with_lifecycle_hooks(
+            DslFlowLifecycleHooks::new()
+                .on_step_succeeded(move |_: &(), _| {
+                    let trace = Arc::clone(&hook_trace);
+                    Box::pin(async move {
+                        trace.lock().expect("lifecycle trace lock").push("hook");
+                        Err(CatgaError::new(ErrorCode::Unavailable, "hook unavailable"))
+                    })
+                })
+                .on_flow_failed(move |_: &(), _| {
+                    Box::pin(async move {
+                        panic!("a succeeded hook failure must not become a flow failure")
+                    })
+                }),
+        )
+        .action(|_: &mut ()| Box::pin(async move { Ok(()) }))
+        .action(move |_: &mut ()| {
+            let trace = Arc::clone(&second_action_trace);
+            Box::pin(async move {
+                trace.lock().expect("lifecycle trace lock").push("second");
+                Ok(())
+            })
+        });
+
+    let error = flow.run(&mut ()).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Unavailable);
+    assert_eq!(error.message(), "hook unavailable");
+    assert_eq!(*trace.lock().expect("lifecycle trace lock"), ["hook"]);
+}
+
+#[tokio::test]
+async fn dsl_flow_failed_step_hook_error_skips_flow_failed_hook() {
+    let flow = DslFlow::new()
+        .with_lifecycle_hooks(
+            DslFlowLifecycleHooks::new()
+                .on_step_failed(|_: &(), _, _| {
+                    Box::pin(async move {
+                        Err(CatgaError::new(ErrorCode::Unavailable, "hook unavailable"))
+                    })
+                })
+                .on_flow_failed(|_: &(), _| {
+                    Box::pin(async move {
+                        panic!("a failed-step hook error must skip the flow-failed hook")
+                    })
+                }),
+        )
+        .action(|_: &mut ()| {
+            Box::pin(async move { Err(CatgaError::new(ErrorCode::Validation, "declined")) })
+        });
+
+    let error = flow.run(&mut ()).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Unavailable);
+    assert_eq!(error.message(), "hook unavailable");
+}
+
+#[tokio::test]
+async fn dsl_flow_emits_hooks_only_for_its_top_level_steps() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let step_hook_trace = Arc::clone(&trace);
+    let flow_hook_trace = Arc::clone(&trace);
+    let flow = DslFlow::new()
+        .with_lifecycle_hooks(
+            DslFlowLifecycleHooks::new()
+                .on_step_succeeded(move |_: &(), step_index| {
+                    let trace = Arc::clone(&step_hook_trace);
+                    Box::pin(async move {
+                        trace
+                            .lock()
+                            .expect("lifecycle trace lock")
+                            .push(match step_index {
+                                0 => "top-level-step",
+                                _ => "unexpected-step",
+                            });
+                        Ok(())
+                    })
+                })
+                .on_flow_succeeded(move |_: &()| {
+                    let trace = Arc::clone(&flow_hook_trace);
+                    Box::pin(async move {
+                        trace.lock().expect("lifecycle trace lock").push("flow");
+                        Ok(())
+                    })
+                }),
+        )
+        .if_else(
+            |_| true,
+            DslFlow::new().action(|_: &mut ()| Box::pin(async move { Ok(()) })),
+            DslFlow::new(),
+        );
+
+    flow.run(&mut ()).await.unwrap();
+
+    assert_eq!(
+        *trace.lock().expect("lifecycle trace lock"),
+        ["top-level-step", "flow"]
     );
 }
 

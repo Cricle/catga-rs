@@ -17,7 +17,9 @@ mod validation;
 
 pub use authorization::{AuthorizationBehavior, AuthorizationPolicies, AuthorizationPolicy};
 pub use auto_batching::{AutoBatchingBehavior, AutoBatchingRunner, BatchOptions};
-pub use circuit_breaker::CircuitBreakerBehavior;
+pub use circuit_breaker::{
+    CircuitBreakerBehavior, CircuitBreakerOptions, CircuitBreakerOptionsBuilder,
+};
 pub use compensation::{CompensationBehavior, CompensationPublisher, EventCompensationPublisher};
 pub use correlation::CorrelationBehavior;
 pub use dead_letter::{DeadLetterBehavior, DeadLetterEnvelope};

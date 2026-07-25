@@ -97,6 +97,148 @@ pub trait Waitable: Send + Sync {
     fn pending_operations(&self) -> usize;
 }
 
+/// Options that bound the drain phase of [`TransportLifecycle::shutdown`].
+///
+/// The timeout limits only how long the coordinator waits for work that was accepted before
+/// shutdown. It never cancels or discards that work; a transport remains responsible for the
+/// cancellation behavior documented by [`Waitable`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransportLifecycleOptions {
+    /// Maximum time to wait for accepted work to drain after new work is rejected.
+    pub drain_timeout: Duration,
+}
+
+impl Default for TransportLifecycleOptions {
+    fn default() -> Self {
+        Self {
+            drain_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+impl TransportLifecycleOptions {
+    /// Creates options with a non-zero drain timeout.
+    pub fn new(drain_timeout: Duration) -> CatgaResult<Self> {
+        let options = Self { drain_timeout };
+        options.validate()?;
+        Ok(options)
+    }
+
+    fn validate(self) -> CatgaResult<()> {
+        if self.drain_timeout.is_zero() {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "transport drain_timeout must be greater than zero",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Result of a [`TransportLifecycle`] shutdown drain attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportShutdown {
+    /// Every operation accepted before shutdown completed before the timeout.
+    Drained,
+    /// The caller cancelled the drain wait; accepted work is not modified by the coordinator.
+    Cancelled {
+        /// The transport-reported number of operations still in flight.
+        pending_operations: usize,
+    },
+    /// The configured drain timeout elapsed; accepted work is not modified by the coordinator.
+    TimedOut {
+        /// The transport-reported number of operations still in flight.
+        pending_operations: usize,
+    },
+}
+
+/// Owns the lifecycle of one transport without a framework host or background task.
+///
+/// Call [`Self::initialize`] during startup. [`Self::shutdown`] then consumes this coordinator,
+/// stops new work, waits for the bounded drain, and releases the owned transport before returning.
+/// Consuming ownership is Rust's disposal boundary: transports release resources through `Drop`,
+/// so no .NET-style disposal interface or service container is needed. A transport needing an
+/// asynchronous protocol-level close should perform it as part of [`Waitable::wait_for_completion`].
+pub struct TransportLifecycle<T> {
+    transport: T,
+}
+
+impl<T> TransportLifecycle<T> {
+    /// Wraps a transport whose startup and shutdown are managed by this value.
+    pub const fn new(transport: T) -> Self {
+        Self { transport }
+    }
+
+    /// Returns the managed transport for read-only configuration or observability.
+    pub const fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    /// Returns mutable access to the managed transport before shutdown begins.
+    pub fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
+    }
+
+    /// Consumes the coordinator without stopping or draining the transport.
+    ///
+    /// Prefer [`Self::shutdown`] in normal runtime teardown paths.
+    pub fn into_inner(self) -> T {
+        self.transport
+    }
+}
+
+impl<T> TransportLifecycle<T>
+where
+    T: AsyncInitializable,
+{
+    /// Initializes the managed transport in the caller's task.
+    ///
+    /// This method does not spawn work. Initialization errors are returned unchanged and leave
+    /// ownership with the coordinator, allowing the caller to select its own retry policy.
+    pub async fn initialize(&self) -> CatgaResult<()> {
+        self.transport.initialize().await
+    }
+}
+
+impl<T> TransportLifecycle<T>
+where
+    T: Stoppable + Waitable,
+{
+    /// Stops accepting work, waits for the configured bounded drain, then releases the transport.
+    ///
+    /// The coordinator allocates no task and polls exactly one drain future. `cancellation` and
+    /// `drain_timeout` stop only the wait. In all outcomes the transport is dropped before this
+    /// method returns, so callers cannot accidentally reuse a transport after shutdown.
+    pub async fn shutdown(
+        self,
+        options: TransportLifecycleOptions,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<TransportShutdown> {
+        options.validate()?;
+        let transport = self.transport;
+        transport.stop_accepting();
+
+        let outcome = {
+            let drain = transport.wait_for_completion(cancellation.clone());
+            tokio::pin!(drain);
+            tokio::select! {
+                _ = cancellation.cancelled() => Ok(TransportShutdown::Cancelled {
+                    pending_operations: transport.pending_operations(),
+                }),
+                result = &mut drain => {
+                    result?;
+                    Ok(TransportShutdown::Drained)
+                },
+                _ = tokio::time::sleep(options.drain_timeout) => Ok(TransportShutdown::TimedOut {
+                    pending_operations: transport.pending_operations(),
+                }),
+            }
+        };
+        drop(transport);
+        outcome
+    }
+}
+
 /// Lock-free accounting for operations that must drain before shutdown.
 ///
 /// Call [`Self::begin_operation`] when an operation becomes visible to a caller and retain the

@@ -6,7 +6,12 @@ use async_nats::jetstream::{
 };
 use async_trait::async_trait;
 use catga_codec_postcard::PostcardCodec;
-use catga_core::{CatgaError, CatgaResult, DeadLetter, DeadLetterStore, EnvelopeCodec, ErrorCode};
+use catga_core::{
+    CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore, EnvelopeCodec,
+    ErrorCode,
+};
+
+const DIAGNOSTICS_MAGIC: &[u8; 4] = b"DLQ2";
 
 /// JetStream append-only dead-letter store.
 pub struct NatsDeadLetters {
@@ -90,24 +95,51 @@ impl DeadLetterStore for NatsDeadLetters {
 fn encode(codec: &PostcardCodec, letter: &DeadLetter) -> CatgaResult<Vec<u8>> {
     let envelope = codec.encode(letter.envelope())?;
     let reason = letter.reason().as_bytes();
+    let diagnostics = letter.diagnostics();
+    let error_code = diagnostics.error_code().as_stable_str().as_bytes();
+    let stage = diagnostics.stage().as_bytes();
+    let reason_len = u32::try_from(reason.len()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "NATS dead-letter reason exceeds wire limits",
+        )
+    })?;
+    let envelope_len = u32::try_from(envelope.len()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "NATS dead-letter envelope exceeds wire limits",
+        )
+    })?;
+    let error_code_len = u8::try_from(error_code.len()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "NATS dead-letter error code exceeds wire limits",
+        )
+    })?;
+    let stage_len = u8::try_from(stage.len()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "NATS dead-letter stage exceeds wire limits",
+        )
+    })?;
     let mut value = Vec::with_capacity(
-        12usize
+        26usize
             .saturating_add(reason.len())
-            .saturating_add(envelope.len()),
+            .saturating_add(envelope.len())
+            .saturating_add(error_code.len())
+            .saturating_add(stage.len()),
     );
     value.extend_from_slice(&letter.attempts().to_be_bytes());
-    value.extend_from_slice(
-        &u32::try_from(reason.len())
-            .unwrap_or(u32::MAX)
-            .to_be_bytes(),
-    );
-    value.extend_from_slice(
-        &u32::try_from(envelope.len())
-            .unwrap_or(u32::MAX)
-            .to_be_bytes(),
-    );
+    value.extend_from_slice(&reason_len.to_be_bytes());
+    value.extend_from_slice(&envelope_len.to_be_bytes());
     value.extend_from_slice(reason);
     value.extend_from_slice(&envelope);
+    value.extend_from_slice(DIAGNOSTICS_MAGIC);
+    value.extend_from_slice(&diagnostics.failed_at_unix_ms().to_be_bytes());
+    value.push(error_code_len);
+    value.push(stage_len);
+    value.extend_from_slice(error_code);
+    value.extend_from_slice(stage);
     Ok(value)
 }
 fn decode(codec: &PostcardCodec, value: &[u8]) -> CatgaResult<DeadLetter> {
@@ -126,7 +158,7 @@ fn decode(codec: &PostcardCodec, value: &[u8]) -> CatgaResult<DeadLetter> {
     let reason_len = usize::try_from(u32::from_be_bytes(value[4..8].try_into().map_err(
         |_| CatgaError::new(ErrorCode::Internal, "NATS dead-letter reason is malformed"),
     )?))
-    .unwrap_or(usize::MAX);
+    .map_err(|_| CatgaError::new(ErrorCode::Internal, "NATS dead-letter reason is too large"))?;
     let envelope_len = usize::try_from(u32::from_be_bytes(value[8..12].try_into().map_err(
         |_| {
             CatgaError::new(
@@ -135,25 +167,146 @@ fn decode(codec: &PostcardCodec, value: &[u8]) -> CatgaResult<DeadLetter> {
             )
         },
     )?))
-    .unwrap_or(usize::MAX);
+    .map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "NATS dead-letter envelope is too large",
+        )
+    })?;
     let end = 12usize
         .checked_add(reason_len)
         .and_then(|n| n.checked_add(envelope_len))
         .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "NATS dead-letter lengths overflow"))?;
-    if end != value.len() {
+    if end > value.len() {
         return Err(CatgaError::new(
             ErrorCode::Internal,
             "NATS dead-letter lengths are malformed",
         ));
     }
     let reason = std::str::from_utf8(&value[12..12 + reason_len])
-        .map_err(|e| CatgaError::new(ErrorCode::Internal, e.to_string()))?;
-    Ok(DeadLetter::new(
-        codec.decode(&value[12 + reason_len..])?,
+        .map_err(|_| CatgaError::new(ErrorCode::Internal, "NATS dead-letter reason is invalid"))?;
+    if end == value.len() {
+        return Ok(DeadLetter::new(
+            codec.decode(&value[12 + reason_len..end])?,
+            reason,
+            attempts,
+        ));
+    }
+    let diagnostics = &value[end..];
+    if diagnostics.len() < 14 || &diagnostics[..4] != DIAGNOSTICS_MAGIC {
+        return Err(CatgaError::new(
+            ErrorCode::Internal,
+            "NATS dead-letter diagnostics are malformed",
+        ));
+    }
+    let failed_at_unix_ms = u64::from_be_bytes(diagnostics[4..12].try_into().map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "NATS dead-letter failure time is malformed",
+        )
+    })?);
+    let error_code_len = usize::from(diagnostics[12]);
+    let stage_len = usize::from(diagnostics[13]);
+    let diagnostics_end = 14usize
+        .checked_add(error_code_len)
+        .and_then(|length| length.checked_add(stage_len))
+        .ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "NATS dead-letter diagnostics overflow")
+        })?;
+    if diagnostics_end != diagnostics.len() {
+        return Err(CatgaError::new(
+            ErrorCode::Internal,
+            "NATS dead-letter diagnostics lengths are malformed",
+        ));
+    }
+    let error_code = std::str::from_utf8(&diagnostics[14..14 + error_code_len]).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "NATS dead-letter error code is invalid",
+        )
+    })?;
+    let error_code = ErrorCode::from_stable_str(error_code).ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "NATS dead-letter error code is unknown",
+        )
+    })?;
+    let stage = std::str::from_utf8(&diagnostics[14 + error_code_len..])
+        .map_err(|_| CatgaError::new(ErrorCode::Internal, "NATS dead-letter stage is invalid"))?;
+    let diagnostics =
+        DeadLetterDiagnostics::try_at(failed_at_unix_ms, error_code, stage).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "NATS dead-letter diagnostics are invalid",
+            )
+        })?;
+    DeadLetter::try_with_diagnostics(
+        codec.decode(&value[12 + reason_len..end])?,
         reason,
         attempts,
-    ))
+        diagnostics,
+    )
 }
 fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode, encode};
+    use catga_codec_postcard::PostcardCodec;
+    use catga_core::{
+        DeadLetter, DeadLetterDiagnostics, Envelope, EnvelopeCodec, ErrorCode, MessageMetadata,
+    };
+
+    fn envelope() -> Envelope {
+        Envelope::new(
+            9,
+            "tests.dead-letter",
+            vec![7],
+            MessageMetadata::new(9, None),
+        )
+    }
+
+    #[test]
+    fn nats_dead_letter_wire_round_trips_diagnostics() -> catga_core::CatgaResult<()> {
+        let codec = PostcardCodec;
+        let diagnostics =
+            DeadLetterDiagnostics::try_at(123, ErrorCode::Timeout, "consumer.handle")?;
+        let letter = DeadLetter::try_with_diagnostics(envelope(), "expired", 2, diagnostics)?;
+
+        assert_eq!(decode(&codec, &encode(&codec, &letter)?)?, letter);
+        Ok(())
+    }
+
+    #[test]
+    fn nats_dead_letter_wire_decodes_legacy_records() -> catga_core::CatgaResult<()> {
+        let codec = PostcardCodec;
+        let payload = codec.encode(&envelope())?;
+        let reason = b"old failure";
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(&4u32.to_be_bytes());
+        legacy.extend_from_slice(
+            &u32::try_from(reason.len())
+                .map_err(|_| {
+                    catga_core::CatgaError::new(ErrorCode::Internal, "test reason is too large")
+                })?
+                .to_be_bytes(),
+        );
+        legacy.extend_from_slice(
+            &u32::try_from(payload.len())
+                .map_err(|_| {
+                    catga_core::CatgaError::new(ErrorCode::Internal, "test payload is too large")
+                })?
+                .to_be_bytes(),
+        );
+        legacy.extend_from_slice(reason);
+        legacy.extend_from_slice(&payload);
+
+        let letter = decode(&codec, &legacy)?;
+        assert_eq!(letter.reason(), "old failure");
+        assert_eq!(letter.diagnostics().stage(), "legacy");
+        assert_eq!(letter.diagnostics().failed_at_unix_ms(), 0);
+        Ok(())
+    }
 }

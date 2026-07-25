@@ -3,21 +3,33 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::{
-    Behavior, CatgaError, CatgaResult, ErrorCode, Next, Request, telemetry::RESILIENCE_RETRIES,
+    Behavior, CatgaError, CatgaResult, ErrorCode, Next, Request, RetryJitter,
+    retry_jitter::RetryJitterState, telemetry::RESILIENCE_RETRIES,
 };
 
 /// Retries transient request failures with bounded exponential backoff.
 pub struct RetryBehavior {
     max_retries: usize,
     initial_delay: Duration,
+    jitter: RetryJitterState,
 }
 
 impl RetryBehavior {
     /// Creates a retry behavior with at most `max_retries` additional attempts.
     pub const fn new(max_retries: usize, initial_delay: Duration) -> Self {
+        Self::with_jitter(max_retries, initial_delay, RetryJitter::None)
+    }
+
+    /// Creates a retry behavior with an explicit bounded jitter policy.
+    pub const fn with_jitter(
+        max_retries: usize,
+        initial_delay: Duration,
+        jitter: RetryJitter,
+    ) -> Self {
         Self {
             max_retries,
             initial_delay,
+            jitter: RetryJitterState::new(jitter),
         }
     }
 
@@ -26,7 +38,8 @@ impl RetryBehavior {
             .ok()
             .and_then(|retry| 1_u32.checked_shl(retry))
             .unwrap_or(u32::MAX);
-        self.initial_delay.saturating_mul(multiplier)
+        self.jitter
+            .delay(self.initial_delay.saturating_mul(multiplier))
     }
 }
 

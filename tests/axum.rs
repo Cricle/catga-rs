@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
+    extract::{Path, State},
     http::{HeaderMap, Request as AxumRequest, StatusCode, header::LOCATION},
     middleware,
     response::IntoResponse,
@@ -17,10 +18,10 @@ use axum::{
 };
 use catga_axum::{
     CORRELATION_ID_HEADER, CatgaHttpError, EndpointKind, EndpointMetadata, EndpointValidation,
-    HttpClusterForwarder, HttpRaftTransport, IntoCatgaHttpResponse, catga_endpoint_metadata,
-    catga_routes, correlation_id, correlation_middleware, endpoint_panic_middleware, event_route,
-    leader_forward_route, mediator_route, propagate_correlation_header, raft_message_route,
-    validate_min_length, validate_required,
+    HttpClusterForwarder, HttpRaftTransport, IntoCatgaHttpResponse, axum_routes,
+    catga_endpoint_metadata, catga_routes, correlation_id, correlation_middleware,
+    endpoint_panic_middleware, event_route, leader_forward_route, mediator_route,
+    propagate_correlation_header, raft_message_route, validate_min_length, validate_required,
 };
 use catga_cluster::{ClusterForwarder, RaftMember, RaftMessage, RaftTransport};
 use catga_core::{
@@ -608,6 +609,144 @@ async fn catga_routes_registers_explicit_http_methods_and_metadata() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(captured.load(Ordering::Relaxed), 24);
+}
+
+#[derive(Clone)]
+struct StaticRouteState {
+    prefix: &'static str,
+}
+
+#[derive(Deserialize, Serialize)]
+struct StaticRoutePayload {
+    value: u32,
+}
+
+#[derive(Deserialize, Serialize)]
+struct StaticRouteResponse {
+    value: u32,
+    source: String,
+}
+
+async fn static_axum_handler_with_extractors(
+    State(state): State<StaticRouteState>,
+    Path(id): Path<u32>,
+    headers: HeaderMap,
+    Json(payload): Json<StaticRoutePayload>,
+) -> (StatusCode, Json<StaticRouteResponse>) {
+    let source = headers
+        .get("x-source")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown");
+
+    (
+        StatusCode::CREATED,
+        Json(StaticRouteResponse {
+            value: payload.value + id,
+            source: format!("{}-{source}", state.prefix),
+        }),
+    )
+}
+
+async fn static_axum_get_handler() -> &'static str {
+    "get"
+}
+
+async fn static_axum_post_handler() -> StatusCode {
+    StatusCode::ACCEPTED
+}
+
+async fn static_axum_patch_handler() -> Json<StaticRoutePayload> {
+    Json(StaticRoutePayload { value: 7 })
+}
+
+async fn static_axum_delete_handler() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+#[tokio::test]
+async fn axum_routes_registers_native_handlers_with_extractors_methods_and_closures() {
+    let closure_prefix = "closure";
+    let app = axum_routes! {
+        Router::<StaticRouteState>::new();
+        GET "/native/get" => static_axum_get_handler,
+        POST "/native/post" => static_axum_post_handler,
+        PUT "/native/users/{id}" => static_axum_handler_with_extractors,
+        PATCH "/native/patch" => static_axum_patch_handler,
+        DELETE "/native/delete" => static_axum_delete_handler,
+        GET "/native/closure/{id}" => move |Path(id): Path<u32>| async move {
+            format!("{closure_prefix}-{id}")
+        },
+    }
+    .with_state(StaticRouteState { prefix: "state" });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        client
+            .get(format!("{endpoint}/native/get"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "get"
+    );
+    assert_eq!(
+        client
+            .post(format!("{endpoint}/native/post"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::ACCEPTED
+    );
+    let response = client
+        .put(format!("{endpoint}/native/users/2"))
+        .header("x-source", "request")
+        .json(&StaticRoutePayload { value: 40 })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    let response = response.json::<StaticRouteResponse>().await.unwrap();
+    assert_eq!(response.value, 42);
+    assert_eq!(response.source, "state-request");
+    assert_eq!(
+        client
+            .patch(format!("{endpoint}/native/patch"))
+            .send()
+            .await
+            .unwrap()
+            .json::<StaticRoutePayload>()
+            .await
+            .unwrap()
+            .value,
+        7
+    );
+    assert_eq!(
+        client
+            .delete(format!("{endpoint}/native/delete"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        client
+            .get(format!("{endpoint}/native/closure/9"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "closure-9"
+    );
+    server.abort();
 }
 
 #[tokio::test]

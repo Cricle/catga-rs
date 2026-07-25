@@ -25,7 +25,11 @@ mod tag_policy;
 mod timeout;
 
 pub use definition::{FlowDefinition, FlowStepOutcome};
-pub use dsl::{DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleObserver, FlowThrottle};
+pub use dsl::{
+    DslFlow, DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks,
+    DslFlowLifecycleObserver, DslFlowStepFailedHook, DslFlowStepSucceededHook,
+    DslFlowSucceededHook, FlowThrottle,
+};
 pub use dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
 pub use due_service::{DueFlowOptions, FlowDueService};
 pub use executor::{FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions};

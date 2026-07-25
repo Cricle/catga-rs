@@ -20,6 +20,10 @@ pub const DEFAULT_IDEMPOTENCY_RETENTION: Duration = Duration::from_secs(24 * 60 
 
 /// Maximum records one retention cleanup operation may inspect or remove.
 pub const MAX_RETENTION_CLEANUP_LIMIT: usize = 1_024;
+/// Maximum UTF-8 byte length of one retained dead-letter error description.
+pub const MAX_DEAD_LETTER_DESCRIPTION_BYTES: usize = 1_024;
+/// Maximum UTF-8 byte length of one retained dead-letter processing stage.
+pub const MAX_DEAD_LETTER_STAGE_BYTES: usize = 64;
 
 /// Validates a completed-record retention duration.
 pub fn validate_completed_retention(retention: Duration) -> CatgaResult<()> {
@@ -173,16 +177,131 @@ pub struct DeadLetter {
     envelope: Envelope,
     reason: Box<str>,
     attempts: u32,
+    diagnostics: DeadLetterDiagnostics,
+}
+
+/// Stable, bounded context captured when processing permanently fails.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeadLetterDiagnostics {
+    failed_at_unix_ms: u64,
+    error_code: ErrorCode,
+    stage: Box<str>,
+}
+
+impl DeadLetterDiagnostics {
+    /// Captures the current UTC failure time, error category, and processing stage.
+    pub fn new(error_code: ErrorCode, stage: impl Into<Box<str>>) -> CatgaResult<Self> {
+        let failed_at_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| {
+                CatgaError::new(ErrorCode::Internal, "system clock precedes the Unix epoch")
+            })?
+            .as_millis();
+        let failed_at_unix_ms = u64::try_from(failed_at_unix_ms).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "system clock exceeds the supported millisecond range",
+            )
+        })?;
+        Self::try_at(failed_at_unix_ms, error_code, stage)
+    }
+
+    /// Creates diagnostics with an explicit UTC epoch-millisecond failure time.
+    pub fn try_at(
+        failed_at_unix_ms: u64,
+        error_code: ErrorCode,
+        stage: impl Into<Box<str>>,
+    ) -> CatgaResult<Self> {
+        let stage = stage.into();
+        if stage.is_empty()
+            || stage.len() > MAX_DEAD_LETTER_STAGE_BYTES
+            || !stage
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "dead-letter stage must be a bounded ASCII identifier",
+            ));
+        }
+        Ok(Self {
+            failed_at_unix_ms,
+            error_code,
+            stage,
+        })
+    }
+
+    /// Returns the UTC epoch-millisecond failure time.
+    pub const fn failed_at_unix_ms(&self) -> u64 {
+        self.failed_at_unix_ms
+    }
+
+    /// Returns the stable category of the terminal failure.
+    pub const fn error_code(&self) -> ErrorCode {
+        self.error_code
+    }
+
+    /// Returns the bounded processing stage that produced the dead letter.
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
 }
 
 impl DeadLetter {
-    /// Creates a dead letter from the failed envelope, error text, and total attempts.
+    /// Creates a compatibility dead letter from the failed envelope, error text, and total attempts.
+    ///
+    /// This legacy constructor retains a bounded description and marks diagnostics as
+    /// `legacy` with an [`ErrorCode::Internal`] category. New failure paths should use
+    /// [`Self::from_failure`] or [`Self::try_with_diagnostics`].
     pub fn new(envelope: Envelope, reason: impl Into<Box<str>>, attempts: u32) -> Self {
         Self {
             envelope,
-            reason: reason.into(),
+            reason: truncate_description(reason.into()),
             attempts,
+            diagnostics: DeadLetterDiagnostics {
+                failed_at_unix_ms: 0,
+                error_code: ErrorCode::Internal,
+                stage: "legacy".into(),
+            },
         }
+    }
+
+    /// Creates a dead letter with validated, structured failure diagnostics.
+    pub fn try_with_diagnostics(
+        envelope: Envelope,
+        reason: impl Into<Box<str>>,
+        attempts: u32,
+        diagnostics: DeadLetterDiagnostics,
+    ) -> CatgaResult<Self> {
+        let reason = reason.into();
+        if reason.len() > MAX_DEAD_LETTER_DESCRIPTION_BYTES {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "dead-letter error description exceeds the configured memory budget",
+            ));
+        }
+        Ok(Self {
+            envelope,
+            reason,
+            attempts,
+            diagnostics,
+        })
+    }
+
+    /// Creates a bounded diagnostic dead letter from a framework failure.
+    pub fn from_failure(
+        envelope: Envelope,
+        error: &CatgaError,
+        attempts: u32,
+        stage: impl Into<Box<str>>,
+    ) -> CatgaResult<Self> {
+        let diagnostics = DeadLetterDiagnostics::new(error.code(), stage)?;
+        Ok(Self {
+            envelope,
+            reason: truncate_description(error.message().into()),
+            attempts,
+            diagnostics,
+        })
     }
 
     /// Returns the failed envelope.
@@ -190,7 +309,7 @@ impl DeadLetter {
         &self.envelope
     }
 
-    /// Returns the terminal failure reason.
+    /// Returns the bounded terminal failure description.
     pub fn reason(&self) -> &str {
         &self.reason
     }
@@ -199,6 +318,22 @@ impl DeadLetter {
     pub const fn attempts(&self) -> u32 {
         self.attempts
     }
+
+    /// Returns stable failure diagnostics retained with this record.
+    pub const fn diagnostics(&self) -> &DeadLetterDiagnostics {
+        &self.diagnostics
+    }
+}
+
+fn truncate_description(reason: Box<str>) -> Box<str> {
+    if reason.len() <= MAX_DEAD_LETTER_DESCRIPTION_BYTES {
+        return reason;
+    }
+    let mut end = MAX_DEAD_LETTER_DESCRIPTION_BYTES;
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason[..end].into()
 }
 
 /// Persists terminal message failures for inspection and recovery.
@@ -209,4 +344,46 @@ pub trait DeadLetterStore: Send + Sync {
 
     /// Returns up to `limit` retained failures in queue order.
     async fn list(&self, limit: usize) -> CatgaResult<Vec<DeadLetter>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        DeadLetter, DeadLetterDiagnostics, Envelope, ErrorCode, MAX_DEAD_LETTER_DESCRIPTION_BYTES,
+        MessageMetadata,
+    };
+
+    fn envelope() -> Envelope {
+        Envelope::new(
+            7,
+            "tests.dead-letter",
+            vec![1, 2, 3],
+            MessageMetadata::new(7, None),
+        )
+    }
+
+    #[test]
+    fn diagnostics_retain_bounded_failure_context() -> crate::CatgaResult<()> {
+        let diagnostics = DeadLetterDiagnostics::new(ErrorCode::Timeout, "consumer.handle")?;
+        let letter = DeadLetter::try_with_diagnostics(envelope(), "timed out", 3, diagnostics)?;
+
+        assert_eq!(letter.diagnostics().error_code(), ErrorCode::Timeout);
+        assert_eq!(letter.diagnostics().stage(), "consumer.handle");
+        assert_eq!(letter.reason(), "timed out");
+        assert!(letter.diagnostics().failed_at_unix_ms() > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn diagnostics_reject_an_unbounded_error_description() -> crate::CatgaResult<()> {
+        let diagnostics = DeadLetterDiagnostics::new(ErrorCode::Internal, "pipeline")?;
+        let description = "x".repeat(MAX_DEAD_LETTER_DESCRIPTION_BYTES + 1);
+
+        let result = DeadLetter::try_with_diagnostics(envelope(), description, 1, diagnostics);
+        assert_eq!(
+            result.err().map(|error| error.code()),
+            Some(ErrorCode::Validation)
+        );
+        Ok(())
+    }
 }
