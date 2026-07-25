@@ -1,0 +1,138 @@
+#![forbid(unsafe_code)]
+//! Core contracts for the Catga CQRS runtime.
+
+mod aggregate;
+mod auto_snapshot;
+mod behaviors;
+mod cache;
+mod codec;
+mod compression;
+mod consumer;
+mod correlation;
+mod distributed_id;
+mod error;
+mod event_store;
+mod event_version;
+mod fault;
+mod handler;
+mod lease;
+mod lifecycle;
+mod mediator;
+mod message;
+mod message_signing;
+mod message_type;
+mod observability;
+mod outbox_processor;
+mod pipeline;
+mod projection;
+mod read_model;
+mod registry;
+mod reliability;
+mod request_client;
+mod resilience;
+mod routing;
+mod security;
+mod snapshot;
+mod snapshot_codec;
+mod store;
+mod subscription;
+pub mod telemetry;
+mod time_travel;
+mod transport;
+mod upgrading_event_store;
+mod versioned_transport;
+
+pub use aggregate::{
+    Aggregate, AggregateRepository, CompositeSnapshotStrategy, EventCountSnapshotStrategy,
+    SnapshotStrategy, TimeBasedSnapshotStrategy,
+};
+pub use auto_snapshot::AutoSnapshotManager;
+pub use behaviors::{
+    AuthorizationBehavior, AuthorizationPolicies, AuthorizationPolicy, AutoBatchingBehavior,
+    AutoBatchingRunner, BatchOptions, CircuitBreakerBehavior, CompensationBehavior,
+    CompensationPublisher, CorrelationBehavior, DeadLetterBehavior, DeadLetterEnvelope,
+    DistributedLockBehavior, DistributedLockKey, EventCompensationPublisher, FaultPublisher,
+    FaultPublishingBehavior, IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey,
+    LoggingBehavior, OutboxBehavior, OutboxEnvelope, RetryBehavior, TimeoutBehavior,
+    TracingBehavior, ValidationBehavior, Validator,
+};
+pub use cache::CachedResultCodec;
+pub use catga_macros::{Message, catga_handlers};
+pub use codec::EnvelopeCodec;
+pub use compression::{
+    CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
+    compress_into, compress_to_slice, decompress, decompress_limited, is_compressed,
+};
+pub use consumer::{CompetingConsumer, ConsumerRun, DeliveryHandler};
+pub use correlation::{
+    Correlated, TransportContext, current_correlation_id, current_correlation_value,
+    current_transport_context, scope_correlation_id, scope_correlation_value,
+    scope_transport_context,
+};
+pub use distributed_id::{
+    DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
+};
+pub use error::{CatgaError, CatgaResult, ErrorCode};
+pub use event_store::{EventStore, EventStream, StoredEvent, VersionInfo};
+pub use event_version::{EventUpgrader, EventVersionRegistry};
+pub use fault::Fault;
+pub use handler::{EventHandler, Handler};
+pub use lease::LeaseStore;
+pub use lifecycle::{
+    AcceptanceGate, AsyncInitializable, AutoRecoveryOptions, HealthCheckable, OperationGuard,
+    OperationTracker, RecoverableComponent, RecoveryManager, RecoveryResult, ShutdownCoordinator,
+    Stoppable, Waitable,
+};
+pub use mediator::{Mediator, MediatorHandle};
+pub use message::{
+    BatchKeyProvider, BatchOptionsProvider, Command, DeliveryMode, Event, Message, MessageMetadata,
+    MessagePriority, QualityOfService, Request,
+};
+pub use message_signing::{HmacMessageSigner, MessageSigner};
+pub use message_type::MessageTypeRegistry;
+pub use observability::TRACING_TARGET;
+pub use outbox_processor::{OutboxLoopOptions, OutboxProcessor, OutboxRun};
+pub use pipeline::{Behavior, Next, Pipeline};
+pub use projection::{
+    CatchUpProjectionRunner, LiveProjection, Projection, ProjectionCheckpoint,
+    ProjectionCheckpointStore, ProjectionRun,
+};
+pub use read_model::{
+    BatchSyncStrategy, ChangeKind, ChangeRecord, ChangeTracker, ReadModelStore,
+    ReadModelSynchronizer, RealtimeSyncStrategy, ScheduledSyncStrategy, SyncStrategy,
+};
+pub use registry::Registry;
+pub use reliability::{
+    DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_INBOX_CLAIM_LEASE, DeadLetter, DeadLetterStore,
+    IdempotencyStore, InboxStore, MAX_RETENTION_CLEANUP_LIMIT, ProcessingState,
+    inbox_claim_expires_at, validate_completed_retention, validate_inbox_claim_lease,
+    validate_retention_cleanup_limit,
+};
+pub use request_client::{EnvelopeRequestClient, RemoteRequest, RequestClient, RequestTransport};
+pub use resilience::{ResilienceExecutor, ResilienceOptions};
+pub use routing::MessageRouter;
+pub use security::{
+    AuthorizationRequirements, AuthorizedRequest, SecurityIdentity, current_security_identity,
+    scope_security_identity,
+};
+pub use snapshot::{EnhancedSnapshotStore, Snapshot, SnapshotInfo, SnapshotStore};
+pub use snapshot_codec::SnapshotCodec;
+pub use store::{
+    DEFAULT_OUTBOX_CLAIM_LEASE, DEFAULT_OUTBOX_MAX_RETRIES, Envelope, EnvelopeHeader,
+    EnvelopeHeaders, MAX_ENVELOPE_HEADER_BYTES, MAX_ENVELOPE_HEADERS, MAX_OUTBOX_CLAIM_LEASE,
+    MAX_OUTBOX_CLAIM_LIMIT, MAX_OUTBOX_FAILURE_ERROR_BYTES, OutboxMessage, OutboxState,
+    OutboxStore, outbox_claim_expires_at, validate_outbox_claim_lease, validate_outbox_claim_limit,
+    validate_outbox_message_id,
+};
+pub use subscription::{
+    CompetingSubscriptionRunner, PersistentSubscription, SubscriptionCheckpoint,
+    SubscriptionHandler, SubscriptionLoopOptions, SubscriptionRun, SubscriptionRunner,
+    SubscriptionStore,
+};
+pub use time_travel::{SnapshotTimeTravelService, StateComparison, TimeTravelService};
+pub use transport::{
+    Acknowledger, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination, DestinationTransport,
+    MessageTransport,
+};
+pub use upgrading_event_store::UpgradingEventStore;
+pub use versioned_transport::VersionedMessageTransport;

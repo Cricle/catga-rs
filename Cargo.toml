@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "crates/catga-core",
+    "crates/catga-flow",
+    "crates/catga-codec-postcard",
+    "crates/catga-codec-memorypack",
+    "crates/catga-axum",
+    "crates/catga-cluster",
+    "crates/catga-macros",
+    "crates/catga-memory",
+    "crates/catga-nats",
+    "crates/catga-redis",
+    "crates/catga-robustmq",
+    "crates/catga-testing",
+    "tests",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+repository = "https://github.com/Cricle/Catga"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
