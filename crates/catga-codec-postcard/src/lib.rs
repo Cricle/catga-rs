@@ -18,7 +18,7 @@ use catga_core::{
     RequestClient, RequestTransport, SnapshotCodec, TransportContext, current_correlation_id,
     current_transport_context, scope_transport_context,
 };
-use futures::{StreamExt, stream};
+use futures::{StreamExt, future::BoxFuture, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use wire::{EnvelopeWire, HeadersEnvelopeWire, LegacyEnvelopeWire};
 
@@ -142,6 +142,19 @@ pub struct PostcardDelivery<M> {
     message: M,
 }
 
+/// The acknowledgement result of one [`PostcardTransport::process_next`] call.
+///
+/// A rejected outcome retains the original application error after the backend accepted a
+/// negative acknowledgement. Backend acknowledgement failures instead remain the outer
+/// [`CatgaResult`] error because the delivery ownership was not resolved.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PostcardProcessOutcome {
+    /// The handler succeeded and the delivery was acknowledged.
+    Acknowledged,
+    /// The handler failed and the delivery was negatively acknowledged for redelivery.
+    Rejected(CatgaError),
+}
+
 fn outgoing_transport_context(
     message_id: u64,
 ) -> (u64, Option<MessagePriority>, Option<EnvelopeHeaders>) {
@@ -209,6 +222,29 @@ impl<M> PostcardDelivery<M> {
     /// finishes.
     pub async fn with_transport_context<T>(&self, future: impl Future<Output = T>) -> T {
         scope_transport_context(self.envelope(), future).await
+    }
+}
+
+async fn process_postcard_delivery<M, H>(
+    delivery: PostcardDelivery<M>,
+    handler: H,
+) -> CatgaResult<PostcardProcessOutcome>
+where
+    H: for<'a> FnOnce(&'a M) -> BoxFuture<'a, CatgaResult<()>>,
+{
+    let result = {
+        let message = delivery.message();
+        delivery.with_transport_context(handler(message)).await
+    };
+    match result {
+        Ok(()) => {
+            delivery.acknowledge().await?;
+            Ok(PostcardProcessOutcome::Acknowledged)
+        }
+        Err(error) => {
+            delivery.negative_acknowledge().await?;
+            Ok(PostcardProcessOutcome::Rejected(error))
+        }
     }
 }
 
@@ -394,6 +430,23 @@ where
     {
         let delivery = self.transport.receive().await?;
         self.decode_delivery(delivery).await
+    }
+
+    /// Receives, handles, and resolves one typed delivery.
+    ///
+    /// The handler runs with the delivery's immutable transport context scoped to its future.
+    /// A successful handler acknowledges the delivery. A handler error requests redelivery and
+    /// returns [`PostcardProcessOutcome::Rejected`] with that original error, making a deliberate
+    /// best-effort rejection distinguishable from a failed negative acknowledgement. The caller
+    /// owns repetition and cancellation by invoking this method from its own loop; this facade
+    /// never starts a background task or retains pending deliveries.
+    pub async fn process_next<M, H>(&self, handler: H) -> CatgaResult<PostcardProcessOutcome>
+    where
+        M: DeserializeOwned,
+        H: for<'a> FnOnce(&'a M) -> BoxFuture<'a, CatgaResult<()>>,
+    {
+        let delivery = self.receive::<M>().await?;
+        process_postcard_delivery(delivery, handler).await
     }
 
     async fn decode_delivery<M>(&self, delivery: Delivery) -> CatgaResult<PostcardDelivery<M>>
@@ -675,6 +728,24 @@ where
         let destination = Destination::parse(destination)?;
         let delivery = self.transport.receive_from(&destination).await?;
         self.decode_delivery(delivery).await
+    }
+
+    /// Receives, handles, and resolves one typed delivery from `destination`.
+    ///
+    /// This is the destination counterpart of [`PostcardTransport::process_next`]. It has the
+    /// same acknowledgement and explicit outcome rules while leaving subscription repetition and
+    /// cancellation under caller ownership.
+    pub async fn process_next_from<M, H>(
+        &self,
+        destination: impl Into<Box<str>>,
+        handler: H,
+    ) -> CatgaResult<PostcardProcessOutcome>
+    where
+        M: DeserializeOwned,
+        H: for<'a> FnOnce(&'a M) -> BoxFuture<'a, CatgaResult<()>>,
+    {
+        let delivery = self.receive_from::<M>(destination).await?;
+        process_postcard_delivery(delivery, handler).await
     }
 
     async fn send_with_quality_of_service<M>(
