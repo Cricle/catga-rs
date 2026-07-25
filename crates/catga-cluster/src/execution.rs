@@ -9,6 +9,10 @@ use crate::ClusterCoordinator;
 
 /// Adds leader-gated execution to a [`ClusterCoordinator`].
 ///
+/// [`Self::execute_if_leader`] returns an optional action result for simple leader-only work.
+/// [`Self::execute_if_leader_cancellable`] returns structured errors and notifies active work
+/// when this node loses leadership.
+///
 /// `Some` contains the action result when this node was leader at the execution
 /// boundary; `None` means the caller must retry or route the work to the leader.
 pub trait ClusterCoordinatorExt: ClusterCoordinator {
@@ -67,10 +71,15 @@ where
 
         let leadership_lost = CancellationToken::new();
         let action = action(leadership_lost.clone());
+        tokio::pin!(action);
         tokio::select! {
-            result = action => result,
+            result = &mut action => result,
             _ = self.wait_for_leadership_change(true) => {
                 leadership_lost.cancel();
+                std::future::poll_fn(|context| {
+                    let _ = action.as_mut().poll(context);
+                    std::task::Poll::Ready(())
+                }).await;
                 Err(CatgaError::new(ErrorCode::Cancelled, "leadership was lost"))
             }
         }

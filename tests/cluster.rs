@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use catga_cluster::{
@@ -62,16 +62,24 @@ async fn leadership_loss_cancels_active_action() {
     let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
     let node_a = cluster.node("node-a").unwrap();
     let action_started = Arc::new(Notify::new());
+    let cancellations = Arc::new(AtomicUsize::new(0));
+    let cancellation_observed = Arc::new(Notify::new());
 
     let action = tokio::spawn({
         let action_started = Arc::clone(&action_started);
+        let cancellations = Arc::clone(&cancellations);
+        let cancellation_observed = Arc::clone(&cancellation_observed);
         async move {
             node_a
                 .execute_if_leader_cancellable(move |leadership_lost| {
                     let action_started = Arc::clone(&action_started);
+                    let cancellations = Arc::clone(&cancellations);
+                    let cancellation_observed = Arc::clone(&cancellation_observed);
                     async move {
                         action_started.notify_one();
                         leadership_lost.cancelled().await;
+                        cancellations.fetch_add(1, Ordering::SeqCst);
+                        cancellation_observed.notify_one();
                         Ok(())
                     }
                 })
@@ -88,6 +96,30 @@ async fn leadership_loss_cancels_active_action() {
         action.await.unwrap().unwrap_err().code(),
         ErrorCode::Cancelled
     );
+    tokio::time::timeout(Duration::from_secs(1), cancellation_observed.notified())
+        .await
+        .unwrap();
+    assert_eq!(cancellations.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn nonleader_cancellable_execution_returns_unavailable_without_calling_action() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let node_b = cluster.node("node-b").unwrap();
+    let action_called = Arc::new(AtomicBool::new(false));
+
+    let result = node_b
+        .execute_if_leader_cancellable({
+            let action_called = Arc::clone(&action_called);
+            move |_| {
+                action_called.store(true, Ordering::SeqCst);
+                async { Ok(()) }
+            }
+        })
+        .await;
+
+    assert_eq!(result.unwrap_err().code(), ErrorCode::Unavailable);
+    assert!(!action_called.load(Ordering::SeqCst));
 }
 
 #[derive(Debug)]
