@@ -50,7 +50,12 @@ pub trait ClusterCoordinator: Send + Sync {
         &self,
         timeout: Duration,
     ) -> impl std::future::Future<Output = bool> + Send;
-    /// Waits until this node's leadership state differs from `was_leader`.
+    /// Waits until an observed leadership transition occurs after this call begins.
+    ///
+    /// When this node has already changed leadership state, this returns immediately. Otherwise,
+    /// it returns after the next published transition. The returned state can equal `was_leader`
+    /// when another transition restores the original state before the waiter is polled; callers
+    /// that fence leader-owned work must still treat that observed transition as a lost epoch.
     fn wait_for_leadership_change(
         &self,
         was_leader: bool,
@@ -125,6 +130,9 @@ impl MemoryCluster {
         {
             return None;
         }
+        if current.leader.as_ref() == leader {
+            return Some(());
+        }
         self.inner.topology.store(Arc::new(Topology {
             leader: leader.into(),
             endpoints: Arc::clone(&current.endpoints),
@@ -186,14 +194,12 @@ impl ClusterCoordinator for MemoryClusterNode {
     }
 
     async fn wait_for_leadership_change(&self, was_leader: bool) -> bool {
-        loop {
-            let notified = self.inner.changed.notified();
-            let is_leader = self.is_leader();
-            if is_leader != was_leader {
-                return is_leader;
-            }
-            notified.await;
+        let notified = self.inner.changed.notified();
+        if self.is_leader() != was_leader {
+            return self.is_leader();
         }
+        notified.await;
+        self.is_leader()
     }
 }
 
