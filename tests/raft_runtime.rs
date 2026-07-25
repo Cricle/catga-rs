@@ -1,4 +1,12 @@
-use std::{collections::HashMap, io, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use catga_cluster::{
@@ -6,6 +14,22 @@ use catga_cluster::{
     RaftTransport,
 };
 use tokio::sync::{RwLock, mpsc};
+
+#[derive(Default)]
+struct BlockingTransport {
+    entered_send: AtomicBool,
+}
+
+#[async_trait]
+impl RaftTransport for BlockingTransport {
+    async fn send(
+        &self,
+        _message: RaftMessage,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.entered_send.store(true, Ordering::Release);
+        std::future::pending().await
+    }
+}
 
 #[derive(Clone, Default)]
 struct ChannelTransport {
@@ -115,4 +139,51 @@ async fn raft_runtime_owns_ticks_transport_and_committed_entries_without_externa
         runtime.shutdown();
         runtime.join().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn raft_runtime_shutdown_cancels_a_blocked_transport_send() {
+    let transport = Arc::new(BlockingTransport::default());
+    let runtime = Arc::new(
+        RaftRuntime::spawn(
+            RaftNode::new(
+                1,
+                "http://node-1",
+                vec![
+                    RaftMember::new(1, "http://node-1"),
+                    RaftMember::new(2, "http://node-2"),
+                ],
+            )
+            .unwrap(),
+            Arc::clone(&transport),
+            Duration::from_millis(1),
+        )
+        .unwrap(),
+    );
+    let campaign = {
+        let runtime = Arc::clone(&runtime);
+        tokio::spawn(async move { runtime.campaign().await })
+    };
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !transport.entered_send.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("campaign must start transport delivery");
+
+    runtime.shutdown();
+    assert!(matches!(
+        campaign.await.unwrap(),
+        Err(RaftRuntimeError::Stopped)
+    ));
+    let runtime = match Arc::try_unwrap(runtime) {
+        Ok(runtime) => runtime,
+        Err(_) => panic!("campaign task released the runtime"),
+    };
+    tokio::time::timeout(Duration::from_secs(1), runtime.join())
+        .await
+        .expect("shutdown must cancel a blocked transport send")
+        .unwrap();
 }

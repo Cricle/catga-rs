@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
@@ -53,10 +55,29 @@ impl Parse for Registrations {
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let Registrations(registrations) = syn::parse2(input)?;
+    let mut request_messages = HashSet::with_capacity(registrations.len());
+    for registration in &registrations {
+        match registration {
+            Registration::Request { message, .. } => {
+                if !request_messages.insert(quote!(#message).to_string()) {
+                    return Err(syn::Error::new_spanned(
+                        message,
+                        "duplicate request handler registration",
+                    ));
+                }
+            }
+            Registration::Event { handlers, .. } if handlers.is_empty() => {
+                return Err(syn::Error::new_spanned(
+                    handlers,
+                    "event registration requires at least one handler",
+                ));
+            }
+            Registration::Event { .. } => {}
+        };
+    }
     let entries = registrations.iter().map(|registration| match registration {
         Registration::Request { message, handler } => quote! {
-            registry.register_request::<#message, _>(#handler)
-                .expect("Catga request handler registration must be unique");
+            registry.register_request::<#message, _>(#handler)?;
         },
         Registration::Event { message, handlers } => {
             let registrations = handlers.iter().map(|handler| {
@@ -68,8 +89,46 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         }
     });
     Ok(quote! {{
-        let mut registry = ::catga_core::Registry::new();
-        #(#entries)*
-        registry
+        (|| -> ::catga_core::CatgaResult<::catga_core::Registry> {
+            let mut registry = ::catga_core::Registry::new();
+            #(#entries)*
+            Ok(registry)
+        })()
     }})
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+
+    use super::expand;
+
+    #[test]
+    fn duplicate_request_registration_is_rejected_during_macro_expansion() {
+        let error = expand(quote! {
+            request CreateOrder => CreateOrderHandler;
+            request CreateOrder => ReplayOrderHandler;
+        })
+        .expect_err("duplicate request registrations must not defer to a startup panic");
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate request handler registration")
+        );
+    }
+
+    #[test]
+    fn empty_event_registration_is_rejected_during_macro_expansion() {
+        let error = expand(quote! {
+            event OrderCreated => [];
+        })
+        .expect_err("an event with no handlers would silently discard delivery");
+
+        assert!(
+            error
+                .to_string()
+                .contains("event registration requires at least one handler")
+        );
+    }
 }

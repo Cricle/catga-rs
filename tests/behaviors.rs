@@ -147,6 +147,29 @@ impl Handler<InboxWork> for CountingHandler {
     }
 }
 
+#[derive(Debug)]
+struct UnidentifiedInboxWork;
+
+impl catga_core::Message for UnidentifiedInboxWork {}
+
+impl Request for UnidentifiedInboxWork {
+    type Response = u64;
+}
+
+impl InboxKey for UnidentifiedInboxWork {
+    fn inbox_message_id(&self) -> u64 {
+        0
+    }
+}
+
+#[async_trait]
+impl Handler<UnidentifiedInboxWork> for CountingHandler {
+    async fn handle(&self, _: UnidentifiedInboxWork) -> CatgaResult<u64> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(21)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct DeadWork;
 
@@ -404,6 +427,49 @@ async fn inbox_behavior_returns_a_cached_result_without_reinvoking_the_handler()
     assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
     assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn inbox_behavior_skips_deduplication_for_the_reserved_zero_message_identifier() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+        .register_request::<UnidentifiedInboxWork, _>(CountingHandler(Arc::clone(&attempts)))
+        .unwrap();
+    let mediator = Mediator::new(registry);
+    let store = Arc::new(MemoryInbox::default());
+    let pipeline = Pipeline::new().with(InboxBehavior::new(store, U64Codec));
+
+    assert_eq!(
+        mediator
+            .send_with(UnidentifiedInboxWork, &pipeline)
+            .await
+            .unwrap(),
+        21
+    );
+    assert_eq!(
+        mediator
+            .send_with(UnidentifiedInboxWork, &pipeline)
+            .await
+            .unwrap(),
+        21
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn inbox_behavior_exposes_a_validated_claim_lease() {
+    let store = Arc::new(MemoryInbox::default());
+    let behavior = InboxBehavior::new(store, U64Codec)
+        .with_claim_lease(Duration::from_secs(7))
+        .unwrap();
+    assert_eq!(behavior.claim_lease(), Duration::from_secs(7));
+
+    let store = Arc::new(MemoryInbox::default());
+    assert!(matches!(
+        InboxBehavior::new(store, U64Codec).with_claim_lease(Duration::ZERO),
+        Err(error) if error.code() == ErrorCode::Validation
+    ));
 }
 
 #[tokio::test]

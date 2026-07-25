@@ -1,9 +1,12 @@
 //! JetStream KV-backed inbox records built on the shared claim state machine.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, IdempotencyStore, InboxStore, ProcessingState};
+use catga_core::{
+    CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, IdempotencyStore, InboxStore, ProcessingState,
+    inbox_claim_expires_at, telemetry,
+};
 
 use crate::NatsIdempotency;
 
@@ -24,22 +27,51 @@ impl NatsInbox {
 #[async_trait]
 impl InboxStore for NatsInbox {
     async fn try_claim(&self, message_id: u64) -> CatgaResult<bool> {
-        self.records.try_claim(&message_id.to_string()).await
+        self.try_claim_for(message_id, DEFAULT_INBOX_CLAIM_LEASE)
+            .await
+    }
+
+    async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
+        telemetry::record_persistence("nats", "inbox", "try_claim", async {
+            self.records
+                .try_claim_until(&message_id.to_string(), inbox_claim_expires_at(lease)?)
+                .await
+        })
+        .await
     }
 
     async fn complete(&self, message_id: u64, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
-        self.records.complete(&message_id.to_string(), result).await
+        telemetry::record_persistence("nats", "inbox", "complete", async {
+            self.records.complete(&message_id.to_string(), result).await
+        })
+        .await
     }
 
     async fn fail(&self, message_id: u64) -> CatgaResult<()> {
-        self.records.fail(&message_id.to_string()).await
+        telemetry::record_persistence("nats", "inbox", "fail", async {
+            self.records.fail(&message_id.to_string()).await
+        })
+        .await
     }
 
     async fn state(&self, message_id: u64) -> CatgaResult<Option<ProcessingState>> {
-        self.records.state(&message_id.to_string()).await
+        telemetry::record_persistence("nats", "inbox", "state", async {
+            self.records.state(&message_id.to_string()).await
+        })
+        .await
     }
 
     async fn result(&self, message_id: u64) -> CatgaResult<Option<Arc<[u8]>>> {
-        self.records.result(&message_id.to_string()).await
+        telemetry::record_persistence("nats", "inbox", "result", async {
+            self.records.result(&message_id.to_string()).await
+        })
+        .await
+    }
+
+    async fn cleanup_completed(&self, retention: Duration, limit: usize) -> CatgaResult<usize> {
+        telemetry::record_persistence("nats", "inbox", "cleanup", async {
+            self.records.cleanup_completed_for(retention, limit).await
+        })
+        .await
     }
 }

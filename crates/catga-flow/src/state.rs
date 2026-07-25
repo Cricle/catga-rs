@@ -1,9 +1,10 @@
 use std::{sync::Arc, time::SystemTime};
 
 use catga_core::CatgaError;
+use serde::{Deserialize, Serialize};
 
 /// The lifecycle phase of a durable flow.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FlowStatus {
     /// The forward action is eligible to run.
     Running,
@@ -27,7 +28,7 @@ impl FlowStatus {
 }
 
 /// Immutable, versioned state for one durable flow execution.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FlowState {
     id: Box<str>,
     flow_type: Box<str>,

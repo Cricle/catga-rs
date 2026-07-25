@@ -4,10 +4,11 @@ use std::{
 };
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use tracing::Instrument;
 
 use crate::{
     FlowContinuation, FlowDefinition, FlowScheduler, FlowState, FlowStatus, FlowStepOutcome,
-    SuspendedFlowStore, WaitCondition, WaitPolicy,
+    SuspendedFlowStore, WaitCondition, WaitPolicy, metrics::FlowMetrics,
 };
 
 /// The observable state after starting, resuming, or recording a durable flow trigger.
@@ -53,12 +54,17 @@ impl FlowRuntimeResult {
 }
 
 /// Executes named flow definitions against a durable continuation store.
+///
+/// While a step handler is pending, the runtime refreshes its durable heartbeat at half of
+/// `stale_after`. Losing that owner-conditional heartbeat drops the handler future before it can
+/// persist another transition. External effects remain at-least-once and must be idempotent.
 pub struct FlowRuntime<S: ?Sized, H: ?Sized> {
     store: Arc<S>,
     scheduler: Arc<H>,
-    definition: FlowDefinition,
+    definition: Arc<FlowDefinition>,
     owner: Box<str>,
     stale_after: Duration,
+    metrics: FlowMetrics,
 }
 
 impl<S, H> FlowRuntime<S, H>
@@ -76,16 +82,38 @@ where
         Self {
             store,
             scheduler,
-            definition,
+            definition: Arc::new(definition),
             owner: owner.into(),
             stale_after: Duration::from_secs(30),
+            metrics: FlowMetrics::default(),
         }
     }
 
     /// Sets how long an unheartbeated running continuation remains exclusively owned.
+    ///
+    /// Positive durations also control automatic handler renewal at half this interval. Zero is
+    /// retained for deterministic forced-recovery tests and disables automatic renewal.
     pub fn with_stale_after(mut self, stale_after: Duration) -> Self {
         self.stale_after = stale_after;
         self
+    }
+
+    pub(crate) fn with_shared_definition(
+        store: Arc<S>,
+        scheduler: Arc<H>,
+        definition: Arc<FlowDefinition>,
+        owner: impl Into<Box<str>>,
+        stale_after: Duration,
+        metrics: FlowMetrics,
+    ) -> Self {
+        Self {
+            store,
+            scheduler,
+            definition,
+            owner: owner.into(),
+            stale_after,
+            metrics,
+        }
     }
 
     /// Starts a new flow and executes until it suspends or reaches a terminal state.
@@ -109,12 +137,36 @@ where
                 "a flow with this identity already exists",
             ));
         }
+        self.metrics.record_started();
         self.resume(continuation.state().id()).await
     }
 
     /// Resumes a previously suspended flow from its persisted named step.
     pub async fn resume(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {
         self.resume_at(flow_id, SystemTime::now()).await
+    }
+
+    /// Resumes `flow_id` only when its persisted suspended state still matches `state_id`.
+    ///
+    /// External schedulers should call this with the state target returned in
+    /// [`crate::ScheduledResume`]. A stale job cannot resume a flow that has already advanced to
+    /// another named step.
+    pub async fn resume_scheduled(
+        &self,
+        flow_id: &str,
+        state_id: &str,
+    ) -> CatgaResult<FlowRuntimeResult> {
+        let Some(continuation) = self.store.get(flow_id).await? else {
+            return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
+        };
+        self.ensure_definition(&continuation)?;
+        if continuation.step_name() != state_id {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "scheduled resume targets a stale flow state",
+            ));
+        }
+        self.resume(flow_id).await
     }
 
     /// Cancels a durable flow unless it has already reached a terminal state.
@@ -129,6 +181,7 @@ where
         if continuation.state().status().is_terminal() {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
+        let schedule_id: Option<Box<str>> = continuation.schedule_id().map(Into::into);
         let cancelled = continuation
             .clone()
             .ready()
@@ -138,6 +191,16 @@ where
             .update(continuation.state().version(), cancelled.clone())
             .await?
         {
+            if let Some(schedule_id) = schedule_id
+                && let Err(error) = self.scheduler.cancel_resume(&schedule_id).await
+            {
+                tracing::warn!(
+                    flow_id,
+                    schedule_id = schedule_id.as_ref(),
+                    error = ?error,
+                    "flow cancellation persisted, but its scheduled resume could not be cancelled"
+                );
+            }
             Ok(FlowRuntimeResult::new(cancelled.state().clone()))
         } else {
             self.current_result(flow_id).await
@@ -173,7 +236,7 @@ where
                 WaitEvaluation::Pending => {
                     return Ok(FlowRuntimeResult::new(continuation.state().clone()));
                 }
-                WaitEvaluation::Failed(error) => return self.fail(continuation, error).await,
+                WaitEvaluation::Failed(error) => return self.fail(continuation, error, None).await,
                 WaitEvaluation::Ready => {}
             }
         }
@@ -237,8 +300,8 @@ where
 
     /// Refreshes the caller's durable execution lease without changing its business version.
     ///
-    /// Long-running handlers should call this more frequently than `stale_after`; handlers remain
-    /// at-least-once and must make external side effects idempotent.
+    /// The runtime automatically calls this while a registered step future is pending. It remains
+    /// public for caller-owned work performed outside that execution loop.
     pub async fn heartbeat(&self, flow_id: &str, version: i64) -> CatgaResult<bool> {
         let Some(continuation) = self.store.get(flow_id).await? else {
             return Ok(false);
@@ -248,15 +311,24 @@ where
     }
 
     async fn drive(&self, mut continuation: FlowContinuation) -> CatgaResult<FlowRuntimeResult> {
+        let mut execution = self
+            .metrics
+            .begin_execution(continuation.state().id(), self.definition.name());
         loop {
             let state = continuation.state().clone();
-            let outcome = match self
-                .definition
-                .execute(continuation.step_name(), state.clone())
-                .await
-            {
+            let mut step = execution.begin_step(continuation.step_name());
+            let result = self
+                .execute_step_with_heartbeat(&continuation, state.clone(), step.span())
+                .await;
+            let step_outcome = if matches!(&result, Ok(FlowStepOutcome::Fail(_)) | Err(_)) {
+                "failure"
+            } else {
+                "success"
+            };
+            step.complete(step_outcome);
+            let outcome = match result {
                 Ok(outcome) => outcome,
-                Err(error) => return self.fail(continuation, error).await,
+                Err(error) => return self.fail(continuation, error, Some(&mut execution)).await,
             };
             match outcome {
                 FlowStepOutcome::Advance => {
@@ -269,6 +341,7 @@ where
                                     ErrorCode::Validation,
                                     "an advancing flow step requires a following step",
                                 ),
+                                Some(&mut execution),
                             )
                             .await;
                     };
@@ -290,6 +363,7 @@ where
                                     ErrorCode::NotFound,
                                     "a flow transition references an unregistered step",
                                 ),
+                                Some(&mut execution),
                             )
                             .await;
                     }
@@ -312,24 +386,35 @@ where
                                     ErrorCode::Validation,
                                     "a delayed flow step requires a following step",
                                 ),
+                                Some(&mut execution),
                             )
                             .await;
                     };
                     let completed_steps = state.step().saturating_add(1);
-                    let suspended = continuation
+                    let pending = continuation
                         .clone()
                         .at_step(next_step)
                         .with_state(state.at_step(completed_steps).suspended().next_version())
                         .delayed_until(resume_at);
-                    self.persist(continuation.state().version(), suspended.clone())
-                        .await?;
-                    if let Err(error) = self
+                    let schedule_id = match self
                         .scheduler
-                        .schedule_resume(suspended.state().id(), resume_at)
+                        .schedule_resume(pending.state().id(), pending.step_name(), resume_at)
                         .await
                     {
-                        return self.fail(suspended, error).await;
+                        Ok(schedule_id) => schedule_id,
+                        Err(error) => {
+                            return self.fail(continuation, error, Some(&mut execution)).await;
+                        }
+                    };
+                    let suspended = pending.with_schedule_id(schedule_id.clone());
+                    if let Err(error) = self
+                        .persist(continuation.state().version(), suspended.clone())
+                        .await
+                    {
+                        let _ = self.scheduler.cancel_resume(&schedule_id).await;
+                        return Err(error);
                     }
+                    execution.complete("suspended");
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
                 FlowStepOutcome::Wait(wait) => {
@@ -342,6 +427,7 @@ where
                                     ErrorCode::Validation,
                                     "a waiting flow step requires a following step",
                                 ),
+                                Some(&mut execution),
                             )
                             .await;
                     };
@@ -353,6 +439,7 @@ where
                         .with_wait(wait);
                     self.persist(continuation.state().version(), suspended.clone())
                         .await?;
+                    execution.complete("suspended");
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
                 FlowStepOutcome::Complete => {
@@ -362,9 +449,47 @@ where
                         .with_state(state.done(completed_steps).next_version());
                     self.persist(continuation.state().version(), done.clone())
                         .await?;
+                    self.metrics.record_completed();
+                    execution.complete("success");
                     return Ok(FlowRuntimeResult::new(done.state().clone()));
                 }
-                FlowStepOutcome::Fail(error) => return self.fail(continuation, error).await,
+                FlowStepOutcome::Fail(error) => {
+                    return self.fail(continuation, error, Some(&mut execution)).await;
+                }
+            }
+        }
+    }
+
+    async fn execute_step_with_heartbeat(
+        &self,
+        continuation: &FlowContinuation,
+        state: FlowState,
+        span: tracing::Span,
+    ) -> CatgaResult<FlowStepOutcome> {
+        let execution = self
+            .definition
+            .execute(continuation.step_name(), state)
+            .instrument(span);
+        if self.stale_after.is_zero() {
+            return execution.await;
+        }
+        tokio::pin!(execution);
+        let heartbeat_interval = (self.stale_after / 2).max(Duration::from_nanos(1));
+        loop {
+            tokio::select! {
+                result = &mut execution => return result,
+                _ = tokio::time::sleep(heartbeat_interval) => {
+                    if !self.store.heartbeat(
+                        continuation.state().id(),
+                        &self.owner,
+                        continuation.state().version(),
+                    ).await? {
+                        return Err(CatgaError::new(
+                            ErrorCode::Conflict,
+                            "flow execution ownership was lost while its step was running",
+                        ));
+                    }
+                }
             }
         }
     }
@@ -373,6 +498,7 @@ where
         &self,
         continuation: FlowContinuation,
         error: CatgaError,
+        execution: Option<&mut crate::metrics::FlowExecution>,
     ) -> CatgaResult<FlowRuntimeResult> {
         let failed = continuation
             .clone()
@@ -380,6 +506,10 @@ where
             .with_state(continuation.state().clone().failed(error).next_version());
         self.persist(continuation.state().version(), failed.clone())
             .await?;
+        self.metrics.record_failed();
+        if let Some(execution) = execution {
+            execution.complete("failure");
+        }
         Ok(FlowRuntimeResult::new(failed.state().clone()))
     }
 

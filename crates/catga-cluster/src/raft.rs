@@ -67,6 +67,16 @@ pub struct RaftApplicationSnapshot {
     pub data: Vec<u8>,
 }
 
+/// One bounded page of persisted committed application commands.
+///
+/// `next_index` advances over every Raft log entry in the page, including
+/// protocol entries that do not contain application data. A caller must keep
+/// reading while it is `Some` even when `entries` is empty.
+pub(crate) struct PersistedCommittedPage {
+    pub(crate) entries: Vec<RaftCommittedEntry>,
+    pub(crate) next_index: Option<u64>,
+}
+
 /// Errors raised while building a Raft node.
 #[derive(Debug)]
 pub enum RaftNodeError {
@@ -422,6 +432,26 @@ impl RaftNode {
     /// business command twice.
     pub fn persisted_committed_entries(&self) -> raft::Result<Vec<RaftCommittedEntry>> {
         Ok(committed_entries(self.storage.committed_entries()?))
+    }
+
+    /// Reads at most `max_entries` durable log entries for recovery.
+    ///
+    /// The returned application commands exclude empty Raft protocol entries.
+    /// `next_index` nevertheless advances past those entries, allowing a
+    /// recovery loop to retain a fixed memory bound even across configuration
+    /// changes or no-op entries.
+    pub(crate) fn persisted_committed_page(
+        &self,
+        start_index: u64,
+        max_entries: usize,
+    ) -> raft::Result<PersistedCommittedPage> {
+        let (entries, next_index) = self
+            .storage
+            .committed_entries_page(start_index, max_entries)?;
+        Ok(PersistedCommittedPage {
+            entries: committed_entries(entries),
+            next_index,
+        })
     }
 
     fn drive_ready(&mut self) -> raft::Result<()> {

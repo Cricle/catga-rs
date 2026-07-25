@@ -20,7 +20,7 @@ pub trait MessageSigner: Send + Sync {
 /// A shared-secret HMAC-SHA256 message signer using Base64 signatures.
 #[derive(Clone)]
 pub struct HmacMessageSigner {
-    key: Box<[u8]>,
+    mac: HmacSha256,
 }
 
 impl HmacMessageSigner {
@@ -33,12 +33,17 @@ impl HmacMessageSigner {
                 "message signing key must not be empty",
             ));
         }
-        Ok(Self { key: key.into() })
+        let mac = HmacSha256::new_from_slice(key).map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                format!("invalid message signing key: {error}"),
+            )
+        })?;
+        Ok(Self { mac })
     }
 
     fn mac(&self, payload: &[u8]) -> HmacSha256 {
-        let mut mac = HmacSha256::new_from_slice(&self.key)
-            .expect("HMAC-SHA256 accepts every non-empty key length");
+        let mut mac = self.mac.clone();
         mac.update(payload);
         mac
     }

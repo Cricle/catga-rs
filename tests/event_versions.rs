@@ -67,6 +67,36 @@ impl EventUpgrader for V2ToV3 {
     }
 }
 
+struct InvalidV1ToV2;
+
+impl EventUpgrader for InvalidV1ToV2 {
+    fn source_type(&self) -> &str {
+        "order.created.v1"
+    }
+
+    fn target_type(&self) -> &str {
+        "order.created.v2"
+    }
+
+    fn source_version(&self) -> u32 {
+        1
+    }
+
+    fn target_version(&self) -> u32 {
+        2
+    }
+
+    fn upgrade(&self, source: Envelope) -> catga_core::CatgaResult<Envelope> {
+        Ok(Envelope::versioned(
+            source.id(),
+            self.source_type(),
+            source.payload().to_vec(),
+            source.metadata(),
+            self.source_version(),
+        ))
+    }
+}
+
 #[test]
 fn event_version_registry_upgrades_envelopes_through_immutable_rule_snapshots() {
     let registry = EventVersionRegistry::default();
@@ -87,6 +117,37 @@ fn event_version_registry_upgrades_envelopes_through_immutable_rule_snapshots() 
     assert_eq!(upgraded.payload(), [1, 2, 3]);
     assert_eq!(registry.current_version("order.created.v3"), 3);
     assert!(registry.has_upgraders("order.created.v1"));
+}
+
+#[test]
+fn event_version_registry_rejects_duplicate_source_steps() {
+    let registry = EventVersionRegistry::default();
+    registry.register(Arc::new(V1ToV2)).unwrap();
+
+    assert_eq!(
+        registry.register(Arc::new(V1ToV2)).unwrap_err().code(),
+        catga_core::ErrorCode::Conflict
+    );
+}
+
+#[test]
+fn event_version_registry_rejects_an_upgrader_with_an_invalid_declared_output() {
+    let registry = EventVersionRegistry::default();
+    registry.register(Arc::new(InvalidV1ToV2)).unwrap();
+
+    assert_eq!(
+        registry
+            .upgrade_to_latest(Envelope::versioned(
+                7,
+                "order.created.v1",
+                vec![1],
+                MessageMetadata::new(7, None),
+                1,
+            ))
+            .unwrap_err()
+            .code(),
+        catga_core::ErrorCode::Validation
+    );
 }
 
 #[tokio::test]

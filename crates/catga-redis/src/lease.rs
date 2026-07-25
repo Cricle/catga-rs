@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, LeaseStore};
+use catga_core::{CatgaResult, LeaseStore, telemetry};
 use redis::{
     Script,
     aio::{ConnectionManager, ConnectionManagerConfig},
@@ -66,13 +66,22 @@ impl RedisLeases {
 #[async_trait]
 impl LeaseStore for RedisLeases {
     async fn try_acquire(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
-        self.execute(ACQUIRE, resource, owner, Some(ttl)).await
+        telemetry::record_persistence("redis", "lease", "try_acquire", async {
+            self.execute(ACQUIRE, resource, owner, Some(ttl)).await
+        })
+        .await
     }
     async fn renew(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
-        self.execute(RENEW, resource, owner, Some(ttl)).await
+        telemetry::record_persistence("redis", "lease", "renew", async {
+            self.execute(RENEW, resource, owner, Some(ttl)).await
+        })
+        .await
     }
     async fn release(&self, resource: &str, owner: &str) -> CatgaResult<bool> {
-        self.execute(RELEASE, resource, owner, None).await
+        telemetry::record_persistence("redis", "lease", "release", async {
+            self.execute(RELEASE, resource, owner, None).await
+        })
+        .await
     }
 }
 

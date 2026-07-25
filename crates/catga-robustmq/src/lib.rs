@@ -4,5 +4,6 @@
 mod client;
 mod priority;
 
-pub use client::{MailboxClient, MailboxConfig};
+pub use catga_codec_postcard::{PostcardRequestClient, PostcardRpcResponse};
+pub use client::{MailboxClient, MailboxConfig, MailboxRequest, MailboxRequestServer};
 pub use priority::MailboxPriority;

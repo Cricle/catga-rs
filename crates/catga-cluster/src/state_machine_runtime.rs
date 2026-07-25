@@ -22,7 +22,8 @@ const INBOUND_BUFFER: usize = 256;
 pub enum RaftStateMachineRuntimeError {
     /// The configured logical Raft clock interval was zero.
     InvalidTickInterval,
-    /// The owner task exited before it could handle a request.
+    /// The owner task stopped before it could complete a request, including a
+    /// request interrupted by [`RaftStateMachineRuntime::shutdown`].
     Stopped,
     /// `raft-rs` rejected an operation or an inbound protocol message.
     Raft(raft::Error),
@@ -140,7 +141,9 @@ impl RaftStateMachineRuntime {
         &self,
         data: impl Into<Vec<u8>>,
     ) -> Result<(), RaftStateMachineRuntimeError> {
-        self.request(Command::Propose(data.into())).await
+        let data = data.into();
+        self.request(move |reply| Command::Propose(data, reply))
+            .await
     }
 
     /// Persists a state-machine snapshot at the latest successfully applied command.
@@ -149,6 +152,9 @@ impl RaftStateMachineRuntime {
     }
 
     /// Requests a graceful stop of the owner task.
+    ///
+    /// The runtime cancels a transport send that is currently awaiting
+    /// completion and does not deliver any remaining outbound messages.
     pub fn shutdown(&self) {
         self.shutdown.cancel();
     }
@@ -160,20 +166,13 @@ impl RaftStateMachineRuntime {
             .map_err(RaftStateMachineRuntimeError::Task)?
     }
 
-    async fn request(&self, command: Command) -> Result<(), RaftStateMachineRuntimeError> {
+    async fn request<F>(&self, command: F) -> Result<(), RaftStateMachineRuntimeError>
+    where
+        F: FnOnce(oneshot::Sender<Result<(), RaftStateMachineRuntimeError>>) -> Command,
+    {
         let (reply, result) = oneshot::channel();
-        let command = match command {
-            Command::Campaign => Command::CampaignWithReply(reply),
-            Command::Propose(data) => Command::ProposeWithReply(data, reply),
-            Command::Checkpoint => Command::CheckpointWithReply(reply),
-            Command::CampaignWithReply(_)
-            | Command::ProposeWithReply(_, _)
-            | Command::CheckpointWithReply(_) => {
-                unreachable!("only public state-machine commands are requested")
-            }
-        };
         self.commands
-            .send(command)
+            .send(command(reply))
             .await
             .map_err(|_| RaftStateMachineRuntimeError::Stopped)?;
         result
@@ -184,15 +183,12 @@ impl RaftStateMachineRuntime {
 }
 
 enum Command {
-    Campaign,
-    Propose(Vec<u8>),
-    Checkpoint,
-    CampaignWithReply(oneshot::Sender<Result<(), RaftStateMachineRuntimeError>>),
-    ProposeWithReply(
+    Campaign(oneshot::Sender<Result<(), RaftStateMachineRuntimeError>>),
+    Propose(
         Vec<u8>,
         oneshot::Sender<Result<(), RaftStateMachineRuntimeError>>,
     ),
-    CheckpointWithReply(oneshot::Sender<Result<(), RaftStateMachineRuntimeError>>),
+    Checkpoint(oneshot::Sender<Result<(), RaftStateMachineRuntimeError>>),
 }
 
 async fn run<M>(
@@ -210,21 +206,37 @@ where
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            biased;
             _ = shutdown.cancelled() => return Ok(()),
-            _ = ticks.tick() => drive(driver.tick(), &mut driver, transport.as_ref()).await?,
-            Some(message) = inbound.recv() => drive(driver.step(message), &mut driver, transport.as_ref()).await?,
+            _ = ticks.tick() => {
+                if !drive(driver.tick(), &mut driver, transport.as_ref(), &shutdown).await? {
+                    return Ok(());
+                }
+            }
+            Some(message) = inbound.recv() => {
+                if !drive(driver.step(message), &mut driver, transport.as_ref(), &shutdown).await? {
+                    return Ok(());
+                }
+            }
             Some(command) = commands.recv() => match command {
-                Command::CampaignWithReply(reply) => {
-                    respond(reply, drive(driver.campaign(), &mut driver, transport.as_ref()).await)?;
+                Command::Campaign(reply) => {
+                    if !respond_drive(
+                        reply,
+                        drive(driver.campaign(), &mut driver, transport.as_ref(), &shutdown).await,
+                    )? {
+                        return Ok(());
+                    }
                 }
-                Command::ProposeWithReply(data, reply) => {
-                    respond(reply, drive(driver.propose(data), &mut driver, transport.as_ref()).await)?;
+                Command::Propose(data, reply) => {
+                    if !respond_drive(
+                        reply,
+                        drive(driver.propose(data), &mut driver, transport.as_ref(), &shutdown).await,
+                    )? {
+                        return Ok(());
+                    }
                 }
-                Command::CheckpointWithReply(reply) => {
+                Command::Checkpoint(reply) => {
                     respond(reply, driver.checkpoint().map_err(RaftStateMachineRuntimeError::StateMachine))?;
-                }
-                Command::Campaign | Command::Propose(_) | Command::Checkpoint => {
-                    unreachable!("state-machine commands are always paired with a reply")
                 }
             },
             else => return Ok(()),
@@ -262,30 +274,55 @@ async fn drive<M>(
     raft_result: raft::Result<()>,
     driver: &mut RaftStateMachineDriver<M>,
     transport: &dyn RaftTransport,
-) -> Result<(), RaftStateMachineRuntimeError>
+    shutdown: &CancellationToken,
+) -> Result<bool, RaftStateMachineRuntimeError>
 where
     M: RaftStateMachine,
 {
     raft_result.map_err(RaftStateMachineRuntimeError::Raft)?;
-    send_messages(driver, transport).await?;
+    if !send_messages(driver, transport, shutdown).await? {
+        return Ok(false);
+    }
     driver
         .apply_committed()
         .map_err(RaftStateMachineRuntimeError::StateMachine)?;
-    send_messages(driver, transport).await
+    send_messages(driver, transport, shutdown).await
 }
 
 async fn send_messages<M>(
     driver: &mut RaftStateMachineDriver<M>,
     transport: &dyn RaftTransport,
-) -> Result<(), RaftStateMachineRuntimeError>
+    shutdown: &CancellationToken,
+) -> Result<bool, RaftStateMachineRuntimeError>
 where
     M: RaftStateMachine,
 {
     for message in driver.drain_messages() {
-        transport
-            .send(message)
-            .await
-            .map_err(RaftStateMachineRuntimeError::Transport)?;
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return Ok(false),
+            result = transport.send(message) => result.map_err(RaftStateMachineRuntimeError::Transport)?,
+        }
     }
-    Ok(())
+    Ok(true)
+}
+
+fn respond_drive(
+    reply: oneshot::Sender<Result<(), RaftStateMachineRuntimeError>>,
+    result: Result<bool, RaftStateMachineRuntimeError>,
+) -> Result<bool, RaftStateMachineRuntimeError> {
+    match result {
+        Ok(continue_running) => {
+            if continue_running {
+                respond(reply, Ok(()))?;
+            } else {
+                let _ = reply.send(Err(RaftStateMachineRuntimeError::Stopped));
+            }
+            Ok(continue_running)
+        }
+        Err(error) => {
+            respond(reply, Err(error))?;
+            Ok(true)
+        }
+    }
 }

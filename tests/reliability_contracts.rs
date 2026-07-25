@@ -3,7 +3,10 @@
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, Envelope, MessageMetadata, OutboxMessage, OutboxState, OutboxStore};
+use catga_core::{
+    CatgaError, CatgaResult, Envelope, ErrorCode, MessageMetadata, OutboxMessage, OutboxState,
+    OutboxStore, validate_outbox_claim_limit,
+};
 
 #[derive(Default)]
 struct RecordingOutbox {
@@ -18,6 +21,7 @@ impl OutboxStore for RecordingOutbox {
     }
 
     async fn claim(&self, owner: &str, limit: usize) -> CatgaResult<Vec<OutboxMessage>> {
+        validate_outbox_claim_limit(limit)?;
         let mut messages = self.messages.lock().unwrap();
         let mut claimed = Vec::new();
         for message in messages
@@ -27,28 +31,67 @@ impl OutboxStore for RecordingOutbox {
             if claimed.len() == limit {
                 break;
             }
-            message.claim(owner);
+            message.claim_until_with_token(owner, format!("recording-{}", message.id()), u64::MAX);
             claimed.push(message.clone());
         }
         Ok(claimed)
     }
 
-    async fn ack(&self, owner: &str, id: u64) -> CatgaResult<()> {
-        self.messages.lock().unwrap().retain(|message| {
-            message.id() != id || message.owner().is_none_or(|current| current != owner)
-        });
+    async fn ack(&self, owner: &str, id: u64, claim_token: &str) -> CatgaResult<()> {
+        if let Some(message) = self.messages.lock().unwrap().iter_mut().find(|message| {
+            message.id() == id
+                && message.owner() == Some(owner)
+                && message.claim_token() == Some(claim_token)
+        }) {
+            message.mark_published(0);
+        }
         Ok(())
     }
 
-    async fn release(&self, owner: &str, id: u64) -> CatgaResult<()> {
+    async fn release(&self, owner: &str, id: u64, claim_token: &str) -> CatgaResult<()> {
         let mut messages = self.messages.lock().unwrap();
-        if let Some(message) = messages
-            .iter_mut()
-            .find(|message| message.id() == id && message.owner() == Some(owner))
-        {
+        if let Some(message) = messages.iter_mut().find(|message| {
+            message.id() == id
+                && message.owner() == Some(owner)
+                && message.claim_token() == Some(claim_token)
+        }) {
             message.release();
         }
         Ok(())
+    }
+
+    async fn record_failure(
+        &self,
+        owner: &str,
+        id: u64,
+        claim_token: &str,
+        reason: &str,
+    ) -> CatgaResult<()> {
+        let mut messages = self.messages.lock().map_err(|_| {
+            CatgaError::new(ErrorCode::Internal, "recording outbox mutex was poisoned")
+        })?;
+        if let Some(message) = messages.iter_mut().find(|message| {
+            message.id() == id
+                && message.owner() == Some(owner)
+                && message.claim_token() == Some(claim_token)
+        }) {
+            message.record_failure(reason);
+        }
+        Ok(())
+    }
+
+    async fn cancel(&self, id: u64) -> CatgaResult<bool> {
+        let mut messages = self.messages.lock().map_err(|_| {
+            CatgaError::new(ErrorCode::Internal, "recording outbox mutex was poisoned")
+        })?;
+        let Some(index) = messages
+            .iter()
+            .position(|message| message.id() == id && message.state() == OutboxState::Pending)
+        else {
+            return Ok(false);
+        };
+        messages.remove(index);
+        Ok(true)
     }
 }
 
@@ -62,7 +105,7 @@ fn message(id: u64) -> OutboxMessage {
 }
 
 #[tokio::test]
-async fn outbox_contract_supports_enqueue_claim_and_owner_ack() {
+async fn outbox_contract_supports_enqueue_claim_and_token_ack() {
     let store = RecordingOutbox::default();
     store.enqueue(message(1)).await.unwrap();
 
@@ -70,6 +113,9 @@ async fn outbox_contract_supports_enqueue_claim_and_owner_ack() {
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].owner(), Some("worker-a"));
 
-    store.ack("worker-a", 1).await.unwrap();
+    store
+        .ack("worker-a", 1, claimed[0].claim_token().unwrap())
+        .await
+        .unwrap();
     assert!(store.claim("worker-b", 1).await.unwrap().is_empty());
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use catga_core::{Event, Message};
+use catga_core::{ErrorCode, Event, Message};
 use catga_flow::{
     StateMachine, StateMachineEventRouter, StateMachineExecutor, StateMachineSnapshot,
     StateMachineState, StateMachineStore,
@@ -27,6 +27,16 @@ impl StateMachineState<State> for Order {
 
     fn set_current_state(&mut self, state: State) {
         self.state = state;
+    }
+}
+
+impl Default for Order {
+    fn default() -> Self {
+        Self {
+            state: State::Pending,
+            payment_allowed: true,
+            trace: Vec::new(),
+        }
     }
 }
 
@@ -200,6 +210,22 @@ async fn memory_store_uses_versions_and_executor_persists_handled_events() {
     assert_eq!(saved.state().current_state(), &State::Paid);
 }
 
+#[test]
+fn restored_state_machine_snapshots_reject_negative_versions() {
+    let error = StateMachineSnapshot::restore(
+        "invalid-order",
+        Order {
+            state: State::Pending,
+            payment_allowed: true,
+            trace: Vec::new(),
+        },
+        -1,
+    )
+    .expect_err("negative persisted version must fail");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+}
+
 #[tokio::test]
 async fn executor_creates_an_instance_from_a_configured_initial_event() {
     let store = Arc::new(MemoryStateMachines::default());
@@ -266,6 +292,59 @@ async fn event_router_uses_a_typed_instance_id_resolver() {
     assert_eq!(
         store
             .get("order-10")
+            .await
+            .unwrap()
+            .unwrap()
+            .state()
+            .current_state(),
+        &State::Paid
+    );
+}
+
+#[tokio::test]
+async fn event_router_uses_an_optional_fallback_for_unregistered_event_types() {
+    let store = Arc::new(MemoryStateMachines::default());
+    let executor = Arc::new(StateMachineExecutor::new(machine(), Arc::clone(&store)));
+    assert!(
+        executor
+            .initialize("order-fallback", Order::default())
+            .await
+            .unwrap()
+    );
+    let router = StateMachineEventRouter::new(executor).with_fallback(|event| {
+        event
+            .downcast_ref::<RoutedPaid>()
+            .map(|event| event.instance_id.clone())
+            .ok_or_else(|| catga_core::CatgaError::new(ErrorCode::Unsupported, "unroutable"))
+    });
+
+    let result = router
+        .route(&RoutedPaid {
+            instance_id: "order-fallback".to_owned(),
+        })
+        .await
+        .unwrap();
+
+    assert!(result.handled());
+}
+
+#[tokio::test]
+async fn executor_lazily_initializes_default_state_without_a_custom_factory() {
+    let store = Arc::new(MemoryStateMachines::default());
+    let mut definition = StateMachine::<Order, State>::builder(State::Pending);
+    definition.default_initial_state();
+    definition
+        .state(State::Pending)
+        .on::<Started>()
+        .transition_to(State::Paid);
+    let executor = StateMachineExecutor::new(definition.build(), Arc::clone(&store));
+
+    let result = executor.handle("order-default", &Started).await.unwrap();
+
+    assert!(result.handled());
+    assert_eq!(
+        store
+            .get("order-default")
             .await
             .unwrap()
             .unwrap()

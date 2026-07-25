@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, LeaseStore};
+use catga_core::{CatgaResult, LeaseStore, telemetry};
 use dashmap::{DashMap, mapref::entry::Entry};
 
 /// An in-memory lease store with owner-conditional operations.
@@ -23,8 +23,9 @@ struct Lease {
 #[async_trait]
 impl LeaseStore for MemoryLeases {
     async fn try_acquire(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
+        let mut operation = telemetry::persistence_operation("memory", "lease", "try_acquire");
         let expiry = expiry(ttl);
-        Ok(match self.leases.entry(resource.into()) {
+        let result = Ok(match self.leases.entry(resource.into()) {
             Entry::Vacant(entry) => {
                 entry.insert(Lease {
                     owner: owner.into(),
@@ -49,30 +50,40 @@ impl LeaseStore for MemoryLeases {
                 true
             }
             Entry::Occupied(_) => false,
-        })
+        });
+        operation.complete(&result);
+        result
     }
     async fn renew(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
-        let Some(lease) = self.leases.get(resource) else {
-            return Ok(false);
-        };
-        if lease.owner.as_ref() != owner
-            || lease.expires_at_millis.load(Ordering::Acquire) <= now_millis()
-        {
-            return Ok(false);
-        }
-        lease
-            .expires_at_millis
-            .store(expiry(ttl), Ordering::Release);
-        Ok(true)
+        let mut operation = telemetry::persistence_operation("memory", "lease", "renew");
+        let result = (|| {
+            let Some(lease) = self.leases.get(resource) else {
+                return Ok(false);
+            };
+            if lease.owner.as_ref() != owner
+                || lease.expires_at_millis.load(Ordering::Acquire) <= now_millis()
+            {
+                return Ok(false);
+            }
+            lease
+                .expires_at_millis
+                .store(expiry(ttl), Ordering::Release);
+            Ok(true)
+        })();
+        operation.complete(&result);
+        result
     }
     async fn release(&self, resource: &str, owner: &str) -> CatgaResult<bool> {
-        Ok(match self.leases.entry(resource.into()) {
+        let mut operation = telemetry::persistence_operation("memory", "lease", "release");
+        let result = Ok(match self.leases.entry(resource.into()) {
             Entry::Occupied(entry) if entry.get().owner.as_ref() == owner => {
                 entry.remove();
                 true
             }
             _ => false,
-        })
+        });
+        operation.complete(&result);
+        result
     }
 }
 

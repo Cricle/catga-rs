@@ -101,6 +101,30 @@ pub trait Projection: Send + Sync {
     async fn reset(&self) -> CatgaResult<()>;
 }
 
+/// Applies newly received stored events to one projection without checkpoint I/O.
+///
+/// This is the low-latency counterpart to [`CatchUpProjectionRunner`]. The
+/// caller selects the durable subscription and ordering policy; this wrapper
+/// only forwards an immutable event reference to the projection.
+pub struct LiveProjection<'a, P: ?Sized> {
+    projection: &'a P,
+}
+
+impl<'a, P: ?Sized> LiveProjection<'a, P>
+where
+    P: Projection,
+{
+    /// Creates a live handler for one projection.
+    pub const fn new(projection: &'a P) -> Self {
+        Self { projection }
+    }
+
+    /// Applies one newly delivered immutable stored event.
+    pub async fn handle(&self, event: &StoredEvent) -> CatgaResult<()> {
+        self.projection.apply(event).await
+    }
+}
+
 /// Summary returned after a projection run.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProjectionRun {
@@ -140,8 +164,7 @@ where
             events,
             checkpoints,
             projection,
-            NonZeroUsize::new(DEFAULT_BATCH_SIZE)
-                .expect("the default projection batch is non-zero"),
+            NonZeroUsize::new(DEFAULT_BATCH_SIZE).unwrap_or(NonZeroUsize::MIN),
         )
     }
 

@@ -22,6 +22,9 @@ pub type RaftTransportResult = Result<(), Box<dyn Error + Send + Sync>>;
 ///
 /// Implementations should enqueue quickly or apply their own bounded
 /// backpressure, because a send is awaited by the single Raft owner task.
+/// The runtime cancels an in-flight `send` future when
+/// [`RaftRuntime::shutdown`] is called, so implementations must release any
+/// resources acquired by a dropped send future.
 #[async_trait]
 pub trait RaftTransport: Send + Sync {
     /// Delivers one Raft protocol message.
@@ -33,7 +36,8 @@ pub trait RaftTransport: Send + Sync {
 pub enum RaftRuntimeError {
     /// The configured logical Raft clock interval was zero.
     InvalidTickInterval,
-    /// The owner task exited before it could handle a request.
+    /// The owner task stopped before it could complete a request, including a
+    /// request interrupted by [`RaftRuntime::shutdown`].
     Stopped,
     /// `raft-rs` rejected an operation or an inbound protocol message.
     Raft(raft::Error),
@@ -145,7 +149,9 @@ impl RaftRuntime {
 
     /// Proposes one application command through the locally elected leader.
     pub async fn propose(&self, data: impl Into<Vec<u8>>) -> Result<(), RaftRuntimeError> {
-        self.request(Command::Propose(data.into())).await
+        let data = data.into();
+        self.request(move |reply| Command::Propose(data, reply))
+            .await
     }
 
     /// Takes committed normal entries accumulated by the runtime.
@@ -159,6 +165,9 @@ impl RaftRuntime {
     }
 
     /// Requests a graceful stop of the owner task.
+    ///
+    /// The runtime cancels a transport send that is currently awaiting
+    /// completion and does not deliver any remaining outbound messages.
     pub fn shutdown(&self) {
         self.shutdown.cancel();
     }
@@ -168,19 +177,13 @@ impl RaftRuntime {
         self.task.await.map_err(RaftRuntimeError::Task)?
     }
 
-    async fn request(&self, command: Command) -> Result<(), RaftRuntimeError> {
+    async fn request<F>(&self, command: F) -> Result<(), RaftRuntimeError>
+    where
+        F: FnOnce(oneshot::Sender<Result<(), RaftRuntimeError>>) -> Command,
+    {
         let (reply, result) = oneshot::channel();
-        let command = match command {
-            Command::Campaign => Command::CampaignWithReply(reply),
-            Command::Propose(data) => Command::ProposeWithReply(data, reply),
-            Command::CampaignWithReply(_)
-            | Command::ProposeWithReply(_, _)
-            | Command::DrainCommitted(_) => {
-                unreachable!("only public Raft commands are requested")
-            }
-        };
         self.commands
-            .send(command)
+            .send(command(reply))
             .await
             .map_err(|_| RaftRuntimeError::Stopped)?;
         result.await.map_err(|_| RaftRuntimeError::Stopped)??;
@@ -189,10 +192,8 @@ impl RaftRuntime {
 }
 
 enum Command {
-    Campaign,
-    Propose(Vec<u8>),
-    CampaignWithReply(oneshot::Sender<Result<(), RaftRuntimeError>>),
-    ProposeWithReply(Vec<u8>, oneshot::Sender<Result<(), RaftRuntimeError>>),
+    Campaign(oneshot::Sender<Result<(), RaftRuntimeError>>),
+    Propose(Vec<u8>, oneshot::Sender<Result<(), RaftRuntimeError>>),
     DrainCommitted(oneshot::Sender<Vec<RaftCommittedEntry>>),
 }
 
@@ -208,27 +209,41 @@ async fn run(
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            biased;
             _ = shutdown.cancelled() => return Ok(()),
-            _ = ticks.tick() => drive(node.tick(), &mut node, transport.as_ref()).await?,
-            Some(message) = inbound.recv() => drive(node.step(message), &mut node, transport.as_ref()).await?,
+            _ = ticks.tick() => {
+                if !drive(node.tick(), &mut node, transport.as_ref(), &shutdown).await? {
+                    return Ok(());
+                }
+            }
+            Some(message) = inbound.recv() => {
+                if !drive(node.step(message), &mut node, transport.as_ref(), &shutdown).await? {
+                    return Ok(());
+                }
+            }
             Some(command) = commands.recv() => {
                 match command {
-                    Command::CampaignWithReply(reply) => {
-                        respond(
+                    Command::Campaign(reply) => {
+                        if !respond_drive(
                             reply,
-                            drive(node.campaign(), &mut node, transport.as_ref()).await,
-                        )?;
+                            drive(node.campaign(), &mut node, transport.as_ref(), &shutdown)
+                                .await,
+                        )? {
+                            return Ok(());
+                        }
                     }
-                    Command::ProposeWithReply(data, reply) => {
-                        respond(
+                    Command::Propose(data, reply) => {
+                        if !respond_drive(
                             reply,
-                            drive(node.propose(data), &mut node, transport.as_ref()).await,
-                        )?;
+                            drive(node.propose(data), &mut node, transport.as_ref(), &shutdown)
+                                .await,
+                        )? {
+                            return Ok(());
+                        }
                     }
                     Command::DrainCommitted(reply) => {
                         let _ = reply.send(node.drain_committed());
                     }
-                    Command::Campaign | Command::Propose(_) => unreachable!("commands are always paired with a reply"),
                 }
             }
             else => return Ok(()),
@@ -256,13 +271,35 @@ async fn drive(
     result: raft::Result<()>,
     node: &mut RaftNode,
     transport: &dyn RaftTransport,
-) -> Result<(), RaftRuntimeError> {
+    shutdown: &CancellationToken,
+) -> Result<bool, RaftRuntimeError> {
     result.map_err(RaftRuntimeError::Raft)?;
     for message in node.drain_messages() {
-        transport
-            .send(message)
-            .await
-            .map_err(RaftRuntimeError::Transport)?;
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return Ok(false),
+            result = transport.send(message) => result.map_err(RaftRuntimeError::Transport)?,
+        }
     }
-    Ok(())
+    Ok(true)
+}
+
+fn respond_drive(
+    reply: oneshot::Sender<Result<(), RaftRuntimeError>>,
+    result: Result<bool, RaftRuntimeError>,
+) -> Result<bool, RaftRuntimeError> {
+    match result {
+        Ok(continue_running) => {
+            if continue_running {
+                respond(reply, Ok(()))?;
+            } else {
+                let _ = reply.send(Err(RaftRuntimeError::Stopped));
+            }
+            Ok(continue_running)
+        }
+        Err(error) => {
+            respond(reply, Err(error))?;
+            Ok(true)
+        }
+    }
 }

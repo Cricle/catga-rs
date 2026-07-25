@@ -3,8 +3,17 @@
 
 mod definition;
 mod dsl;
+mod dsl_checkpoint;
+mod dsl_parallel_recovery;
+mod dsl_progress;
+mod dsl_recovery;
+mod dsl_when_any;
+mod due_service;
 mod executor;
+mod hot_reload;
 mod local;
+mod metrics;
+mod persistence;
 mod runtime;
 mod scheduler;
 mod state;
@@ -12,22 +21,39 @@ mod state_machine;
 mod store;
 mod suspension;
 mod suspension_store;
+mod tag_policy;
+mod timeout;
 
 pub use definition::{FlowDefinition, FlowStepOutcome};
-pub use dsl::DslFlow;
-pub use executor::FlowExecutor;
+pub use dsl::{DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleObserver, FlowThrottle};
+pub use dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
+pub use due_service::{DueFlowOptions, FlowDueService};
+pub use executor::{FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions};
+pub use hot_reload::{
+    FlowRegistry, FlowReloaded, FlowVersionManager, RegistryFlowRuntime, VersionedFlowDefinition,
+};
 pub use local::{Flow, FlowResult};
+pub use persistence::{decode_continuation, encode_continuation};
 pub use runtime::{FlowRuntime, FlowRuntimeResult};
-pub use scheduler::{FlowScheduler, MemoryFlowScheduler, ScheduledResume};
+pub use scheduler::{DueFlowScheduler, FlowScheduler, MemoryFlowScheduler, ScheduledResume};
 pub use state::{FlowState, FlowStatus};
 pub use state_machine::{StateMachine, StateMachineResult};
 pub use state_machine::{
     StateMachineBuilder, StateMachineEventRouter, StateMachineExecutor, StateMachineSnapshot,
-    StateMachineState, StateMachineStore,
+    StateMachineState, StateMachineStore, decode_state_machine_snapshot,
+    encode_state_machine_snapshot,
 };
 pub use store::FlowStore;
 pub use suspension::{FlowContinuation, WaitCondition, WaitPolicy, WaitResult};
-pub use suspension_store::SuspendedFlowStore;
+pub use suspension_store::{
+    FlowQuery, FlowSummary, MAX_FLOW_QUERY_RESULTS, MAX_FLOW_QUERY_SCAN, SuspendedFlowStore,
+};
+pub use tag_policy::FlowTagPolicy;
+pub use timeout::{
+    DEFAULT_FLOW_TIMEOUT_BATCH_SIZE, DEFAULT_FLOW_TIMEOUT_SCAN_LIMIT, FlowTimeoutOptions,
+    FlowTimeoutService, MAX_FLOW_TIMEOUT_BATCH_SIZE, MAX_FLOW_TIMEOUT_SCAN_LIMIT, TimedOutFlowPoll,
+    TimedOutFlowReceipt, TimedOutFlowStore, flow_timeout_deadline_unix_ms,
+};
 
 /// Builds a named durable flow definition from registered async step handlers.
 ///

@@ -4,6 +4,7 @@ use std::{hash::Hash, sync::Arc};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Event};
 
+use super::actions::ErasedEvent;
 use super::{StateMachine, StateMachineResult, StateMachineState, StateMachineStore};
 
 /// Applies events to persistent state-machine instances with optimistic concurrency.
@@ -39,14 +40,23 @@ where
     where
         E: Event,
     {
+        let event: &ErasedEvent = event;
+        self.handle_erased(instance_id, event).await
+    }
+
+    pub(crate) async fn handle_erased(
+        &self,
+        instance_id: &str,
+        event: &ErasedEvent,
+    ) -> CatgaResult<StateMachineResult<K>> {
         let Some(snapshot) = self.store.get(instance_id).await? else {
-            let Some(mut state) = self.machine.create_initial(instance_id, event) else {
+            let Some(mut state) = self.machine.create_initial_erased(instance_id, event)? else {
                 return Err(CatgaError::new(
                     ErrorCode::NotFound,
                     format!("state-machine instance '{instance_id}' does not exist"),
                 ));
             };
-            let result = self.machine.handle(&mut state, event).await?;
+            let result = self.machine.handle_erased(&mut state, event).await?;
             if !result.handled() {
                 return Ok(result);
             }
@@ -63,7 +73,7 @@ where
             ));
         };
         let mut state = snapshot.state().clone();
-        let result = self.machine.handle(&mut state, event).await?;
+        let result = self.machine.handle_erased(&mut state, event).await?;
         if !result.handled() {
             return Ok(result);
         }

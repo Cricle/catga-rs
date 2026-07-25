@@ -96,6 +96,39 @@ impl RaftStorage {
         self.entries(first, commit + 1, None, GetEntriesContext::empty(false))
     }
 
+    /// Reads one bounded recovery page ending at the current durable commit.
+    ///
+    /// The continuation index advances over all Raft entries, including empty
+    /// protocol entries, so callers cannot stop early after an empty page.
+    pub(crate) fn committed_entries_page(
+        &self,
+        start_index: u64,
+        max_entries: usize,
+    ) -> RaftResult<(Vec<Entry>, Option<u64>)> {
+        if max_entries == 0 {
+            return Err(Error::Store(StorageError::Unavailable));
+        }
+        let state = self.initial_state()?;
+        let first = self.first_index()?;
+        let start = start_index.max(first);
+        let commit = state.hard_state.commit;
+        if start > commit {
+            return Ok((Vec::new(), None));
+        }
+        let limit =
+            u64::try_from(max_entries).map_err(|_| Error::Store(StorageError::Unavailable))?;
+        let commit_exclusive = commit
+            .checked_add(1)
+            .ok_or(Error::Store(StorageError::Unavailable))?;
+        let exclusive_end = start
+            .checked_add(limit)
+            .map(|end| end.min(commit_exclusive))
+            .ok_or(Error::Store(StorageError::Unavailable))?;
+        let entries = self.entries(start, exclusive_end, None, GetEntriesContext::empty(false))?;
+        let next_index = (exclusive_end <= commit).then_some(exclusive_end);
+        Ok((entries, next_index))
+    }
+
     pub(crate) fn application_snapshot(&self) -> RaftResult<Option<Snapshot>> {
         match self {
             Self::InMemory(storage) => Ok(storage
@@ -411,7 +444,7 @@ impl Storage for PersistentRaftStorage {
         }
         let last = self.last_index()?;
         if high > last + 1 {
-            panic!("index out of bound (last: {}, high: {high})", last + 1);
+            return Err(Error::Store(StorageError::Unavailable));
         }
         if low == high {
             return Ok(Vec::new());

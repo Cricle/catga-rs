@@ -3,6 +3,7 @@ members = [
     "crates/catga-core",
     "crates/catga-flow",
     "crates/catga-codec-postcard",
+    "crates/catga-codec-memorypack",
     "crates/catga-axum",
     "crates/catga-cluster",
     "crates/catga-macros",
@@ -10,6 +11,7 @@ members = [
     "crates/catga-nats",
     "crates/catga-redis",
     "crates/catga-robustmq",
+    "crates/catga-testing",
     "tests",
 ]
 resolver = "3"
@@ -22,4 +24,7 @@ repository = "https://github.com/Cricle/Catga"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-missing_docs = "warn"
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"

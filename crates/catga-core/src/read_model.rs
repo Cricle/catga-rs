@@ -10,7 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 
-use crate::{CatgaResult, Envelope};
+use crate::{CatgaError, CatgaResult, Envelope};
 
 /// The lifecycle operation represented by one read-model change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,7 +93,11 @@ pub trait ChangeTracker: Send + Sync {
 /// Applies a batch of pending changes to one external read model.
 #[async_trait]
 pub trait SyncStrategy: Send + Sync {
-    /// Applies every supplied change or returns the first failure.
+    /// Applies every supplied change or returns the first failure or deferral.
+    ///
+    /// A strategy that intentionally defers work must return a transient error
+    /// rather than `Ok(())`, so [`ReadModelSynchronizer`] retains the supplied
+    /// changes instead of acknowledging work that was not applied.
     async fn execute(&self, changes: &[ChangeRecord]) -> CatgaResult<()>;
 }
 
@@ -130,6 +134,10 @@ pub struct BatchSyncStrategy<F> {
 }
 
 /// Runs a full ordered change set no more often than one configured interval.
+///
+/// Calls made while another invocation is active or before the interval
+/// elapses return [`crate::ErrorCode::Transient`]. This keeps pending changes
+/// durable until an invocation actually runs and succeeds.
 pub struct ScheduledSyncStrategy<F> {
     interval_millis: u64,
     action: F,
@@ -162,12 +170,18 @@ where
         loop {
             let state = self.state.load(Ordering::Acquire);
             if state & BUSY != 0 {
-                return Ok(());
+                return Err(CatgaError::new(
+                    crate::ErrorCode::Transient,
+                    "read-model synchronization is already running",
+                ));
             }
             let last = state & TIMESTAMP;
             let now = now_millis();
             if last != 0 && now.saturating_sub(last) < self.interval_millis {
-                return Ok(());
+                return Err(CatgaError::new(
+                    crate::ErrorCode::Transient,
+                    "read-model synchronization is deferred until its scheduled interval",
+                ));
             }
             if self
                 .state

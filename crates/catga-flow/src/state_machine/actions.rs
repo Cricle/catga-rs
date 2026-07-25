@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use catga_core::{CatgaResult, Event};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Event};
 use futures::{FutureExt, future::BoxFuture};
 
 pub(super) type SyncStateAction<S> = Arc<dyn Fn(&mut S) -> CatgaResult<()> + Send + Sync>;
@@ -16,7 +16,7 @@ pub(super) type AsyncEventAction<S, E> =
     Arc<dyn for<'a> Fn(&'a mut S, &'a E) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
 pub(super) type EventGuard<S, E> = Arc<dyn Fn(&S, &E) -> bool + Send + Sync>;
 pub(super) type InitialStateFactory<S, E> = Arc<dyn Fn(&E, &str) -> S + Send + Sync>;
-pub(super) type ErasedEvent = dyn Any + Send + Sync;
+pub(crate) type ErasedEvent = dyn Any + Send + Sync;
 
 pub(super) enum StateAction<S> {
     Sync(SyncStateAction<S>),
@@ -50,7 +50,7 @@ impl<S, K> Default for StateDefinition<S, K> {
 
 pub(super) trait ErasedTransition<S, K>: Send + Sync {
     fn event_type(&self) -> TypeId;
-    fn applies(&self, state: &S, event: &ErasedEvent) -> bool;
+    fn applies(&self, state: &S, event: &ErasedEvent) -> CatgaResult<bool>;
     fn target(&self) -> Option<&K>;
     fn execute<'a>(
         &'a self,
@@ -62,7 +62,22 @@ pub(super) trait ErasedTransition<S, K>: Send + Sync {
 pub(super) trait ErasedInitialStateFactory<S, K>: Send + Sync {
     fn event_type(&self) -> TypeId;
     fn initial_state(&self) -> &K;
-    fn create(&self, event: &ErasedEvent, instance_id: &str) -> S;
+    fn create(&self, event: &ErasedEvent, instance_id: &str) -> CatgaResult<S>;
+}
+
+fn typed_event<E>(event: &ErasedEvent) -> CatgaResult<&E>
+where
+    E: Event,
+{
+    event.downcast_ref::<E>().ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            format!(
+                "state-machine event type mismatch: expected {}",
+                std::any::type_name::<E>()
+            ),
+        )
+    })
 }
 
 pub(super) struct TypedInitialStateFactory<S, K, E> {
@@ -84,11 +99,8 @@ where
         &self.initial_state
     }
 
-    fn create(&self, event: &ErasedEvent, instance_id: &str) -> S {
-        let event = event
-            .downcast_ref::<E>()
-            .expect("state-machine initial event type was checked before dispatch");
-        (self.factory)(event, instance_id)
+    fn create(&self, event: &ErasedEvent, instance_id: &str) -> CatgaResult<S> {
+        Ok((self.factory)(typed_event::<E>(event)?, instance_id))
     }
 }
 
@@ -124,11 +136,9 @@ where
         TypeId::of::<E>()
     }
 
-    fn applies(&self, state: &S, event: &ErasedEvent) -> bool {
-        let event = event
-            .downcast_ref::<E>()
-            .expect("state-machine event type was checked before dispatch");
-        self.guard.as_ref().is_none_or(|guard| guard(state, event))
+    fn applies(&self, state: &S, event: &ErasedEvent) -> CatgaResult<bool> {
+        let event = typed_event::<E>(event)?;
+        Ok(self.guard.as_ref().is_none_or(|guard| guard(state, event)))
     }
 
     fn target(&self) -> Option<&K> {
@@ -140,13 +150,69 @@ where
         state: &'a mut S,
         event: &'a ErasedEvent,
     ) -> BoxFuture<'a, CatgaResult<()>> {
-        let event = event
-            .downcast_ref::<E>()
-            .expect("state-machine event type was checked before dispatch");
+        let event = match typed_event::<E>(event) {
+            Ok(event) => event,
+            Err(error) => return futures::future::ready(Err(error)).boxed(),
+        };
         match &self.action {
             EventAction::None => futures::future::ready(Ok(())).boxed(),
             EventAction::Sync(action) => futures::future::ready(action(state, event)).boxed(),
             EventAction::Async(action) => action(state, event),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ErasedEvent, ErasedInitialStateFactory, ErasedTransition, TypedInitialStateFactory,
+        TypedTransition,
+    };
+    use catga_core::{ErrorCode, Event, Message};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct ExpectedEvent;
+
+    impl Message for ExpectedEvent {}
+    impl Event for ExpectedEvent {}
+
+    #[derive(Clone)]
+    struct UnexpectedEvent;
+
+    impl Message for UnexpectedEvent {}
+    impl Event for UnexpectedEvent {}
+
+    #[tokio::test]
+    async fn erased_state_machine_actions_report_mismatched_event_types() {
+        let factory: TypedInitialStateFactory<(), (), ExpectedEvent> = TypedInitialStateFactory {
+            initial_state: (),
+            factory: Arc::new(|_, _| ()),
+        };
+        let transition = TypedTransition::<(), (), ExpectedEvent>::new();
+        let event: &ErasedEvent = &UnexpectedEvent;
+
+        assert_eq!(
+            factory
+                .create(event, "instance")
+                .expect_err("mismatched events must return an error")
+                .code(),
+            ErrorCode::Internal
+        );
+        assert_eq!(
+            transition
+                .applies(&(), event)
+                .expect_err("mismatched events must return an error")
+                .code(),
+            ErrorCode::Internal
+        );
+        assert_eq!(
+            transition
+                .execute(&mut (), event)
+                .await
+                .expect_err("mismatched events must return an error")
+                .code(),
+            ErrorCode::Internal
+        );
     }
 }

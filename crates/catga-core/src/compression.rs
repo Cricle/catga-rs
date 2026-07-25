@@ -1,6 +1,6 @@
 //! Bounded transport payload compression with a compact self-describing frame.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use brotli::{CompressorWriter, Decompressor};
 use flate2::{
@@ -11,7 +11,9 @@ use flate2::{
 
 use crate::{CatgaError, CatgaResult, ErrorCode};
 
-const HEADER_LEN: usize = 5;
+const FRAME_MAGIC: &[u8; 4] = b"CTGA";
+const FRAME_VERSION: u8 = 1;
+const HEADER_LEN: usize = 10;
 
 /// Maximum uncompressed payload accepted by [`decompress`].
 pub const DEFAULT_MAX_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
@@ -103,7 +105,9 @@ pub fn compress_into(
     output: &mut Vec<u8>,
 ) -> CatgaResult<()> {
     output.clear();
-    if algorithm == CompressionAlgorithm::None || data.is_empty() {
+    if (algorithm == CompressionAlgorithm::None && !data.starts_with(FRAME_MAGIC))
+        || data.is_empty()
+    {
         output.extend_from_slice(data);
         return Ok(());
     }
@@ -113,10 +117,12 @@ pub fn compress_into(
             "payload exceeds the compression frame length limit",
         )
     })?;
+    output.extend_from_slice(FRAME_MAGIC);
+    output.push(FRAME_VERSION);
     output.push(algorithm as u8);
     output.extend_from_slice(&original_length.to_le_bytes());
     match algorithm {
-        CompressionAlgorithm::None => unreachable!("none returns before framing"),
+        CompressionAlgorithm::None => output.extend_from_slice(data),
         CompressionAlgorithm::Gzip => {
             let mut writer = GzEncoder::new(output, Compression::fast());
             writer.write_all(data).map_err(write_error)?;
@@ -136,6 +142,102 @@ pub fn compress_into(
     Ok(())
 }
 
+/// Compresses a payload directly into a caller-provided fixed-size slice.
+///
+/// Returns the exact number of encoded bytes on success. Unlike [`compress`]
+/// and [`compress_into`], this function never creates, reserves, or resizes
+/// an output container. The caller owns the output capacity and should consume
+/// only `&output[..written]`.
+///
+/// The encoded bytes use the same algorithm tag and little-endian original
+/// length framing as [`compress_into`]. [`CompressionAlgorithm::None`] and an
+/// empty payload retain unframed raw-payload behavior unless raw bytes begin
+/// with the reserved `CTGA` frame magic, which uses an explicit None envelope.
+/// Insufficient output
+/// capacity returns [`ErrorCode::Validation`]. Raw payload failures leave the
+/// supplied slice unchanged; compressed failures clear any prefix written by
+/// the encoder so it cannot be observed as a valid compressed frame.
+pub fn compress_to_slice(
+    data: &[u8],
+    algorithm: CompressionAlgorithm,
+    output: &mut [u8],
+) -> CatgaResult<usize> {
+    if (algorithm == CompressionAlgorithm::None && !data.starts_with(FRAME_MAGIC))
+        || data.is_empty()
+    {
+        if output.len() < data.len() {
+            return Err(insufficient_output_error());
+        }
+        output[..data.len()].copy_from_slice(data);
+        return Ok(data.len());
+    }
+    let original_length = u32::try_from(data.len()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "payload exceeds the compression frame length limit",
+        )
+    })?;
+    if output.len() < HEADER_LEN.saturating_add(data.len())
+        && algorithm == CompressionAlgorithm::None
+    {
+        return Err(insufficient_output_error());
+    }
+    if output.len() < HEADER_LEN {
+        return Err(insufficient_output_error());
+    }
+
+    let mut writer = SliceWriter::new(output);
+    let header = [
+        b'C',
+        b'T',
+        b'G',
+        b'A',
+        FRAME_VERSION,
+        algorithm as u8,
+        original_length as u8,
+        (original_length >> 8) as u8,
+        (original_length >> 16) as u8,
+        (original_length >> 24) as u8,
+    ];
+    writer
+        .write_all(&header)
+        .map_err(|_| insufficient_output_error())?;
+
+    match algorithm {
+        CompressionAlgorithm::None => {
+            writer
+                .write_all(data)
+                .map_err(|_| insufficient_output_error())?;
+            Ok(writer.len())
+        }
+        CompressionAlgorithm::Gzip => {
+            let result = {
+                let mut encoder = GzEncoder::new(&mut writer, Compression::fast());
+                encoder
+                    .write_all(data)
+                    .and_then(|_| encoder.finish().map(|_| ()))
+            };
+            finish_slice_write(result, &mut writer)
+        }
+        CompressionAlgorithm::Brotli => {
+            let result = {
+                let mut encoder = CompressorWriter::new(&mut writer, 4_096, 4, 22);
+                encoder.write_all(data).and_then(|_| encoder.flush())
+            };
+            finish_slice_write(result, &mut writer)
+        }
+        CompressionAlgorithm::Deflate => {
+            let result = {
+                let mut encoder = DeflateEncoder::new(&mut writer, Compression::fast());
+                encoder
+                    .write_all(data)
+                    .and_then(|_| encoder.finish().map(|_| ()))
+            };
+            finish_slice_write(result, &mut writer)
+        }
+    }
+}
+
 /// Decompresses a framed payload with [`DEFAULT_MAX_DECOMPRESSED_BYTES`] as its allocation cap.
 pub fn decompress(data: &[u8]) -> CatgaResult<Vec<u8>> {
     decompress_limited(data, DEFAULT_MAX_DECOMPRESSED_BYTES)
@@ -143,21 +245,32 @@ pub fn decompress(data: &[u8]) -> CatgaResult<Vec<u8>> {
 
 /// Decompresses a payload while rejecting a frame whose declared or actual output exceeds `limit`.
 pub fn decompress_limited(data: &[u8], limit: usize) -> CatgaResult<Vec<u8>> {
-    if data.len() < HEADER_LEN {
+    if !data.starts_with(FRAME_MAGIC) {
         return copy_raw_limited(data, limit);
     }
-    let Ok(algorithm) = CompressionAlgorithm::try_from(data[0]) else {
-        return copy_raw_limited(data, limit);
-    };
-    if algorithm == CompressionAlgorithm::None {
-        return copy_raw_limited(&data[HEADER_LEN..], limit);
+    if data.len() < HEADER_LEN || data[4] != FRAME_VERSION {
+        return Err(CatgaError::new(
+            ErrorCode::Validation,
+            "compressed payload has an invalid frame header",
+        ));
     }
-    let declared = u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as usize;
+    let algorithm = CompressionAlgorithm::try_from(data[5])?;
+    let declared = u32::from_le_bytes([data[6], data[7], data[8], data[9]]) as usize;
     if declared > limit {
         return Err(CatgaError::new(
             ErrorCode::Validation,
             "compressed payload exceeds the decompression limit",
         ));
+    }
+    if algorithm == CompressionAlgorithm::None {
+        let payload = &data[HEADER_LEN..];
+        if payload.len() != declared {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "compressed payload has an invalid decoded length",
+            ));
+        }
+        return Ok(payload.to_vec());
     }
     let mut output = Vec::new();
     output.try_reserve_exact(declared).map_err(|_| {
@@ -168,7 +281,12 @@ pub fn decompress_limited(data: &[u8], limit: usize) -> CatgaResult<Vec<u8>> {
     })?;
     let payload = &data[HEADER_LEN..];
     match algorithm {
-        CompressionAlgorithm::None => unreachable!("none returns before decompression"),
+        CompressionAlgorithm::None => {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "compressed payload dispatch received an uncompressed algorithm",
+            ));
+        }
         CompressionAlgorithm::Gzip => {
             read_framed(GzDecoder::new(payload), &mut output, declared, limit)?;
         }
@@ -190,7 +308,9 @@ pub fn decompress_limited(data: &[u8], limit: usize) -> CatgaResult<Vec<u8>> {
 /// Returns whether bytes begin with a supported compressed-payload frame.
 pub fn is_compressed(data: &[u8]) -> bool {
     data.len() >= HEADER_LEN
-        && CompressionAlgorithm::try_from(data[0])
+        && data.starts_with(FRAME_MAGIC)
+        && data[4] == FRAME_VERSION
+        && CompressionAlgorithm::try_from(data[5])
             .is_ok_and(|algorithm| algorithm != CompressionAlgorithm::None)
 }
 
@@ -221,6 +341,73 @@ fn read_framed<R: Read>(
         ));
     }
     Ok(())
+}
+
+struct SliceWriter<'a> {
+    output: &'a mut [u8],
+    written: usize,
+    capacity_exhausted: bool,
+}
+
+impl<'a> SliceWriter<'a> {
+    const fn new(output: &'a mut [u8]) -> Self {
+        Self {
+            output,
+            written: 0,
+            capacity_exhausted: false,
+        }
+    }
+
+    const fn len(&self) -> usize {
+        self.written
+    }
+
+    fn clear_written(&mut self) {
+        self.output[..self.written].fill(0);
+        self.written = 0;
+    }
+}
+
+impl Write for SliceWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let remaining = self.output.len().saturating_sub(self.written);
+        if bytes.len() > remaining {
+            self.capacity_exhausted = true;
+            return Err(io::Error::from(io::ErrorKind::WriteZero));
+        }
+        let end = self.written + bytes.len();
+        self.output[self.written..end].copy_from_slice(bytes);
+        self.written = end;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn finish_slice_write(result: io::Result<()>, writer: &mut SliceWriter<'_>) -> CatgaResult<usize> {
+    match result {
+        Ok(()) => Ok(writer.len()),
+        Err(_) if writer.capacity_exhausted => {
+            writer.clear_written();
+            Err(insufficient_output_error())
+        }
+        Err(_) => {
+            writer.clear_written();
+            Err(CatgaError::new(
+                ErrorCode::Internal,
+                "compression encoder failed while writing to the fixed output buffer",
+            ))
+        }
+    }
+}
+
+fn insufficient_output_error() -> CatgaError {
+    CatgaError::new(
+        ErrorCode::Validation,
+        "compression output buffer is too small",
+    )
 }
 
 fn write_error(error: std::io::Error) -> CatgaError {

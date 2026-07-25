@@ -233,3 +233,27 @@ fn persistent_checkpoint_recovers_before_replaying_later_commands() {
     assert_eq!(driver.apply_committed().unwrap(), 1);
     assert_eq!(driver.machine().value, 13);
 }
+
+#[test]
+fn persistent_recovery_replays_a_committed_suffix_larger_than_one_page() {
+    let directory = tempfile::tempdir().unwrap();
+    let members = vec![member()];
+    const COMMANDS: u64 = 257;
+
+    {
+        let node = RaftNode::open_persistent(1, "http://node-1", members.clone(), directory.path())
+            .unwrap();
+        let mut driver = RaftStateMachineDriver::new(node, Counter::default()).unwrap();
+        driver.campaign().unwrap();
+        for _ in 0..COMMANDS {
+            driver.propose(1_u64.to_le_bytes()).unwrap();
+        }
+        assert_eq!(driver.apply_committed().unwrap(), COMMANDS as usize);
+    }
+
+    let node = RaftNode::open_persistent(1, "http://node-1", members, directory.path()).unwrap();
+    let driver = RaftStateMachineDriver::new(node, Counter::default()).unwrap();
+
+    assert_eq!(driver.machine().applications, COMMANDS as usize);
+    assert_eq!(driver.machine().value, COMMANDS);
+}

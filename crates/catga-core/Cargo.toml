@@ -18,6 +18,9 @@ catga-macros = { path = "../catga-macros" }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures = "0.3"
 hmac = "0.12"
+metrics = "0.24"
+serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"

@@ -1,7 +1,13 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use async_trait::async_trait;
-use catga_core::{CatgaError, CatgaResult, ErrorCode, InboxStore, ProcessingState};
+use catga_core::{
+    CatgaError, CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode, InboxStore, ProcessingState,
+    inbox_claim_expires_at, telemetry,
+};
 use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::claim::ClaimRecord;
@@ -10,58 +16,134 @@ use crate::claim::ClaimRecord;
 #[derive(Default)]
 pub struct MemoryInbox {
     records: DashMap<u64, ClaimRecord>,
+    completed: DashMap<u64, u64>,
 }
 
 #[async_trait]
 impl InboxStore for MemoryInbox {
     async fn try_claim(&self, message_id: u64) -> CatgaResult<bool> {
-        match self.records.entry(message_id) {
-            Entry::Occupied(record) => Ok(record.get().try_claim()),
+        self.try_claim_for(message_id, DEFAULT_INBOX_CLAIM_LEASE)
+            .await
+    }
+
+    async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
+        let mut operation = telemetry::persistence_operation("memory", "inbox", "try_claim");
+        let expires_at = inbox_claim_expires_at(lease)?;
+        let now = now_millis();
+        let result = match self.records.entry(message_id) {
+            Entry::Occupied(record) => Ok(record.get().try_claim_until(expires_at, now)),
             Entry::Vacant(entry) => {
-                entry.insert(ClaimRecord::claimed());
-                Ok(true)
+                let record = ClaimRecord::claimed();
+                let claimed = record.try_claim_until(expires_at, now);
+                entry.insert(record);
+                Ok(claimed)
             }
-        }
+        };
+        operation.complete(&result);
+        result
     }
 
     async fn complete(&self, message_id: u64, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
-        let record = self
+        let mut operation = telemetry::persistence_operation("memory", "inbox", "complete");
+        let outcome = self
             .records
             .get(&message_id)
-            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "inbox message is not claimed"))?;
-        if record.complete(result) {
-            Ok(())
-        } else {
-            Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "inbox message is not currently claimed",
-            ))
+            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "inbox message is not claimed"))
+            .and_then(|record| {
+                if record.complete(result) {
+                    Ok(())
+                } else {
+                    Err(CatgaError::new(
+                        ErrorCode::Conflict,
+                        "inbox message is not currently claimed",
+                    ))
+                }
+            });
+        if outcome.is_ok() {
+            self.completed.insert(message_id, now_millis());
         }
+        operation.complete(&outcome);
+        outcome
     }
 
     async fn fail(&self, message_id: u64) -> CatgaResult<()> {
-        let record = self
+        let mut operation = telemetry::persistence_operation("memory", "inbox", "fail");
+        let outcome = self
             .records
             .get(&message_id)
-            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "inbox message is not claimed"))?;
-        if record.fail() {
-            Ok(())
-        } else {
-            Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "inbox message is not currently claimed",
-            ))
-        }
+            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "inbox message is not claimed"))
+            .and_then(|record| {
+                if record.fail() {
+                    Ok(())
+                } else {
+                    Err(CatgaError::new(
+                        ErrorCode::Conflict,
+                        "inbox message is not currently claimed",
+                    ))
+                }
+            });
+        operation.complete(&outcome);
+        outcome
     }
 
     async fn state(&self, message_id: u64) -> CatgaResult<Option<ProcessingState>> {
-        Ok(self.records.get(&message_id).map(|record| record.state()))
+        let mut operation = telemetry::persistence_operation("memory", "inbox", "state");
+        let result = Ok(self.records.get(&message_id).map(|record| record.state()));
+        operation.complete(&result);
+        result
     }
 
     async fn result(&self, message_id: u64) -> CatgaResult<Option<Arc<[u8]>>> {
-        Ok(self
+        let mut operation = telemetry::persistence_operation("memory", "inbox", "result");
+        let outcome = Ok(self
             .records
             .get(&message_id)
-            .and_then(|record| record.result()))
+            .and_then(|record| record.result()));
+        operation.complete(&outcome);
+        outcome
     }
+
+    async fn cleanup_completed(&self, retention: Duration, limit: usize) -> CatgaResult<usize> {
+        let mut operation = telemetry::persistence_operation("memory", "inbox", "cleanup");
+        let outcome = (|| {
+            catga_core::validate_retention_cleanup_limit(limit)?;
+            let retention = u64::try_from(retention.as_millis()).map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Validation,
+                    "inbox retention exceeds the supported millisecond range",
+                )
+            })?;
+            let now = now_millis();
+            let candidates: Vec<u64> = self
+                .completed
+                .iter()
+                .take(limit)
+                .filter(|entry| now.saturating_sub(*entry.value()) >= retention)
+                .map(|entry| *entry.key())
+                .collect();
+            let mut removed = 0;
+            for id in candidates {
+                if self
+                    .records
+                    .get(&id)
+                    .is_some_and(|record| record.state() == ProcessingState::Completed)
+                {
+                    self.records.remove(&id);
+                    removed += 1;
+                }
+                self.completed.remove(&id);
+            }
+            Ok(removed)
+        })();
+        operation.complete(&outcome);
+        outcome
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }

@@ -1,5 +1,7 @@
 //! State-machine values that may be persisted independently of configuration.
 
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
+
 /// Mutable state held by a state-machine instance.
 pub trait StateMachineState<K>: Clone + Send + Sync + 'static {
     /// Returns the instance's current state discriminator.
@@ -72,6 +74,21 @@ impl<S> StateMachineSnapshot<S> {
             state,
             version: 0,
         }
+    }
+
+    /// Restores a snapshot loaded from a durable store.
+    pub fn restore(instance_id: impl Into<Box<str>>, state: S, version: i64) -> CatgaResult<Self> {
+        if version < 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "state-machine snapshot version cannot be negative",
+            ));
+        }
+        Ok(Self {
+            instance_id: instance_id.into(),
+            state,
+            version,
+        })
     }
 
     /// Returns the immutable instance identity.

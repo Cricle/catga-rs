@@ -2,13 +2,15 @@
 
 use std::{
     num::NonZeroUsize,
+    sync::Arc,
     sync::atomic::{AtomicUsize, Ordering},
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
 use catga_core::{
-    CatchUpProjectionRunner, CatgaResult, Envelope, EventStore, MessageMetadata, Projection,
-    ProjectionCheckpointStore, StoredEvent,
+    CatchUpProjectionRunner, CatgaResult, Envelope, EventStore, LiveProjection, MessageMetadata,
+    Projection, ProjectionCheckpointStore, StoredEvent,
 };
 use catga_memory::{MemoryEventStore, MemoryProjectionCheckpoints};
 
@@ -53,6 +55,16 @@ fn event(id: u64, value: u8) -> Envelope {
         vec![value],
         MessageMetadata::new(id, None),
     )
+}
+
+#[tokio::test]
+async fn live_projection_applies_one_stored_event_without_checkpoint_state() {
+    let projection = SumProjection::new();
+    let live = LiveProjection::new(&projection);
+    let stored = StoredEvent::new(0, Arc::new(event(9, 7)), SystemTime::now());
+
+    live.handle(&stored).await.expect("event is applied");
+    assert_eq!(projection.total(), 7);
 }
 
 #[tokio::test]

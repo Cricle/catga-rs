@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::{Behavior, CatgaResult, ErrorCode, Next, Request};
+use crate::{
+    Behavior, CatgaError, CatgaResult, ErrorCode, Next, Request, telemetry::RESILIENCE_RETRIES,
+};
 
 /// Retries transient request failures with bounded exponential backoff.
 pub struct RetryBehavior {
@@ -38,6 +40,7 @@ where
             match next.run(message.clone()).await {
                 Err(error) if error.code() == ErrorCode::Transient && retry < self.max_retries => {
                     let delay = self.delay_for(retry);
+                    metrics::counter!(RESILIENCE_RETRIES).increment(1);
                     if !delay.is_zero() {
                         tokio::time::sleep(delay).await;
                     }
@@ -45,6 +48,9 @@ where
                 result => return result,
             }
         }
-        unreachable!("retry loop always returns")
+        Err(CatgaError::new(
+            ErrorCode::Internal,
+            "retry loop completed without a handler result",
+        ))
     }
 }

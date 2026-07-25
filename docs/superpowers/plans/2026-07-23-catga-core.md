@@ -551,6 +551,6 @@ Run: `git add crates/catga-memory crates/catga-core .github README.md Cargo.toml
 
 ## Plan Self-Review
 
-Spec coverage: Tasks 1-4 cover typed messages, handlers, pipeline, fan-out, batch and stream semantics. Tasks 5-8 cover persistence, bounded transport, acknowledgement, correlation, retry, timeout, idempotency, outbox, inbox, and dead-letter semantics. Tasks 9-10 cover the only requested non-memory adapters, Redis and NATS. Task 11 supplies cross-adapter tests, benchmarks, and CI gates. Event sourcing, Flow, Web, RabbitMQ, scheduling, and clustering remain explicitly deferred by the approved spec.
+Spec coverage: Tasks 1-4 cover typed messages, handlers, pipeline, fan-out, batch and stream semantics. Tasks 5-8 cover persistence, bounded transport, acknowledgement, correlation, retry, timeout, idempotency, outbox, inbox, and dead-letter semantics. Tasks 9-10 cover the only requested non-memory adapters, Redis and NATS. Task 11 supplies cross-adapter tests, benchmarks, and CI gates. Event sourcing, Flow, Web, scheduling, and clustering remain explicitly deferred by the approved spec.
 
 Consistency check: `CatgaResult<T>`, `MessageTransport`, `Envelope`, `Delivery`, and `ErrorCode` are defined in core before later tasks use them. The Redis and NATS tests use the same `Envelope`/`Delivery` acknowledgement model. Each implementation task starts with a focused failing test and ends with a verification command and commit.

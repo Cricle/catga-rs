@@ -5,8 +5,8 @@
 Create the first production-ready stage of a pure-Rust port of Catga: a fast
 CQRS mediator, message pipeline, in-memory transport and persistence, plus
 Redis and NATS adapters. The full source-library port remains the program
-goal; RabbitMQ, HTTP/Axum integration, Flow, event sourcing, cluster support,
-and schedulers are deliberately deferred from this first executable stage.
+goal. HTTP/Axum integration, Flow, event sourcing, cluster support, and
+schedulers are expanded in their own implementation milestones.
 
 ## Source Compatibility Boundary
 
@@ -157,6 +157,6 @@ performance claim is made before those measurements exist.
 ## Deferred Work
 
 Subsequent specs cover event sourcing and snapshots, Flow DSL/Saga and state
-machines, Axum integration, RabbitMQ, schedulers, cluster coordination,
+machines, Axum integration, schedulers, cluster coordination,
 source-compatible documentation/examples, and the remaining C# test-derived
 compatibility matrix.

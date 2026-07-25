@@ -132,6 +132,9 @@ async fn scheduled_strategy_runs_once_per_interval_without_a_lock() {
     )];
 
     strategy.execute(&changes).await.unwrap();
-    strategy.execute(&changes).await.unwrap();
+    assert_eq!(
+        strategy.execute(&changes).await.unwrap_err().code(),
+        ErrorCode::Transient
+    );
     assert_eq!(calls.load(Ordering::Relaxed), 1);
 }

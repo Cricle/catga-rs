@@ -137,21 +137,54 @@ async fn wrong_definition_cannot_record_a_child_result() {
 }
 
 #[tokio::test]
-async fn memory_scheduler_rejects_duplicate_flow_resumes() {
+async fn memory_scheduler_allows_distinct_state_resumes_for_one_flow() {
     let scheduler = MemoryFlowScheduler::default();
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
 
     assert!(
         scheduler
-            .schedule_resume("flow-15", SystemTime::now())
+            .schedule_resume("flow-15", "reserve", now)
             .await
             .is_ok()
     );
     assert!(
         scheduler
-            .schedule_resume("flow-15", SystemTime::now())
+            .schedule_resume("flow-15", "charge", now)
             .await
-            .is_err()
+            .is_ok()
     );
+
+    let due = scheduler.take_due(now);
+    let targets: Vec<(&str, &str)> = due
+        .iter()
+        .map(|schedule| (schedule.flow_id(), schedule.state_id()))
+        .collect();
+
+    assert_eq!(targets, [("flow-15", "reserve"), ("flow-15", "charge")]);
+}
+
+#[tokio::test]
+async fn memory_scheduler_yields_due_resumes_in_deadline_order() {
+    let scheduler = MemoryFlowScheduler::default();
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+
+    scheduler
+        .schedule_resume("late", "late-state", now + Duration::from_secs(30))
+        .await
+        .unwrap();
+    scheduler
+        .schedule_resume("first", "first-state", now + Duration::from_secs(10))
+        .await
+        .unwrap();
+    scheduler
+        .schedule_resume("middle", "middle-state", now + Duration::from_secs(20))
+        .await
+        .unwrap();
+
+    let due = scheduler.take_due(now + Duration::from_secs(30));
+    let flow_ids: Vec<&str> = due.iter().map(|schedule| schedule.flow_id()).collect();
+
+    assert_eq!(flow_ids, ["first", "middle", "late"]);
 }
 
 #[tokio::test]

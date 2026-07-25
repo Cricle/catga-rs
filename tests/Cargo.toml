@@ -8,26 +8,35 @@ autotests = false
 
 [dependencies]
 async-trait = "0.1"
+async-nats = "0.35"
 axum = "0.8"
 catga-axum = { path = "../crates/catga-axum" }
 catga-core = { path = "../crates/catga-core" }
 catga-flow = { path = "../crates/catga-flow" }
 catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
+catga-codec-memorypack = { path = "../crates/catga-codec-memorypack" }
 catga-cluster = { path = "../crates/catga-cluster" }
 catga-memory = { path = "../crates/catga-memory" }
 catga-nats = { path = "../crates/catga-nats" }
 catga-redis = { path = "../crates/catga-redis" }
 catga-robustmq = { path = "../crates/catga-robustmq" }
+catga-testing = { path = "../crates/catga-testing" }
 futures = "0.3"
+metrics = "0.24"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 robustmq = "1"
 raft = { version = "0.7", default-features = false, features = ["protobuf-codec"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 redis = { version = "1", features = ["tokio-comp"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = "0.3"
 
 [[test]]
 name = "result"
@@ -78,6 +87,10 @@ name = "state_machine"
 path = "state_machine.rs"
 
 [[test]]
+name = "state_machine_persistence"
+path = "state_machine_persistence.rs"
+
+[[test]]
 name = "mediator"
 path = "mediator.rs"
 
@@ -90,8 +103,40 @@ name = "behaviors"
 path = "behaviors.rs"
 
 [[test]]
+name = "faults"
+path = "faults.rs"
+
+[[test]]
+name = "validation"
+path = "validation.rs"
+
+[[test]]
+name = "security"
+path = "security.rs"
+
+[[test]]
+name = "compensation"
+path = "compensation.rs"
+
+[[test]]
+name = "observability"
+path = "observability.rs"
+
+[[test]]
 name = "batch_stream"
 path = "batch_stream.rs"
+
+[[test]]
+name = "auto_batching"
+path = "pipeline/auto_batching.rs"
+
+[[test]]
+name = "circuit_breaker"
+path = "pipeline/circuit_breaker.rs"
+
+[[test]]
+name = "resilience"
+path = "resilience.rs"
 
 [[test]]
 name = "reliability_contracts"
@@ -104,6 +149,18 @@ path = "memory_outbox.rs"
 [[test]]
 name = "outbox_processor"
 path = "outbox_processor.rs"
+
+[[test]]
+name = "outbox_behavior"
+path = "reliability/outbox_behavior.rs"
+
+[[test]]
+name = "outbox_processor_runtime"
+path = "reliability/outbox_processor_runtime.rs"
+
+[[test]]
+name = "scheduled_outbox"
+path = "reliability/scheduled_outbox.rs"
 
 [[test]]
 name = "event_store"
@@ -128,6 +185,10 @@ path = "enhanced_snapshots.rs"
 [[test]]
 name = "aggregates"
 path = "aggregates.rs"
+
+[[test]]
+name = "auto_snapshot"
+path = "event_sourcing/auto_snapshot.rs"
 
 [[test]]
 name = "event_versions"
@@ -158,6 +219,42 @@ name = "memory_transport"
 path = "memory_transport.rs"
 
 [[test]]
+name = "routing"
+path = "routing.rs"
+
+[[test]]
+name = "versioned_transport"
+path = "transport/versioned.rs"
+
+[[test]]
+name = "transport_acknowledgement"
+path = "transport/acknowledgement.rs"
+
+[[test]]
+name = "transport_competing_consumer"
+path = "transport/competing_consumer.rs"
+
+[[test]]
+name = "transport_request_client"
+path = "transport/request_client.rs"
+
+[[test]]
+name = "transport_batch"
+path = "transport/batch.rs"
+
+[[test]]
+name = "transport_destination"
+path = "transport/destination.rs"
+
+[[test]]
+name = "testing_helpers"
+path = "testing/helpers.rs"
+
+[[test]]
+name = "testing_harness"
+path = "testing/harness.rs"
+
+[[test]]
 name = "memory_reliability"
 path = "memory_reliability.rs"
 
@@ -178,6 +275,10 @@ name = "codec"
 path = "codec.rs"
 
 [[test]]
+name = "memorypack"
+path = "memorypack.rs"
+
+[[test]]
 name = "compression"
 path = "compression.rs"
 
@@ -186,33 +287,53 @@ name = "nats"
 path = "nats.rs"
 
 [[test]]
+name = "nats_request"
+path = "nats_request.rs"
+
+[[test]]
 name = "redis"
 path = "redis.rs"
 
 [[test]]
 name = "flow_state"
-path = "flow_state.rs"
+path = "flow/state.rs"
 
 [[test]]
 name = "flow_store"
-path = "flow_store.rs"
+path = "flow/store.rs"
+
+[[test]]
+name = "dsl_progress"
+path = "flow/dsl_progress.rs"
+
+[[test]]
+name = "due_scheduler"
+path = "flow/due_scheduler.rs"
 
 [[test]]
 name = "flows"
-path = "flows.rs"
+path = "flow/local.rs"
 
 [[test]]
 name = "flow_executor"
-path = "flow_executor.rs"
+path = "flow/executor.rs"
 
 [[test]]
 name = "flow_suspension"
-path = "flow_suspension.rs"
+path = "flow/suspension.rs"
+
+[[test]]
+name = "flow_persistence"
+path = "flow/persistence.rs"
 
 [[test]]
 name = "flow_wait_policies"
-path = "flow_wait_policies.rs"
+path = "flow/wait_policies.rs"
 
 [[test]]
 name = "flow_recovery"
-path = "flow_recovery.rs"
+path = "flow/recovery.rs"
+
+[[test]]
+name = "flow_hot_reload"
+path = "flow/hot_reload.rs"

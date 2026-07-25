@@ -14,6 +14,7 @@ use super::{StateMachineExecutor, StateMachineResult, StateMachineState, StateMa
 
 type InstanceIdResolver<E> = Arc<dyn Fn(&E) -> String + Send + Sync>;
 type ErasedEvent = dyn Any + Send + Sync;
+type FallbackInstanceIdResolver = Arc<dyn Fn(&ErasedEvent) -> CatgaResult<String> + Send + Sync>;
 
 trait ErasedEventRoute<S, K, Store>: Send + Sync {
     fn route<'a>(
@@ -38,9 +39,16 @@ where
         &'a self,
         event: &'a ErasedEvent,
     ) -> BoxFuture<'a, CatgaResult<StateMachineResult<K>>> {
-        let event = event
-            .downcast_ref::<E>()
-            .expect("state-machine event type was checked before routing");
+        let Some(event) = event.downcast_ref::<E>() else {
+            return futures::future::ready(Err(CatgaError::new(
+                ErrorCode::Internal,
+                format!(
+                    "state-machine route event type mismatch: expected {}",
+                    std::any::type_name::<E>()
+                ),
+            )))
+            .boxed();
+        };
         async move {
             let instance_id = (self.resolve_instance_id)(event);
             if instance_id.trim().is_empty() {
@@ -64,6 +72,7 @@ where
 pub struct StateMachineEventRouter<S, K, Store> {
     executor: Arc<StateMachineExecutor<S, K, Store>>,
     routes: HashMap<TypeId, Arc<dyn ErasedEventRoute<S, K, Store>>>,
+    fallback: Option<FallbackInstanceIdResolver>,
 }
 
 impl<S, K, Store> StateMachineEventRouter<S, K, Store>
@@ -77,6 +86,7 @@ where
         Self {
             executor,
             routes: HashMap::new(),
+            fallback: None,
         }
     }
 
@@ -96,12 +106,27 @@ where
         self
     }
 
+    /// Configures a resolver used only when an event type has no typed route.
+    ///
+    /// The resolver receives the erased event so applications can deliberately decide which
+    /// otherwise-unregistered event types share a fallback instance-id policy.
+    pub fn with_fallback<F>(mut self, resolver: F) -> Self
+    where
+        F: Fn(&dyn Any) -> CatgaResult<String> + Send + Sync + 'static,
+    {
+        self.fallback = Some(Arc::new(move |event| resolver(event)));
+        self
+    }
+
     /// Resolves and handles one registered event.
     pub async fn route<E>(&self, event: &E) -> CatgaResult<StateMachineResult<K>>
     where
         E: Event,
     {
-        let Some(route) = self.routes.get(&TypeId::of::<E>()) else {
+        if let Some(route) = self.routes.get(&TypeId::of::<E>()) {
+            return route.route(event).await;
+        }
+        let Some(fallback) = &self.fallback else {
             return Err(CatgaError::new(
                 ErrorCode::Unsupported,
                 format!(
@@ -110,6 +135,14 @@ where
                 ),
             ));
         };
-        route.route(event).await
+        let event: &ErasedEvent = event;
+        let instance_id = fallback(event)?;
+        if instance_id.trim().is_empty() {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "state-machine fallback instance id cannot be empty",
+            ));
+        }
+        self.executor.handle_erased(&instance_id, event).await
     }
 }

@@ -1,12 +1,48 @@
 //! Persistent event-stream subscriptions with per-stream checkpoints.
 
-use std::{num::NonZeroUsize, time::SystemTime};
+use std::{
+    num::NonZeroUsize,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::{CatgaError, CatgaResult, ErrorCode, EventStore, StoredEvent};
 
 const DEFAULT_BATCH_SIZE: usize = 256;
+
+/// Timing configuration for a caller-owned continuous subscription loop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubscriptionLoopOptions {
+    poll_interval: Duration,
+}
+
+impl SubscriptionLoopOptions {
+    /// Creates loop options with a nonzero interval between completed subscription passes.
+    pub fn new(poll_interval: Duration) -> CatgaResult<Self> {
+        if poll_interval.is_zero() {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "subscription poll interval must be greater than zero",
+            ));
+        }
+        Ok(Self { poll_interval })
+    }
+
+    /// Returns the delay after a completed subscription pass.
+    pub const fn poll_interval(self) -> Duration {
+        self.poll_interval
+    }
+}
+
+impl Default for SubscriptionLoopOptions {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_millis(100),
+        }
+    }
+}
 
 /// Immutable definition of a durable event-stream subscription.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,6 +214,11 @@ impl SubscriptionRun {
     pub const fn streams(&self) -> usize {
         self.streams
     }
+
+    fn combine(&mut self, other: Self) {
+        self.handled = self.handled.saturating_add(other.handled);
+        self.streams = self.streams.saturating_add(other.streams);
+    }
 }
 
 /// Replays persisted events into one durable subscription definition.
@@ -200,8 +241,7 @@ where
             events,
             subscriptions,
             handler,
-            NonZeroUsize::new(DEFAULT_BATCH_SIZE)
-                .expect("the default subscription batch is non-zero"),
+            NonZeroUsize::new(DEFAULT_BATCH_SIZE).unwrap_or(NonZeroUsize::MIN),
         )
     }
 
@@ -221,6 +261,10 @@ where
     }
 
     /// Processes every newly persisted event selected by one subscription.
+    ///
+    /// A checkpoint at [`i64::MAX`] is terminal because the signed event-version domain has no
+    /// later value. The runner treats that stream as complete instead of overflowing while
+    /// calculating a follow-up read position.
     pub async fn run_once(&self, subscription_name: &str) -> CatgaResult<SubscriptionRun> {
         let subscription = self
             .subscriptions
@@ -240,6 +284,29 @@ where
         Ok(run)
     }
 
+    /// Repeatedly processes a subscription until `shutdown` is cancelled.
+    ///
+    /// The first pass starts immediately. Cancellation is observed before each later pass and
+    /// while waiting for [`SubscriptionLoopOptions::poll_interval`]; an already-started pass
+    /// completes so its successfully handled events can persist their checkpoints. This method
+    /// creates no task, so callers retain supervision and shutdown ownership of its future.
+    pub async fn run_until_cancelled(
+        &self,
+        subscription_name: &str,
+        options: SubscriptionLoopOptions,
+        shutdown: CancellationToken,
+    ) -> CatgaResult<SubscriptionRun> {
+        let mut total = SubscriptionRun::default();
+        while !shutdown.is_cancelled() {
+            total.combine(self.run_once(subscription_name).await?);
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = tokio::time::sleep(options.poll_interval()) => {}
+            }
+        }
+        Ok(total)
+    }
+
     async fn run_stream(
         &self,
         subscription: &PersistentSubscription,
@@ -249,8 +316,12 @@ where
             .subscriptions
             .load_checkpoint(subscription.name(), stream_id)
             .await?;
-        let mut next_version = checkpoint.map_or(0, |checkpoint| checkpoint.version() + 1);
         let mut handled = 0;
+        let Some(mut next_version) =
+            checkpoint.map_or(Some(0), |checkpoint| advance_version(checkpoint.version()))
+        else {
+            return Ok(handled);
+        };
         loop {
             let stream = self
                 .events
@@ -275,13 +346,91 @@ where
                         event.version(),
                     ))
                     .await?;
-                next_version = event.version() + 1;
+                let Some(next) = advance_version(event.version()) else {
+                    return Ok(handled);
+                };
+                next_version = next;
             }
             if stream.events().len() < self.batch_size.get() {
                 return Ok(handled);
             }
         }
     }
+
+    async fn run_next(&self, subscription_name: &str) -> CatgaResult<bool> {
+        let subscription = self
+            .subscriptions
+            .load(subscription_name)
+            .await?
+            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "subscription does not exist"))?;
+        let mut stream_ids = self.events.stream_ids().await?;
+        stream_ids.sort_unstable();
+        for stream_id in stream_ids
+            .into_iter()
+            .filter(|stream_id| subscription.matches_stream(stream_id))
+        {
+            if self.run_next_in_stream(&subscription, &stream_id).await? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn run_next_in_stream(
+        &self,
+        subscription: &PersistentSubscription,
+        stream_id: &str,
+    ) -> CatgaResult<bool> {
+        let checkpoint = self
+            .subscriptions
+            .load_checkpoint(subscription.name(), stream_id)
+            .await?;
+        let Some(mut next_version) =
+            checkpoint.map_or(Some(0), |checkpoint| advance_version(checkpoint.version()))
+        else {
+            return Ok(false);
+        };
+        loop {
+            let stream = self
+                .events
+                .read(
+                    stream_id,
+                    u64::try_from(next_version).unwrap_or(0),
+                    self.batch_size.get(),
+                )
+                .await?;
+            if stream.events().is_empty() {
+                return Ok(false);
+            }
+            for event in stream.events() {
+                let selected = subscription.matches_event_type(event.envelope().message_type());
+                if selected {
+                    self.handler.handle(event).await?;
+                }
+                self.subscriptions
+                    .save_checkpoint(SubscriptionCheckpoint::new(
+                        subscription.name(),
+                        stream_id,
+                        event.version(),
+                    ))
+                    .await?;
+                if selected {
+                    return Ok(true);
+                }
+                let Some(next) = advance_version(event.version()) else {
+                    return Ok(false);
+                };
+                next_version = next;
+            }
+            if stream.events().len() < self.batch_size.get() {
+                return Ok(false);
+            }
+        }
+    }
+}
+
+fn advance_version(version: i64) -> Option<i64> {
+    version.checked_add(1)
 }
 
 /// Runs a subscription only while the caller owns its exclusive consumer lease.
@@ -332,6 +481,34 @@ where
             (Err(error), _) => Err(error),
             (Ok(_), Err(error)) => Err(error),
             (Ok(run), Ok(())) => Ok(Some(run)),
+        }
+    }
+
+    /// Attempts to handle at most one selected event while holding this consumer's lease.
+    ///
+    /// `Ok(None)` means another consumer currently owns the lease. `Ok(Some(true))` means one
+    /// matching event was handled and checkpointed. `Ok(Some(false))` means this consumer
+    /// acquired and released the lease without finding any matching pending event. Filtered
+    /// events still advance their per-stream checkpoints, so repeated calls do not rescan them.
+    pub async fn try_process_next(&self) -> CatgaResult<Option<bool>> {
+        if !self
+            .runner
+            .subscriptions
+            .try_acquire(self.subscription_name, self.consumer_id)
+            .await?
+        {
+            return Ok(None);
+        }
+        let result = self.runner.run_next(self.subscription_name).await;
+        let release = self
+            .runner
+            .subscriptions
+            .release(self.subscription_name, self.consumer_id)
+            .await;
+        match (result, release) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(processed), Ok(())) => Ok(Some(processed)),
         }
     }
 }

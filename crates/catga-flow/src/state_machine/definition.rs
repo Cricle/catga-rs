@@ -18,10 +18,13 @@ use super::{
     },
 };
 
+type DefaultInitialStateFactory<S> = Arc<dyn Fn() -> S + Send + Sync>;
+
 struct MachineDefinition<S, K> {
     initial: K,
     states: HashMap<K, StateDefinition<S, K>>,
     initial_factories: Vec<Arc<dyn ErasedInitialStateFactory<S, K>>>,
+    default_initial_factory: Option<DefaultInitialStateFactory<S>>,
 }
 
 /// An immutable state-machine configuration optimized for concurrent reads.
@@ -48,6 +51,7 @@ where
             initial,
             states: HashMap::new(),
             initial_factories: Vec::new(),
+            default_initial_factory: None,
         }
     }
 
@@ -61,14 +65,27 @@ where
     where
         E: Event,
     {
+        let event: &ErasedEvent = event;
+        self.handle_erased(state, event).await
+    }
+
+    pub(crate) async fn handle_erased(
+        &self,
+        state: &mut S,
+        event: &ErasedEvent,
+    ) -> CatgaResult<StateMachineResult<K>> {
         let previous = state.current_state().clone();
         let Some(definition) = self.definition.states.get(&previous) else {
             return Ok(StateMachineResult::new(previous.clone(), previous, false));
         };
-        let event: &ErasedEvent = event;
-        let Some(transition) = definition.transitions.iter().find(|transition| {
-            transition.event_type() == TypeId::of::<E>() && transition.applies(state, event)
-        }) else {
+        let mut selected = None;
+        for transition in &definition.transitions {
+            if transition.event_type() == event.type_id() && transition.applies(state, event)? {
+                selected = Some(transition);
+                break;
+            }
+        }
+        let Some(transition) = selected else {
             return Ok(StateMachineResult::new(previous.clone(), previous, false));
         };
 
@@ -94,19 +111,27 @@ where
         ))
     }
 
-    pub(crate) fn create_initial<E>(&self, instance_id: &str, event: &E) -> Option<S>
-    where
-        E: Event,
-    {
-        let event: &ErasedEvent = event;
-        let factory = self
+    pub(crate) fn create_initial_erased(
+        &self,
+        instance_id: &str,
+        event: &ErasedEvent,
+    ) -> CatgaResult<Option<S>> {
+        if let Some(factory) = self
             .definition
             .initial_factories
             .iter()
-            .find(|factory| factory.event_type() == TypeId::of::<E>())?;
-        let mut state = factory.create(event, instance_id);
-        state.set_current_state(factory.initial_state().clone());
-        Some(state)
+            .find(|factory| factory.event_type() == event.type_id())
+        {
+            let mut state = factory.create(event, instance_id)?;
+            state.set_current_state(factory.initial_state().clone());
+            return Ok(Some(state));
+        }
+        let Some(factory) = &self.definition.default_initial_factory else {
+            return Ok(None);
+        };
+        let mut state = factory();
+        state.set_current_state(self.definition.initial.clone());
+        Ok(Some(state))
     }
 }
 
@@ -115,6 +140,7 @@ pub struct StateMachineBuilder<S, K> {
     initial: K,
     states: HashMap<K, StateDefinition<S, K>>,
     initial_factories: Vec<Arc<dyn ErasedInitialStateFactory<S, K>>>,
+    default_initial_factory: Option<DefaultInitialStateFactory<S>>,
 }
 
 impl<S, K> StateMachineBuilder<S, K>
@@ -162,6 +188,19 @@ where
         self.starts_with::<E, _>(self.initial.clone(), factory)
     }
 
+    /// Enables lazy creation with [`Default::default`] when no event-specific factory matches.
+    ///
+    /// Event-specific factories registered with [`Self::starts_with`] keep precedence. This is an
+    /// explicit opt-in so missing instances remain errors for definitions that require a custom
+    /// correlation or hydration policy.
+    pub fn default_initial_state(&mut self) -> &mut Self
+    where
+        S: Default + 'static,
+    {
+        self.default_initial_factory = Some(Arc::new(S::default));
+        self
+    }
+
     /// Freezes definitions into a lock-free-read state machine.
     pub fn build(self) -> StateMachine<S, K> {
         StateMachine {
@@ -169,6 +208,7 @@ where
                 initial: self.initial,
                 states: self.states,
                 initial_factories: self.initial_factories,
+                default_initial_factory: self.default_initial_factory,
             }),
         }
     }
@@ -227,7 +267,7 @@ where
     {
         EventTransitionBuilder {
             definition: self.definition,
-            transition: Some(TypedTransition::new()),
+            transition: TypedTransition::new(),
         }
     }
 }
@@ -240,7 +280,7 @@ where
     E: Event,
 {
     definition: &'a mut StateDefinition<S, K>,
-    transition: Option<TypedTransition<S, K, E>>,
+    transition: TypedTransition<S, K, E>,
 }
 
 impl<'a, S, K, E> EventTransitionBuilder<'a, S, K, E>
@@ -249,24 +289,12 @@ where
     K: Clone + Send + Sync + 'static,
     E: Event,
 {
-    fn transition_mut(&mut self) -> &mut TypedTransition<S, K, E> {
-        self.transition
-            .as_mut()
-            .expect("transition builder is committed only once")
-    }
-
-    fn commit(&mut self) {
-        if let Some(transition) = self.transition.take() {
-            self.definition.transitions.push(Arc::new(transition));
-        }
-    }
-
     /// Requires a guard to approve the transition.
     pub fn when<F>(mut self, guard: F) -> Self
     where
         F: Fn(&S, &E) -> bool + Send + Sync + 'static,
     {
-        self.transition_mut().guard = Some(Arc::new(guard));
+        self.transition.guard = Some(Arc::new(guard));
         self
     }
 
@@ -275,7 +303,7 @@ where
     where
         F: Fn(&mut S, &E) -> CatgaResult<()> + Send + Sync + 'static,
     {
-        self.transition_mut().action = EventAction::Sync(Arc::new(action));
+        self.transition.action = EventAction::Sync(Arc::new(action));
         self
     }
 
@@ -284,19 +312,19 @@ where
     where
         F: for<'b> Fn(&'b mut S, &'b E) -> BoxFuture<'b, CatgaResult<()>> + Send + Sync + 'static,
     {
-        self.transition_mut().action = EventAction::Async(Arc::new(action));
+        self.transition.action = EventAction::Async(Arc::new(action));
         self
     }
 
     /// Changes the current state after the transition action succeeds and commits the transition.
     pub fn transition_to(mut self, target: K) -> StateDefinitionBuilder<'a, S, K> {
-        self.transition_mut().target = Some(target);
+        self.transition.target = Some(target);
         self.finish()
     }
 
     /// Commits this transition and returns to the containing state configuration.
-    pub fn finish(mut self) -> StateDefinitionBuilder<'a, S, K> {
-        self.commit();
+    pub fn finish(self) -> StateDefinitionBuilder<'a, S, K> {
+        self.definition.transitions.push(Arc::new(self.transition));
         StateDefinitionBuilder {
             definition: self.definition,
         }

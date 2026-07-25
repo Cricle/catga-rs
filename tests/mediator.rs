@@ -1,9 +1,15 @@
 //! Mediator routing tests.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, Event, EventHandler, Handler, Mediator, Registry, Request};
+use catga_core::{
+    CatgaResult, ErrorCode, Event, EventHandler, Handler, Mediator, MediatorHandle, Registry,
+    Request,
+};
 
 #[derive(Debug)]
 struct Double(u64);
@@ -29,16 +35,18 @@ struct OrderCreated;
 impl catga_core::Message for OrderCreated {}
 impl Event for OrderCreated {}
 
-static AUDIT_COUNT: AtomicUsize = AtomicUsize::new(0);
-static NOTIFY_COUNT: AtomicUsize = AtomicUsize::new(0);
+struct AuditOrder {
+    count: Arc<AtomicUsize>,
+}
 
-struct AuditOrder;
-struct NotifyCustomer;
+struct NotifyCustomer {
+    count: Arc<AtomicUsize>,
+}
 
 #[async_trait]
 impl EventHandler<OrderCreated> for AuditOrder {
     async fn handle(&self, _: OrderCreated) -> CatgaResult<()> {
-        AUDIT_COUNT.fetch_add(1, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -46,26 +54,171 @@ impl EventHandler<OrderCreated> for AuditOrder {
 #[async_trait]
 impl EventHandler<OrderCreated> for NotifyCustomer {
     async fn handle(&self, _: OrderCreated) -> CatgaResult<()> {
-        NOTIFY_COUNT.fetch_add(1, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }
 
 #[tokio::test]
-async fn request_routes_to_one_handler_and_event_fans_out() {
-    AUDIT_COUNT.store(0, Ordering::Relaxed);
-    NOTIFY_COUNT.store(0, Ordering::Relaxed);
+async fn request_routes_to_one_handler_and_event_fans_out() -> CatgaResult<()> {
+    let audit_count = Arc::new(AtomicUsize::new(0));
+    let notify_count = Arc::new(AtomicUsize::new(0));
 
     let mut registry = Registry::new();
-    registry
-        .register_request::<Double, _>(DoubleHandler)
-        .unwrap();
-    registry.register_event::<OrderCreated, _>(AuditOrder);
-    registry.register_event::<OrderCreated, _>(NotifyCustomer);
+    registry.register_request::<Double, _>(DoubleHandler)?;
+    registry.register_event::<OrderCreated, _>(AuditOrder {
+        count: Arc::clone(&audit_count),
+    });
+    registry.register_event::<OrderCreated, _>(NotifyCustomer {
+        count: Arc::clone(&notify_count),
+    });
     let mediator = Mediator::new(registry);
 
-    assert_eq!(mediator.send(Double(4)).await.unwrap(), 8);
-    mediator.publish(OrderCreated).await.unwrap();
-    assert_eq!(AUDIT_COUNT.load(Ordering::Relaxed), 1);
-    assert_eq!(NOTIFY_COUNT.load(Ordering::Relaxed), 1);
+    assert_eq!(mediator.send(Double(4)).await?, 8);
+    mediator.publish(OrderCreated).await?;
+    assert_eq!(audit_count.load(Ordering::Relaxed), 1);
+    assert_eq!(notify_count.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+#[derive(Debug)]
+struct CloneTrackedEvent {
+    clone_count: Arc<AtomicUsize>,
+}
+
+impl Clone for CloneTrackedEvent {
+    fn clone(&self) -> Self {
+        self.clone_count.fetch_add(1, Ordering::Relaxed);
+        Self {
+            clone_count: Arc::clone(&self.clone_count),
+        }
+    }
+}
+
+impl catga_core::Message for CloneTrackedEvent {}
+impl Event for CloneTrackedEvent {}
+
+struct CloneTrackedHandler {
+    delivery_count: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl EventHandler<CloneTrackedEvent> for CloneTrackedHandler {
+    async fn handle(&self, _: CloneTrackedEvent) -> CatgaResult<()> {
+        self.delivery_count.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FollowUpCreated;
+
+impl catga_core::Message for FollowUpCreated {}
+impl Event for FollowUpCreated {}
+
+struct FollowUpAudit {
+    count: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl EventHandler<FollowUpCreated> for FollowUpAudit {
+    async fn handle(&self, _: FollowUpCreated) -> CatgaResult<()> {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+struct PublishCreated;
+
+impl catga_core::Message for PublishCreated {}
+
+impl Request for PublishCreated {
+    type Response = ();
+}
+
+struct FollowUpHandler {
+    mediator: MediatorHandle,
+}
+
+#[async_trait]
+impl Handler<PublishCreated> for FollowUpHandler {
+    async fn handle(&self, _: PublishCreated) -> CatgaResult<()> {
+        self.mediator.publish(FollowUpCreated).await
+    }
+}
+
+#[tokio::test]
+async fn mediator_handle_binds_after_registry_startup_and_publishes_from_a_handler()
+-> CatgaResult<()> {
+    let follow_up_count = Arc::new(AtomicUsize::new(0));
+    let handle = MediatorHandle::new();
+
+    assert!(matches!(
+        handle.publish(FollowUpCreated).await,
+        Err(error) if error.code() == ErrorCode::Unavailable
+    ));
+
+    let mut registry = Registry::new();
+    registry.register_request::<PublishCreated, _>(FollowUpHandler {
+        mediator: handle.clone(),
+    })?;
+    registry.register_event::<FollowUpCreated, _>(FollowUpAudit {
+        count: Arc::clone(&follow_up_count),
+    });
+    let mediator = Arc::new(Mediator::new(registry));
+    handle.bind(Arc::clone(&mediator))?;
+
+    assert!(matches!(
+        handle.bind(Arc::clone(&mediator)),
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    mediator.send(PublishCreated).await?;
+    assert_eq!(follow_up_count.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn event_fan_out_moves_the_final_delivery_instead_of_cloning_it() -> CatgaResult<()> {
+    let clone_count = Arc::new(AtomicUsize::new(0));
+    let delivery_count = Arc::new(AtomicUsize::new(0));
+
+    let mut registry = Registry::new();
+    registry.register_event::<CloneTrackedEvent, _>(CloneTrackedHandler {
+        delivery_count: Arc::clone(&delivery_count),
+    });
+    registry.register_event::<CloneTrackedEvent, _>(CloneTrackedHandler {
+        delivery_count: Arc::clone(&delivery_count),
+    });
+    registry.register_event::<CloneTrackedEvent, _>(CloneTrackedHandler {
+        delivery_count: Arc::clone(&delivery_count),
+    });
+    let mediator = Mediator::new(registry);
+
+    mediator
+        .publish(CloneTrackedEvent {
+            clone_count: Arc::clone(&clone_count),
+        })
+        .await?;
+
+    assert_eq!(delivery_count.load(Ordering::Relaxed), 3);
+    assert_eq!(clone_count.load(Ordering::Relaxed), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn bounded_event_fan_out_rejects_zero_concurrency() -> CatgaResult<()> {
+    let mediator = Mediator::new(Registry::new());
+
+    let error = match mediator.publish_with_concurrency(OrderCreated, 0).await {
+        Ok(()) => {
+            return Err(catga_core::CatgaError::new(
+                ErrorCode::Internal,
+                "zero handler concurrency must be rejected",
+            ));
+        }
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    Ok(())
 }

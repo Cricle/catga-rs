@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_core::{CatgaError, CatgaResult, ErrorCode, LeaseStore};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, LeaseStore, telemetry};
 
 /// A JetStream KV lease store using entry revisions for conditional updates.
 pub struct NatsLeases {
@@ -43,58 +43,67 @@ impl NatsLeases {
 #[async_trait]
 impl LeaseStore for NatsLeases {
     async fn try_acquire(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
-        let value = value(owner, ttl);
-        if self
-            .store
-            .create(resource, value.clone().into())
-            .await
-            .is_ok()
-        {
-            return Ok(true);
-        }
-        let Some(entry) = self.entry(resource).await? else {
-            return Ok(false);
-        };
-        let Some((current_owner, expires)) = parse(&entry.value) else {
-            return Ok(false);
-        };
-        if current_owner != owner && expires > now_millis() {
-            return Ok(false);
-        }
-        Ok(self
-            .store
-            .update(resource, value.into(), entry.revision)
-            .await
-            .is_ok())
+        telemetry::record_persistence("nats", "lease", "try_acquire", async {
+            let value = value(owner, ttl);
+            if self
+                .store
+                .create(resource, value.clone().into())
+                .await
+                .is_ok()
+            {
+                return Ok(true);
+            }
+            let Some(entry) = self.entry(resource).await? else {
+                return Ok(false);
+            };
+            let Some((current_owner, expires)) = parse(&entry.value) else {
+                return Ok(false);
+            };
+            if current_owner != owner && expires > now_millis() {
+                return Ok(false);
+            }
+            Ok(self
+                .store
+                .update(resource, value.into(), entry.revision)
+                .await
+                .is_ok())
+        })
+        .await
     }
     async fn renew(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
-        let Some(entry) = self.entry(resource).await? else {
-            return Ok(false);
-        };
-        let Some((current_owner, expires)) = parse(&entry.value) else {
-            return Ok(false);
-        };
-        if current_owner != owner || expires <= now_millis() {
-            return Ok(false);
-        }
-        Ok(self
-            .store
-            .update(resource, value(owner, ttl).into(), entry.revision)
-            .await
-            .is_ok())
+        telemetry::record_persistence("nats", "lease", "renew", async {
+            let Some(entry) = self.entry(resource).await? else {
+                return Ok(false);
+            };
+            let Some((current_owner, expires)) = parse(&entry.value) else {
+                return Ok(false);
+            };
+            if current_owner != owner || expires <= now_millis() {
+                return Ok(false);
+            }
+            Ok(self
+                .store
+                .update(resource, value(owner, ttl).into(), entry.revision)
+                .await
+                .is_ok())
+        })
+        .await
     }
     async fn release(&self, resource: &str, owner: &str) -> CatgaResult<bool> {
-        let Some(entry) = self.entry(resource).await? else {
-            return Ok(false);
-        };
-        if parse(&entry.value).is_none_or(|(current_owner, _)| current_owner != owner) {
-            return Ok(false);
-        }
-        Ok(self
-            .store
-            .delete_expect_revision(resource, Some(entry.revision))
-            .await
-            .is_ok())
+        telemetry::record_persistence("nats", "lease", "release", async {
+            let Some(entry) = self.entry(resource).await? else {
+                return Ok(false);
+            };
+            if parse(&entry.value).is_none_or(|(current_owner, _)| current_owner != owner) {
+                return Ok(false);
+            }
+            Ok(self
+                .store
+                .delete_expect_revision(resource, Some(entry.revision))
+                .await
+                .is_ok())
+        })
+        .await
     }
 }
 

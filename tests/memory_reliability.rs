@@ -1,6 +1,6 @@
 //! In-memory reliability store tests.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use catga_core::{
     DeadLetter, DeadLetterStore, Envelope, IdempotencyStore, InboxStore, MessageMetadata,
@@ -77,4 +77,52 @@ async fn concurrent_inbox_claims_have_exactly_one_owner() {
         owners += usize::from(claim.unwrap());
     }
     assert_eq!(owners, 1);
+}
+
+#[tokio::test]
+async fn expired_inbox_claim_can_be_reclaimed_without_a_background_worker() {
+    let inbox = MemoryInbox::default();
+    assert!(
+        inbox
+            .try_claim_for(91, Duration::from_millis(1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !inbox
+            .try_claim_for(91, Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        inbox
+            .try_claim_for(91, Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn completed_reliability_records_are_removed_by_bounded_retention_cleanup() {
+    let idempotency = MemoryIdempotency::with_retention(Duration::from_millis(1)).unwrap();
+    assert!(idempotency.try_claim("retained-key").await.unwrap());
+    idempotency.complete("retained-key", None).await.unwrap();
+
+    let inbox = MemoryInbox::default();
+    assert!(inbox.try_claim(92).await.unwrap());
+    inbox.complete(92, None).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(idempotency.cleanup_completed(1).await.unwrap(), 1);
+    assert_eq!(
+        inbox
+            .cleanup_completed(Duration::from_millis(1), 1)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(idempotency.state("retained-key").await.unwrap(), None);
+    assert_eq!(inbox.state(92).await.unwrap(), None);
 }

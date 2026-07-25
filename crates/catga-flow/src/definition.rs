@@ -1,6 +1,9 @@
-use std::future::Future;
+use std::{
+    future::Future,
+    time::{Duration, SystemTime},
+};
 
-use catga_core::{CatgaError, CatgaResult};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use futures::future::BoxFuture;
 
 use crate::{FlowState, WaitCondition};
@@ -31,9 +34,34 @@ impl FlowStepOutcome {
         Self::Goto(step_name.into())
     }
 
-    /// Creates a delayed-suspension outcome.
+    /// Creates an absolute, durable scheduled-resume outcome.
+    ///
+    /// This is the Rust counterpart of a `ScheduleAt` flow step. The runtime
+    /// persists the following named step and delegates the wake-up to its
+    /// [`crate::FlowScheduler`], rather than retaining a process-local timer.
+    /// The supplied time is expressed as [`SystemTime`] so callers must choose
+    /// the desired wall-clock policy explicitly.
     pub const fn suspend_until(resume_at: std::time::SystemTime) -> Self {
         Self::SuspendUntil(resume_at)
+    }
+
+    /// Creates a durable delayed suspension relative to the current wall clock.
+    ///
+    /// This is the Rust counterpart of a `Delay` flow step. A zero duration
+    /// advances immediately, avoiding an unnecessary durable write and
+    /// scheduler operation. A positive duration is converted to an absolute
+    /// scheduled resume and is therefore recoverable after process restart.
+    pub fn delay(duration: Duration) -> CatgaResult<Self> {
+        if duration.is_zero() {
+            return Ok(Self::Advance);
+        }
+        let resume_at = SystemTime::now().checked_add(duration).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "flow delay exceeds the supported system time range",
+            )
+        })?;
+        Ok(Self::SuspendUntil(resume_at))
     }
 
     /// Creates a successful terminal outcome.
@@ -101,7 +129,8 @@ impl FlowDefinition {
             .map(|step| step.name.as_ref())
     }
 
-    pub(crate) fn has_step(&self, name: &str) -> bool {
+    /// Returns whether a step with `name` is registered.
+    pub fn has_step(&self, name: &str) -> bool {
         self.steps.iter().any(|step| step.name.as_ref() == name)
     }
 

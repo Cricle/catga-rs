@@ -4,11 +4,12 @@ use std::{
 };
 
 use catga_core::CatgaError;
+use serde::{Deserialize, Serialize};
 
 use crate::FlowState;
 
 /// The policy used to decide when a wait condition is complete.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum WaitPolicy {
     /// Every expected child must succeed.
     All,
@@ -17,7 +18,7 @@ pub enum WaitPolicy {
 }
 
 /// One immutable child result recorded against a wait condition.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WaitResult {
     child_id: Box<str>,
     payload: Option<Arc<[u8]>>,
@@ -68,7 +69,7 @@ impl WaitResult {
 }
 
 /// Immutable persisted state for a set of child-flow results.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WaitCondition {
     correlation_id: Box<str>,
     policy: WaitPolicy,
@@ -182,15 +183,34 @@ impl WaitCondition {
 }
 
 /// Immutable flow state plus the named step needed to resume it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FlowContinuation {
     state: FlowState,
     step_name: Box<str>,
     wait: Option<WaitCondition>,
     resume_at: Option<SystemTime>,
+    schedule_id: Option<Box<str>>,
+    created_at: SystemTime,
 }
 
 impl FlowContinuation {
+    pub(crate) fn from_legacy(
+        state: FlowState,
+        step_name: Box<str>,
+        wait: Option<WaitCondition>,
+        resume_at: Option<SystemTime>,
+        schedule_id: Option<Box<str>>,
+    ) -> Self {
+        Self {
+            created_at: state.heartbeat(),
+            state,
+            step_name,
+            wait,
+            resume_at,
+            schedule_id,
+        }
+    }
+
     /// Creates a continuation ready to execute `step_name`.
     pub fn new(state: FlowState, step_name: impl Into<Box<str>>) -> Self {
         Self {
@@ -198,6 +218,8 @@ impl FlowContinuation {
             step_name: step_name.into(),
             wait: None,
             resume_at: None,
+            schedule_id: None,
+            created_at: SystemTime::now(),
         }
     }
 
@@ -208,6 +230,8 @@ impl FlowContinuation {
             step_name: step_name.into(),
             wait: Some(wait),
             resume_at: None,
+            schedule_id: None,
+            created_at: SystemTime::now(),
         }
     }
 
@@ -231,11 +255,29 @@ impl FlowContinuation {
         self.resume_at
     }
 
+    /// Returns when this durable continuation was created.
+    pub const fn created_at(&self) -> SystemTime {
+        self.created_at
+    }
+
+    /// Returns the cancellation identity of the delayed resume, when it has been scheduled.
+    pub fn schedule_id(&self) -> Option<&str> {
+        self.schedule_id.as_deref()
+    }
+
     /// Returns a delayed copy that will resume at `resume_at`.
     pub fn delayed_until(self, resume_at: SystemTime) -> Self {
         Self {
             resume_at: Some(resume_at),
             wait: None,
+            schedule_id: None,
+            ..self
+        }
+    }
+
+    pub(crate) fn with_schedule_id(self, schedule_id: impl Into<Box<str>>) -> Self {
+        Self {
+            schedule_id: Some(schedule_id.into()),
             ..self
         }
     }
@@ -245,6 +287,7 @@ impl FlowContinuation {
         Self {
             wait: Some(wait),
             resume_at: None,
+            schedule_id: None,
             ..self
         }
     }
@@ -255,6 +298,7 @@ impl FlowContinuation {
             step_name: step_name.into(),
             wait: None,
             resume_at: None,
+            schedule_id: None,
             ..self
         }
     }
@@ -264,6 +308,7 @@ impl FlowContinuation {
         Self {
             wait: None,
             resume_at: None,
+            schedule_id: None,
             ..self
         }
     }

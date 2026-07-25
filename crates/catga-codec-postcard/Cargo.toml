@@ -10,6 +10,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
 catga-core = { path = "../catga-core" }
+futures = "0.3"
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }

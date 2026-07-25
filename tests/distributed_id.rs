@@ -35,3 +35,21 @@ fn snowflake_layout_rejects_invalid_bit_allocation_and_worker_ids() {
     assert!(SnowflakeLayout::new(40, 10, 12, 1_704_067_200_000).is_err());
     assert!(SnowflakeIdGenerator::new(256, SnowflakeLayout::default()).is_err());
 }
+
+#[test]
+fn snowflake_writes_the_next_id_into_a_caller_owned_decimal_buffer() {
+    let generator = SnowflakeIdGenerator::new(7, SnowflakeLayout::default()).unwrap();
+    let mut output = [0_u8; 20];
+
+    let written = generator
+        .try_write_next_id(&mut output)
+        .unwrap()
+        .expect("a 20-byte decimal buffer fits every u64");
+    let id = std::str::from_utf8(&output[..written])
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+
+    assert_eq!(generator.parse(id).worker_id(), 7);
+    assert_eq!(generator.try_write_next_id(&mut [0_u8; 1]).unwrap(), None);
+}

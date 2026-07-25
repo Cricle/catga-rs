@@ -1,9 +1,43 @@
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::{CatgaError, CatgaResult, ErrorCode};
+
 /// A value that can be handled or transported by Catga.
 pub trait Message: Send + Sync + 'static {
     /// Returns the stable Rust type name used by the default registry.
     fn message_type(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+
+    /// Returns the schema version written to typed transport envelopes.
+    ///
+    /// Messages without an explicit evolution contract retain version one for
+    /// wire compatibility. Versioned messages override this method or use the
+    /// corresponding derive configuration.
+    fn schema_version(&self) -> u32 {
+        1
+    }
+
+    /// Returns the priority requested for typed transport delivery.
+    ///
+    /// Messages without an explicit priority retain normal delivery ordering.
+    /// Implementations may override this method when priority depends on the
+    /// message value; `#[derive(Message)]` supports a static priority
+    /// declaration without a runtime allocation.
+    fn priority(&self) -> MessagePriority {
+        MessagePriority::Normal
+    }
+
+    /// Visits explicitly opted-in values for structured tracing.
+    ///
+    /// The default implementation exports no application data. Deriving [`Message`] supports
+    /// `#[catga(trace_tag)]` and `#[catga(trace_tag = "name")]` on named fields, plus
+    /// `#[catga(trace_tags(prefix = "name.", include = ["field"], exclude = ["field"]))]`
+    /// for type-level bulk selection. This gives applications a compile-time,
+    /// privacy-preserving equivalent of Catga's activity-tag provider without reflection or a
+    /// per-message tag allocation.
+    fn visit_trace_tags(&self, _: &mut dyn FnMut(&str, &dyn std::fmt::Display)) {}
 }
 
 /// A message that produces a typed response.
@@ -18,11 +52,94 @@ pub trait Command: Message {}
 /// A message delivered to zero or more subscribers.
 pub trait Event: Message + Clone {}
 
+/// Supplies an optional stable shard key for automatic request batching.
+///
+/// Returning `None` places the request in the behavior's default shard.
+/// Implementations return owned text because a batch actor retains the key
+/// after the caller's request has been moved into its queue.
+pub trait BatchKeyProvider {
+    /// Returns the shard key for this request, when it has one.
+    fn batch_key(&self) -> Option<Box<str>>;
+}
+
+/// Supplies compile-time batch runtime limits for one request type.
+///
+/// `#[derive(Message)]` can implement this with `#[catga(batch(...))]`, so
+/// applications do not need a global batching-options registry.
+pub trait BatchOptionsProvider {
+    /// Returns the validated runtime limits declared by the message type.
+    fn batch_options() -> crate::BatchOptions;
+}
+
+/// Delivery guarantee requested for a transported message.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u8)]
+pub enum QualityOfService {
+    /// The transport may drop a message rather than retrying it.
+    AtMostOnce = 0,
+    /// The transport retries delivery and consumers may see duplicates.
+    #[default]
+    AtLeastOnce = 1,
+    /// Delivery requires deduplication by the receiving application.
+    ExactlyOnce = 2,
+}
+
+impl QualityOfService {
+    /// Returns the stable telemetry tag for this level.
+    pub const fn as_tag(self) -> &'static str {
+        match self {
+            Self::AtMostOnce => "AtMostOnce",
+            Self::AtLeastOnce => "AtLeastOnce",
+            Self::ExactlyOnce => "ExactlyOnce",
+        }
+    }
+
+    /// Returns whether this level needs a backend acknowledgement.
+    pub const fn requires_ack(self) -> bool {
+        matches!(self, Self::AtLeastOnce | Self::ExactlyOnce)
+    }
+
+    /// Returns whether consumers must deduplicate repeated message identities.
+    pub const fn requires_deduplication(self) -> bool {
+        matches!(self, Self::ExactlyOnce)
+    }
+}
+
+/// Chooses whether a sender waits for delivery or relies on durable retry.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u8)]
+pub enum DeliveryMode {
+    /// Wait for the current operation's result.
+    #[default]
+    WaitForResult = 0,
+    /// Persist for asynchronous retry by a background worker.
+    AsyncRetry = 1,
+}
+
+/// Relative message importance for transports that support priority queues.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[repr(u8)]
+pub enum MessagePriority {
+    /// Deferrable work.
+    Low = 0,
+    /// Default application work.
+    #[default]
+    Normal = 1,
+    /// Important work that should precede normal traffic.
+    High = 2,
+    /// Time-sensitive work.
+    Critical = 3,
+}
+
 /// Identifiers propagated with a message through a distributed operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MessageMetadata {
     message_id: u64,
     correlation_id: Option<u64>,
+    quality_of_service: QualityOfService,
+    delivery_mode: DeliveryMode,
+    priority: MessagePriority,
+    not_before_unix_ms: Option<u64>,
 }
 
 impl MessageMetadata {
@@ -31,6 +148,10 @@ impl MessageMetadata {
         Self {
             message_id,
             correlation_id,
+            quality_of_service: QualityOfService::AtLeastOnce,
+            delivery_mode: DeliveryMode::WaitForResult,
+            priority: MessagePriority::Normal,
+            not_before_unix_ms: None,
         }
     }
 
@@ -42,5 +163,83 @@ impl MessageMetadata {
     /// Returns the optional distributed correlation identifier.
     pub const fn correlation_id(self) -> Option<u64> {
         self.correlation_id
+    }
+
+    /// Returns the requested transport delivery guarantee.
+    pub const fn quality_of_service(self) -> QualityOfService {
+        self.quality_of_service
+    }
+
+    /// Returns whether the sender waits or relies on durable retry.
+    pub const fn delivery_mode(self) -> DeliveryMode {
+        self.delivery_mode
+    }
+
+    /// Returns the requested transport priority.
+    pub const fn priority(self) -> MessagePriority {
+        self.priority
+    }
+
+    /// Returns the optional UTC epoch-millisecond delivery boundary.
+    pub const fn not_before_unix_ms(self) -> Option<u64> {
+        self.not_before_unix_ms
+    }
+
+    /// Returns the optional wall-clock delivery boundary.
+    pub fn not_before(self) -> Option<SystemTime> {
+        self.not_before_unix_ms
+            .and_then(|milliseconds| UNIX_EPOCH.checked_add(Duration::from_millis(milliseconds)))
+    }
+
+    /// Returns whether this metadata permits delivery at `now`.
+    pub fn is_due_at(self, now: SystemTime) -> bool {
+        let Some(not_before) = self.not_before_unix_ms else {
+            return true;
+        };
+        now.duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+            .is_some_and(|milliseconds| milliseconds >= not_before)
+    }
+
+    /// Replaces the requested delivery guarantee.
+    pub const fn with_quality_of_service(mut self, quality_of_service: QualityOfService) -> Self {
+        self.quality_of_service = quality_of_service;
+        self
+    }
+
+    /// Replaces the sender completion mode.
+    pub const fn with_delivery_mode(mut self, delivery_mode: DeliveryMode) -> Self {
+        self.delivery_mode = delivery_mode;
+        self
+    }
+
+    /// Replaces the requested transport priority.
+    pub const fn with_priority(mut self, priority: MessagePriority) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// Replaces the optional UTC epoch-millisecond delivery boundary.
+    pub const fn with_not_before_unix_ms(mut self, not_before_unix_ms: Option<u64>) -> Self {
+        self.not_before_unix_ms = not_before_unix_ms;
+        self
+    }
+
+    /// Replaces the optional wall-clock delivery boundary.
+    pub fn with_not_before(self, not_before: SystemTime) -> CatgaResult<Self> {
+        let elapsed = not_before.duration_since(UNIX_EPOCH).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "scheduled delivery time precedes the Unix epoch",
+            )
+        })?;
+        let milliseconds = u64::try_from(elapsed.as_millis()).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "scheduled delivery time exceeds the supported range",
+            )
+        })?;
+        Ok(self.with_not_before_unix_ms(Some(milliseconds)))
     }
 }

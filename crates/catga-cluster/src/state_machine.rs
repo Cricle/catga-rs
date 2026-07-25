@@ -6,6 +6,8 @@ use catga_core::{CatgaError, CatgaResult};
 
 use crate::{RaftApplicationSnapshot, RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode};
 
+const RECOVERY_PAGE_ENTRIES: usize = 128;
+
 /// Applies deterministic Raft commands and converts its state to durable bytes.
 ///
 /// Implementations are owned by one [`RaftStateMachineDriver`] and therefore do
@@ -95,10 +97,7 @@ where
         if let Some(snapshot) = driver.node.application_snapshot()? {
             driver.restore_snapshot(snapshot)?;
         }
-        driver
-            .pending_entries
-            .extend(driver.node.persisted_committed_entries()?);
-        driver.apply_available()?;
+        driver.recover_committed_entries()?;
         driver.node.acknowledge_recovered(driver.applied_index)?;
         Ok(driver)
     }
@@ -208,5 +207,31 @@ where
         self.machine.restore(&snapshot.data)?;
         self.applied_index = snapshot.index;
         Ok(())
+    }
+
+    /// Replays the durable committed suffix in fixed-size pages.
+    ///
+    /// Each page is applied before the next is read, so recovery memory is
+    /// bounded by `RECOVERY_PAGE_ENTRIES` plus one application command.
+    fn recover_committed_entries(&mut self) -> Result<(), RaftStateMachineError> {
+        let mut start_index = self
+            .applied_index
+            .checked_add(1)
+            .ok_or(raft::Error::Store(raft::StorageError::Unavailable))?;
+        loop {
+            let page = self
+                .node
+                .persisted_committed_page(start_index, RECOVERY_PAGE_ENTRIES)?;
+            for entry in page.entries {
+                if entry.index > self.applied_index {
+                    self.machine.apply(&entry)?;
+                    self.applied_index = entry.index;
+                }
+            }
+            let Some(next_index) = page.next_index else {
+                return Ok(());
+            };
+            start_index = next_index;
+        }
     }
 }

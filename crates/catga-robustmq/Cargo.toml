@@ -10,6 +10,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
 catga-codec-postcard = { path = "../catga-codec-postcard" }
 catga-core = { path = "../catga-core" }
 robustmq = "1"
+serde = "1"
+tokio = { version = "1", features = ["sync", "time"] }

@@ -1,15 +1,84 @@
 //! Persistent subscription contract tests.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
 use catga_core::{
-    CompetingSubscriptionRunner, Envelope, EventStore, MessageMetadata, PersistentSubscription,
-    StoredEvent, SubscriptionHandler, SubscriptionRunner, SubscriptionStore,
+    CatgaError, CatgaResult, CompetingSubscriptionRunner, Envelope, ErrorCode, EventStore,
+    EventStream, MessageMetadata, PersistentSubscription, StoredEvent, SubscriptionHandler,
+    SubscriptionLoopOptions, SubscriptionRunner, SubscriptionStore, VersionInfo,
 };
 use catga_memory::{MemoryEventStore, MemorySubscriptions};
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 struct SumHandler(AtomicUsize);
+
+struct StaticEventStore {
+    event: StoredEvent,
+}
+
+#[async_trait]
+impl EventStore for StaticEventStore {
+    async fn append(
+        &self,
+        _stream_id: &str,
+        _events: Vec<Envelope>,
+        _expected_version: Option<i64>,
+    ) -> CatgaResult<i64> {
+        Err(CatgaError::new(
+            ErrorCode::Unsupported,
+            "static event store is read-only",
+        ))
+    }
+
+    async fn read(
+        &self,
+        stream_id: &str,
+        _from_version: u64,
+        _max_count: usize,
+    ) -> CatgaResult<EventStream> {
+        Ok(EventStream::new(
+            stream_id,
+            self.event.version(),
+            vec![self.event.clone()],
+        ))
+    }
+
+    async fn version(&self, _stream_id: &str) -> CatgaResult<i64> {
+        Ok(self.event.version())
+    }
+
+    async fn read_to_version(&self, stream_id: &str, _to_version: i64) -> CatgaResult<EventStream> {
+        self.read(stream_id, 0, 1).await
+    }
+
+    async fn read_to_time(
+        &self,
+        stream_id: &str,
+        _upper_bound: SystemTime,
+    ) -> CatgaResult<EventStream> {
+        self.read(stream_id, 0, 1).await
+    }
+
+    async fn version_history(&self, _stream_id: &str) -> CatgaResult<Vec<VersionInfo>> {
+        Ok(vec![VersionInfo::new(
+            self.event.version(),
+            self.event.timestamp(),
+            self.event.envelope().message_type(),
+        )])
+    }
+
+    async fn stream_ids(&self) -> CatgaResult<Vec<String>> {
+        Ok(vec![String::from("orders-a")])
+    }
+}
 
 #[async_trait]
 impl SubscriptionHandler for SumHandler {
@@ -106,5 +175,137 @@ async fn subscriptions_filter_events_checkpoint_each_stream_and_exclusively_leas
             .try_acquire("orders", "worker-b")
             .await
             .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn competing_subscription_processes_at_most_one_matching_event_per_lease() {
+    let events = MemoryEventStore::default();
+    let subscriptions = MemorySubscriptions::default();
+    let handler = SumHandler(AtomicUsize::new(0));
+    subscriptions
+        .save(PersistentSubscription::new("orders", "orders-*").with_event_types(["selected"]))
+        .await
+        .unwrap();
+    events
+        .append(
+            "orders-a",
+            vec![
+                event(1, "ignored", 40),
+                event(2, "selected", 2),
+                event(3, "selected", 3),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+
+    let first =
+        CompetingSubscriptionRunner::new(&events, &subscriptions, &handler, "orders", "worker-a");
+    let second =
+        CompetingSubscriptionRunner::new(&events, &subscriptions, &handler, "orders", "worker-b");
+
+    assert_eq!(first.try_process_next().await.unwrap(), Some(true));
+    assert_eq!(handler.0.load(Ordering::Acquire), 2);
+    assert_eq!(
+        subscriptions
+            .load_checkpoint("orders", "orders-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .version(),
+        1
+    );
+
+    assert_eq!(second.try_process_next().await.unwrap(), Some(true));
+    assert_eq!(handler.0.load(Ordering::Acquire), 5);
+    assert_eq!(first.try_process_next().await.unwrap(), Some(false));
+}
+
+#[tokio::test]
+async fn subscription_runtime_runs_immediately_and_stops_on_cancellation() {
+    assert_eq!(
+        SubscriptionLoopOptions::new(Duration::ZERO)
+            .expect_err("zero interval is invalid")
+            .code(),
+        ErrorCode::Validation
+    );
+
+    let events = Arc::new(MemoryEventStore::default());
+    let subscriptions = Arc::new(MemorySubscriptions::default());
+    let handler = Arc::new(SumHandler(AtomicUsize::new(0)));
+    subscriptions
+        .save(PersistentSubscription::new("orders", "orders-*").with_event_types(["selected"]))
+        .await
+        .unwrap();
+    events
+        .append("orders-a", vec![event(1, "selected", 7)], None)
+        .await
+        .unwrap();
+
+    let shutdown = CancellationToken::new();
+    let worker = tokio::spawn({
+        let events = Arc::clone(&events);
+        let subscriptions = Arc::clone(&subscriptions);
+        let handler = Arc::clone(&handler);
+        let shutdown = shutdown.clone();
+        async move {
+            SubscriptionRunner::new(events.as_ref(), subscriptions.as_ref(), handler.as_ref())
+                .run_until_cancelled(
+                    "orders",
+                    SubscriptionLoopOptions::new(Duration::from_secs(60))
+                        .expect("positive interval is valid"),
+                    shutdown,
+                )
+                .await
+        }
+    });
+
+    timeout(Duration::from_secs(1), async {
+        while handler.0.load(Ordering::Acquire) != 7 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first subscription pass runs immediately");
+
+    shutdown.cancel();
+    let run = timeout(Duration::from_secs(1), worker)
+        .await
+        .expect("the subscription loop observes cancellation")
+        .expect("the caller-owned task does not panic")
+        .expect("the completed subscription loop succeeds");
+    assert_eq!(run.handled(), 1);
+    assert_eq!(run.streams(), 1);
+}
+
+#[tokio::test]
+async fn subscription_treats_the_maximum_event_version_as_a_completed_stream() {
+    let events = StaticEventStore {
+        event: StoredEvent::new(
+            i64::MAX,
+            Arc::new(event(1, "ignored", 9)),
+            SystemTime::now(),
+        ),
+    };
+    let subscriptions = MemorySubscriptions::default();
+    let handler = SumHandler(AtomicUsize::new(0));
+    subscriptions
+        .save(PersistentSubscription::new("orders", "orders-*").with_event_types(["selected"]))
+        .await
+        .unwrap();
+
+    let runner = SubscriptionRunner::new(&events, &subscriptions, &handler);
+    assert_eq!(runner.run_once("orders").await.unwrap().handled(), 0);
+    assert_eq!(runner.run_once("orders").await.unwrap().handled(), 0);
+    assert_eq!(handler.0.load(Ordering::Acquire), 0);
+    assert_eq!(
+        subscriptions
+            .load_checkpoint("orders", "orders-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .version(),
+        i64::MAX
     );
 }

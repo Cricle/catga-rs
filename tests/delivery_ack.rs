@@ -29,6 +29,10 @@ async fn acknowledgement_is_consumed_with_its_delivery() {
         Box::new(CounterAcknowledger(count.clone())),
     );
 
-    MemoryTransport::new(1).ack(delivery).await.unwrap();
+    MemoryTransport::new(1)
+        .unwrap()
+        .ack(delivery)
+        .await
+        .unwrap();
     assert_eq!(count.load(Ordering::Relaxed), 1);
 }

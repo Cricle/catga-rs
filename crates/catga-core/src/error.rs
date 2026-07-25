@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
+
 /// Categories used to classify framework failures.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ErrorCode {
     /// Input does not meet the handler's validation rules.
     Validation,
@@ -7,6 +9,10 @@ pub enum ErrorCode {
     NotFound,
     /// An operation conflicts with persisted state.
     Conflict,
+    /// Authentication is required before the operation may proceed.
+    Unauthorized,
+    /// The authenticated identity is not permitted to perform the operation.
+    Forbidden,
     /// Work was cancelled before completion.
     Cancelled,
     /// Work exceeded its configured deadline.
@@ -15,12 +21,14 @@ pub enum ErrorCode {
     Unsupported,
     /// The operation may succeed when retried.
     Transient,
+    /// The component is intentionally not accepting work or cannot currently serve it.
+    Unavailable,
     /// An unexpected framework failure occurred.
     Internal,
 }
 
 /// A structured Catga failure.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CatgaError {
     code: ErrorCode,
     message: Box<str>,

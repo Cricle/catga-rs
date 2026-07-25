@@ -18,6 +18,19 @@ use raft::eraftpb::{ConfState, MessageType, Snapshot};
 use tokio::sync::{RwLock, mpsc};
 
 #[derive(Default)]
+struct BlockingTransport {
+    entered_send: AtomicU64,
+}
+
+#[async_trait]
+impl RaftTransport for BlockingTransport {
+    async fn send(&self, _message: RaftMessage) -> RaftTransportResult {
+        self.entered_send.store(1, Ordering::Release);
+        std::future::pending().await
+    }
+}
+
+#[derive(Default)]
 struct SharedCounter {
     value: Arc<AtomicU64>,
 }
@@ -266,8 +279,55 @@ async fn state_machine_runtimes_replicate_and_apply_on_every_node() {
     .await
     .unwrap();
 
-    for runtime in runtimes {
+    for runtime in &runtimes {
         runtime.shutdown();
+    }
+    for runtime in runtimes {
         runtime.join().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn state_machine_runtime_shutdown_cancels_a_blocked_transport_send() {
+    let transport = Arc::new(BlockingTransport::default());
+    let node = RaftNode::new(
+        1,
+        "http://node-1",
+        vec![
+            RaftMember::new(1, "http://node-1"),
+            RaftMember::new(2, "http://node-2"),
+        ],
+    )
+    .unwrap();
+    let driver = RaftStateMachineDriver::new(node, SharedCounter::default()).unwrap();
+    let runtime = Arc::new(
+        RaftStateMachineRuntime::spawn(driver, Arc::clone(&transport), Duration::from_millis(1))
+            .unwrap(),
+    );
+    let campaign = {
+        let runtime = Arc::clone(&runtime);
+        tokio::spawn(async move { runtime.campaign().await })
+    };
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while transport.entered_send.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("campaign must start transport delivery");
+
+    runtime.shutdown();
+    assert!(matches!(
+        campaign.await.unwrap(),
+        Err(catga_cluster::RaftStateMachineRuntimeError::Stopped)
+    ));
+    let runtime = match Arc::try_unwrap(runtime) {
+        Ok(runtime) => runtime,
+        Err(_) => panic!("campaign task released the runtime"),
+    };
+    tokio::time::timeout(Duration::from_secs(1), runtime.join())
+        .await
+        .expect("shutdown must cancel a blocked transport send")
+        .unwrap();
 }
