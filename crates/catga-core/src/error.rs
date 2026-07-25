@@ -1,6 +1,4 @@
-use std::fmt;
-
-use serde::{Deserialize, Serialize, de};
+use serde::{Deserialize, Serialize};
 
 /// Maximum UTF-8 byte length retained for optional error details.
 pub const MAX_ERROR_DETAILS_BYTES: usize = 1024;
@@ -82,7 +80,7 @@ impl ErrorCode {
 }
 
 /// A structured Catga failure.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CatgaError {
     code: ErrorCode,
     message: Box<str>,
@@ -90,116 +88,6 @@ pub struct CatgaError {
     details: Option<Box<str>>,
     #[serde(default)]
     retryable: Option<bool>,
-}
-
-#[derive(Deserialize)]
-#[serde(field_identifier, rename_all = "snake_case")]
-enum CatgaErrorField {
-    Code,
-    Message,
-    Details,
-    Retryable,
-}
-
-struct CatgaErrorVisitor;
-
-impl<'de> de::Visitor<'de> for CatgaErrorVisitor {
-    type Value = CatgaError;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a Catga error")
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::SeqAccess<'de>,
-    {
-        let code = sequence
-            .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-        let message = sequence
-            .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-        // Postcard reports a missing trailing sequence element as an error rather than `None`.
-        // Treat that legacy end-of-frame condition as the serde default for new fields.
-        let details = match sequence.next_element::<Option<Box<str>>>() {
-            Ok(details) => details.flatten(),
-            Err(_) => None,
-        };
-        let retryable = match sequence.next_element::<Option<bool>>() {
-            Ok(retryable) => retryable.flatten(),
-            Err(_) => None,
-        };
-
-        Ok(CatgaError {
-            code,
-            message,
-            details: details.map(|details| bounded_details(&details)),
-            retryable,
-        })
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::MapAccess<'de>,
-    {
-        let mut code = None;
-        let mut message = None;
-        let mut details: Option<Option<Box<str>>> = None;
-        let mut retryable: Option<Option<bool>> = None;
-
-        while let Some(field) = map.next_key()? {
-            match field {
-                CatgaErrorField::Code => {
-                    if code.is_some() {
-                        return Err(de::Error::duplicate_field("code"));
-                    }
-                    code = Some(map.next_value()?);
-                }
-                CatgaErrorField::Message => {
-                    if message.is_some() {
-                        return Err(de::Error::duplicate_field("message"));
-                    }
-                    message = Some(map.next_value()?);
-                }
-                CatgaErrorField::Details => {
-                    if details.is_some() {
-                        return Err(de::Error::duplicate_field("details"));
-                    }
-                    details = Some(map.next_value()?);
-                }
-                CatgaErrorField::Retryable => {
-                    if retryable.is_some() {
-                        return Err(de::Error::duplicate_field("retryable"));
-                    }
-                    retryable = Some(map.next_value()?);
-                }
-            }
-        }
-
-        Ok(CatgaError {
-            code: code.ok_or_else(|| de::Error::missing_field("code"))?,
-            message: message.ok_or_else(|| de::Error::missing_field("message"))?,
-            details: match details {
-                Some(details) => details.map(|details| bounded_details(&details)),
-                None => None,
-            },
-            retryable: retryable.flatten(),
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for CatgaError {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        deserializer.deserialize_struct(
-            "CatgaError",
-            &["code", "message", "details", "retryable"],
-            CatgaErrorVisitor,
-        )
-    }
 }
 
 impl CatgaError {
