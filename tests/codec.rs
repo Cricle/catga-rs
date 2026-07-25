@@ -438,13 +438,7 @@ fn postcard_codec_bounds_received_error_details() {
 
     let decoded = codec.decode_value::<CatgaError>(&bytes).unwrap();
 
-    assert!(decoded.details().unwrap().len() <= catga_core::MAX_ERROR_DETAILS_BYTES);
-    assert!(
-        decoded
-            .details()
-            .unwrap()
-            .is_char_boundary(decoded.details().unwrap().len())
-    );
+    assert_eq!(decoded.details(), Some("é".repeat(512).as_str()));
 }
 
 #[test]
