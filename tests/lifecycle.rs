@@ -89,9 +89,8 @@ impl catga_core::Waitable for LifecycleTransport {
             .lock()
             .map_err(|_| CatgaError::new(ErrorCode::Internal, "test event log poisoned"))?
             .push("draining");
-        while self.pending.load(Ordering::Acquire) != 0 {
+        if self.pending.load(Ordering::Acquire) != 0 {
             cancellation.cancelled().await;
-            return Ok(());
         }
         Ok(())
     }
