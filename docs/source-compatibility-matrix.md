@@ -6,10 +6,10 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 
 | Upstream area | Rust replacement | Evidence | Status |
 | --- | --- | --- | --- |
-| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-postcard` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel}` | Migrated; public Rustdoc is checked with warnings denied, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience, and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
-| HTTP integration (11 C# files) | `catga-axum` | `tests/axum.rs` | Migrated with typed Axum routes instead of reflection discovery; leader forwarding and the generic `propagate_correlation_header` helper retain ambient correlation across HTTP hops without a global client wrapper, `EndpointValidation` maps input errors to the stable Catga validation result, `IntoCatgaHttpResponse` replaces overlapping mutable C# result builders with one allocation-conscious result-to-response trait, and opt-in `endpoint_panic_middleware` replaces endpoint exception handling without exposing panic payloads |
+| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-postcard` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel}` | Migrated; public Rustdoc is checked with warnings denied, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience with rolling failure-ratio circuits and atomic full jitter, and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
+| HTTP integration (11 C# files) | `catga-axum` | `tests/axum.rs` | Migrated with typed and arbitrary-signature static Axum routes instead of reflection discovery; leader forwarding and the generic `propagate_correlation_header` helper retain ambient correlation across HTTP hops without a global client wrapper, `EndpointValidation` maps input errors to the stable Catga validation result, `IntoCatgaHttpResponse` replaces overlapping mutable C# result builders with one allocation-conscious result-to-response trait, and opt-in `endpoint_panic_middleware` replaces endpoint exception handling without exposing panic payloads |
 | Cluster coordination (10 C# files) | `catga-cluster`, Axum raft transport | `tests/{cluster,raft_cluster,raft_runtime,raft_state_machine_runtime}.rs` | Migrated |
-| Flow and state machines (67 C# files) | `catga-flow`, Memory/Redis/NATS flow stores | `tests/flow`, `tests/state_machine*.rs`, `tests/observability.rs` | Migrated; durable DSL recovery uses bounded nested conditional paths, explicitly replayable ForEach item snapshots, branch-local parallel cursors, and a persisted `when_any` winner. The same recovery contract is exercised in memory and compiled through explicit Redis/NATS service-gated tests |
+| Flow and state machines (67 C# files) | `catga-flow`, Memory/Redis/NATS flow stores | `tests/flow`, `tests/state_machine*.rs`, `tests/observability.rs` | Migrated; durable DSL recovery uses bounded nested conditional paths, explicitly replayable ForEach item snapshots, branch-local parallel cursors, and a persisted `when_any` winner. Async top-level lifecycle hooks are serial, caller-owned, and emitted before successful checkpoint persistence, preserving documented at-least-once replay. The same recovery contract is exercised in memory and compiled through explicit Redis/NATS service-gated tests |
 | In-memory persistence (17 C# files) | `catga-memory` | `tests/{memory_reliability,event_sourcing,flow}` | Migrated |
 | NATS persistence and transport (24 C# files) | `catga-nats` | `tests/{nats,nats_request}.rs` | Migrated; real Core NATS and JetStream regressions include explicit QoS separation and native redelivery-attempt reporting |
 | Redis persistence and transport (26 C# files) | `catga-redis` | `tests/redis.rs`, `tests/state_machine_persistence.rs` | Migrated; real Redis regression covers Streams queues, ephemeral Pub/Sub broadcasts, stores, historical enhanced snapshots, durable DSL step progress, native redelivery-attempt reporting, and bounded group-wide idle-delivery recovery |
@@ -99,9 +99,25 @@ documentation/performance artifacts, not runtime contracts.
 * C# source-generation responsibilities are split by Rust's compile-time
   boundaries: `#[derive(Message)]` emits message identity, authorization,
   batch and trace-tag metadata; `catga_handlers!` emits typed request/event
-  registration; `catga_routes!` emits static Axum routes; and Postcard bounds
-  make serializer availability a compile-time requirement. This replaces
+  registration; `catga_routes!` emits static Catga routes and `axum_routes!`
+  emits static native Axum-handler routes; and Postcard bounds make serializer
+  availability a compile-time requirement. This replaces
   reflection-based registration analyzers without runtime scanning.
+* The source hosted transport lifecycle maps to owning
+  `TransportLifecycle<T>`. It initializes in the caller's task, permanently
+  stops accepting work, waits for one bounded drain future, and consumes the
+  transport so Rust `Drop` releases resources before shutdown returns. No
+  framework-owned worker or HTTP health endpoint is introduced.
+* Source identity claims map to bounded, immutable `SecurityClaims`: entries
+  use sorted `Arc<[SecurityClaim]>` storage and binary lookup, with fixed
+  count/key/value budgets. Claims remain data and never grant a role or policy
+  by themselves. Portable dead letters retain bounded error text plus stable
+  error code, UTC timestamp, and processing stage; memory, Redis, and NATS
+  readers accept their legacy records as explicitly marked legacy diagnostics.
+* Source Polly-style circuit and retry policy maps to a caller-owned rolling
+  bounded outcome window with explicit minimum throughput and exact failure
+  ratio. `RetryJitter::Full` advances one atomic state per retry and retains no
+  task or waiter; the compatibility default remains deterministic no-jitter.
 * .NET cancellation-token parameters map to cancellation by dropping Rust
   futures or to explicit `CancellationToken` arguments on long-lived workers;
   they are not duplicated on every short-lived dispatch call.

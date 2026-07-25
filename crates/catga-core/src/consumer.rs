@@ -217,11 +217,12 @@ where
             if let Some(policy) = dead_letters
                 && delivery.attempts() >= policy.max_attempts.get()
             {
-                let letter = DeadLetter::new(
+                let letter = DeadLetter::from_failure(
                     delivery.envelope().clone(),
-                    error.message(),
+                    &error,
                     delivery.attempts(),
-                );
+                    "consumer.handle",
+                )?;
                 match policy.store.enqueue(letter).await {
                     Ok(()) => {
                         transport.ack(delivery).await?;

@@ -33,6 +33,9 @@ use protobuf::Message as ProtobufMessage;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::mpsc;
 
+/// Re-exported so [`axum_routes!`] expands against the same Axum version as this crate.
+pub use axum;
+
 pub use validation::{
     EndpointValidation, validate_max_length, validate_min_count, validate_min_length,
     validate_not_empty, validate_positive, validate_range, validate_required,
@@ -389,6 +392,82 @@ macro_rules! catga_routes {
             Ok(router)
         })()
     }};
+}
+
+/// Builds routes for native Axum handlers from an existing [`axum::Router`] expression.
+///
+/// This is separate from [`catga_routes!`], which registers Catga mediator request and event
+/// handlers. `axum_routes!` expands each entry directly to Axum's corresponding routing method;
+/// it neither serializes through Catga nor stores handlers in a runtime registry. Consequently,
+/// handlers may use any extractor and response type accepted by Axum, and invalid handler,
+/// extractor, state, or `Send` bounds are reported by the usual Axum compiler diagnostics.
+///
+/// The first expression supplies the router to extend. For handlers that use `State<T>`, use
+/// `Router::<T>::new()` as the base and call `.with_state(state)` on the expanded router. Each
+/// following entry is an explicit uppercase HTTP method, a route path expression, and a handler
+/// expression. Supported methods are `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`.
+///
+/// ```no_run
+/// use axum::{
+///     Router,
+///     extract::{Path, State},
+/// };
+///
+/// #[derive(Clone)]
+/// struct AppState;
+///
+/// async fn show_user(State(_state): State<AppState>, Path(id): Path<u64>) -> String {
+///     id.to_string()
+/// }
+///
+/// let app: Router = catga_axum::axum_routes! {
+///     Router::<AppState>::new();
+///     GET "/users/{id}" => show_user,
+///     POST "/users" => || async { axum::http::StatusCode::CREATED },
+/// }
+/// .with_state(AppState);
+/// # let _ = app;
+/// ```
+///
+/// A closure is a handler expression just like a function item. The expanded router is returned
+/// directly, so route storage stays proportional to the number of declared routes and the macro
+/// creates no background work.
+#[macro_export]
+macro_rules! axum_routes {
+    (
+        $router:expr;
+        $( $method:ident $path:expr => $handler:expr ),+ $(,)?
+    ) => {{
+        let mut router = $router;
+        $(
+            router = $crate::__catga_axum_route!($method, router, $path, $handler);
+        )+
+        router
+    }};
+}
+
+/// Expands one [`axum_routes!`] entry to Axum's native routing API.
+///
+/// This macro is public only because exported macros resolve through `$crate`; applications use
+/// [`axum_routes!`] instead.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __catga_axum_route {
+    (GET, $router:ident, $path:expr, $handler:expr) => {
+        $router.route($path, $crate::axum::routing::get($handler))
+    };
+    (POST, $router:ident, $path:expr, $handler:expr) => {
+        $router.route($path, $crate::axum::routing::post($handler))
+    };
+    (PUT, $router:ident, $path:expr, $handler:expr) => {
+        $router.route($path, $crate::axum::routing::put($handler))
+    };
+    (PATCH, $router:ident, $path:expr, $handler:expr) => {
+        $router.route($path, $crate::axum::routing::patch($handler))
+    };
+    (DELETE, $router:ident, $path:expr, $handler:expr) => {
+        $router.route($path, $crate::axum::routing::delete($handler))
+    };
 }
 
 /// Builds a static OpenAPI/Swagger metadata catalog from explicit Catga message types.

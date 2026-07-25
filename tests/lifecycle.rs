@@ -9,7 +9,8 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{
     AutoRecoveryOptions, CatgaError, CatgaResult, ErrorCode, RecoverableComponent, RecoveryManager,
-    RecoveryResult, ShutdownCoordinator,
+    RecoveryResult, ShutdownCoordinator, Stoppable, TransportLifecycle, TransportLifecycleOptions,
+    TransportShutdown,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -31,6 +32,73 @@ struct PanickingRecoverable;
 
 struct BlockingRecoverable {
     started: Notify,
+}
+
+struct LifecycleTransport {
+    accepting: AtomicBool,
+    pending: AtomicUsize,
+    events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+}
+
+impl LifecycleTransport {
+    fn new(events: Arc<std::sync::Mutex<Vec<&'static str>>>, pending: usize) -> Self {
+        Self {
+            accepting: AtomicBool::new(true),
+            pending: AtomicUsize::new(pending),
+            events,
+        }
+    }
+}
+
+impl Drop for LifecycleTransport {
+    fn drop(&mut self) {
+        if let Ok(mut events) = self.events.lock() {
+            events.push("dropped");
+        }
+    }
+}
+
+#[async_trait]
+impl catga_core::AsyncInitializable for LifecycleTransport {
+    async fn initialize(&self) -> CatgaResult<()> {
+        self.events
+            .lock()
+            .map_err(|_| CatgaError::new(ErrorCode::Internal, "test event log poisoned"))?
+            .push("initialized");
+        Ok(())
+    }
+}
+
+impl Stoppable for LifecycleTransport {
+    fn stop_accepting(&self) {
+        self.accepting.store(false, Ordering::Release);
+        if let Ok(mut events) = self.events.lock() {
+            events.push("stopped");
+        }
+    }
+
+    fn is_accepting(&self) -> bool {
+        self.accepting.load(Ordering::Acquire)
+    }
+}
+
+#[async_trait]
+impl catga_core::Waitable for LifecycleTransport {
+    async fn wait_for_completion(&self, cancellation: CancellationToken) -> CatgaResult<()> {
+        self.events
+            .lock()
+            .map_err(|_| CatgaError::new(ErrorCode::Internal, "test event log poisoned"))?
+            .push("draining");
+        while self.pending.load(Ordering::Acquire) != 0 {
+            cancellation.cancelled().await;
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    fn pending_operations(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
 }
 
 #[async_trait]
@@ -248,4 +316,50 @@ async fn operation_tracker_drains_when_a_delivery_guard_is_dropped() {
     drop(operation);
     wait.await.unwrap();
     assert_eq!(tracker.pending_operations(), 0);
+}
+
+#[tokio::test]
+async fn transport_lifecycle_initializes_stops_drains_then_releases_transport() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lifecycle = TransportLifecycle::new(LifecycleTransport::new(Arc::clone(&events), 0));
+
+    lifecycle.initialize().await.unwrap();
+    let result = lifecycle
+        .shutdown(
+            TransportLifecycleOptions::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result, TransportShutdown::Drained);
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["initialized", "stopped", "draining", "dropped"]
+    );
+}
+
+#[tokio::test]
+async fn transport_lifecycle_times_out_after_stopping_and_still_releases_transport() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lifecycle = TransportLifecycle::new(LifecycleTransport::new(Arc::clone(&events), 1));
+
+    let result = lifecycle
+        .shutdown(
+            TransportLifecycleOptions::new(Duration::from_millis(1)).unwrap(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        TransportShutdown::TimedOut {
+            pending_operations: 1
+        }
+    );
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["stopped", "draining", "dropped"]
+    );
 }

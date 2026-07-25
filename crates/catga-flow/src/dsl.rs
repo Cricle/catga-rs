@@ -82,6 +82,96 @@ pub trait DslFlowLifecycleObserver: Send + Sync {
     fn observe(&self, event: &DslFlowLifecycleEvent);
 }
 
+/// Async callback invoked with immutable state after a top-level step succeeds.
+pub type DslFlowStepSucceededHook<S> =
+    Box<dyn for<'a> Fn(&'a S, usize) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
+
+/// Async callback invoked with immutable state after a top-level step fails.
+pub type DslFlowStepFailedHook<S> = Box<
+    dyn for<'a> Fn(&'a S, usize, &'a CatgaError) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync,
+>;
+
+/// Async callback invoked with immutable state after every top-level step succeeds.
+pub type DslFlowSucceededHook<S> =
+    Box<dyn for<'a> Fn(&'a S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
+
+/// Async callback invoked with immutable state after a top-level step failure ends the flow.
+pub type DslFlowFailedHook<S> =
+    Box<dyn for<'a> Fn(&'a S, &'a CatgaError) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
+
+/// Optional, async lifecycle hooks for one [`DslFlow`].
+///
+/// Hooks run sequentially on the caller's execution future after the configured synchronous
+/// [`DslFlowLifecycleObserver`]s. A hook error is returned unchanged and stops execution; it is
+/// not converted into another lifecycle event. Hooks configured on an outer flow are emitted only
+/// for that flow's top-level steps.
+pub struct DslFlowLifecycleHooks<S> {
+    step_succeeded: Option<DslFlowStepSucceededHook<S>>,
+    step_failed: Option<DslFlowStepFailedHook<S>>,
+    flow_succeeded: Option<DslFlowSucceededHook<S>>,
+    flow_failed: Option<DslFlowFailedHook<S>>,
+}
+
+impl<S> DslFlowLifecycleHooks<S> {
+    /// Creates an empty async lifecycle hook set.
+    pub const fn new() -> Self {
+        Self {
+            step_succeeded: None,
+            step_failed: None,
+            flow_succeeded: None,
+            flow_failed: None,
+        }
+    }
+
+    /// Configures the hook invoked after each successful top-level step.
+    pub fn on_step_succeeded<F>(mut self, hook: F) -> Self
+    where
+        F: for<'a> Fn(&'a S, usize) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync + 'static,
+    {
+        self.step_succeeded = Some(Box::new(hook));
+        self
+    }
+
+    /// Configures the hook invoked after a failed top-level step.
+    pub fn on_step_failed<F>(mut self, hook: F) -> Self
+    where
+        F: for<'a> Fn(&'a S, usize, &'a CatgaError) -> BoxFuture<'a, CatgaResult<()>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.step_failed = Some(Box::new(hook));
+        self
+    }
+
+    /// Configures the hook invoked after all top-level steps succeed.
+    pub fn on_flow_succeeded<F>(mut self, hook: F) -> Self
+    where
+        F: for<'a> Fn(&'a S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync + 'static,
+    {
+        self.flow_succeeded = Some(Box::new(hook));
+        self
+    }
+
+    /// Configures the hook invoked after a top-level step failure ends the flow.
+    pub fn on_flow_failed<F>(mut self, hook: F) -> Self
+    where
+        F: for<'a> Fn(&'a S, &'a CatgaError) -> BoxFuture<'a, CatgaResult<()>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.flow_failed = Some(Box::new(hook));
+        self
+    }
+}
+
+impl<S> Default for DslFlowLifecycleHooks<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 enum Step<S> {
     Action(Action<S>),
     ForEach {
@@ -135,6 +225,7 @@ enum Step<S> {
 pub struct DslFlow<S> {
     steps: Vec<Step<S>>,
     lifecycle_observers: Vec<Arc<dyn DslFlowLifecycleObserver>>,
+    lifecycle_hooks: Option<DslFlowLifecycleHooks<S>>,
 }
 
 /// Shared concurrency budget for throttled flow actions.
@@ -171,6 +262,7 @@ impl<S: Send> DslFlow<S> {
         Self {
             steps: Vec::new(),
             lifecycle_observers: Vec::new(),
+            lifecycle_hooks: None,
         }
     }
 
@@ -184,6 +276,18 @@ impl<S: Send> DslFlow<S> {
     {
         let observer: Arc<dyn DslFlowLifecycleObserver> = observer;
         self.lifecycle_observers.push(observer);
+        self
+    }
+
+    /// Adds asynchronous lifecycle hooks for top-level step and flow outcomes.
+    ///
+    /// A synchronous observer receives each event before the corresponding hook. Hooks are
+    /// awaited in the execution future, so a hook error is returned unchanged and prevents later
+    /// steps. In [`DslFlow::run_checkpointed`], successful-step hooks run before their completed
+    /// checkpoint is persisted. A persistence failure can therefore replay the step and hook on
+    /// retry; consumers must treat such successful-step effects as at-least-once.
+    pub fn with_lifecycle_hooks(mut self, hooks: DslFlowLifecycleHooks<S>) -> Self {
+        self.lifecycle_hooks = Some(hooks);
         self
     }
 
@@ -739,20 +843,15 @@ impl<S: Send> DslFlow<S> {
         Box::pin(async move {
             for (step_index, step) in self.steps.iter().enumerate() {
                 match self.run_step(state, step).await {
-                    Ok(()) => self.notify(DslFlowLifecycleEvent::StepSucceeded { step_index }),
+                    Ok(()) => self.notify_step_succeeded(state, step_index).await?,
                     Err(error) => {
-                        self.notify(DslFlowLifecycleEvent::StepFailed {
-                            step_index,
-                            error: error.clone(),
-                        });
-                        self.notify(DslFlowLifecycleEvent::FlowFailed {
-                            error: error.clone(),
-                        });
+                        self.notify_step_failed(state, step_index, &error).await?;
+                        self.notify_flow_failed(state, &error).await?;
                         return Err(error);
                     }
                 }
             }
-            self.notify(DslFlowLifecycleEvent::FlowSucceeded);
+            self.notify_flow_succeeded(state).await?;
             Ok(())
         })
     }
@@ -761,6 +860,72 @@ impl<S: Send> DslFlow<S> {
         for observer in &self.lifecycle_observers {
             observer.observe(&event);
         }
+    }
+
+    fn notify_step_succeeded<'a>(
+        &'a self,
+        state: &'a mut S,
+        step_index: usize,
+    ) -> BoxFuture<'a, CatgaResult<()>> {
+        Box::pin(async move {
+            self.notify(DslFlowLifecycleEvent::StepSucceeded { step_index });
+            if let Some(hooks) = &self.lifecycle_hooks
+                && let Some(hook) = &hooks.step_succeeded
+            {
+                hook(&*state, step_index).await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn notify_step_failed<'a>(
+        &'a self,
+        state: &'a mut S,
+        step_index: usize,
+        error: &'a CatgaError,
+    ) -> BoxFuture<'a, CatgaResult<()>> {
+        Box::pin(async move {
+            self.notify(DslFlowLifecycleEvent::StepFailed {
+                step_index,
+                error: error.clone(),
+            });
+            if let Some(hooks) = &self.lifecycle_hooks
+                && let Some(hook) = &hooks.step_failed
+            {
+                hook(&*state, step_index, error).await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn notify_flow_succeeded<'a>(&'a self, state: &'a mut S) -> BoxFuture<'a, CatgaResult<()>> {
+        Box::pin(async move {
+            self.notify(DslFlowLifecycleEvent::FlowSucceeded);
+            if let Some(hooks) = &self.lifecycle_hooks
+                && let Some(hook) = &hooks.flow_succeeded
+            {
+                hook(&*state).await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn notify_flow_failed<'a>(
+        &'a self,
+        state: &'a mut S,
+        error: &'a CatgaError,
+    ) -> BoxFuture<'a, CatgaResult<()>> {
+        Box::pin(async move {
+            self.notify(DslFlowLifecycleEvent::FlowFailed {
+                error: error.clone(),
+            });
+            if let Some(hooks) = &self.lifecycle_hooks
+                && let Some(hook) = &hooks.flow_failed
+            {
+                hook(&*state, error).await?;
+            }
+            Ok(())
+        })
     }
 
     /// Runs a named flow from its latest durable checkpoint.
@@ -819,10 +984,20 @@ impl<S: Send> DslFlow<S> {
                 progress,
                 codec,
             };
-            self.run_checkpointed_step(&mut initial, step, step_cursor, &context)
-                .await?;
+            match self
+                .run_checkpointed_step(&mut initial, step, step_cursor, &context)
+                .await
+            {
+                Ok(()) => self.notify_step_succeeded(&mut initial, index).await?,
+                Err(error) => {
+                    self.notify_step_failed(&mut initial, index, &error).await?;
+                    self.notify_flow_failed(&mut initial, &error).await?;
+                    return Err(error);
+                }
+            }
             persist_completed_checkpoint(&initial, &context).await?;
         }
+        self.notify_flow_succeeded(&mut initial).await?;
         Ok(initial)
     }
 
