@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use catga_cluster::{
-    ClusterCoordinator, ClusterForwarder, ForwardToLeaderBehavior, LeaderOnlyBehavior,
-    MemoryCluster, SingletonTaskRunner,
+    ClusterCoordinator, ClusterCoordinatorExt, ClusterForwarder, ForwardToLeaderBehavior,
+    LeaderOnlyBehavior, MemoryCluster, SingletonTaskRunner,
 };
 use catga_core::{CatgaResult, ErrorCode, Handler, Mediator, Pipeline, Registry, Request};
 use tokio::sync::Notify;
@@ -55,6 +55,39 @@ async fn cluster_executes_actions_only_while_the_caller_is_leader() {
 
     assert_eq!(node_a.execute_if_leader(|| async { 7_u32 }).await, Some(7));
     assert_eq!(node_b.execute_if_leader(|| async { 9_u32 }).await, None);
+}
+
+#[tokio::test]
+async fn leadership_loss_cancels_active_action() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let node_a = cluster.node("node-a").unwrap();
+    let action_started = Arc::new(Notify::new());
+
+    let action = tokio::spawn({
+        let action_started = Arc::clone(&action_started);
+        async move {
+            node_a
+                .execute_if_leader_cancellable(move |leadership_lost| {
+                    let action_started = Arc::clone(&action_started);
+                    async move {
+                        action_started.notify_one();
+                        leadership_lost.cancelled().await;
+                        Ok(())
+                    }
+                })
+                .await
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), action_started.notified())
+        .await
+        .unwrap();
+    cluster.elect("node-b").unwrap();
+
+    assert_eq!(
+        action.await.unwrap().unwrap_err().code(),
+        ErrorCode::Cancelled
+    );
 }
 
 #[derive(Debug)]
