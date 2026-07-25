@@ -5,8 +5,8 @@
 Create the first production-ready stage of a pure-Rust port of Catga: a fast
 CQRS mediator, message pipeline, in-memory transport and persistence, plus
 Redis and NATS adapters. The full source-library port remains the program
-goal; RabbitMQ, HTTP/Axum integration, Flow, event sourcing, cluster support,
-and schedulers are deliberately deferred from this first executable stage.
+goal. HTTP/Axum integration, Flow, event sourcing, cluster support, and
+schedulers are expanded in their own implementation milestones.
 
 ## Source Compatibility Boundary
 
@@ -37,6 +37,7 @@ catga-rs/
     catga-memory/           # In-memory transport and persistence
     catga-redis/            # Optional Redis adapter
     catga-nats/             # Optional NATS / JetStream adapter
+    catga-robustmq/         # Optional RobustMQ mq9 mailbox adapter
   tests/
     compatibility/          # Core behavioral tests derived from Catga tests
     integration/            # Redis/NATS tests, skipped without services
@@ -115,6 +116,14 @@ Integration tests skip with an explicit message if the service URL is absent;
 CI will later supply service containers so these adapters are not considered
 fully verified merely by compiling.
 
+`catga-robustmq` uses the `robustmq` Rust SDK's `MQ9Client` for persistent
+mailboxes, priority delivery, and offline recipients. It remains a transport
+adapter: Catga persistence is never coupled to RobustMQ internals. Standard
+topic dispatch uses RobustMQ's NATS-compatible endpoint through the same NATS
+transport contract; mq9 mailbox functions are an opt-in extension trait.
+Integration tests use a real broker and verify send, receive, acknowledgement,
+and redelivery.
+
 ## Reliability Pipeline
 
 Pipeline behavior wraps requests in registration order. The phase implements
@@ -148,6 +157,6 @@ performance claim is made before those measurements exist.
 ## Deferred Work
 
 Subsequent specs cover event sourcing and snapshots, Flow DSL/Saga and state
-machines, Axum integration, RabbitMQ, schedulers, cluster coordination,
+machines, Axum integration, schedulers, cluster coordination,
 source-compatible documentation/examples, and the remaining C# test-derived
 compatibility matrix.

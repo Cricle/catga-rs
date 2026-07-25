@@ -1,0 +1,24 @@
+[package]
+name = "catga-flow"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+arc-swap = "1"
+async-trait = "0.1"
+catga-core = { path = "../catga-core" }
+dashmap = "6"
+futures = "0.3"
+metrics = "0.24"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive", "rc"] }
+tracing = "0.1"
+tokio = { version = "1", features = ["sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }

@@ -1,0 +1,18 @@
+[package]
+name = "catga-testing"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+catga-core = { path = "../catga-core" }
+catga-flow = { path = "../catga-flow" }
+catga-memory = { path = "../catga-memory" }
+dashmap = "6"
+futures = "0.3"
