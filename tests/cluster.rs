@@ -103,6 +103,20 @@ async fn leadership_loss_cancels_active_action() {
 }
 
 #[tokio::test]
+async fn leadership_change_waiter_observes_a_loss_before_regaining_leadership() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let node_a = cluster.node("node-a").unwrap();
+    let waiter = node_a.wait_for_leadership_change(true);
+    tokio::pin!(waiter);
+
+    assert!(futures::poll!(&mut waiter).is_pending());
+    cluster.elect("node-b").unwrap();
+    cluster.elect("node-a").unwrap();
+
+    assert!(futures::poll!(&mut waiter).is_ready());
+}
+
+#[tokio::test]
 async fn nonleader_cancellable_execution_returns_unavailable_without_calling_action() {
     let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
     let node_b = cluster.node("node-b").unwrap();

@@ -222,14 +222,12 @@ impl ClusterCoordinator for RaftClusterNode {
     }
 
     async fn wait_for_leadership_change(&self, was_leader: bool) -> bool {
-        loop {
-            let notified = self.inner.changed.notified();
-            let is_leader = self.is_leader();
-            if is_leader != was_leader {
-                return is_leader;
-            }
-            notified.await;
+        let notified = self.inner.changed.notified();
+        if self.is_leader() != was_leader {
+            return self.is_leader();
         }
+        notified.await;
+        self.is_leader()
     }
 }
 
