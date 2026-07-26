@@ -469,13 +469,6 @@ async fn nats_flow_scheduler_keeps_zero_limit_and_cancellation_non_destructive()
         .schedule_resume("nats-payment-cancel", "charge", now)
         .await
         .unwrap();
-    assert!(
-        scheduler
-            .claim_due("worker", now, Duration::from_secs(1), 1)
-            .await
-            .unwrap()
-            .is_empty()
-    );
     assert_eq!(
         scheduler
             .claim_due("worker", now, Duration::from_secs(1), 1)

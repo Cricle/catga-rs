@@ -307,7 +307,7 @@ impl FlowScheduler for NatsFlowScheduler {
             owner: None,
             lease_until_millis: None,
         };
-        if create(&self.schedules, &key, &schedule).await? {
+        if create_or_restore(&self.schedules, &key, &schedule).await? {
             Ok(schedule_id)
         } else {
             Err(CatgaError::new(
@@ -491,6 +491,21 @@ async fn create<T: Serialize>(store: &kv::Store, key: &str, value: &T) -> CatgaR
             if committed { Ok(true) } else { Err(reported) }
         }
     }
+}
+
+async fn create_or_restore<T: Serialize>(
+    store: &kv::Store,
+    key: &str,
+    value: &T,
+) -> CatgaResult<bool> {
+    let Some(entry) = store.entry(key).await.map_err(map_error)? else {
+        return create(store, key, value).await;
+    };
+    if matches!(entry.operation, kv::Operation::Put) {
+        return Ok(false);
+    }
+    let record = create_record(&encode(value)?);
+    compare_and_set(store, key, record.value().to_vec(), entry.revision).await
 }
 
 async fn compare_and_set(
