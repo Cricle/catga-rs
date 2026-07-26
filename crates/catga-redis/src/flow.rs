@@ -53,9 +53,10 @@ return 1
 const HEARTBEAT: &str = r#"
 if redis.call('HGET', KEYS[1], 'version') ~= ARGV[1] then return 0 end
 if redis.call('HGET', KEYS[1], 'owner') ~= ARGV[2] then return 0 end
-redis.call('HSET', KEYS[1], 'value', ARGV[3], 'heartbeat', ARGV[4])
+if redis.call('HGET', KEYS[1], 'value') ~= ARGV[3] then return 0 end
+redis.call('HSET', KEYS[1], 'value', ARGV[4], 'heartbeat', ARGV[5])
 if redis.call('HGET', KEYS[1], 'status') == 'running' then
-  redis.call('ZADD', KEYS[2], ARGV[4], KEYS[1])
+  redis.call('ZADD', KEYS[2], ARGV[5], KEYS[1])
 else
   redis.call('ZREM', KEYS[2], KEYS[1])
 end
@@ -221,6 +222,7 @@ impl FlowStore for RedisFlows {
         if current.owner() != Some(owner) || current.version() != version {
             return Ok(false);
         }
+        let current_value = self.codec.encode_value(&current)?;
         let next = current.heartbeated_at(SystemTime::now());
         let (value, heartbeat, _, _, _) = self.fields(&next)?;
         let mut connection = self.connection.clone();
@@ -229,6 +231,7 @@ impl FlowStore for RedisFlows {
             .key(self.index_key(next.flow_type()))
             .arg(version)
             .arg(owner)
+            .arg(current_value)
             .arg(value)
             .arg(heartbeat)
             .invoke_async(&mut connection)
@@ -293,5 +296,13 @@ mod tests {
     fn heartbeat_removes_non_running_flows_from_claim_index() {
         assert!(HEARTBEAT.contains("if redis.call('HGET', KEYS[1], 'status') == 'running' then"));
         assert!(HEARTBEAT.contains("redis.call('ZREM', KEYS[2], KEYS[1])"));
+    }
+
+    #[test]
+    fn heartbeat_uses_the_current_physical_value_as_a_compare_and_set_token() {
+        assert!(
+            HEARTBEAT
+                .contains("if redis.call('HGET', KEYS[1], 'value') ~= ARGV[3] then return 0 end")
+        );
     }
 }
