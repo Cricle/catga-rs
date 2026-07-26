@@ -58,8 +58,6 @@ pub enum RaftClusterConfigError {
     ZeroMemberId,
     /// The configured local or remote endpoint was empty.
     EmptyEndpoint,
-    /// The configuration did not contain a remote member.
-    MissingMembers,
     /// A remote member duplicated the local node identifier.
     LocalMemberDuplicated(u64),
     /// More than one remote member used this identifier.
@@ -77,7 +75,6 @@ impl fmt::Display for RaftClusterConfigError {
         match self {
             Self::ZeroMemberId => formatter.write_str("Raft member id zero is reserved"),
             Self::EmptyEndpoint => formatter.write_str("Raft member endpoints must not be empty"),
-            Self::MissingMembers => formatter.write_str("a cluster configuration needs remote members"),
             Self::LocalMemberDuplicated(id) => {
                 write!(formatter, "remote members must not repeat local node id {id}")
             }
@@ -86,7 +83,7 @@ impl fmt::Display for RaftClusterConfigError {
                 "tick, heartbeat, and election timing must be non-zero with election after heartbeat",
             ),
             Self::InvalidLocalCluster => {
-                formatter.write_str("a local cluster needs at least two nodes and a valid local id")
+                formatter.write_str("a local cluster needs at least one node and a valid local id")
             }
             Self::Node(error) => error.fmt(formatter),
         }
@@ -130,7 +127,7 @@ pub struct RaftClusterConfig {
 }
 
 impl RaftClusterConfig {
-    /// Builds a deterministic local multi-node configuration for development.
+    /// Builds a deterministic local Raft configuration for development.
     ///
     /// `node_id` is a zero-based process index, matching Catga's C# helper;
     /// it is converted to Raft's non-zero numeric member identifier internally.
@@ -139,7 +136,7 @@ impl RaftClusterConfig {
         total_nodes: u64,
         base_port: u16,
     ) -> Result<Self, RaftClusterConfigError> {
-        if total_nodes < 2 || node_id >= total_nodes {
+        if total_nodes == 0 || node_id >= total_nodes {
             return Err(RaftClusterConfigError::InvalidLocalCluster);
         }
         let port = u64::from(base_port);
@@ -211,9 +208,6 @@ impl RaftClusterConfig {
         }
         if self.local_node_endpoint.is_empty() {
             return Err(RaftClusterConfigError::EmptyEndpoint);
-        }
-        if self.members.is_empty() {
-            return Err(RaftClusterConfigError::MissingMembers);
         }
         let mut ids = HashSet::with_capacity(self.members.len());
         let mut members = Vec::with_capacity(self.members.len() + 1);

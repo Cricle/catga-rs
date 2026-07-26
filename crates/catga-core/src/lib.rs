@@ -41,6 +41,7 @@ pub mod telemetry;
 mod time_travel;
 mod trace_context;
 mod transport;
+mod transport_batching;
 mod upgrading_event_store;
 mod versioned_transport;
 
@@ -97,7 +98,7 @@ pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;
 pub use observability::TRACING_TARGET;
 pub use outbox_processor::{OutboxLoopOptions, OutboxProcessor, OutboxRun};
-pub use pipeline::{Behavior, Next, Pipeline};
+pub use pipeline::{Behavior, MAX_PIPELINE_DEPTH, Next, Pipeline};
 pub use projection::{
     CatchUpProjectionRunner, LiveProjection, Projection, ProjectionCheckpoint,
     ProjectionCheckpointStore, ProjectionRun,
@@ -149,5 +150,6 @@ pub use transport::{
     Acknowledger, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination, DestinationTransport,
     MessageTransport,
 };
+pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use versioned_transport::VersionedMessageTransport;

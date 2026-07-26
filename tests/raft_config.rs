@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use catga_cluster::{RaftClusterConfig, RaftClusterConfigError, RaftMember};
+use catga_cluster::{ClusterCoordinator, RaftClusterConfig, RaftClusterConfigError, RaftMember};
 
 #[test]
 fn cluster_config_deserializes_validates_timing_and_opens_persistent_nodes()
@@ -99,6 +99,34 @@ fn local_cluster_maps_zero_based_process_indexes_to_valid_raft_ids()
             RaftMember::new(3, "http://localhost:6002"),
         ]
     );
+
+    Ok(())
+}
+
+#[test]
+fn local_cluster_allows_one_stable_raft_member() -> Result<(), Box<dyn std::error::Error>> {
+    let config = RaftClusterConfig::local(0, 1, 6_000)?;
+
+    assert_eq!(
+        config.members()?,
+        vec![RaftMember::new(1, "http://localhost:6000")]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn deserialized_single_node_cluster_opens_and_elects() -> Result<(), Box<dyn std::error::Error>> {
+    let config: RaftClusterConfig = serde_json::from_value(serde_json::json!({
+        "nodeId": 1,
+        "localNodeEndpoint": "http://node-1",
+        "members": []
+    }))?;
+
+    assert_eq!(config.members()?, vec![RaftMember::new(1, "http://node-1")]);
+    let mut node = config.open_node()?;
+    node.campaign()?;
+    assert!(node.coordinator().is_leader());
 
     Ok(())
 }

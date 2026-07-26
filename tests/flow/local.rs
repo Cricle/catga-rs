@@ -4,6 +4,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -21,6 +22,7 @@ use metrics::{
     SharedString, Unit,
 };
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default)]
 struct FlowMetricRecorder {
@@ -232,6 +234,75 @@ async fn empty_local_flow_completes_successfully() {
 
     assert!(result.is_success());
     assert_eq!(result.completed_steps(), 0);
+}
+
+#[tokio::test]
+async fn local_flow_reports_the_elapsed_call_duration() {
+    let result = Flow::new("elapsed")
+        .step(|| async { Ok(()) }, || async { Ok(()) })
+        .run()
+        .await;
+
+    assert!(result.is_success());
+    assert!(result.elapsed() >= Duration::ZERO);
+}
+
+#[tokio::test]
+async fn local_flow_cancellation_compensates_completed_steps_in_reverse_order() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let cancellation = CancellationToken::new();
+    let waiting_for_second_step = started.notified();
+
+    let flow = Flow::new("cancellable")
+        .step(
+            {
+                let trace = Arc::clone(&trace);
+                move || {
+                    let trace = Arc::clone(&trace);
+                    async move {
+                        trace.lock().expect("trace lock").push("reserve");
+                        Ok(())
+                    }
+                }
+            },
+            {
+                let trace = Arc::clone(&trace);
+                move || {
+                    let trace = Arc::clone(&trace);
+                    async move {
+                        trace.lock().expect("trace lock").push("release");
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .step(
+            {
+                let started = Arc::clone(&started);
+                move || {
+                    let started = Arc::clone(&started);
+                    async move {
+                        started.notify_one();
+                        futures::future::pending::<CatgaResult<()>>().await
+                    }
+                }
+            },
+            || async { Ok(()) },
+        );
+    let cancellation_for_run = cancellation.clone();
+    let task = tokio::spawn(async move { flow.run_until_cancelled(cancellation_for_run).await });
+
+    waiting_for_second_step.await;
+    cancellation.cancel();
+    let result = task.await.expect("flow task must not panic");
+
+    assert!(matches!(
+        result.error(),
+        Some(error) if error.code() == ErrorCode::Cancelled
+    ));
+    assert_eq!(result.completed_steps(), 1);
+    assert_eq!(*trace.lock().expect("trace lock"), ["reserve", "release"]);
 }
 
 #[derive(Default)]

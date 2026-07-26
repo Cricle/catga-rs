@@ -1,7 +1,11 @@
-use std::future::Future;
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use futures::future::BoxFuture;
+use tokio_util::sync::CancellationToken;
 
 type Action = Box<dyn Fn() -> BoxFuture<'static, CatgaResult<()>> + Send + Sync>;
 
@@ -10,6 +14,7 @@ type Action = Box<dyn Fn() -> BoxFuture<'static, CatgaResult<()>> + Send + Sync>
 pub struct FlowResult {
     completed_steps: u32,
     error: Option<CatgaError>,
+    elapsed: Duration,
 }
 
 impl FlowResult {
@@ -18,6 +23,7 @@ impl FlowResult {
         Self {
             completed_steps,
             error: None,
+            elapsed: Duration::ZERO,
         }
     }
 
@@ -26,6 +32,7 @@ impl FlowResult {
         Self {
             completed_steps,
             error: Some(error),
+            elapsed: Duration::ZERO,
         }
     }
 
@@ -42,6 +49,16 @@ impl FlowResult {
     /// Returns the operation error when execution failed.
     pub fn error(&self) -> Option<&CatgaError> {
         self.error.as_ref()
+    }
+
+    /// Returns the caller-observed duration of this flow execution, including compensations.
+    pub const fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    fn with_elapsed(mut self, elapsed: Duration) -> Self {
+        self.elapsed = elapsed;
+        self
     }
 }
 
@@ -89,36 +106,87 @@ impl Flow {
         self.run_from(0, usize::MAX).await
     }
 
+    /// Executes forward actions until `cancellation` is cancelled, compensating completed actions
+    /// in reverse order when cancellation wins.
+    ///
+    /// This is the explicit cooperative-cancellation form of [`Self::run`]. It does not spawn a
+    /// task: cancellation drops the currently running action future, runs only compensations for
+    /// actions that already succeeded, and returns an [`ErrorCode::Cancelled`] result. Dropping
+    /// the returned future directly retains the ordinary Rust cancellation semantics and does not
+    /// invoke compensations because no caller-owned cancellation signal was observed.
+    pub async fn run_until_cancelled(self, cancellation: CancellationToken) -> FlowResult {
+        self.run_from_with_cancellation(0, usize::MAX, Some(&cancellation))
+            .await
+    }
+
     /// Resumes forward execution at `start_step` and compensates at most `max_compensations`
     /// successful steps from this invocation after a later failure.
     ///
     /// Steps before `start_step` are caller-owned prior work and are never compensated here. An
     /// out-of-range restart point returns a validation failure without invoking any action.
     pub async fn run_from(self, start_step: usize, max_compensations: usize) -> FlowResult {
+        self.run_from_with_cancellation(start_step, max_compensations, None)
+            .await
+    }
+
+    async fn run_from_with_cancellation(
+        self,
+        start_step: usize,
+        max_compensations: usize,
+        cancellation: Option<&CancellationToken>,
+    ) -> FlowResult {
+        let started = Instant::now();
         if start_step > self.steps.len() {
             return FlowResult::failure(
                 u32::try_from(self.steps.len()).unwrap_or(u32::MAX),
                 CatgaError::new(ErrorCode::Validation, "flow restart step is out of range"),
-            );
+            )
+            .with_elapsed(started.elapsed());
         }
         let mut completed = Vec::with_capacity(self.steps.len());
         for (index, step) in self.steps.iter().enumerate().skip(start_step) {
-            match (step.run)().await {
+            if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                self.compensate(completed, max_compensations).await;
+                return FlowResult::failure(
+                    u32::try_from(index).unwrap_or(u32::MAX),
+                    CatgaError::new(ErrorCode::Cancelled, "local flow execution was cancelled"),
+                )
+                .with_elapsed(started.elapsed());
+            }
+            let result = match cancellation {
+                Some(cancellation) => {
+                    tokio::select! {
+                        _ = cancellation.cancelled() => Err(CatgaError::new(
+                            ErrorCode::Cancelled,
+                            "local flow execution was cancelled",
+                        )),
+                        result = (step.run)() => result,
+                    }
+                }
+                None => (step.run)().await,
+            };
+            match result {
                 Ok(()) => completed.push(index),
                 Err(error) => {
-                    for index in completed.into_iter().rev().take(max_compensations) {
-                        if let Err(compensation_error) = (self.steps[index].compensate)().await {
-                            tracing::warn!(
-                                flow = self.name.as_ref(),
-                                error = compensation_error.message(),
-                                "flow compensation failed"
-                            );
-                        }
-                    }
-                    return FlowResult::failure(u32::try_from(index).unwrap_or(u32::MAX), error);
+                    self.compensate(completed, max_compensations).await;
+                    return FlowResult::failure(u32::try_from(index).unwrap_or(u32::MAX), error)
+                        .with_elapsed(started.elapsed());
                 }
             }
         }
         FlowResult::success(u32::try_from(self.steps.len()).unwrap_or(u32::MAX))
+            .with_elapsed(started.elapsed())
+    }
+
+    async fn compensate(&self, completed: Vec<usize>, max_compensations: usize) {
+        for index in completed.into_iter().rev().take(max_compensations) {
+            if let Err(compensation_error) = (self.steps[index].compensate)().await {
+                tracing::warn!(
+                    flow = self.name.as_ref(),
+                    error = compensation_error.message(),
+                    "flow compensation failed"
+                );
+            }
+        }
     }
 }

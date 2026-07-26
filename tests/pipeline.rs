@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use catga_core::{
-    Behavior, CatgaError, CatgaResult, ErrorCode, Handler, Mediator, Next, Pipeline, Registry,
-    Request, RetryBehavior, RetryJitter,
+    Behavior, CatgaError, CatgaResult, ErrorCode, Handler, MAX_PIPELINE_DEPTH, Mediator, Next,
+    Pipeline, Registry, Request, RetryBehavior, RetryJitter,
 };
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
@@ -56,6 +56,15 @@ struct TraceBehavior {
     entered: &'static str,
     exited: &'static str,
     trace: Arc<Mutex<Vec<&'static str>>>,
+}
+
+struct PassThroughBehavior;
+
+#[async_trait]
+impl Behavior<Double> for PassThroughBehavior {
+    async fn handle(&self, message: Double, next: Next<Double>) -> CatgaResult<u64> {
+        next.run(message).await
+    }
 }
 
 #[async_trait]
@@ -112,4 +121,26 @@ async fn retry_behavior_uses_fixed_jitter_without_waiting_for_the_base_delay() {
     .await
     .expect("fixed zero jitter avoids the one-second base delay");
     assert_eq!(result, Ok(()));
+}
+
+#[tokio::test]
+async fn pipeline_rejects_depths_above_the_supported_bound_before_the_handler_runs() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Registry::new();
+    registry
+        .register_request::<Double, _>(DoubleHandler(Arc::clone(&trace)))
+        .expect("test registry accepts one handler");
+    let mediator = Mediator::new(registry);
+    let mut pipeline = Pipeline::new();
+    for _ in 0..=MAX_PIPELINE_DEPTH {
+        pipeline = pipeline.with(PassThroughBehavior);
+    }
+
+    let error = mediator
+        .send_with(Double(4), &pipeline)
+        .await
+        .expect_err("an oversized pipeline must be rejected");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert!(trace.lock().expect("trace lock").is_empty());
 }

@@ -3,7 +3,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
-use crate::{CatgaResult, Request};
+use crate::{CatgaError, CatgaResult, ErrorCode, Request};
+
+/// Maximum number of behaviors that can wrap one request dispatch.
+///
+/// This preserves the upstream's fixed recursion bound and prevents an accidentally generated
+/// behavior list from consuming unbounded startup memory or overflowing the dispatch chain.
+pub const MAX_PIPELINE_DEPTH: usize = 100;
 
 type Continuation<M> =
     dyn Fn(M) -> BoxFuture<'static, CatgaResult<<M as Request>::Response>> + Send + Sync;
@@ -75,6 +81,40 @@ impl<M: Request> Pipeline<M> {
     pub fn with_shared(mut self, behavior: Arc<dyn Behavior<M>>) -> Self {
         self.behaviors.push(behavior);
         self
+    }
+
+    /// Adds a behavior while rejecting a pipeline deeper than [`MAX_PIPELINE_DEPTH`].
+    ///
+    /// Prefer this fallible builder for generated or configuration-driven pipelines. The legacy
+    /// [`Self::with`] builder remains available for source compatibility; dispatch still rejects
+    /// any oversized legacy pipeline before invoking a behavior or handler.
+    pub fn try_with<B>(self, behavior: B) -> CatgaResult<Self>
+    where
+        B: Behavior<M> + 'static,
+    {
+        self.try_with_shared(Arc::new(behavior))
+    }
+
+    /// Adds a shared behavior while enforcing [`MAX_PIPELINE_DEPTH`].
+    pub fn try_with_shared(mut self, behavior: Arc<dyn Behavior<M>>) -> CatgaResult<Self> {
+        if self.behaviors.len() >= MAX_PIPELINE_DEPTH {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "pipeline depth exceeds the supported maximum",
+            ));
+        }
+        self.behaviors.push(behavior);
+        Ok(self)
+    }
+
+    /// Returns the number of configured behaviors.
+    pub const fn len(&self) -> usize {
+        self.behaviors.len()
+    }
+
+    /// Returns whether this pipeline has no configured behaviors.
+    pub const fn is_empty(&self) -> bool {
+        self.behaviors.is_empty()
     }
 
     pub(crate) fn wrap(&self, terminal: Next<M>) -> Next<M> {

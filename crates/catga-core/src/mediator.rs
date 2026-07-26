@@ -10,8 +10,8 @@ use futures::{FutureExt, Stream, StreamExt, stream};
 use tracing::Instrument;
 
 use crate::{
-    CatgaError, CatgaResult, Command, ErrorCode, Event, Next, Pipeline, Registry, Request,
-    observability,
+    CatgaError, CatgaResult, Command, ErrorCode, Event, MAX_PIPELINE_DEPTH, Next, Pipeline,
+    Registry, Request, observability,
 };
 
 /// Dispatches typed requests, commands, and events through an immutable handler registry.
@@ -126,6 +126,12 @@ impl Mediator {
         message: M,
         pipeline: &Pipeline<M>,
     ) -> CatgaResult<M::Response> {
+        if pipeline.len() > MAX_PIPELINE_DEPTH {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "pipeline depth exceeds the supported maximum",
+            ));
+        }
         let registry = Arc::clone(&self.registry);
         let terminal = Next::new(move |message| {
             let registry = Arc::clone(&registry);
