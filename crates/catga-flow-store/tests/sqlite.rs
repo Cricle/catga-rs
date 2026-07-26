@@ -154,8 +154,10 @@ async fn sqlite_suspended_store_preserves_wait_results_and_summary_bounds() -> C
             Duration::from_secs(30),
         ),
     );
+    let created_at = waiting.created_at();
     assert!(store.create(waiting.clone()).await?);
     assert_eq!(store.get("sql-wait-1").await?, Some(waiting.clone()));
+    tokio::time::sleep(Duration::from_millis(1)).await;
     assert!(
         store
             .record_wait_success("sql-wait-1", 0, "child-a", b"ok".to_vec())
@@ -171,6 +173,10 @@ async fn sqlite_suspended_store_preserves_wait_results_and_summary_bounds() -> C
     assert_eq!(
         required(summaries.first(), "flow summary")?.id(),
         "sql-wait-1"
+    );
+    assert!(
+        required(summaries.first(), "flow summary")?.updated_at() > created_at,
+        "successful wait-result persistence must refresh the discovery timestamp"
     );
     Ok(())
 }

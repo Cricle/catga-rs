@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use catga_core::{CatgaError, ErrorCode};
 use catga_flow::{
@@ -52,6 +55,17 @@ struct VersionFourContinuation {
     created_at: SystemTime,
 }
 
+#[derive(Serialize)]
+struct VersionFiveContinuation {
+    state: FlowState,
+    step_name: Box<str>,
+    wait: Option<WaitCondition>,
+    resume_at: Option<SystemTime>,
+    schedule_id: Option<Box<str>>,
+    compensations: Arc<[Box<str>]>,
+    created_at: SystemTime,
+}
+
 #[test]
 fn continuation_codec_preserves_terminal_error_and_wait_results() {
     let state = FlowState::new("payment-42", "payment", b"input".to_vec(), "node-a")
@@ -79,12 +93,12 @@ fn continuation_codec_preserves_terminal_error_and_wait_results() {
 
 #[test]
 fn continuation_codec_rejects_unknown_format_versions_explicitly() {
-    let error = decode_continuation(&[6]).expect_err("unknown format version must fail");
+    let error = decode_continuation(&[7]).expect_err("unknown format version must fail");
 
     assert_eq!(error.code(), ErrorCode::Internal);
     assert_eq!(
         error.message(),
-        "unsupported flow continuation format version 6"
+        "unsupported flow continuation format version 7"
     );
 }
 
@@ -142,6 +156,28 @@ fn continuation_codec_migrates_v4_records_without_compensations() {
     assert_eq!(restored.schedule_id(), legacy.schedule_id.as_deref());
     assert_eq!(restored.created_at(), created_at);
     assert!(restored.compensation_steps().is_empty());
+}
+
+#[test]
+fn continuation_codec_migrates_v5_records_with_creation_time_as_update_time() {
+    let created_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_300);
+    let legacy = VersionFiveContinuation {
+        state: FlowState::new("payment-46", "payment", b"input".to_vec(), "node-a"),
+        step_name: "charge".into(),
+        wait: None,
+        resume_at: None,
+        schedule_id: None,
+        compensations: Arc::from([Box::<str>::from("reserve")]),
+        created_at,
+    };
+    let mut encoded = vec![5];
+    encoded.extend(postcard::to_allocvec(&legacy).expect("encode v5 continuation"));
+
+    let restored = decode_continuation(&encoded).expect("v5 layout must migrate");
+
+    assert_eq!(restored.created_at(), created_at);
+    assert_eq!(restored.updated_at(), created_at);
+    assert_eq!(restored.compensation_steps(), legacy.compensations.as_ref());
 }
 
 #[test]

@@ -37,6 +37,7 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
                flow_key BINARY(32) NOT NULL PRIMARY KEY, flow_id NVARCHAR(MAX) NOT NULL, \
                flow_type NVARCHAR(MAX) NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, \
                created_at_ms BIGINT NOT NULL, created_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
+               updated_at_ms BIGINT NOT NULL DEFAULT 0, updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
                deadline_ms BIGINT NULL, revision BIGINT NOT NULL, \
                due_token BINARY(16) NULL, lease_until_ms BIGINT NULL, payload VARBINARY(MAX) NOT NULL); \
              CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
@@ -47,6 +48,10 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
                (deadline_ms, lease_until_ms, flow_key); END; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'created_at_subsec_ns') IS NULL \
                ALTER TABLE dbo.catga_flow_continuations ADD created_at_subsec_ns BIGINT NOT NULL DEFAULT 0; \
+             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'updated_at_ms') IS NULL BEGIN \
+               ALTER TABLE dbo.catga_flow_continuations ADD updated_at_ms BIGINT NOT NULL DEFAULT 0; \
+               ALTER TABLE dbo.catga_flow_continuations ADD updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0; \
+               UPDATE dbo.catga_flow_continuations SET updated_at_ms = created_at_ms, updated_at_subsec_ns = created_at_subsec_ns; END; \
              IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
                AND name = N'catga_flow_continuations_order_idx') \
                CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
@@ -87,13 +92,15 @@ pub(crate) async fn create(pool: &MssqlPool, continuation: FlowContinuation) -> 
     let deadline = deadline_millis(&continuation)?;
     let (created_at_ms, created_at_subsec_ns) =
         unix_millis_and_subsec_nanos(continuation.created_at())?;
+    let (updated_at_ms, updated_at_subsec_ns) =
+        unix_millis_and_subsec_nanos(continuation.updated_at())?;
     let mut query = Query::new(
         "IF NOT EXISTS (SELECT 1 FROM dbo.catga_flow_continuations WITH (UPDLOCK, HOLDLOCK) \
            WHERE flow_key = @P1) BEGIN \
            INSERT INTO dbo.catga_flow_continuations \
-             (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, deadline_ms, \
+             (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, \
               revision, payload) \
-           VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, 0, @P9); \
+           VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, @P9, @P10, 0, @P11); \
            SELECT CAST(1 AS BIGINT) AS inserted; END \
          ELSE SELECT CAST(0 AS BIGINT) AS inserted;",
     );
@@ -104,6 +111,8 @@ pub(crate) async fn create(pool: &MssqlPool, continuation: FlowContinuation) -> 
     query.bind(continuation.state().version());
     query.bind(created_at_ms);
     query.bind(created_at_subsec_ns);
+    query.bind(updated_at_ms);
+    query.bind(updated_at_subsec_ns);
     query.bind(deadline);
     query.bind(frame.as_slice());
     let mut connection = pool
@@ -170,7 +179,7 @@ pub(crate) async fn query(pool: &MssqlPool, query: &FlowQuery) -> CatgaResult<Ve
         )
     })?;
     let mut statement = Query::new(
-        "SELECT TOP (@P1) flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns \
+        "SELECT TOP (@P1) flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns \
          FROM dbo.catga_flow_continuations \
          ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC",
     );
@@ -198,13 +207,23 @@ pub(crate) async fn query(pool: &MssqlPool, query: &FlowQuery) -> CatgaResult<Ve
             "created_at_subsec_ns",
             "SQL Server summary creation precision",
         )?;
+        let updated_at = required_i64(&row, "updated_at_ms", "SQL Server summary update time")?;
+        let updated_at_subsec_ns = required_i64(
+            &row,
+            "updated_at_subsec_ns",
+            "SQL Server summary update precision",
+        )?;
         let summary = FlowSummary::new(
             id,
             flow_type,
             status_from_code(status)?,
             version,
             system_time_from_unix_millis_and_subsec_nanos(created_at, created_at_subsec_ns)?,
-        );
+        )
+        .with_updated_at(system_time_from_unix_millis_and_subsec_nanos(
+            updated_at,
+            updated_at_subsec_ns,
+        )?);
         if query.matches_summary(&summary) {
             summaries.push(summary);
             if summaries.len() == query.max_results() {
@@ -431,17 +450,20 @@ async fn replace(
     let frame = encode_continuation(next)?;
     let deadline = deadline_millis(next)?;
     let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?;
+    let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?;
     let mut query = Query::new(
         "UPDATE dbo.catga_flow_continuations SET flow_type = @P1, status = @P2, \
-           version = @P3, created_at_ms = @P4, created_at_subsec_ns = @P5, deadline_ms = @P6, payload = @P7, \
+           version = @P3, created_at_ms = @P4, created_at_subsec_ns = @P5, updated_at_ms = @P6, updated_at_subsec_ns = @P7, deadline_ms = @P8, payload = @P9, \
            revision = revision + 1, due_token = NULL, lease_until_ms = NULL \
-         WHERE flow_key = @P8 AND flow_id = @P9 AND revision = @P10",
+         WHERE flow_key = @P10 AND flow_id = @P11 AND revision = @P12",
     );
     query.bind(next.state().flow_type());
     query.bind(status_code(next.state().status()));
     query.bind(next.state().version());
     query.bind(created_at_ms);
     query.bind(created_at_subsec_ns);
+    query.bind(updated_at_ms);
+    query.bind(updated_at_subsec_ns);
     query.bind(deadline);
     query.bind(frame.as_slice());
     query.bind(key.as_slice());

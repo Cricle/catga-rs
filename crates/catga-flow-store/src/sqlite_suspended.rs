@@ -32,6 +32,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> CatgaResult<()> {
              flow_key BLOB PRIMARY KEY NOT NULL, flow_id TEXT NOT NULL UNIQUE, \
              flow_type TEXT NOT NULL, status INTEGER NOT NULL, version INTEGER NOT NULL, \
              created_at_ms INTEGER NOT NULL, created_at_subsec_ns INTEGER NOT NULL DEFAULT 0, \
+             updated_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_subsec_ns INTEGER NOT NULL DEFAULT 0, \
              deadline_ms INTEGER NULL, revision INTEGER NOT NULL, \
              due_token BLOB NULL, lease_until_ms INTEGER NULL, payload BLOB NOT NULL)",
     )
@@ -54,6 +55,34 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> CatgaResult<()> {
         .execute(&mut *transaction)
         .await
         .map_err(|error| database_error("add SQLite continuation precision column", error))?;
+    }
+    let has_updated_column: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('catga_flow_continuations') WHERE name = ?",
+    )
+    .bind("updated_at_ms")
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| database_error("inspect SQLite continuation update column", error))?;
+    if has_updated_column == 0 {
+        sqlx::query(
+            "ALTER TABLE catga_flow_continuations ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| database_error("add SQLite continuation update column", error))?;
+        sqlx::query(
+            "ALTER TABLE catga_flow_continuations ADD COLUMN updated_at_subsec_ns INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| database_error("add SQLite continuation update precision column", error))?;
+        sqlx::query(
+            "UPDATE catga_flow_continuations SET updated_at_ms = created_at_ms, \
+             updated_at_subsec_ns = created_at_subsec_ns",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| database_error("backfill SQLite continuation update time", error))?;
     }
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS catga_flow_continuations_query_idx \
@@ -87,10 +116,12 @@ pub(crate) async fn create(pool: &SqlitePool, continuation: FlowContinuation) ->
     let key = flow_key(continuation.state().id());
     let (created_at_ms, created_at_subsec_ns) =
         unix_millis_and_subsec_nanos(continuation.created_at())?;
+    let (updated_at_ms, updated_at_subsec_ns) =
+        unix_millis_and_subsec_nanos(continuation.updated_at())?;
     let result = sqlx::query(
         "INSERT INTO catga_flow_continuations \
-         (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, deadline_ms, revision, payload) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING",
+         (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, revision, payload) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING",
     )
     .bind(key.as_slice())
     .bind(continuation.state().id())
@@ -99,6 +130,8 @@ pub(crate) async fn create(pool: &SqlitePool, continuation: FlowContinuation) ->
     .bind(continuation.state().version())
     .bind(created_at_ms)
     .bind(created_at_subsec_ns)
+    .bind(updated_at_ms)
+    .bind(updated_at_subsec_ns)
     .bind(deadline_millis(&continuation)?)
     .bind(encode_continuation(&continuation)?)
     .execute(pool)
@@ -147,7 +180,7 @@ pub(crate) async fn query(pool: &SqlitePool, query: &FlowQuery) -> CatgaResult<V
         )
     })?;
     let rows = sqlx::query(
-        "SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns \
+        "SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns \
          FROM catga_flow_continuations \
          ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ?",
     )
@@ -175,13 +208,23 @@ pub(crate) async fn query(pool: &SqlitePool, query: &FlowQuery) -> CatgaResult<V
         let created_at_subsec_ns = row
             .try_get("created_at_subsec_ns")
             .map_err(|error| database_error("decode SQLite summary creation precision", error))?;
+        let updated_at = row
+            .try_get("updated_at_ms")
+            .map_err(|error| database_error("decode SQLite summary update time", error))?;
+        let updated_at_subsec_ns = row
+            .try_get("updated_at_subsec_ns")
+            .map_err(|error| database_error("decode SQLite summary update precision", error))?;
         let summary = FlowSummary::new(
             id,
             flow_type,
             status_from_code(status)?,
             version,
             system_time_from_unix_millis_and_subsec_nanos(created_at, created_at_subsec_ns)?,
-        );
+        )
+        .with_updated_at(system_time_from_unix_millis_and_subsec_nanos(
+            updated_at,
+            updated_at_subsec_ns,
+        )?);
         if query.matches_summary(&summary) {
             summaries.push(summary);
             if summaries.len() == query.max_results() {
@@ -394,9 +437,10 @@ async fn replace(
 ) -> CatgaResult<bool> {
     let key = flow_key(next.state().id());
     let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?;
+    let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?;
     let result = sqlx::query(
         "UPDATE catga_flow_continuations SET \
-             flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, deadline_ms = ?, \
+             flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, \
              payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL \
          WHERE flow_key = ? AND flow_id = ? AND revision = ?",
     )
@@ -405,6 +449,8 @@ async fn replace(
     .bind(next.state().version())
     .bind(created_at_ms)
     .bind(created_at_subsec_ns)
+    .bind(updated_at_ms)
+    .bind(updated_at_subsec_ns)
     .bind(deadline_millis(next)?)
     .bind(encode_continuation(next)?)
     .bind(key.as_slice())

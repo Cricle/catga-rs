@@ -558,6 +558,41 @@ async fn concurrent_wait_results_are_not_lost() {
 }
 
 #[tokio::test]
+async fn flow_summary_exposes_the_latest_durable_continuation_update() {
+    let store = MemorySuspendedFlows::default();
+    let continuation = FlowContinuation::waiting(
+        FlowState::new(
+            "flow-summary-update",
+            "payment",
+            b"input".to_vec(),
+            "node-a",
+        ),
+        "charge",
+        WaitCondition::new(
+            "wait-summary-update",
+            WaitPolicy::All,
+            1,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        ),
+    );
+    let created_at = continuation.created_at();
+    assert!(store.create(continuation).await.unwrap());
+
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert!(
+        store
+            .record_wait_success("flow-summary-update", 0, "child-a", b"ok".to_vec())
+            .await
+            .unwrap()
+    );
+
+    let summaries = store.query(&FlowQuery::new(1, 1).unwrap()).await.unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert!(summaries[0].updated_at() > created_at);
+}
+
+#[tokio::test]
 async fn delayed_flow_persists_and_resumes_registered_steps() {
     let store = Arc::new(MemorySuspendedFlows::default());
     let scheduler = Arc::new(MemoryFlowScheduler::default());

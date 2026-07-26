@@ -13,13 +13,13 @@ macro_rules! define_server_suspended {
         /// Inserts one continuation and collision-checks its raw identity.
         pub(crate) async fn create(pool: &$pool, continuation: FlowContinuation) -> CatgaResult<bool> {
             let key = flow_key(continuation.state().id());
-            let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.created_at())?;
+            let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.updated_at())?;
             let insert = if $postgres {
-                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, deadline_ms, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING"
+                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING"
             } else {
-                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, deadline_ms, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE flow_key = flow_key"
+                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE flow_key = flow_key"
             };
-            let result = sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(encode_continuation(&continuation)?)
+            let result = sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(encode_continuation(&continuation)?)
                 .execute(pool).await.map_err(|error| database_error(concat!("create ", $label, " continuation"), error))?;
             if result.rows_affected() == 1 { return Ok(true); }
             let row = sqlx::query(statement("SELECT flow_id FROM catga_flow_continuations WHERE flow_key = ?", $postgres)).bind(key.as_slice()).fetch_optional(pool).await.map_err(|error| database_error(concat!("read conflicting ", $label, " continuation"), error))?;
@@ -34,7 +34,7 @@ macro_rules! define_server_suspended {
         /// Scans no more than the caller-requested number of compact summary rows.
         pub(crate) async fn query(pool: &$pool, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
             let limit = i64::try_from(query.max_scan()).map_err(|_| CatgaError::new(ErrorCode::Validation, "continuation query scan limit exceeds i64"))?;
-            let rows = sqlx::query(statement("SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns FROM catga_flow_continuations ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ?", $postgres)).bind(limit).fetch_all(pool).await.map_err(|error| database_error(concat!("query ", $label, " continuations"), error))?;
+            let rows = sqlx::query(statement("SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns FROM catga_flow_continuations ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ?", $postgres)).bind(limit).fetch_all(pool).await.map_err(|error| database_error(concat!("query ", $label, " continuations"), error))?;
             let mut summaries = Vec::with_capacity(query.max_results());
             for row in rows {
                 let id: String = row.try_get("flow_id").map_err(|error| database_error(concat!("decode ", $label, " summary identity"), error))?;
@@ -42,8 +42,8 @@ macro_rules! define_server_suspended {
                 let status: i64 = row.try_get("status").map_err(|error| database_error(concat!("decode ", $label, " summary status"), error))?;
                 let version: i64 = row.try_get("version").map_err(|error| database_error(concat!("decode ", $label, " summary version"), error))?;
                 let created_at: i64 = row.try_get("created_at_ms").map_err(|error| database_error(concat!("decode ", $label, " summary creation time"), error))?;
-                let created_at_subsec_ns: i64 = row.try_get("created_at_subsec_ns").map_err(|error| database_error(concat!("decode ", $label, " summary creation precision"), error))?;
-                let summary = FlowSummary::new(id, flow_type, status_from_code(status)?, version, system_time_from_unix_millis_and_subsec_nanos(created_at, created_at_subsec_ns)?);
+                let created_at_subsec_ns: i64 = row.try_get("created_at_subsec_ns").map_err(|error| database_error(concat!("decode ", $label, " summary creation precision"), error))?; let updated_at: i64 = row.try_get("updated_at_ms").map_err(|error| database_error(concat!("decode ", $label, " summary update time"), error))?; let updated_at_subsec_ns: i64 = row.try_get("updated_at_subsec_ns").map_err(|error| database_error(concat!("decode ", $label, " summary update precision"), error))?;
+                let summary = FlowSummary::new(id, flow_type, status_from_code(status)?, version, system_time_from_unix_millis_and_subsec_nanos(created_at, created_at_subsec_ns)?).with_updated_at(system_time_from_unix_millis_and_subsec_nanos(updated_at, updated_at_subsec_ns)?);
                 if query.matches_summary(&summary) {
                     summaries.push(summary);
                     if summaries.len() == query.max_results() { break; }
@@ -97,8 +97,8 @@ macro_rules! define_server_suspended {
         }
 
         async fn replace(pool: &$pool, current: &StoredContinuation, next: &FlowContinuation) -> CatgaResult<bool> {
-            let key = flow_key(next.state().id()); let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?; let result = sqlx::query(statement("UPDATE catga_flow_continuations SET flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, deadline_ms = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL WHERE flow_key = ? AND flow_id = ? AND revision = ?", $postgres))
-                .bind(next.state().flow_type()).bind(status_code(next.state().status())).bind(next.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(deadline_millis(next)?).bind(encode_continuation(next)?).bind(key.as_slice()).bind(next.state().id()).bind(current.revision).execute(pool).await.map_err(|error| database_error(concat!("replace ", $label, " continuation"), error))?;
+            let key = flow_key(next.state().id()); let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?; let result = sqlx::query(statement("UPDATE catga_flow_continuations SET flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL WHERE flow_key = ? AND flow_id = ? AND revision = ?", $postgres))
+                .bind(next.state().flow_type()).bind(status_code(next.state().status())).bind(next.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(next)?).bind(encode_continuation(next)?).bind(key.as_slice()).bind(next.state().id()).bind(current.revision).execute(pool).await.map_err(|error| database_error(concat!("replace ", $label, " continuation"), error))?;
             Ok(result.rows_affected() == 1)
         }
     };

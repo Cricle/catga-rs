@@ -18,6 +18,7 @@ pub struct FlowSummary {
     status: FlowStatus,
     version: i64,
     created_at: SystemTime,
+    updated_at: SystemTime,
 }
 
 impl FlowSummary {
@@ -35,18 +36,20 @@ impl FlowSummary {
             status,
             version,
             created_at,
+            updated_at: created_at,
         }
     }
 
     /// Creates a summary from a durable continuation.
     pub fn from_continuation(continuation: &FlowContinuation) -> Self {
-        Self {
-            id: continuation.state().id().into(),
-            flow_type: continuation.state().flow_type().into(),
-            status: continuation.state().status(),
-            version: continuation.state().version(),
-            created_at: continuation.created_at(),
-        }
+        Self::new(
+            continuation.state().id(),
+            continuation.state().flow_type(),
+            continuation.state().status(),
+            continuation.state().version(),
+            continuation.created_at(),
+        )
+        .with_updated_at(continuation.updated_at())
     }
 
     /// Returns the stable flow identity.
@@ -72,6 +75,18 @@ impl FlowSummary {
     /// Returns when the durable continuation was created.
     pub const fn created_at(&self) -> SystemTime {
         self.created_at
+    }
+
+    /// Returns when the durable continuation was last successfully changed.
+    pub const fn updated_at(&self) -> SystemTime {
+        self.updated_at
+    }
+
+    /// Sets the timestamp of the last successful durable change.
+    #[must_use]
+    pub const fn with_updated_at(mut self, updated_at: SystemTime) -> Self {
+        self.updated_at = updated_at;
+        self
     }
 }
 

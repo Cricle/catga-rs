@@ -465,6 +465,7 @@ pub struct FlowContinuation {
     schedule_id: Option<Box<str>>,
     compensations: Arc<[Box<str>]>,
     created_at: SystemTime,
+    updated_at: SystemTime,
 }
 
 impl FlowContinuation {
@@ -477,6 +478,7 @@ impl FlowContinuation {
     ) -> Self {
         Self {
             created_at: state.heartbeat(),
+            updated_at: state.heartbeat(),
             state,
             step_name,
             wait,
@@ -487,11 +489,37 @@ impl FlowContinuation {
     }
 
     pub(crate) fn with_created_at(self, created_at: SystemTime) -> Self {
-        Self { created_at, ..self }
+        Self {
+            created_at,
+            updated_at: created_at,
+            ..self
+        }
+    }
+
+    pub(crate) fn from_version_five(
+        state: FlowState,
+        step_name: Box<str>,
+        wait: Option<WaitCondition>,
+        resume_at: Option<SystemTime>,
+        schedule_id: Option<Box<str>>,
+        compensations: Arc<[Box<str>]>,
+        created_at: SystemTime,
+    ) -> Self {
+        Self {
+            state,
+            step_name,
+            wait,
+            resume_at,
+            schedule_id,
+            compensations,
+            created_at,
+            updated_at: created_at,
+        }
     }
 
     /// Creates a continuation ready to execute `step_name`.
     pub fn new(state: FlowState, step_name: impl Into<Box<str>>) -> Self {
+        let now = SystemTime::now();
         Self {
             state,
             step_name: step_name.into(),
@@ -499,12 +527,14 @@ impl FlowContinuation {
             resume_at: None,
             schedule_id: None,
             compensations: Arc::from([]),
-            created_at: SystemTime::now(),
+            created_at: now,
+            updated_at: now,
         }
     }
 
     /// Creates a continuation suspended on `wait` at `step_name`.
     pub fn waiting(state: FlowState, step_name: impl Into<Box<str>>, wait: WaitCondition) -> Self {
+        let now = SystemTime::now();
         Self {
             state,
             step_name: step_name.into(),
@@ -512,7 +542,8 @@ impl FlowContinuation {
             resume_at: None,
             schedule_id: None,
             compensations: Arc::from([]),
-            created_at: SystemTime::now(),
+            created_at: now,
+            updated_at: now,
         }
     }
 
@@ -541,6 +572,14 @@ impl FlowContinuation {
         self.created_at
     }
 
+    /// Returns when this durable continuation was most recently changed.
+    ///
+    /// Legacy frames without this field decode with their creation time, so discovery callers can
+    /// safely use this value while old durable records are migrated lazily on their next write.
+    pub const fn updated_at(&self) -> SystemTime {
+        self.updated_at
+    }
+
     /// Returns the cancellation identity of the delayed resume, when it has been scheduled.
     pub fn schedule_id(&self) -> Option<&str> {
         self.schedule_id.as_deref()
@@ -560,14 +599,14 @@ impl FlowContinuation {
             resume_at: Some(resume_at),
             wait: None,
             schedule_id: None,
-            ..self
+            ..self.touch()
         }
     }
 
     pub(crate) fn with_schedule_id(self, schedule_id: impl Into<Box<str>>) -> Self {
         Self {
             schedule_id: Some(schedule_id.into()),
-            ..self
+            ..self.touch()
         }
     }
 
@@ -577,7 +616,7 @@ impl FlowContinuation {
             wait: Some(wait),
             resume_at: None,
             schedule_id: None,
-            ..self
+            ..self.touch()
         }
     }
 
@@ -588,7 +627,7 @@ impl FlowContinuation {
             wait: None,
             resume_at: None,
             schedule_id: None,
-            ..self
+            ..self.touch()
         }
     }
 
@@ -598,13 +637,16 @@ impl FlowContinuation {
             wait: None,
             resume_at: None,
             schedule_id: None,
-            ..self
+            ..self.touch()
         }
     }
 
     /// Returns a copy whose flow state has been atomically advanced by a store.
     pub fn with_state(self, state: FlowState) -> Self {
-        Self { state, ..self }
+        Self {
+            state,
+            ..self.touch()
+        }
     }
 
     pub(crate) fn record_compensation(self, step_name: impl Into<Box<str>>) -> CatgaResult<Self> {
@@ -619,7 +661,7 @@ impl FlowContinuation {
         compensations.push(step_name.into());
         Ok(Self {
             compensations: Arc::from(compensations),
-            ..self
+            ..self.touch()
         })
     }
 
@@ -632,7 +674,12 @@ impl FlowContinuation {
         let _ = compensations.pop();
         Self {
             compensations: Arc::from(compensations),
-            ..self
+            ..self.touch()
         }
+    }
+
+    fn touch(mut self) -> Self {
+        self.updated_at = SystemTime::now();
+        self
     }
 }
