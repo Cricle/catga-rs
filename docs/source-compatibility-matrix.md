@@ -29,17 +29,23 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 ## Verification Boundaries
 
 The workspace's deterministic tests, formatting, Clippy, and Rustdoc gates run
-without services. `cargo test -p catga-tests --test nats` starts one isolated
-JetStream container per test when `CATGA_NATS_URL` is absent, waits for it to
-be removed before returning, and uses a configured URL without deleting that
-external service. Redis and RobustMQ integration tests remain ignored by
+without services. `cargo test -p catga-tests --test nats --test nats_request`
+starts one isolated JetStream container per test when `CATGA_NATS_URL` is
+absent, waits for it to be removed before returning, and uses a configured URL
+without deleting that external service. Redis and RobustMQ integration tests remain ignored by
 default and require `CATGA_REDIS_URL` or `CATGA_ROBUSTMQ_URL`; run them
 explicitly with `cargo test -- --ignored` when those services are available.
 The optional mailbox-protocol request/server test intentionally requires
 `CATGA_ROBUSTMQ_URL`, because a plain NATS server does not implement the
-protocol's mailbox-control endpoint. The manual NATS throughput baseline is
-`cargo test -p catga-tests --test nats_performance -- --ignored --nocapture`;
-it reports measurements without asserting a host-dependent threshold.
+protocol's mailbox-control endpoint. Manual, host-neutral performance baselines
+are ignored by default: NATS durable round trips
+(`cargo test -p catga-tests --test nats_performance -- --ignored --nocapture`),
+bounded automatic batching
+(`cargo test --manifest-path tests/Cargo.toml --test transport_batch transport_batcher_throughput_benchmark -- --ignored --nocapture`),
+and SQLite state-machine/DSL progress lifecycles
+(`cargo test -p catga-flow-store --features sqlite --test sqlite_state_machine_performance --test sqlite_dsl_progress_performance -- --ignored --nocapture`).
+Each prints throughput while retaining correctness checks and intentionally has
+no machine-dependent timing threshold.
 
 ## Migration Rules
 
@@ -145,8 +151,11 @@ it reports measurements without asserting a host-dependent threshold.
   ratio. `RetryJitter::Full` advances one atomic state per retry and retains no
   task or waiter; the compatibility default remains deterministic no-jitter.
 * .NET cancellation-token parameters map to cancellation by dropping Rust
-  futures or to explicit `CancellationToken` arguments on long-lived workers;
-  they are not duplicated on every short-lived dispatch call.
+  futures or to explicit `CancellationToken` arguments on long-lived workers.
+  Short-lived mediator dispatch also provides opt-in
+  `*_with_cancellation` methods; handlers and pipeline behavior can
+  cooperatively inspect the task-scoped token through `current_cancellation()`.
+  Ordinary dispatch stays token-free, preserving the minimal Rust API.
 * The source automatic batching behavior maps to the paired
   `AutoBatchingBehavior` and `AutoBatchingRunner` types. Construction returns
   the bounded sender and its single-use receiver together; the application

@@ -96,6 +96,10 @@ name = "mediator"
 path = "mediator.rs"
 
 [[test]]
+name = "mediator_performance"
+path = "mediator_performance.rs"
+
+[[test]]
 name = "pipeline"
 path = "pipeline.rs"
 
@@ -326,6 +330,10 @@ path = "flow/due_scheduler.rs"
 [[test]]
 name = "flows"
 path = "flow/local.rs"
+
+[[test]]
+name = "flow_performance"
+path = "flow_performance.rs"
 
 [[test]]
 name = "flow_executor"
