@@ -64,6 +64,41 @@ async fn durable_runtime_rejects_duplicate_step_names_before_persisting_or_runni
 }
 
 #[tokio::test]
+async fn durable_runtime_completes_when_the_final_sequential_step_advances() {
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let first_invocations = Arc::clone(&invocations);
+    let final_invocations = Arc::clone(&invocations);
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("implicit-completion")
+            .step("first", move |_| {
+                let invocations = Arc::clone(&first_invocations);
+                async move {
+                    invocations.fetch_add(1, Ordering::Relaxed);
+                    Ok(FlowStepOutcome::Advance)
+                }
+            })
+            .step("final", move |_| {
+                let invocations = Arc::clone(&final_invocations);
+                async move {
+                    invocations.fetch_add(1, Ordering::Relaxed);
+                    Ok(FlowStepOutcome::Advance)
+                }
+            }),
+        "node-a",
+    );
+
+    let result = runtime
+        .start("implicit-completion/1", [])
+        .await
+        .expect("final advance must complete the durable flow");
+
+    assert!(result.is_success());
+    assert_eq!(invocations.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
 async fn tagged_durable_step_retries_only_transient_failures_within_its_bound() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let runtime = FlowRuntime::new(

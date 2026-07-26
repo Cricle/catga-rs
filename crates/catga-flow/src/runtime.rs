@@ -430,16 +430,7 @@ where
                     let compensated = self.record_step_compensation(&continuation)?;
                     let Some(next_step) = self.definition.next_step_name(continuation.step_name())
                     else {
-                        return self
-                            .fail(
-                                compensated,
-                                CatgaError::new(
-                                    ErrorCode::Validation,
-                                    "an advancing flow step requires a following step",
-                                ),
-                                Some(&mut execution),
-                            )
-                            .await;
+                        return self.complete(continuation, state, &mut execution).await;
                     };
                     let flow_id: Box<str> = continuation.state().id().into();
                     if let Some(running) = self.transition_to(compensated, state, next_step).await?
@@ -541,15 +532,7 @@ where
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
                 FlowStepOutcome::Complete => {
-                    let completed_steps = state.step().saturating_add(1);
-                    let done = continuation
-                        .clone()
-                        .with_state(state.done(completed_steps).next_version());
-                    self.persist(continuation.state().version(), done.clone())
-                        .await?;
-                    self.metrics.record_completed(continuation.created_at());
-                    execution.complete("success");
-                    return Ok(FlowRuntimeResult::new(done.state().clone()));
+                    return self.complete(continuation, state, &mut execution).await;
                 }
                 FlowStepOutcome::Fail(error) => {
                     return self.fail(continuation, error, Some(&mut execution)).await;
@@ -656,6 +639,23 @@ where
                 }
             }
         }
+    }
+
+    async fn complete(
+        &self,
+        continuation: FlowContinuation,
+        state: FlowState,
+        execution: &mut crate::metrics::FlowExecution,
+    ) -> CatgaResult<FlowRuntimeResult> {
+        let completed_steps = state.step().saturating_add(1);
+        let done = continuation
+            .clone()
+            .with_state(state.done(completed_steps).next_version());
+        self.persist(continuation.state().version(), done.clone())
+            .await?;
+        self.metrics.record_completed(continuation.created_at());
+        execution.complete("success");
+        Ok(FlowRuntimeResult::new(done.state().clone()))
     }
 
     async fn fail(
