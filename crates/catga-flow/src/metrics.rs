@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 /// Counter incremented after a durable flow continuation is created.
@@ -28,6 +28,13 @@ pub(crate) const FLOW_STEPS_FAILED: &str = "catga.flow.step.failed";
 
 /// Histogram recording the elapsed milliseconds of one active durable Flow drive.
 pub(crate) const FLOW_DURATION: &str = "catga.flow.duration";
+
+/// Histogram recording wall-clock time from durable flow creation to its terminal outcome.
+///
+/// Unlike [`FLOW_DURATION`], this includes time spent durably suspended between drives. The sole
+/// `outcome` label is `success`, `failure`, or `cancelled`; flow identities and definition names
+/// deliberately remain trace-only fields to keep metric cardinality bounded.
+pub(crate) const FLOW_LATENCY: &str = "catga.flow.latency";
 
 /// Histogram recording the elapsed milliseconds of one registered Flow step.
 pub(crate) const FLOW_STEP_DURATION: &str = "catga.flow.step.duration";
@@ -53,13 +60,31 @@ impl FlowMetrics {
     }
 
     /// Records that this runtime successfully persisted a completed terminal state.
-    pub(crate) fn record_completed(&self) {
+    pub(crate) fn record_completed(&self, created_at: SystemTime) {
         metrics::counter!(FLOWS_COMPLETED).increment(1);
+        self.record_latency("success", created_at);
     }
 
     /// Records that this runtime successfully persisted a failed terminal state.
-    pub(crate) fn record_failed(&self) {
+    pub(crate) fn record_failed(&self, created_at: SystemTime) {
         metrics::counter!(FLOWS_FAILED).increment(1);
+        self.record_latency("failure", created_at);
+    }
+
+    /// Records that this runtime successfully persisted a cancelled terminal state.
+    pub(crate) fn record_cancelled(&self, created_at: SystemTime) {
+        self.record_latency("cancelled", created_at);
+    }
+
+    fn record_latency(&self, outcome: &'static str, created_at: SystemTime) {
+        // A backwards wall-clock adjustment must not make a histogram sample negative. This
+        // metric is observational only, so the safest bounded value is zero milliseconds.
+        let duration_ms = SystemTime::now()
+            .duration_since(created_at)
+            .unwrap_or_default()
+            .as_secs_f64()
+            * 1_000.0;
+        metrics::histogram!(FLOW_LATENCY, "outcome" => outcome).record(duration_ms);
     }
 
     /// Starts instrumentation for one claimed Flow drive.

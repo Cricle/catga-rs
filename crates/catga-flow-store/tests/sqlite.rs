@@ -6,13 +6,51 @@ use std::time::{Duration, SystemTime};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
     DslStepProgress, DslStepProgressStore, FlowContinuation, FlowQuery, FlowState, FlowStore,
-    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
-    WaitPolicy,
+    StateMachineSnapshot, StateMachineStore, SuspendedFlowStore, TimedOutFlowPoll,
+    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
-use catga_flow_store::{SqlDslStepProgressStore, SqlFlowStore, SqlSuspendedFlowStore};
+use catga_flow_store::{
+    SqlDslStepProgressStore, SqlFlowStore, SqlStateMachineStore, SqlSuspendedFlowStore,
+};
+use serde::{Deserialize, Serialize};
 
 #[path = "../../../tests/flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PersistedStateMachine {
+    paid: bool,
+    quantity: u32,
+}
+
+#[tokio::test]
+async fn sqlite_state_machine_store_preserves_snapshots_and_version_cas() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("state-machines.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlStateMachineStore::<PersistedStateMachine>::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let initial = StateMachineSnapshot::new(
+        "order-7",
+        PersistedStateMachine {
+            quantity: 3,
+            paid: false,
+        },
+    );
+    assert!(store.create(initial.clone()).await?);
+    assert!(!store.create(initial.clone()).await?);
+    assert_eq!(store.get("order-7").await?, Some(initial.clone()));
+
+    let next = initial.next_version(PersistedStateMachine {
+        quantity: 3,
+        paid: true,
+    });
+    assert!(store.update(initial.version(), next.clone()).await?);
+    assert!(!store.update(initial.version(), next.clone()).await?);
+    assert_eq!(store.get("order-7").await?, Some(next));
+    Ok(())
+}
 
 #[tokio::test]
 async fn sqlite_dsl_progress_store_preserves_versioned_step_progress() -> CatgaResult<()> {

@@ -220,6 +220,7 @@ where
             .update(continuation.state().version(), cancelled.clone())
             .await?
         {
+            self.metrics.record_cancelled(continuation.created_at());
             if let Some(schedule_id) = schedule_id
                 && let Err(error) = self.scheduler.cancel_resume(&schedule_id).await
             {
@@ -564,7 +565,7 @@ where
                         .with_state(state.done(completed_steps).next_version());
                     self.persist(continuation.state().version(), done.clone())
                         .await?;
-                    self.metrics.record_completed();
+                    self.metrics.record_completed(continuation.created_at());
                     execution.complete("success");
                     return Ok(FlowRuntimeResult::new(done.state().clone()));
                 }
@@ -700,7 +701,7 @@ where
             .with_state(continuation.state().clone().failed(error).next_version());
         self.persist(continuation.state().version(), failed.clone())
             .await?;
-        self.metrics.record_failed();
+        self.metrics.record_failed(continuation.created_at());
         if let Some(execution) = execution {
             execution.complete("failure");
         }
@@ -739,7 +740,7 @@ where
             .with_state(continuation.state().clone().failed(error).next_version());
         self.persist(continuation.state().version(), failed.clone())
             .await?;
-        self.metrics.record_failed();
+        self.metrics.record_failed(continuation.created_at());
         if let Some(execution) = execution {
             execution.complete("failure");
         }

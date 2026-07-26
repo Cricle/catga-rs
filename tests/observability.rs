@@ -1010,6 +1010,14 @@ async fn flow_runtime_records_terminal_and_step_metrics() {
     assert_eq!(recorder.counter("catga.flow.step.executed|"), 3);
     assert_eq!(recorder.counter("catga.flow.step.succeeded|"), 2);
     assert_eq!(recorder.counter("catga.flow.step.failed|"), 1);
+    assert_eq!(
+        recorder.histogram_samples("catga.flow.latency|outcome=success"),
+        1
+    );
+    assert_eq!(
+        recorder.histogram_samples("catga.flow.latency|outcome=failure"),
+        1
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

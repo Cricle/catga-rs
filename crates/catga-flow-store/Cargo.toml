@@ -23,6 +23,7 @@ async-trait = "0.1"
 bb8 = { version = "0.9", optional = true }
 bb8-tiberius = { version = "0.16", default-features = false, features = ["tds73", "with-tokio"], optional = true }
 catga-core = { path = "../catga-core" }
+catga-codec-postcard = { path = "../catga-codec-postcard" }
 catga-flow = { path = "../catga-flow" }
 catga-redis = { path = "../catga-redis", optional = true }
 sha2 = "0.10"
@@ -34,3 +35,4 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
