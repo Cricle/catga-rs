@@ -7,11 +7,13 @@ use std::{
 };
 
 use futures::{FutureExt, Stream, StreamExt, stream};
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::cancellation::until_cancelled;
 use crate::{
     CatgaError, CatgaResult, Command, ErrorCode, Event, MAX_PIPELINE_DEPTH, Next, Pipeline,
-    Registry, Request, observability,
+    Registry, Request, observability, scope_cancellation,
 };
 
 /// Dispatches typed requests, commands, and events through an immutable handler registry.
@@ -58,14 +60,47 @@ impl MediatorHandle {
         self.bound()?.send(message).await
     }
 
+    /// Sends one request through the bound mediator with cooperative cancellation.
+    pub async fn send_with_cancellation<M: Request>(
+        &self,
+        message: M,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<M::Response> {
+        self.bound()?
+            .send_with_cancellation(message, cancellation)
+            .await
+    }
+
     /// Sends one command through the bound mediator.
     pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
         self.bound()?.send_command(command).await
     }
 
+    /// Sends one command through the bound mediator with cooperative cancellation.
+    pub async fn send_command_with_cancellation<C: Command>(
+        &self,
+        command: C,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<()> {
+        self.bound()?
+            .send_command_with_cancellation(command, cancellation)
+            .await
+    }
+
     /// Publishes one event through the bound mediator.
     pub async fn publish<E: Event>(&self, event: E) -> CatgaResult<()> {
         self.bound()?.publish(event).await
+    }
+
+    /// Publishes one event through the bound mediator with cooperative cancellation.
+    pub async fn publish_with_cancellation<E: Event>(
+        &self,
+        event: E,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<()> {
+        self.bound()?
+            .publish_with_cancellation(event, cancellation)
+            .await
     }
 
     fn bound(&self) -> CatgaResult<&Arc<Mediator>> {
@@ -103,6 +138,20 @@ impl Mediator {
         result
     }
 
+    /// Routes a request while making `cancellation` available to the handler and behaviors.
+    ///
+    /// Cancellation before dispatch prevents handler invocation. Cancellation during dispatch
+    /// drops the active future and returns [`ErrorCode::Cancelled`]; code that must release an
+    /// external resource can obtain the same token with [`crate::current_cancellation`].
+    pub async fn send_with_cancellation<M: Request>(
+        &self,
+        message: M,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<M::Response> {
+        let operation = scope_cancellation(cancellation.clone(), self.send(message));
+        until_cancelled(cancellation, operation).await
+    }
+
     /// Routes a command to its sole registered handler.
     pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
         let command_type = std::any::type_name::<C>();
@@ -114,6 +163,16 @@ impl Mediator {
             .await;
         observability::record_command(&span, command_type, started.elapsed(), &result);
         result
+    }
+
+    /// Routes a command while making `cancellation` available to its handler.
+    pub async fn send_command_with_cancellation<C: Command>(
+        &self,
+        command: C,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<()> {
+        let operation = scope_cancellation(cancellation.clone(), self.send_command(command));
+        until_cancelled(cancellation, operation).await
     }
 
     /// Routes a request through a typed pipeline before its registered handler.
@@ -151,6 +210,20 @@ impl Mediator {
         .await;
         observability::record_request(&span, request_type, started.elapsed(), &result);
         result
+    }
+
+    /// Routes a request through `pipeline` with explicit cooperative cancellation.
+    ///
+    /// This is the cancellation-aware counterpart to [`Self::send_with`]. Behaviors and the
+    /// terminal handler share one task-local token from [`crate::current_cancellation`].
+    pub async fn send_with_cancellation_and_pipeline<M: Request>(
+        &self,
+        message: M,
+        pipeline: &Pipeline<M>,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<M::Response> {
+        let operation = scope_cancellation(cancellation.clone(), self.send_with(message, pipeline));
+        until_cancelled(cancellation, operation).await
     }
 
     async fn dispatch<M: Request>(registry: &Registry, message: M) -> CatgaResult<M::Response> {
@@ -327,6 +400,16 @@ impl Mediator {
         .await;
         observability::record_event(&span, event_type, started.elapsed(), &result);
         result
+    }
+
+    /// Delivers an event while making `cancellation` available to every handler.
+    pub async fn publish_with_cancellation<E: Event>(
+        &self,
+        event: E,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<()> {
+        let operation = scope_cancellation(cancellation.clone(), self.publish(event));
+        until_cancelled(cancellation, operation).await
     }
 }
 

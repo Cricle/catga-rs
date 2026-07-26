@@ -5,6 +5,7 @@ mod aggregate;
 mod auto_snapshot;
 mod behaviors;
 mod cache;
+mod cancellation;
 mod codec;
 mod compression;
 mod consumer;
@@ -60,6 +61,7 @@ pub use behaviors::{
     RetryBehavior, TimeoutBehavior, TracingBehavior, ValidationBehavior, Validator,
 };
 pub use cache::CachedResultCodec;
+pub use cancellation::{current_cancellation, scope_cancellation};
 pub use catga_macros::{Message, catga_handlers};
 pub use codec::EnvelopeCodec;
 pub use compression::{

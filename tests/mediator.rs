@@ -8,8 +8,9 @@ use std::sync::{
 use async_trait::async_trait;
 use catga_core::{
     Behavior, CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler, Handler,
-    Mediator, MediatorHandle, Next, Pipeline, Registry, Request,
+    Mediator, MediatorHandle, Next, Pipeline, Registry, Request, current_cancellation,
 };
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
 struct Double(u64);
@@ -45,6 +46,92 @@ impl Behavior<Double> for PanickingDoubleBehavior {
     async fn handle(&self, _: Double, _: Next<Double>) -> CatgaResult<u64> {
         panic!("pipeline behavior panic must not escape the mediator");
     }
+}
+
+struct CancellationAwareDoubleHandler {
+    observed_scope: Arc<AtomicUsize>,
+    started: Arc<tokio::sync::Notify>,
+}
+
+struct CancellationScopeBehavior {
+    observed_scope: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Behavior<Double> for CancellationScopeBehavior {
+    async fn handle(&self, message: Double, next: Next<Double>) -> CatgaResult<u64> {
+        self.observed_scope.store(
+            usize::from(current_cancellation().is_some()),
+            Ordering::Release,
+        );
+        next.run(message).await
+    }
+}
+
+#[async_trait]
+impl Handler<Double> for CancellationAwareDoubleHandler {
+    async fn handle(&self, _: Double) -> CatgaResult<u64> {
+        self.observed_scope.store(
+            usize::from(current_cancellation().is_some()),
+            Ordering::Release,
+        );
+        self.started.notify_one();
+        std::future::pending::<CatgaResult<u64>>().await
+    }
+}
+
+#[tokio::test]
+async fn mediator_cancellation_rejects_pre_cancelled_requests_and_scopes_the_token()
+-> CatgaResult<()> {
+    let observed_scope = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let mut registry = Registry::new();
+    registry.register_request::<Double, _>(CancellationAwareDoubleHandler {
+        observed_scope: Arc::clone(&observed_scope),
+        started: Arc::clone(&started),
+    })?;
+    let mediator = Mediator::new(registry);
+    let cancellation = CancellationToken::new();
+    let waiting_for_handler = started.notified();
+
+    let dispatch = mediator.send_with_cancellation(Double(1), cancellation.clone());
+    tokio::pin!(dispatch);
+    waiting_for_handler.await;
+    assert_eq!(observed_scope.load(Ordering::Acquire), 1);
+    cancellation.cancel();
+    assert!(matches!(
+        dispatch.await,
+        Err(error) if error.code() == ErrorCode::Cancelled
+    ));
+
+    let pre_cancelled = CancellationToken::new();
+    pre_cancelled.cancel();
+    assert!(matches!(
+        mediator.send_with_cancellation(Double(2), pre_cancelled).await,
+        Err(error) if error.code() == ErrorCode::Cancelled
+    ));
+    assert_eq!(observed_scope.load(Ordering::Acquire), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_scope_is_available_to_pipeline_behaviors() -> CatgaResult<()> {
+    let observed_scope = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry.register_request::<Double, _>(DoubleHandler)?;
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(CancellationScopeBehavior {
+        observed_scope: Arc::clone(&observed_scope),
+    });
+
+    assert_eq!(
+        mediator
+            .send_with_cancellation_and_pipeline(Double(4), &pipeline, CancellationToken::new())
+            .await?,
+        8
+    );
+    assert_eq!(observed_scope.load(Ordering::Acquire), 1);
+    Ok(())
 }
 
 #[tokio::test]
