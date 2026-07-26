@@ -124,6 +124,7 @@ where
         flow_id: impl Into<Box<str>>,
         data: impl Into<Arc<[u8]>>,
     ) -> CatgaResult<FlowRuntimeResult> {
+        self.definition.validate()?;
         let Some(first_step) = self.definition.first_step_name() else {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
@@ -902,6 +903,7 @@ where
     }
 
     fn ensure_definition(&self, continuation: &FlowContinuation) -> CatgaResult<()> {
+        self.definition.validate()?;
         if continuation.state().flow_type() == self.definition.name() {
             Ok(())
         } else {

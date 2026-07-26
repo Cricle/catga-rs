@@ -80,6 +80,7 @@ impl FlowStepOutcome {
 pub struct FlowDefinition {
     name: Box<str>,
     steps: Vec<RegisteredStep>,
+    invalid_step_names: bool,
 }
 
 struct RegisteredStep {
@@ -95,26 +96,22 @@ impl FlowDefinition {
         Self {
             name: name.into(),
             steps: Vec::new(),
+            invalid_step_names: false,
         }
     }
 
     /// Registers one named step handler.
-    pub fn step<Handler, HandlerFuture>(
-        mut self,
-        name: impl Into<Box<str>>,
-        handler: Handler,
-    ) -> Self
+    pub fn step<Handler, HandlerFuture>(self, name: impl Into<Box<str>>, handler: Handler) -> Self
     where
         Handler: Fn(FlowState) -> HandlerFuture + Send + Sync + 'static,
         HandlerFuture: Future<Output = CatgaResult<FlowStepOutcome>> + Send + 'static,
     {
-        self.steps.push(RegisteredStep {
+        self.register(RegisteredStep {
             name: name.into(),
             tag: None,
             handler: Box::new(move |state| Box::pin(handler(state))),
             compensation: None,
-        });
-        self
+        })
     }
 
     /// Registers one named durable step and its idempotent rollback action.
@@ -124,7 +121,7 @@ impl FlowDefinition {
     /// in reverse completion order. A rollback failure leaves the continuation in its durable
     /// compensating phase so a later stale-owner recovery retries the same action.
     pub fn step_with_compensation<Handler, HandlerFuture, Compensate, CompensateFuture>(
-        mut self,
+        self,
         name: impl Into<Box<str>>,
         handler: Handler,
         compensate: Compensate,
@@ -135,13 +132,12 @@ impl FlowDefinition {
         Compensate: Fn(FlowState) -> CompensateFuture + Send + Sync + 'static,
         CompensateFuture: Future<Output = CatgaResult<()>> + Send + 'static,
     {
-        self.steps.push(RegisteredStep {
+        self.register(RegisteredStep {
             name: name.into(),
             tag: None,
             handler: Box::new(move |state| Box::pin(handler(state))),
             compensation: Some(Box::new(move |state| Box::pin(compensate(state)))),
-        });
-        self
+        })
     }
 
     /// Registers one named durable step with a static policy tag.
@@ -150,7 +146,7 @@ impl FlowDefinition {
     /// They do not make a durable transition optional: every [`FlowRuntime`](crate::FlowRuntime)
     /// transition remains persisted so restart recovery cannot silently skip work.
     pub fn step_with_tag<Handler, HandlerFuture>(
-        mut self,
+        self,
         name: impl Into<Box<str>>,
         tag: impl Into<Box<str>>,
         handler: Handler,
@@ -159,13 +155,12 @@ impl FlowDefinition {
         Handler: Fn(FlowState) -> HandlerFuture + Send + Sync + 'static,
         HandlerFuture: Future<Output = CatgaResult<FlowStepOutcome>> + Send + 'static,
     {
-        self.steps.push(RegisteredStep {
+        self.register(RegisteredStep {
             name: name.into(),
             tag: Some(tag.into()),
             handler: Box::new(move |state| Box::pin(handler(state))),
             compensation: None,
-        });
-        self
+        })
     }
 
     /// Returns the registered durable flow type.
@@ -175,6 +170,27 @@ impl FlowDefinition {
 
     pub(crate) fn first_step_name(&self) -> Option<&str> {
         self.steps.first().map(|step| step.name.as_ref())
+    }
+
+    /// Validates the definition before it is used to create or resume durable state.
+    ///
+    /// Named continuations resolve both a handler and its successor by name, so names must be
+    /// non-empty and unique. The builder records this condition while registering steps, making
+    /// runtime validation constant-time and allocation-free.
+    pub(crate) fn validate(&self) -> CatgaResult<()> {
+        if self.name.is_empty() {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "a flow definition requires a non-empty name",
+            ));
+        }
+        if self.invalid_step_names {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "flow definition step names must be non-empty and unique",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn next_step_name(&self, name: &str) -> Option<&str> {
@@ -232,5 +248,15 @@ impl FlowDefinition {
             ));
         };
         compensation(state).await
+    }
+
+    fn register(mut self, step: RegisteredStep) -> Self {
+        self.invalid_step_names |= step.name.is_empty()
+            || self
+                .steps
+                .iter()
+                .any(|registered| registered.name == step.name);
+        self.steps.push(step);
+        self
     }
 }

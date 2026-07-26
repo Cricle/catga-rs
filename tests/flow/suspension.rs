@@ -21,6 +21,49 @@ use tokio_util::sync::CancellationToken;
 mod timeout_store_contract;
 
 #[tokio::test]
+async fn durable_runtime_rejects_duplicate_step_names_before_persisting_or_running() {
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let first_invocations = Arc::clone(&invocations);
+    let second_invocations = Arc::clone(&invocations);
+    let runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("duplicate-step-names")
+            .step("work", move |_| {
+                let invocations = Arc::clone(&first_invocations);
+                async move {
+                    invocations.fetch_add(1, Ordering::Relaxed);
+                    Ok(FlowStepOutcome::Advance)
+                }
+            })
+            .step("work", move |_| {
+                let invocations = Arc::clone(&second_invocations);
+                async move {
+                    invocations.fetch_add(1, Ordering::Relaxed);
+                    Ok(FlowStepOutcome::complete())
+                }
+            }),
+        "node-a",
+    );
+
+    let error = runtime
+        .start("duplicate-step-names/1", [])
+        .await
+        .expect_err("duplicate durable step names must be rejected before execution");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(invocations.load(Ordering::Relaxed), 0);
+    assert!(
+        store
+            .get("duplicate-step-names/1")
+            .await
+            .expect("memory store remains available")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn tagged_durable_step_retries_only_transient_failures_within_its_bound() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let runtime = FlowRuntime::new(
