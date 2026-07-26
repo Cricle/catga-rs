@@ -41,7 +41,7 @@ use crate::backend::Backend;
 ///
 /// The default type parameter uses compact Postcard encoding; use one of the `*_with_codec`
 /// constructors for an application-specific [`SnapshotCodec`]. Construct the store with an enabled
-/// backend and call [`Self::migrate`] before accepting state-machine traffic. Rows use a fixed
+/// backend and call its `migrate` method before accepting state-machine traffic. Rows use a fixed
 /// SHA-256 identity key plus the original identity for collision detection, retain both logical
 /// versions and physical revisions for bounded compare-and-set, and cap each encoded state at one
 /// mebibyte. This type creates neither background tasks nor unbounded queues.
