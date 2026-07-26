@@ -1,0 +1,316 @@
+#![cfg(feature = "sqlite")]
+//! SQLite integration coverage for the feature-gated FlowStore.
+
+use std::time::{Duration, SystemTime};
+
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use catga_flow::{
+    FlowContinuation, FlowQuery, FlowState, FlowStore, SuspendedFlowStore, TimedOutFlowPoll,
+    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
+};
+use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
+
+#[path = "../../../tests/flow/timeout_store_contract.rs"]
+mod timeout_store_contract;
+
+#[tokio::test]
+async fn sqlite_flow_store_creates_and_loads_a_flow_state() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("flows.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let state = FlowState::new("sql-flow-1", "payment", b"input".as_slice(), "node-a");
+    assert!(store.create(state.clone()).await?);
+    assert_eq!(store.get(state.id()).await?, Some(state));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_suspended_store_preserves_wait_results_and_summary_bounds() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("suspended.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let waiting = FlowContinuation::waiting(
+        FlowState::new("sql-wait-1", "payment", [], "node-a").suspended(),
+        "finish",
+        WaitCondition::new(
+            "sql-wait-1/correlation",
+            WaitPolicy::All,
+            1,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        ),
+    );
+    assert!(store.create(waiting.clone()).await?);
+    assert_eq!(store.get("sql-wait-1").await?, Some(waiting.clone()));
+    assert!(
+        store
+            .record_wait_success("sql-wait-1", 0, "child-a", b"ok".to_vec())
+            .await?
+    );
+    let persisted = required(store.get("sql-wait-1").await?, "persisted continuation")?;
+    let wait = required(persisted.wait(), "persisted wait condition")?;
+    let result = required(wait.results().first(), "persisted wait result")?;
+    assert_eq!(result.payload(), Some(&b"ok"[..]));
+
+    let summaries = store.query(&FlowQuery::new(1, 1)?).await?;
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(
+        required(summaries.first(), "flow summary")?.id(),
+        "sql-wait-1"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_suspended_store_summary_preserves_submillisecond_creation_time() -> CatgaResult<()>
+{
+    let directory = temporary_directory()?;
+    let database = directory.path().join("summary-precision.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let continuation = FlowContinuation::new(
+        FlowState::new("sql-summary-precision", "payment", [], "node-a"),
+        "finish",
+    );
+    let created_at = continuation.created_at();
+    assert!(store.create(continuation).await?);
+
+    let summaries = store.query(&FlowQuery::new(1, 1)?).await?;
+    assert_eq!(
+        required(summaries.first(), "precise flow summary")?.created_at(),
+        created_at
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_suspended_store_migrates_an_existing_table_with_discovery_order_index()
+-> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("existing-continuations.db");
+    let url = format!("sqlite://{}", database.display());
+    std::fs::File::create(&database).map_err(|error| {
+        CatgaError::new(ErrorCode::Internal, "create existing continuation database")
+            .with_details(error.to_string())
+    })?;
+    let pool = sqlx::SqlitePool::connect(&url)
+        .await
+        .map_err(|error| test_database_error("connect existing continuation database", error))?;
+    sqlx::query(
+        "CREATE TABLE catga_flow_continuations (\
+         flow_key BLOB PRIMARY KEY NOT NULL, flow_id TEXT NOT NULL UNIQUE, \
+         flow_type TEXT NOT NULL, status INTEGER NOT NULL, version INTEGER NOT NULL, \
+         created_at_ms INTEGER NOT NULL, deadline_ms INTEGER NULL, revision INTEGER NOT NULL, \
+         due_token BLOB NULL, lease_until_ms INTEGER NULL, payload BLOB NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|error| test_database_error("create existing continuation table", error))?;
+    drop(pool);
+
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let index_sql: String =
+        sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' \
+         AND name = 'catga_flow_continuations_order_idx'",
+        )
+        .fetch_one(&sqlx::SqlitePool::connect(&url).await.map_err(|error| {
+            test_database_error("connect discovery-index inspection pool", error)
+        })?)
+        .await
+        .map_err(|error| test_database_error("read continuation discovery index", error))?;
+    assert!(index_sql.contains("created_at_ms, created_at_subsec_ns, flow_key"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_suspended_store_uses_full_snapshot_claims_and_versioned_updates() -> CatgaResult<()>
+{
+    let directory = temporary_directory()?;
+    let database = directory.path().join("suspended-cas.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let running = FlowContinuation::new(
+        FlowState::new("sql-suspended-cas", "payment", [], "node-a"),
+        "finish",
+    );
+    assert!(store.create(running.clone()).await?);
+    assert!(store.heartbeat("sql-suspended-cas", "node-a", 0).await?);
+    let claimed = running
+        .clone()
+        .with_state(running.state().clone().claimed_by("node-b").next_version());
+    assert!(!store.claim(&running, claimed).await?);
+
+    let current = required(
+        store.get("sql-suspended-cas").await?,
+        "current suspended continuation",
+    )?;
+    let next = current
+        .clone()
+        .ready()
+        .with_state(current.state().clone().suspended().next_version());
+    assert!(store.update(current.state().version(), next).await?);
+    assert!(store.delete("sql-suspended-cas", 1).await?);
+    assert!(store.get("sql-suspended-cas").await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_flow_store_uses_version_cas_stale_claims_and_owner_heartbeats() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("flow-cas.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let initial = FlowState::new("sql-flow-cas", "payment", [], "node-a");
+    assert!(store.create(initial.clone()).await?);
+    let next = initial.clone().next_version();
+    assert!(store.update(initial.version(), next.clone()).await?);
+    assert!(!store.update(initial.version(), initial).await?);
+
+    let stale = FlowState::new("sql-flow-stale", "payment", [], "node-a")
+        .heartbeated_at(SystemTime::UNIX_EPOCH);
+    assert!(store.create(stale).await?);
+    let claimed = required(
+        store
+            .try_claim("payment", "node-b", Duration::from_secs(86_400))
+            .await?,
+        "claimed stale flow",
+    )?;
+    assert_eq!(claimed.id(), "sql-flow-stale");
+    assert_eq!(claimed.owner(), Some("node-b"));
+    assert_eq!(claimed.version(), 1);
+    assert!(
+        store
+            .heartbeat(claimed.id(), "node-b", claimed.version())
+            .await?
+    );
+    let persisted = required(store.get(claimed.id()).await?, "claimed flow state")?;
+    assert_eq!(persisted.version(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_timeout_receipts_are_leased_released_and_token_fenced() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("timeout-receipts.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000);
+    let continuation = FlowContinuation::waiting(
+        FlowState::new("sql-timeout-1", "payment", [], "node-a").suspended(),
+        "finish",
+        WaitCondition::new(
+            "sql-timeout-1/wait",
+            WaitPolicy::All,
+            1,
+            now - Duration::from_secs(2),
+            Duration::from_secs(1),
+        ),
+    );
+    assert!(store.create(continuation).await?);
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 0);
+
+    let poll = TimedOutFlowPoll::new(now, 1, 1)?;
+    let first = required(
+        store.poll_timed_out(&poll).await?.pop(),
+        "first timeout receipt",
+    )?;
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 1);
+    assert_eq!(first.flow_id(), "sql-timeout-1");
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
+
+    let mut forged_token = first.token().to_vec();
+    *required(forged_token.first_mut(), "timeout receipt token byte")? ^= u8::MAX;
+    let forged = TimedOutFlowReceipt::new(first.flow_id(), forged_token);
+    store.release_timed_out(&forged).await?;
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
+
+    store.release_timed_out(&first).await?;
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 2);
+    let second = required(
+        store.poll_timed_out(&poll).await?.pop(),
+        "released timeout receipt",
+    )?;
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 3);
+    assert_ne!(second.token(), first.token());
+
+    store.ack_timed_out(&first).await?;
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
+
+    let after_lease = TimedOutFlowPoll::new(now + Duration::from_secs(60), 1, 1)?;
+    let third = required(
+        store.poll_timed_out(&after_lease).await?.pop(),
+        "expired timeout receipt lease",
+    )?;
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 4);
+    assert_ne!(third.token(), second.token());
+
+    store.ack_timed_out(&second).await?;
+    assert!(store.poll_timed_out(&after_lease).await?.is_empty());
+
+    store.release_timed_out(&third).await?;
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 5);
+    let fourth = required(
+        store.poll_timed_out(&after_lease).await?.pop(),
+        "second released timeout receipt",
+    )?;
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 6);
+    assert_ne!(fourth.token(), third.token());
+    store.ack_timed_out(&fourth).await?;
+    assert_eq!(stored_revision(&url, "sql-timeout-1").await?, 7);
+    assert!(store.poll_timed_out(&after_lease).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_timeout_poll_is_bounded_and_reconciles_stale_waits() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("timeout-contract.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    timeout_store_contract::run_timeout_store_contract(&store, "sqlite-timeout", false).await
+}
+
+fn temporary_directory() -> CatgaResult<tempfile::TempDir> {
+    tempfile::tempdir().map_err(|error| {
+        CatgaError::new(ErrorCode::Internal, "create SQLite test directory")
+            .with_details(error.to_string())
+    })
+}
+
+fn required<T>(value: Option<T>, description: &'static str) -> CatgaResult<T> {
+    value.ok_or_else(|| CatgaError::new(ErrorCode::Internal, description))
+}
+
+async fn stored_revision(url: &str, flow_id: &str) -> CatgaResult<i64> {
+    let pool = sqlx::SqlitePool::connect(url)
+        .await
+        .map_err(|error| test_database_error("connect revision inspection pool", error))?;
+    sqlx::query_scalar("SELECT revision FROM catga_flow_continuations WHERE flow_id = ?")
+        .bind(flow_id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| test_database_error("read continuation revision", error))
+}
+
+fn test_database_error(description: &'static str, error: sqlx::Error) -> CatgaError {
+    CatgaError::new(ErrorCode::Internal, description).with_details(error.to_string())
+}

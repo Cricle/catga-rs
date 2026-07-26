@@ -2,6 +2,7 @@
 members = [
     "crates/catga-core",
     "crates/catga-flow",
+    "crates/catga-flow-store",
     "crates/catga-codec-postcard",
     "crates/catga-codec-memorypack",
     "crates/catga-axum",

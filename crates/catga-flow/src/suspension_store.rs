@@ -21,6 +21,23 @@ pub struct FlowSummary {
 }
 
 impl FlowSummary {
+    /// Creates a summary from already validated persistence columns.
+    pub fn new(
+        id: impl Into<Box<str>>,
+        flow_type: impl Into<Box<str>>,
+        status: FlowStatus,
+        version: i64,
+        created_at: SystemTime,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            flow_type: flow_type.into(),
+            status,
+            version,
+            created_at,
+        }
+    }
+
     /// Creates a summary from a durable continuation.
     pub fn from_continuation(continuation: &FlowContinuation) -> Self {
         Self {
@@ -125,6 +142,19 @@ impl FlowQuery {
                 .is_none_or(|flow_type| state.flow_type() == flow_type)
             && self.created_at.is_none_or(|(start, end)| {
                 let created_at = continuation.created_at();
+                created_at >= start && created_at < end
+            })
+    }
+
+    /// Returns whether an already compacted summary matches every configured filter.
+    pub fn matches_summary(&self, summary: &FlowSummary) -> bool {
+        self.status.is_none_or(|status| summary.status() == status)
+            && self
+                .flow_type
+                .as_deref()
+                .is_none_or(|flow_type| summary.flow_type() == flow_type)
+            && self.created_at.is_none_or(|(start, end)| {
+                let created_at = summary.created_at();
                 created_at >= start && created_at < end
             })
     }

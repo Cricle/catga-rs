@@ -20,6 +20,9 @@ pub const MAX_FLOW_TIMEOUT_BATCH_SIZE: usize = 256;
 pub const MAX_FLOW_TIMEOUT_SCAN_LIMIT: usize = 1_024;
 
 /// Returns the checked UTC epoch-millisecond deadline indexed for an active suspended wait.
+///
+/// Fractional milliseconds are rounded up so a millisecond-resolution backend never discovers a
+/// wait before its actual deadline.
 pub fn flow_timeout_deadline_unix_ms(continuation: &FlowContinuation) -> CatgaResult<Option<u64>> {
     if continuation.state().status() != FlowStatus::Suspended {
         return Ok(None);
@@ -44,7 +47,16 @@ pub fn flow_timeout_deadline_unix_ms(continuation: &FlowContinuation) -> CatgaRe
                 "flow wait deadline precedes the Unix epoch",
             )
         })?;
-    u64::try_from(elapsed.as_millis()).map(Some).map_err(|_| {
+    let rounded_millis = elapsed
+        .as_millis()
+        .checked_add(u128::from(elapsed.subsec_nanos() % 1_000_000 != 0))
+        .ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "flow wait deadline exceeds the supported millisecond range",
+            )
+        })?;
+    u64::try_from(rounded_millis).map(Some).map_err(|_| {
         CatgaError::new(
             ErrorCode::Validation,
             "flow wait deadline exceeds the supported millisecond range",
@@ -317,4 +329,30 @@ fn validate_bounds(limit: usize, scan_limit: usize) -> CatgaResult<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::flow_timeout_deadline_unix_ms;
+    use crate::{FlowContinuation, FlowState, WaitCondition, WaitPolicy};
+    use catga_core::CatgaResult;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn timeout_deadline_rounds_fractional_milliseconds_up() -> CatgaResult<()> {
+        let continuation = FlowContinuation::waiting(
+            FlowState::new("fractional-timeout", "test", [], "node-a").suspended(),
+            "resume",
+            WaitCondition::new(
+                "fractional-timeout/wait",
+                WaitPolicy::All,
+                1,
+                SystemTime::UNIX_EPOCH + Duration::from_nanos(1),
+                Duration::ZERO,
+            ),
+        );
+
+        assert_eq!(flow_timeout_deadline_unix_ms(&continuation)?, Some(1));
+        Ok(())
+    }
 }

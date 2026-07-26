@@ -1,0 +1,459 @@
+//! SQL Server persistence for durable Flow continuations.
+
+use std::time::SystemTime;
+
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use catga_flow::{
+    FlowContinuation, FlowQuery, FlowSummary, decode_continuation, encode_continuation,
+};
+use tiberius::Query;
+
+use crate::{
+    MssqlPool,
+    error::database_error,
+    key::flow_key,
+    mssql::{missing_column, required_bytes, required_i64, required_str},
+    sql_common::{
+        MAX_CAS_RETRIES, cas_error, deadline_millis, status_code, status_from_code,
+        system_time_from_unix_millis_and_subsec_nanos, unix_millis_and_subsec_nanos,
+    },
+};
+
+struct StoredContinuation {
+    continuation: FlowContinuation,
+    revision: i64,
+}
+
+/// Creates the continuation table and its bounded discovery indexes.
+pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server continuation migration", error))?;
+    connection
+        .execute(
+            "IF OBJECT_ID(N'dbo.catga_flow_continuations', N'U') IS NULL BEGIN \
+             CREATE TABLE dbo.catga_flow_continuations (\
+               flow_key BINARY(32) NOT NULL PRIMARY KEY, flow_id NVARCHAR(MAX) NOT NULL, \
+               flow_type NVARCHAR(MAX) NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, \
+               created_at_ms BIGINT NOT NULL, created_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
+               deadline_ms BIGINT NULL, revision BIGINT NOT NULL, \
+               due_token BINARY(16) NULL, lease_until_ms BIGINT NULL, payload VARBINARY(MAX) NOT NULL); \
+             CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
+               (status, created_at_ms, flow_key); \
+             CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
+               (created_at_ms, created_at_subsec_ns, flow_key); \
+             CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
+               (deadline_ms, lease_until_ms, flow_key); END; \
+             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'created_at_subsec_ns') IS NULL \
+               ALTER TABLE dbo.catga_flow_continuations ADD created_at_subsec_ns BIGINT NOT NULL DEFAULT 0; \
+             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+               AND name = N'catga_flow_continuations_order_idx') \
+               CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
+                 (created_at_ms, created_at_subsec_ns, flow_key); \
+             DECLARE @drop_continuation_id_unique nvarchar(max) = N''; \
+             SELECT @drop_continuation_id_unique += N'ALTER TABLE dbo.catga_flow_continuations DROP CONSTRAINT ' \
+               + QUOTENAME(key_constraint.name) + N';' \
+             FROM sys.key_constraints AS key_constraint \
+             INNER JOIN sys.index_columns AS index_column \
+               ON index_column.object_id = key_constraint.parent_object_id \
+               AND index_column.index_id = key_constraint.unique_index_id \
+             WHERE key_constraint.parent_object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+               AND key_constraint.type = N'UQ' \
+               AND COL_NAME(index_column.object_id, index_column.column_id) = N'flow_id'; \
+             IF @drop_continuation_id_unique <> N'' EXEC sys.sp_executesql @drop_continuation_id_unique; \
+             IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+               AND name = N'catga_flow_continuations_query_idx') \
+               DROP INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations; \
+             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_id') <> -1 \
+               ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_id NVARCHAR(MAX) NOT NULL; \
+             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_type') <> -1 \
+               ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_type NVARCHAR(MAX) NOT NULL; \
+             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+               AND name = N'catga_flow_continuations_query_idx') \
+               CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
+                 (status, created_at_ms, flow_key);",
+            &[],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| database_error("create SQL Server continuation schema", error))
+}
+
+/// Inserts a continuation without replacing an existing identity.
+pub(crate) async fn create(pool: &MssqlPool, continuation: FlowContinuation) -> CatgaResult<bool> {
+    let key = flow_key(continuation.state().id());
+    let frame = encode_continuation(&continuation)?;
+    let deadline = deadline_millis(&continuation)?;
+    let (created_at_ms, created_at_subsec_ns) =
+        unix_millis_and_subsec_nanos(continuation.created_at())?;
+    let mut query = Query::new(
+        "IF NOT EXISTS (SELECT 1 FROM dbo.catga_flow_continuations WITH (UPDLOCK, HOLDLOCK) \
+           WHERE flow_key = @P1) BEGIN \
+           INSERT INTO dbo.catga_flow_continuations \
+             (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, deadline_ms, \
+              revision, payload) \
+           VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, 0, @P9); \
+           SELECT CAST(1 AS BIGINT) AS inserted; END \
+         ELSE SELECT CAST(0 AS BIGINT) AS inserted;",
+    );
+    query.bind(key.as_slice());
+    query.bind(continuation.state().id());
+    query.bind(continuation.state().flow_type());
+    query.bind(status_code(continuation.state().status()));
+    query.bind(continuation.state().version());
+    query.bind(created_at_ms);
+    query.bind(created_at_subsec_ns);
+    query.bind(deadline);
+    query.bind(frame.as_slice());
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server continuation create", error))?;
+    let stream = query
+        .query(&mut connection)
+        .await
+        .map_err(|error| database_error("create SQL Server continuation", error))?;
+    let row = stream
+        .into_row()
+        .await
+        .map_err(|error| database_error("read SQL Server continuation create result", error))?
+        .ok_or_else(|| missing_column("SQL Server continuation create result"))?;
+    if required_i64(&row, "inserted", "SQL Server continuation create result")? == 1 {
+        return Ok(true);
+    }
+    let mut query =
+        Query::new("SELECT flow_id FROM dbo.catga_flow_continuations WHERE flow_key = @P1");
+    query.bind(key.as_slice());
+    let stream = query
+        .query(&mut connection)
+        .await
+        .map_err(|error| database_error("read conflicting SQL Server continuation", error))?;
+    let row = stream
+        .into_row()
+        .await
+        .map_err(|error| database_error("read conflicting SQL Server continuation", error))?
+        .ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Transient,
+                "SQL Server continuation disappeared after conflicting create",
+            )
+        })?;
+    if required_str(
+        &row,
+        "flow_id",
+        "conflicting SQL Server continuation identity",
+    )? == continuation.state().id()
+    {
+        Ok(false)
+    } else {
+        Err(CatgaError::new(
+            ErrorCode::Internal,
+            "SHA-256 collision between SQL continuation identities",
+        ))
+    }
+}
+
+/// Loads one continuation by identity.
+pub(crate) async fn get(pool: &MssqlPool, flow_id: &str) -> CatgaResult<Option<FlowContinuation>> {
+    load(pool, flow_id)
+        .await
+        .map(|value| value.map(|value| value.continuation))
+}
+
+/// Returns matching summaries after fetching at most the configured scan bound.
+pub(crate) async fn query(pool: &MssqlPool, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
+    let limit = i64::try_from(query.max_scan()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "SQL Server continuation scan limit exceeds i64",
+        )
+    })?;
+    let mut statement = Query::new(
+        "SELECT TOP (@P1) flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns \
+         FROM dbo.catga_flow_continuations \
+         ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC",
+    );
+    statement.bind(limit);
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server continuation query", error))?;
+    let rows = statement
+        .query(&mut connection)
+        .await
+        .map_err(|error| database_error("query SQL Server continuations", error))?
+        .into_first_result()
+        .await
+        .map_err(|error| database_error("read SQL Server continuation query", error))?;
+    let mut summaries = Vec::with_capacity(query.max_results());
+    for row in rows {
+        let id = required_str(&row, "flow_id", "SQL Server summary identity")?;
+        let flow_type = required_str(&row, "flow_type", "SQL Server summary flow type")?;
+        let status = required_i64(&row, "status", "SQL Server summary status")?;
+        let version = required_i64(&row, "version", "SQL Server summary version")?;
+        let created_at = required_i64(&row, "created_at_ms", "SQL Server summary creation time")?;
+        let created_at_subsec_ns = required_i64(
+            &row,
+            "created_at_subsec_ns",
+            "SQL Server summary creation precision",
+        )?;
+        let summary = FlowSummary::new(
+            id,
+            flow_type,
+            status_from_code(status)?,
+            version,
+            system_time_from_unix_millis_and_subsec_nanos(created_at, created_at_subsec_ns)?,
+        );
+        if query.matches_summary(&summary) {
+            summaries.push(summary);
+            if summaries.len() == query.max_results() {
+                break;
+            }
+        }
+    }
+    Ok(summaries)
+}
+
+/// Deletes a continuation only while its version and physical revision remain current.
+pub(crate) async fn delete(
+    pool: &MssqlPool,
+    flow_id: &str,
+    expected_version: i64,
+) -> CatgaResult<bool> {
+    for _ in 0..MAX_CAS_RETRIES {
+        let Some(current) = load(pool, flow_id).await? else {
+            return Ok(false);
+        };
+        if current.continuation.state().version() != expected_version {
+            return Ok(false);
+        }
+        let key = flow_key(flow_id);
+        let mut query = Query::new(
+            "DELETE FROM dbo.catga_flow_continuations \
+             WHERE flow_key = @P1 AND flow_id = @P2 AND revision = @P3",
+        );
+        query.bind(key.as_slice());
+        query.bind(flow_id);
+        query.bind(current.revision);
+        let mut connection = pool
+            .get()
+            .await
+            .map_err(|error| database_error("acquire SQL Server continuation delete", error))?;
+        let changed = query
+            .execute(&mut connection)
+            .await
+            .map_err(|error| database_error("delete SQL Server continuation", error))?
+            .total();
+        if changed == 1 {
+            return Ok(true);
+        }
+    }
+    Err(cas_error("delete a SQL Server continuation"))
+}
+
+/// Replaces a continuation after exactly one business-version transition.
+pub(crate) async fn update(
+    pool: &MssqlPool,
+    expected_version: i64,
+    next: FlowContinuation,
+) -> CatgaResult<bool> {
+    if next.state().version() != expected_version.saturating_add(1) {
+        return Ok(false);
+    }
+    for _ in 0..MAX_CAS_RETRIES {
+        let Some(current) = load(pool, next.state().id()).await? else {
+            return Ok(false);
+        };
+        if current.continuation.state().version() != expected_version {
+            return Ok(false);
+        }
+        if replace(pool, &current, &next).await? {
+            return Ok(true);
+        }
+    }
+    Err(cas_error("update a SQL Server continuation"))
+}
+
+/// Claims only when the complete expected snapshot remains current.
+pub(crate) async fn claim(
+    pool: &MssqlPool,
+    expected: &FlowContinuation,
+    next: FlowContinuation,
+) -> CatgaResult<bool> {
+    if next.state().id() != expected.state().id()
+        || next.state().version() != expected.state().version().saturating_add(1)
+    {
+        return Ok(false);
+    }
+    let Some(current) = load(pool, expected.state().id()).await? else {
+        return Ok(false);
+    };
+    if current.continuation != *expected {
+        return Ok(false);
+    }
+    replace(pool, &current, &next).await
+}
+
+/// Records one idempotent child success through bounded revision CAS.
+pub(crate) async fn record_wait_success(
+    pool: &MssqlPool,
+    flow_id: &str,
+    version: i64,
+    child_id: &str,
+    payload: Vec<u8>,
+) -> CatgaResult<bool> {
+    for _ in 0..MAX_CAS_RETRIES {
+        let Some(current) = load(pool, flow_id).await? else {
+            return Ok(false);
+        };
+        if current.continuation.state().version() != version {
+            return Ok(false);
+        }
+        let Some(wait) = current.continuation.wait() else {
+            return Ok(false);
+        };
+        let next_wait = wait.record_success(child_id, payload.clone());
+        if next_wait.completed_count() == wait.completed_count() {
+            return Ok(true);
+        }
+        let next = current.continuation.clone().with_wait(next_wait);
+        if replace(pool, &current, &next).await? {
+            return Ok(true);
+        }
+    }
+    Err(cas_error("record a SQL Server wait result"))
+}
+
+/// Records one idempotent child failure through bounded revision CAS.
+pub(crate) async fn record_wait_failure(
+    pool: &MssqlPool,
+    flow_id: &str,
+    version: i64,
+    child_id: &str,
+    error: CatgaError,
+) -> CatgaResult<bool> {
+    for _ in 0..MAX_CAS_RETRIES {
+        let Some(current) = load(pool, flow_id).await? else {
+            return Ok(false);
+        };
+        if current.continuation.state().version() != version {
+            return Ok(false);
+        }
+        let Some(wait) = current.continuation.wait() else {
+            return Ok(false);
+        };
+        let next_wait = wait.record_failure(child_id, error.clone());
+        if next_wait.completed_count() == wait.completed_count() {
+            return Ok(true);
+        }
+        let next = current.continuation.clone().with_wait(next_wait);
+        if replace(pool, &current, &next).await? {
+            return Ok(true);
+        }
+    }
+    Err(cas_error("record a failed SQL Server wait result"))
+}
+
+/// Refreshes owner liveness without changing business version.
+pub(crate) async fn heartbeat(
+    pool: &MssqlPool,
+    flow_id: &str,
+    owner: &str,
+    version: i64,
+) -> CatgaResult<bool> {
+    for _ in 0..MAX_CAS_RETRIES {
+        let Some(current) = load(pool, flow_id).await? else {
+            return Ok(false);
+        };
+        if current.continuation.state().owner() != Some(owner)
+            || current.continuation.state().version() != version
+        {
+            return Ok(false);
+        }
+        let next = current.continuation.clone().with_state(
+            current
+                .continuation
+                .state()
+                .clone()
+                .heartbeated_at(SystemTime::now()),
+        );
+        if replace(pool, &current, &next).await? {
+            return Ok(true);
+        }
+    }
+    Err(cas_error("heartbeat a SQL Server continuation"))
+}
+
+async fn load(pool: &MssqlPool, flow_id: &str) -> CatgaResult<Option<StoredContinuation>> {
+    let key = flow_key(flow_id);
+    let mut query = Query::new(
+        "SELECT payload, revision FROM dbo.catga_flow_continuations \
+         WHERE flow_key = @P1 AND flow_id = @P2",
+    );
+    query.bind(key.as_slice());
+    query.bind(flow_id);
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server continuation read", error))?;
+    let row = query
+        .query(&mut connection)
+        .await
+        .map_err(|error| database_error("read SQL Server continuation", error))?
+        .into_row()
+        .await
+        .map_err(|error| database_error("read SQL Server continuation row", error))?;
+    row.map(|row| {
+        let frame = required_bytes(&row, "payload", "SQL Server continuation frame")?;
+        let continuation = decode_continuation(frame)?;
+        if continuation.state().id() != flow_id {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "SQL Server continuation identity does not match its frame",
+            ));
+        }
+        let revision = required_i64(&row, "revision", "SQL Server continuation revision")?;
+        Ok(StoredContinuation {
+            continuation,
+            revision,
+        })
+    })
+    .transpose()
+}
+
+async fn replace(
+    pool: &MssqlPool,
+    current: &StoredContinuation,
+    next: &FlowContinuation,
+) -> CatgaResult<bool> {
+    let key = flow_key(next.state().id());
+    let frame = encode_continuation(next)?;
+    let deadline = deadline_millis(next)?;
+    let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?;
+    let mut query = Query::new(
+        "UPDATE dbo.catga_flow_continuations SET flow_type = @P1, status = @P2, \
+           version = @P3, created_at_ms = @P4, created_at_subsec_ns = @P5, deadline_ms = @P6, payload = @P7, \
+           revision = revision + 1, due_token = NULL, lease_until_ms = NULL \
+         WHERE flow_key = @P8 AND flow_id = @P9 AND revision = @P10",
+    );
+    query.bind(next.state().flow_type());
+    query.bind(status_code(next.state().status()));
+    query.bind(next.state().version());
+    query.bind(created_at_ms);
+    query.bind(created_at_subsec_ns);
+    query.bind(deadline);
+    query.bind(frame.as_slice());
+    query.bind(key.as_slice());
+    query.bind(next.state().id());
+    query.bind(current.revision);
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server continuation update", error))?;
+    query
+        .execute(&mut connection)
+        .await
+        .map(|result| result.total() == 1)
+        .map_err(|error| database_error("replace SQL Server continuation", error))
+}
