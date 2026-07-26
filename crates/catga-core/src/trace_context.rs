@@ -30,22 +30,28 @@ pub struct TraceContext {
 impl TraceContext {
     /// Parses a W3C `traceparent` and optional bounded `tracestate`.
     ///
-    /// Invalid, all-zero, non-canonical, or oversized values are rejected with `None` before
-    /// they can be retained in an envelope header set.
+    /// An invalid, all-zero, non-canonical, or oversized `traceparent` is rejected with `None`.
+    /// `tracestate` is an independent companion header: invalid values are discarded while the
+    /// valid parent context remains usable. Empty, whitespace-only, or malformed `tracestate`
+    /// values are discarded so they are not propagated again.
     pub fn parse(traceparent: &str, tracestate: Option<&str>) -> Option<Self> {
-        if !valid_traceparent(traceparent) || !tracestate.is_none_or(valid_tracestate) {
+        if !valid_traceparent(traceparent) {
             return None;
         }
         Some(Self {
             traceparent: traceparent.into(),
-            tracestate: tracestate.map(Into::into),
+            tracestate: tracestate
+                .filter(|value| {
+                    valid_tracestate(value) && !value.trim_matches([' ', '\t']).is_empty()
+                })
+                .map(Into::into),
         })
     }
 
     /// Extracts a valid W3C context from case-insensitive envelope headers.
     ///
-    /// A missing or invalid `traceparent` yields `None`. An invalid `tracestate` also causes the
-    /// complete context to be ignored so a malformed remote value is never propagated onward.
+    /// A missing or invalid `traceparent` yields `None`. An invalid `tracestate` is discarded so
+    /// a malformed remote value is never propagated onward, while the valid parent is retained.
     pub fn from_envelope_headers(headers: &EnvelopeHeaders) -> Option<Self> {
         Self::parse(
             envelope_header(headers, TRACEPARENT_HEADER)?,
@@ -130,29 +136,24 @@ fn valid_nonzero_hex(bytes: &[u8]) -> bool {
 }
 
 fn valid_tracestate(value: &str) -> bool {
-    if value.is_empty()
-        || value.len() > MAX_TRACESTATE_BYTES
-        || !value.is_ascii()
-        || value.split(',').count() > 32
-    {
+    if value.len() > MAX_TRACESTATE_BYTES || !value.is_ascii() || value.split(',').count() > 32 {
         return false;
     }
     let mut keys = HashSet::new();
-    value.split(',').all(|member| {
-        let Some((key, member_value)) = tracestate_member(member) else {
-            return false;
-        };
-        valid_tracestate_key(key) && valid_tracestate_value(member_value) && keys.insert(key)
-    })
+    value
+        .split(',')
+        .all(|member| valid_tracestate_member(member, &mut keys))
 }
 
-fn tracestate_member(member: &str) -> Option<(&str, &str)> {
+fn valid_tracestate_member<'a>(member: &'a str, keys: &mut HashSet<&'a str>) -> bool {
     let member = member.trim_matches([' ', '\t']);
-    let (key, value) = member.split_once('=')?;
-    Some((
-        key.trim_matches([' ', '\t']),
-        value.trim_matches([' ', '\t']),
-    ))
+    if member.is_empty() {
+        return false;
+    }
+    let Some((key, value)) = member.split_once('=') else {
+        return false;
+    };
+    valid_tracestate_key(key) && valid_tracestate_value(value) && keys.insert(key)
 }
 
 fn valid_tracestate_key(key: &str) -> bool {
@@ -161,26 +162,34 @@ fn valid_tracestate_key(key: &str) -> bool {
         return false;
     };
     let system = parts.next();
-    if parts.next().is_some() || !valid_tracestate_key_part(tenant, 241) {
+    if parts.next().is_some() {
         return false;
     }
-    system.is_none_or(|system| valid_tracestate_key_part(system, 14))
+    match system {
+        Some(system) => {
+            valid_tracestate_key_part(tenant, 241, true)
+                && valid_tracestate_key_part(system, 14, false)
+        }
+        None => valid_tracestate_key_part(tenant, 256, false),
+    }
 }
 
-fn valid_tracestate_key_part(value: &str, max_len: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= max_len
-        && value.bytes().all(|byte| {
+fn valid_tracestate_key_part(value: &str, max_len: usize, digit_prefix: bool) -> bool {
+    let Some((first, remaining)) = value.as_bytes().split_first() else {
+        return false;
+    };
+    value.len() <= max_len
+        && (first.is_ascii_lowercase() || (digit_prefix && first.is_ascii_digit()))
+        && remaining.iter().all(|byte| {
             byte.is_ascii_lowercase()
                 || byte.is_ascii_digit()
-                || matches!(byte, b'_' | b'-' | b'*' | b'/')
+                || matches!(*byte, b'_' | b'-' | b'*' | b'/')
         })
 }
 
 fn valid_tracestate_value(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
-        && !value.starts_with([' ', '\t'])
         && !value.ends_with([' ', '\t'])
         && value
             .bytes()

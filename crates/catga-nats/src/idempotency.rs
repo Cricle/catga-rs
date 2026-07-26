@@ -105,7 +105,7 @@ impl NatsIdempotency {
     }
 
     pub(crate) async fn try_claim_until(&self, key: &str, expires_at: u64) -> CatgaResult<bool> {
-        telemetry::record_persistence("nats", "idempotency", "try_claim", async {
+        telemetry::record_persistence_claim("nats", "idempotency", "try_claim", async {
             let key = kv_key(key);
             let value = claimed_with_expiry(expires_at);
             let now = now_millis();
@@ -206,7 +206,7 @@ impl NatsIdempotency {
 #[async_trait]
 impl IdempotencyStore for NatsIdempotency {
     async fn try_claim(&self, key: &str) -> CatgaResult<bool> {
-        telemetry::record_persistence("nats", "idempotency", "try_claim", async {
+        telemetry::record_persistence_claim("nats", "idempotency", "try_claim", async {
             let key = kv_key(key);
             for _ in 0..RETRIES {
                 match self.entry(&key).await? {

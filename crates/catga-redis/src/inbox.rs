@@ -128,7 +128,7 @@ impl InboxStore for RedisInbox {
     }
 
     async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
-        telemetry::record_persistence("redis", "inbox", "try_claim", async {
+        telemetry::record_persistence_claim("redis", "inbox", "try_claim", async {
             let expires_at = inbox_claim_expires_at(lease)?;
             let mut connection = self.connection.clone();
             Script::new(CLAIM)

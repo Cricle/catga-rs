@@ -32,7 +32,7 @@ impl InboxStore for NatsInbox {
     }
 
     async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
-        telemetry::record_persistence("nats", "inbox", "try_claim", async {
+        telemetry::record_persistence_claim("nats", "inbox", "try_claim", async {
             self.records
                 .try_claim_until(&message_id.to_string(), inbox_claim_expires_at(lease)?)
                 .await

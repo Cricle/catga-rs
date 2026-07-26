@@ -26,6 +26,7 @@ use catga_nats::{
     NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport, NatsSnapshotStore,
     NatsSubscriptions, NatsSuspendedFlows, NatsTransport,
 };
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 #[path = "flow/dsl_progress_contract.rs"]
@@ -246,6 +247,120 @@ async fn nats_flows_use_hashed_states_and_type_indexes_for_stale_claims() {
     assert_eq!(claimed.owner(), Some("node-b"));
     assert_eq!(claimed.version(), 1);
     assert!(flows.heartbeat("order/8", "node-b", 1).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_NATS_URL"]
+async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
+    const INDEX_PAGE_CAPACITY: usize = 32;
+
+    let server =
+        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let bucket = format!("CATGA_FLOW_INDEX_{}_{}", std::process::id(), suffix);
+    let flows = NatsFlows::connect(&server, bucket.clone()).await.unwrap();
+    let flow_type = "payment";
+
+    for number in 0..=INDEX_PAGE_CAPACITY {
+        let state = FlowState::new(
+            format!("payment/{number}"),
+            flow_type,
+            b"input".to_vec(),
+            "node-a",
+        );
+        assert!(flows.create(state).await.unwrap());
+    }
+    assert!(
+        !flows
+            .create(FlowState::new(
+                "payment/0",
+                flow_type,
+                b"input".to_vec(),
+                "node-a",
+            ))
+            .await
+            .unwrap()
+    );
+
+    let context = jetstream::new(async_nats::connect(&server).await.unwrap());
+    let index = context
+        .get_key_value(format!("{bucket}_IDX"))
+        .await
+        .unwrap();
+    let type_hash = format!("{:x}", Sha256::digest(flow_type.as_bytes()));
+    for (page, expected_entries) in [INDEX_PAGE_CAPACITY, 1].into_iter().enumerate() {
+        let entry = index
+            .entry(format!("p{type_hash}.{page}"))
+            .await
+            .unwrap()
+            .expect("the type page exists");
+        let payload = entry
+            .value
+            .strip_prefix(b"CNR1")
+            .and_then(|value| value.get(16..))
+            .expect("the index page has a create envelope");
+        let ids = postcard::from_bytes::<Vec<Box<str>>>(payload).unwrap();
+        assert_eq!(ids.len(), expected_entries);
+    }
+
+    let terminal = flows.get("payment/0").await.unwrap().unwrap();
+    assert!(
+        flows
+            .update(terminal.version(), terminal.clone().done(1).next_version(),)
+            .await
+            .unwrap()
+    );
+    let page = index
+        .entry(format!("p{type_hash}.0"))
+        .await
+        .unwrap()
+        .expect("the first type page exists");
+    let payload = page
+        .value
+        .strip_prefix(b"CNR1")
+        .and_then(|value| value.get(16..))
+        .expect("the index page has a create envelope");
+    let ids = postcard::from_bytes::<Vec<Box<str>>>(payload).unwrap();
+    assert_eq!(ids.len(), INDEX_PAGE_CAPACITY.saturating_sub(1));
+    assert!(!ids.iter().any(|id| id.as_ref() == terminal.id()));
+
+    let interrupted = FlowState::new(
+        "payment/interrupted",
+        flow_type,
+        b"input".to_vec(),
+        "node-a",
+    )
+    .heartbeated_at(SystemTime::UNIX_EPOCH);
+    let states = context.get_key_value(&bucket).await.unwrap();
+    states
+        .create(
+            format!("f{:x}", Sha256::digest(interrupted.id().as_bytes())),
+            postcard::to_allocvec(&interrupted).unwrap().into(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!flows.create(interrupted.clone()).await.unwrap());
+    let mut recovered = None;
+    for _ in 0..=INDEX_PAGE_CAPACITY.saturating_add(1) {
+        let candidate = flows
+            .try_claim(flow_type, "node-b", Duration::from_secs(86_400))
+            .await
+            .unwrap();
+        if candidate
+            .as_ref()
+            .is_some_and(|state| state.id() == interrupted.id())
+        {
+            recovered = candidate;
+            break;
+        }
+    }
+    assert_eq!(
+        recovered.as_ref().map(FlowState::id),
+        Some(interrupted.id())
+    );
 }
 
 #[tokio::test]

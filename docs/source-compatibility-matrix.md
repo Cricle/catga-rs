@@ -10,6 +10,7 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 | HTTP integration (11 C# files) | `catga-axum` | `tests/axum.rs` | Migrated with typed and arbitrary-signature static Axum routes instead of reflection discovery; leader forwarding and the generic `propagate_correlation_header` helper retain ambient correlation across HTTP hops without a global client wrapper, `EndpointValidation` maps input errors to the stable Catga validation result, `IntoCatgaHttpResponse` replaces overlapping mutable C# result builders with one allocation-conscious result-to-response trait, and opt-in `endpoint_panic_middleware` replaces endpoint exception handling without exposing panic payloads |
 | Cluster coordination (10 C# files) | `catga-cluster`, Axum raft transport | `tests/{cluster,raft_cluster,raft_runtime,raft_state_machine_runtime}.rs` | Migrated; committed application entries use a bounded in-memory page and resume from durable Raft storage without discarding overflow |
 | Flow and state machines (67 C# files) | `catga-flow`, Memory/Redis/NATS flow stores | `tests/flow`, `tests/state_machine*.rs`, `tests/observability.rs` | Migrated; durable DSL recovery uses bounded nested conditional paths, explicitly replayable ForEach item snapshots, branch-local parallel cursors, and a persisted `when_any` winner. Durable child fan-out first persists up to 1,024 caller-supplied stable child identities, then uses expiring CAS launch claims and an application-owned idempotent launcher; it retains no child task, no unbounded result list, and no result payload larger than 64 KiB. Tagged durable steps select caller-owned timeouts and bounded retries only for typed `Transient` errors; no detached timer or retry task is created, and every durable transition remains persisted regardless of a source-style persist marker. Async top-level lifecycle hooks are serial, caller-owned, and emitted before successful checkpoint persistence, preserving documented at-least-once replay. The same recovery contract is exercised in memory and compiled through explicit Redis/NATS service-gated tests |
+| SQL Flow persistence | `catga-flow-store` | `crates/catga-flow-store/tests/{sqlite,mysql,postgres,mssql}.rs` | Migrated as feature-gated SQLite, MySQL, PostgreSQL, and SQL Server adapters; Redis reuses the existing `RedisSuspendedFlows`. All values use bound parameters, continuation discovery has physical scan indexes, summaries preserve exact sub-millisecond creation times, claims use bounded revision fencing, and SQL Server holds skip-locked selection plus CAS in one transaction. No worker, RabbitMQ/AMQP adapter, or HTTP health route is introduced |
 | In-memory persistence (17 C# files) | `catga-memory` | `tests/{memory_reliability,event_sourcing,flow}` | Migrated |
 | NATS persistence and transport (24 C# files) | `catga-nats` | `tests/{nats,nats_request}.rs` | Migrated; real Core NATS and JetStream regressions include explicit QoS separation and native redelivery-attempt reporting |
 | Redis persistence and transport (26 C# files) | `catga-redis` | `tests/redis.rs`, `tests/state_machine_persistence.rs` | Migrated; real Redis regression covers Streams queues, ephemeral Pub/Sub broadcasts, stores, historical enhanced snapshots, durable DSL step progress, native redelivery-attempt reporting, and bounded group-wide idle-delivery recovery |
@@ -209,7 +210,17 @@ documentation/performance artifacts, not runtime contracts.
   spans without a framework-owned exporter or background task. Core, memory,
   Redis, and JetStream durable operations use the same cancellation-safe async
   guard, so validation and CAS errors retain their original `CatgaResult` while
-  producing a failure observation. Queue, destination, broadcast, Core NATS,
+  producing a failure observation. Typed conflicts additionally increment
+  `catga.persistence.conflicts`, while successful-but-unowned claim and lease
+  attempts increment `catga.persistence.contention`. Inbox behavior reports the
+  fixed outcomes `processed`, `hit`, `conflict`, `failure`, and `bypassed`, and
+  retry backoff uses a cancellation-safe `catga.resilience.retry.pending` gauge.
+  Distributed locking records acquisition latency and the fixed `success`,
+  `contention`, and `failure` acquisition outcomes, a cancellation-safe
+  `catga.distributed_lock.held` gauge, and fixed release outcomes for success,
+  failure, and ownership loss; resource keys and owner identifiers are never
+  metric labels.
+  Queue, destination, broadcast, Core NATS,
   and JetStream publishers additionally emit the bounded
   `catga.messages.{published,failed,aborted}` counters and publish-duration
   histogram through a caller-owned future, without a framework task or
@@ -222,6 +233,15 @@ documentation/performance artifacts, not runtime contracts.
   cancellation-safe RAII without polling a store or retaining flow ids. Flow
   IDs, flow types, and step names are tracing-only fields; Flow metric labels
   are static outcomes where a histogram needs one.
+* Cluster coordination publishes low-cardinality Raft leader, role, term,
+  commit/apply, pending-commit, inbound-queue, and command-queue gauges plus
+  transition and fixed-kind failure counters. Numeric member identities are
+  gauge values rather than labels. Envelope and HTTP boundaries propagate
+  validated, bounded W3C `traceparent` and `tracestate` headers, and consumer
+  processing keeps one tracing span active through handler, dead-letter, and
+  acknowledgement work. Libraries install neither an OpenTelemetry provider
+  nor a health endpoint; applications connect the `metrics` recorder and
+  `tracing` subscriber to their chosen OpenTelemetry SDK/exporter.
 * NATS ExactlyOnce deduplication is broker-owned. The adapter records
   `catga.nats.dedup.drops` only when a JetStream publish acknowledgement marks
   the message as duplicate, including explicit destination publication. It

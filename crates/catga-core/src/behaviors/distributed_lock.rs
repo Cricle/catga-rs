@@ -9,7 +9,12 @@ use std::{
 use async_trait::async_trait;
 use tokio::time::sleep;
 
-use crate::{Behavior, CatgaError, CatgaResult, ErrorCode, LeaseStore, Next, Request};
+use crate::{
+    Behavior, CatgaError, CatgaResult, ErrorCode, LeaseStore, Next, Request,
+    telemetry::{
+        distributed_lock_held, record_distributed_lock_acquire, record_distributed_lock_release,
+    },
+};
 
 /// Supplies the named resource guarded by a distributed lock.
 ///
@@ -66,21 +71,34 @@ impl DistributedLockBehavior {
     }
 
     async fn acquire(&self, resource: &str, owner: &str) -> CatgaResult<bool> {
+        let started = Instant::now();
         let deadline = Instant::now() + self.wait_timeout;
-        loop {
-            if self
+        let result = loop {
+            match self
                 .store
                 .try_acquire(resource, owner, self.lease_duration)
-                .await?
+                .await
             {
-                return Ok(true);
+                Ok(true) => break Ok(true),
+                Ok(false) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break Ok(false);
+                    }
+                    sleep(remaining.min(Duration::from_millis(10))).await;
+                }
+                Err(error) => break Err(error),
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            sleep(remaining.min(Duration::from_millis(10))).await;
-        }
+        };
+        record_distributed_lock_acquire(
+            match &result {
+                Ok(true) => "success",
+                Ok(false) => "contention",
+                Err(_) => "failure",
+            },
+            started,
+        );
+        result
     }
 }
 
@@ -99,16 +117,28 @@ where
             ));
         }
 
+        let _held = distributed_lock_held();
         let result = next.run(message).await;
         match self.store.release(&resource, &owner).await {
-            Ok(true) => result,
-            Ok(false) if result.is_ok() => Err(CatgaError::new(
-                ErrorCode::Internal,
-                "distributed lock ownership was lost before release",
-            )),
-            Ok(false) => result,
-            Err(error) if result.is_ok() => Err(error),
-            Err(_) => result,
+            Ok(true) => {
+                record_distributed_lock_release("success");
+                result
+            }
+            Ok(false) => {
+                record_distributed_lock_release("ownership_lost");
+                if result.is_ok() {
+                    Err(CatgaError::new(
+                        ErrorCode::Internal,
+                        "distributed lock ownership was lost before release",
+                    ))
+                } else {
+                    result
+                }
+            }
+            Err(error) => {
+                record_distributed_lock_release("failure");
+                if result.is_ok() { Err(error) } else { result }
+            }
         }
     }
 }

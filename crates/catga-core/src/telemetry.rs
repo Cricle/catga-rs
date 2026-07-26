@@ -7,7 +7,7 @@
 
 use std::{future::Future, time::Instant};
 
-use crate::{CatgaResult, observability::TRACING_TARGET};
+use crate::{CatgaResult, ErrorCode, observability::TRACING_TARGET};
 use tracing::Instrument;
 
 /// Counter incremented once for every instrumented persistence operation.
@@ -22,6 +22,18 @@ pub const PERSISTENCE_OPERATIONS: &str = "catga.persistence.operations";
 /// Its labels are identical to [`PERSISTENCE_OPERATIONS`].
 pub const PERSISTENCE_DURATION: &str = "catga.persistence.duration";
 
+/// Counter incremented when a persistence operation returns a typed conflict.
+///
+/// Records use the same bounded `backend`, `component`, and `operation` labels as
+/// [`PERSISTENCE_OPERATIONS`].
+pub const PERSISTENCE_CONFLICTS: &str = "catga.persistence.conflicts";
+
+/// Counter incremented when a claim or lease operation finds an existing owner.
+///
+/// Records use the same bounded `backend`, `component`, and `operation` labels as
+/// [`PERSISTENCE_OPERATIONS`].
+pub const PERSISTENCE_CONTENTION: &str = "catga.persistence.contention";
+
 /// Counter incremented for every outbox envelope published and acknowledged.
 pub const OUTBOX_PUBLISHED: &str = "catga.outbox.published";
 
@@ -30,6 +42,37 @@ pub const OUTBOX_FAILED: &str = "catga.outbox.failed";
 
 /// Counter incremented when a retry behavior schedules another handler attempt.
 pub const RESILIENCE_RETRIES: &str = "catga.resilience.retries";
+
+/// Gauge containing the number of retry attempts currently waiting for backoff.
+///
+/// This gauge has no labels, so retry inputs and message identifiers cannot increase cardinality.
+pub const RESILIENCE_RETRY_PENDING: &str = "catga.resilience.retry.pending";
+
+/// Counter for bounded Inbox behavior outcomes.
+///
+/// Its sole `outcome` label is one of `processed`, `hit`, `conflict`, `failure`, or `bypassed`.
+pub const INBOX_OUTCOMES: &str = "catga.inbox.outcomes";
+
+/// Histogram that records distributed-lock acquisition latency in milliseconds.
+///
+/// Its sole `outcome` label is one of `success`, `contention`, or `failure`.
+/// Resource keys and owner identifiers are deliberately omitted.
+pub const DISTRIBUTED_LOCK_ACQUIRE_DURATION: &str = "catga.distributed_lock.acquire.duration";
+
+/// Counter for bounded distributed-lock acquisition outcomes.
+///
+/// Its sole `outcome` label is one of `success`, `contention`, or `failure`.
+pub const DISTRIBUTED_LOCK_ACQUIRE_OUTCOMES: &str = "catga.distributed_lock.acquire.outcomes";
+
+/// Gauge containing the number of distributed locks currently held by this process.
+///
+/// This gauge has no labels, so resource keys and owners cannot increase cardinality.
+pub const DISTRIBUTED_LOCK_HELD: &str = "catga.distributed_lock.held";
+
+/// Counter for bounded distributed-lock release outcomes.
+///
+/// Its sole `outcome` label is one of `success`, `failure`, or `ownership_lost`.
+pub const DISTRIBUTED_LOCK_RELEASE_OUTCOMES: &str = "catga.distributed_lock.release.outcomes";
 
 /// Counter incremented when a circuit breaker transitions into its open state.
 pub const RESILIENCE_CIRCUIT_OPENED: &str = "catga.resilience.circuit.opened";
@@ -139,6 +182,23 @@ pub async fn record_persistence<T>(
     result
 }
 
+/// Awaits a boolean claim operation and records a non-error contention outcome.
+///
+/// `backend`, `component`, and `operation` must be static, low-cardinality names. A successful
+/// `false` result retains the generic `success` operation outcome because the backend call itself
+/// succeeded, while also incrementing [`PERSISTENCE_CONTENTION`].
+pub async fn record_persistence_claim(
+    backend: &'static str,
+    component: &'static str,
+    operation: &'static str,
+    future: impl Future<Output = CatgaResult<bool>>,
+) -> CatgaResult<bool> {
+    let mut guard = persistence_operation(backend, component, operation);
+    let result = future.await;
+    guard.complete_claim(&result);
+    result
+}
+
 /// Awaits one transport publish while recording its original result.
 ///
 /// `backend` and `mode` must be static low-cardinality labels, such as
@@ -203,6 +263,62 @@ pub struct MessageReceiveOperation {
     backend: &'static str,
     mode: &'static str,
     completed: bool,
+}
+
+/// RAII guard for one retry attempt waiting in bounded backoff.
+pub(crate) struct RetryPending;
+
+/// RAII guard for one distributed lock held by this process.
+pub(crate) struct DistributedLockHeld;
+
+/// Records one distributed-lock acquisition with a fixed outcome label.
+///
+/// Callers must use one of the values documented by
+/// [`DISTRIBUTED_LOCK_ACQUIRE_OUTCOMES`].
+pub(crate) fn record_distributed_lock_acquire(outcome: &'static str, started: Instant) {
+    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    metrics::counter!(DISTRIBUTED_LOCK_ACQUIRE_OUTCOMES, "outcome" => outcome).increment(1);
+    metrics::histogram!(DISTRIBUTED_LOCK_ACQUIRE_DURATION, "outcome" => outcome)
+        .record(duration_ms);
+}
+
+/// Records one distributed-lock release with a fixed outcome label.
+///
+/// Callers must use one of the values documented by
+/// [`DISTRIBUTED_LOCK_RELEASE_OUTCOMES`].
+pub(crate) fn record_distributed_lock_release(outcome: &'static str) {
+    metrics::counter!(DISTRIBUTED_LOCK_RELEASE_OUTCOMES, "outcome" => outcome).increment(1);
+}
+
+/// Adds one currently held distributed lock until the returned guard is dropped.
+pub(crate) fn distributed_lock_held() -> DistributedLockHeld {
+    metrics::gauge!(DISTRIBUTED_LOCK_HELD).increment(1.0);
+    DistributedLockHeld
+}
+
+/// Records a fixed, low-cardinality Inbox behavior outcome.
+///
+/// Callers must use one of the values documented by [`INBOX_OUTCOMES`].
+pub(crate) fn record_inbox_outcome(outcome: &'static str) {
+    metrics::counter!(INBOX_OUTCOMES, "outcome" => outcome).increment(1);
+}
+
+/// Adds one retry to the pending-backoff gauge until the returned guard is dropped.
+pub(crate) fn retry_pending() -> RetryPending {
+    metrics::gauge!(RESILIENCE_RETRY_PENDING).increment(1.0);
+    RetryPending
+}
+
+impl Drop for RetryPending {
+    fn drop(&mut self) {
+        metrics::gauge!(RESILIENCE_RETRY_PENDING).decrement(1.0);
+    }
+}
+
+impl Drop for DistributedLockHeld {
+    fn drop(&mut self) {
+        metrics::gauge!(DISTRIBUTED_LOCK_HELD).decrement(1.0);
+    }
 }
 
 impl MessagePublishOperation {
@@ -345,12 +461,35 @@ impl Operation {
     /// the exact same value and error without telemetry modifying it.
     pub fn complete<T>(&mut self, result: &CatgaResult<T>) {
         match result {
-            Ok(_) => self.record("success", None),
-            Err(error) => self.record("failure", Some(error.message())),
+            Ok(_) => self.record("success", None, false),
+            Err(error) => self.record(
+                "failure",
+                Some(error.message()),
+                error.code() == ErrorCode::Conflict,
+            ),
         }
     }
 
-    fn record(&mut self, outcome: &'static str, error: Option<&str>) {
+    /// Records a boolean claim result and counts an owned/contended `false` result separately.
+    ///
+    /// Repeated calls are harmless; only the first result produces metrics.
+    pub fn complete_claim(&mut self, result: &CatgaResult<bool>) {
+        if self.completed {
+            return;
+        }
+        if matches!(result, Ok(false)) {
+            metrics::counter!(
+                PERSISTENCE_CONTENTION,
+                "backend" => self.backend,
+                "component" => self.component,
+                "operation" => self.operation,
+            )
+            .increment(1);
+        }
+        self.complete(result);
+    }
+
+    fn record(&mut self, outcome: &'static str, error: Option<&str>, conflict: bool) {
         if self.completed {
             return;
         }
@@ -378,11 +517,20 @@ impl Operation {
             "outcome" => outcome,
         )
         .record(duration_ms);
+        if conflict {
+            metrics::counter!(
+                PERSISTENCE_CONFLICTS,
+                "backend" => self.backend,
+                "component" => self.component,
+                "operation" => self.operation,
+            )
+            .increment(1);
+        }
     }
 }
 
 impl Drop for Operation {
     fn drop(&mut self) {
-        self.record("aborted", None);
+        self.record("aborted", None, false);
     }
 }

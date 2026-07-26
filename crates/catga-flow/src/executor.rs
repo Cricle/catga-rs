@@ -239,18 +239,44 @@ where
         state: FlowState,
         result: FlowResult,
     ) -> CatgaResult<FlowResult> {
-        let next = match result.error() {
-            Some(error) => state
-                .clone()
-                .at_step(result.completed_steps())
-                .failed(error.clone())
-                .next_version(),
-            None => state.clone().done(result.completed_steps()).next_version(),
-        };
-        if self.store.update(state.version(), next).await? {
-            return Ok(result);
+        let version = state.version();
+        let mut current = state;
+        loop {
+            let next = terminal_state(&current, &result);
+            if self.store.update(version, next).await? {
+                return Ok(result);
+            }
+
+            let Some(observed) = self.store.get(current.id()).await? else {
+                return Err(CatgaError::new(
+                    ErrorCode::Transient,
+                    "flow disappeared while saving its result",
+                ));
+            };
+            if observed.status().is_terminal() {
+                if let Some(terminal) = terminal_result(&observed) {
+                    return terminal;
+                }
+                return Err(CatgaError::new(
+                    ErrorCode::Internal,
+                    "terminal flow state has no result",
+                ));
+            }
+            if observed.status() == FlowStatus::Running
+                && observed.owner() == Some(self.owner.as_ref())
+                && observed.version() == version
+            {
+                // A heartbeat renews the physical store record without changing this logical
+                // version. Rebuild from it and retry so that the terminal transition retains
+                // the renewed heartbeat rather than treating retained ownership as a conflict.
+                current = observed;
+                continue;
+            }
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "flow ownership changed before its result was saved",
+            ));
         }
-        self.load_terminal(state.id()).await
     }
 
     /// Records liveness for this executor's currently owned state.
@@ -314,27 +340,23 @@ where
             "flow ownership changed before execution began",
         ))
     }
-
-    async fn load_terminal(&self, id: &str) -> CatgaResult<FlowResult> {
-        let Some(current) = self.store.get(id).await? else {
-            return Err(CatgaError::new(
-                ErrorCode::Transient,
-                "flow disappeared while saving its result",
-            ));
-        };
-        terminal_result(&current).ok_or_else(|| {
-            CatgaError::new(
-                ErrorCode::Transient,
-                "flow ownership changed before its result was saved",
-            )
-        })?
-    }
 }
 
 fn is_stale(heartbeat: SystemTime, stale_after: Duration) -> bool {
     SystemTime::now()
         .duration_since(heartbeat)
         .is_ok_and(|elapsed| elapsed >= stale_after)
+}
+
+fn terminal_state(state: &FlowState, result: &FlowResult) -> FlowState {
+    match result.error() {
+        Some(error) => state
+            .clone()
+            .at_step(result.completed_steps())
+            .failed(error.clone())
+            .next_version(),
+        None => state.clone().done(result.completed_steps()).next_version(),
+    }
 }
 
 fn terminal_result(state: &FlowState) -> Option<CatgaResult<FlowResult>> {

@@ -5,6 +5,7 @@ mod validation;
 
 use std::{
     collections::HashMap,
+    future::Future,
     io,
     panic::AssertUnwindSafe,
     sync::Arc,
@@ -25,8 +26,9 @@ use catga_cluster::{
     ClusterForwarder, RaftMember, RaftMessage, RaftTransport, RaftTransportResult,
 };
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, Event, Mediator, Request, TraceContext,
-    current_correlation_id, current_correlation_value, current_transport_context,
+    CatgaError, CatgaResult, Envelope, ErrorCode, Event, Mediator, MessageMetadata, Request,
+    TraceContext, current_correlation_id, current_correlation_value, current_transport_context,
+    scope_transport_context,
 };
 use futures::FutureExt;
 use protobuf::Message as ProtobufMessage;
@@ -674,6 +676,9 @@ pub fn raft_message_route(inbox: mpsc::Sender<RaftMessage>) -> Router {
 }
 
 /// Builds the leader-side forwarding route for one explicitly registered request type.
+///
+/// Valid inbound W3C trace context is scoped through the mediator request and any nested
+/// publication, because this route uses the same typed mediator router as [`mediator_route`].
 pub fn leader_forward_route<M>(mediator: Arc<Mediator>) -> Router
 where
     M: Request + DeserializeOwned,
@@ -690,7 +695,8 @@ where
 /// Builds one typed JSON endpoint that dispatches its request through a mediator.
 ///
 /// Route registration is explicit and static, keeping the hot request path free of reflection,
-/// service lookup, and route-table locks.
+/// service lookup, and route-table locks. Valid inbound W3C trace context remains scoped through
+/// the complete mediator request, including nested publication.
 pub fn mediator_route<M>(path: &str, mediator: Arc<Mediator>) -> CatgaResult<Router>
 where
     M: Request + DeserializeOwned,
@@ -722,6 +728,8 @@ where
 }
 
 /// Builds one typed JSON endpoint that publishes an event through a mediator.
+///
+/// Valid inbound W3C trace context remains scoped through the complete event publication.
 pub fn event_route<E>(path: &str, mediator: Arc<Mediator>) -> CatgaResult<Router>
 where
     E: Event + DeserializeOwned,
@@ -746,16 +754,22 @@ where
     }
     Ok(Router::new().route(
         path,
-        on(method.filter(), move |Json(event): Json<E>| {
-            let mediator = Arc::clone(&mediator);
-            async move {
-                mediator
-                    .publish(event)
+        on(
+            method.filter(),
+            move |headers: HeaderMap, Json(event): Json<E>| {
+                let mediator = Arc::clone(&mediator);
+                async move {
+                    scope_inbound_trace_context(&headers, async move {
+                        mediator
+                            .publish(event)
+                            .await
+                            .map(|()| StatusCode::NO_CONTENT)
+                            .map_err(CatgaHttpError::from)
+                    })
                     .await
-                    .map(|()| StatusCode::NO_CONTENT)
-                    .map_err(CatgaHttpError::from)
-            }
-        }),
+                }
+            },
+        ),
     ))
 }
 
@@ -766,17 +780,55 @@ where
 {
     Router::new().route(
         path,
-        on(method.filter(), move |Json(message): Json<M>| {
-            let mediator = Arc::clone(&mediator);
-            async move {
-                mediator
-                    .send(message)
+        on(
+            method.filter(),
+            move |headers: HeaderMap, Json(message): Json<M>| {
+                let mediator = Arc::clone(&mediator);
+                async move {
+                    scope_inbound_trace_context(&headers, async move {
+                        mediator
+                            .send(message)
+                            .await
+                            .map(Json)
+                            .map_err(CatgaHttpError::from)
+                    })
                     .await
-                    .map(Json)
-                    .map_err(CatgaHttpError::from)
-            }
-        }),
+                }
+            },
+        ),
     )
+}
+
+/// Scopes a validated HTTP W3C context using Catga's existing transport context API.
+///
+/// The minimal envelope is local to the HTTP boundary; it carries no payload and exists only to
+/// retain the validated propagation headers while the supplied future runs. An invalid parent
+/// leaves the future unscoped. A malformed state is already discarded by [`TraceContext::parse`]
+/// while retaining a valid parent.
+async fn scope_inbound_trace_context<T>(headers: &HeaderMap, future: impl Future<Output = T>) -> T {
+    let Some(traceparent) = headers
+        .get(catga_core::TRACEPARENT_HEADER)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return future.await;
+    };
+    let tracestate = headers
+        .get(catga_core::TRACESTATE_HEADER)
+        .and_then(|value| value.to_str().ok());
+    let Some(context) = TraceContext::parse(traceparent, tracestate) else {
+        return future.await;
+    };
+    let Ok(headers) = context.inject_into_envelope_headers(None) else {
+        return future.await;
+    };
+    let envelope = Envelope::new(
+        0,
+        "catga.http.inbound",
+        Vec::new(),
+        MessageMetadata::new(0, None),
+    )
+    .with_headers(headers);
+    scope_transport_context(&envelope, future).await
 }
 
 /// Reads a numeric correlation identifier or allocates a monotonic process-local fallback.

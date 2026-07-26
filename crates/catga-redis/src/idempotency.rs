@@ -143,7 +143,7 @@ impl RedisIdempotency {
 #[async_trait]
 impl IdempotencyStore for RedisIdempotency {
     async fn try_claim(&self, key: &str) -> CatgaResult<bool> {
-        telemetry::record_persistence("redis", "idempotency", "try_claim", async {
+        telemetry::record_persistence_claim("redis", "idempotency", "try_claim", async {
             let mut connection = self.connection.clone();
             Script::new(CLAIM)
                 .key(self.key(key))

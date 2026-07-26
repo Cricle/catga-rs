@@ -51,7 +51,7 @@ impl LeaseStore for MemoryLeases {
             }
             Entry::Occupied(_) => false,
         });
-        operation.complete(&result);
+        operation.complete_claim(&result);
         result
     }
     async fn renew(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {

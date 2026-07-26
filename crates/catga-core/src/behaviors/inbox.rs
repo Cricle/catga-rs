@@ -61,32 +61,63 @@ where
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         let message_id = message.inbox_message_id();
         if message_id == 0 {
-            return next.run(message).await;
+            let result = next.run(message).await;
+            crate::telemetry::record_inbox_outcome(if result.is_ok() {
+                "bypassed"
+            } else {
+                "failure"
+            });
+            return result;
         }
-        if !self
-            .store
-            .try_claim_for(message_id, self.claim_lease)
-            .await?
-        {
-            return self
-                .store
-                .result(message_id)
-                .await?
-                .map(|cached| self.codec.decode(&cached))
-                .transpose()?
-                .ok_or_else(|| {
-                    CatgaError::new(ErrorCode::Conflict, "inbox message is already claimed")
-                });
+        let claimed = match self.store.try_claim_for(message_id, self.claim_lease).await {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                crate::telemetry::record_inbox_outcome("failure");
+                return Err(error);
+            }
+        };
+        if !claimed {
+            let cached = match self.store.result(message_id).await {
+                Ok(cached) => cached,
+                Err(error) => {
+                    crate::telemetry::record_inbox_outcome("failure");
+                    return Err(error);
+                }
+            };
+            let Some(cached) = cached else {
+                crate::telemetry::record_inbox_outcome("conflict");
+                return Err(CatgaError::new(
+                    ErrorCode::Conflict,
+                    "inbox message is already claimed",
+                ));
+            };
+            let result = self.codec.decode(&cached);
+            crate::telemetry::record_inbox_outcome(if result.is_ok() { "hit" } else { "failure" });
+            return result;
         }
 
         match next.run(message).await {
             Ok(response) => {
-                let cached = self.codec.encode(&response)?;
-                self.store.complete(message_id, Some(cached)).await?;
+                let cached = match self.codec.encode(&response) {
+                    Ok(cached) => cached,
+                    Err(error) => {
+                        crate::telemetry::record_inbox_outcome("failure");
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = self.store.complete(message_id, Some(cached)).await {
+                    crate::telemetry::record_inbox_outcome("failure");
+                    return Err(error);
+                }
+                crate::telemetry::record_inbox_outcome("processed");
                 Ok(response)
             }
             Err(error) => {
-                self.store.fail(message_id).await?;
+                if let Err(store_error) = self.store.fail(message_id).await {
+                    crate::telemetry::record_inbox_outcome("failure");
+                    return Err(store_error);
+                }
+                crate::telemetry::record_inbox_outcome("failure");
                 Err(error)
             }
         }

@@ -224,6 +224,7 @@ impl ResilienceExecutor {
                     metrics::counter!(RESILIENCE_RETRIES).increment(1);
                     let delay = self.retry_jitter.delay(self.options.retry_delay(retry));
                     if !delay.is_zero() {
+                        let _pending = crate::telemetry::retry_pending();
                         tokio::select! { _ = cancellation.cancelled() => return Err(cancelled()), _ = sleep(delay) => {} }
                     }
                 }

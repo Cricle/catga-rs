@@ -16,11 +16,11 @@ use catga_cluster::{
     RaftStateMachineDriver, RaftStateMachineRuntime, RaftStateMachineRuntimeError, RaftTransport,
 };
 use catga_core::{
-    CatgaError, CatgaResult, CircuitBreakerBehavior, Envelope, ErrorCode, EventStore, Handler,
-    IdempotencyStore, InboxStore, LeaseStore, LoggingBehavior, Mediator, MessageMetadata,
-    MessageTransport, OutboxMessage, OutboxProcessor, OutboxStore, Pipeline, QualityOfService,
-    Registry, Request, RetryBehavior, TracingBehavior, current_correlation_id,
-    scope_correlation_id,
+    CachedResultCodec, CatgaError, CatgaResult, CircuitBreakerBehavior, DistributedLockBehavior,
+    DistributedLockKey, Envelope, ErrorCode, EventStore, Handler, IdempotencyStore, InboxBehavior,
+    InboxKey, InboxStore, LeaseStore, LoggingBehavior, Mediator, MessageMetadata, MessageTransport,
+    OutboxMessage, OutboxProcessor, OutboxStore, Pipeline, QualityOfService, Registry, Request,
+    RetryBehavior, TracingBehavior, current_correlation_id, scope_correlation_id,
 };
 use catga_flow::{FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler};
 use catga_memory::{
@@ -145,6 +145,133 @@ impl Handler<RetryReconcile> for AlwaysTransient {
             "backend is unavailable",
         ))
     }
+}
+
+#[derive(Clone, Copy)]
+struct ObservedInboxRequest;
+
+impl catga_core::Message for ObservedInboxRequest {}
+
+impl Request for ObservedInboxRequest {
+    type Response = ();
+}
+
+impl InboxKey for ObservedInboxRequest {
+    fn inbox_message_id(&self) -> u64 {
+        9_901
+    }
+}
+
+struct ObservedInboxHandler(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Handler<ObservedInboxRequest> for ObservedInboxHandler {
+    async fn handle(&self, _: ObservedInboxRequest) -> CatgaResult<()> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+struct UnitResultCodec;
+
+impl CachedResultCodec<()> for UnitResultCodec {
+    fn encode(&self, _value: &()) -> CatgaResult<Arc<[u8]>> {
+        Ok(Arc::from([]))
+    }
+
+    fn decode(&self, bytes: &[u8]) -> CatgaResult<()> {
+        if bytes.is_empty() {
+            Ok(())
+        } else {
+            Err(CatgaError::new(
+                ErrorCode::Internal,
+                "cached unit response is malformed",
+            ))
+        }
+    }
+}
+
+struct ObservedLockWork;
+
+impl catga_core::Message for ObservedLockWork {}
+
+impl Request for ObservedLockWork {
+    type Response = ();
+}
+
+impl DistributedLockKey for ObservedLockWork {
+    fn distributed_lock_key(&self) -> Box<str> {
+        "inventory:lock-observability".into()
+    }
+}
+
+struct ObservedLockHandler(MetricRecorder);
+
+#[async_trait]
+impl Handler<ObservedLockWork> for ObservedLockHandler {
+    async fn handle(&self, _: ObservedLockWork) -> CatgaResult<()> {
+        assert_eq!(self.0.gauge("catga.distributed_lock.held|"), 1.0);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ObservedLeaseBehavior {
+    Success,
+    Contention,
+    AcquireFailure,
+    ReleaseFailure,
+    OwnershipLost,
+}
+
+struct ObservedLeaseStore(ObservedLeaseBehavior);
+
+#[async_trait]
+impl LeaseStore for ObservedLeaseStore {
+    async fn try_acquire(&self, _: &str, _: &str, _: Duration) -> CatgaResult<bool> {
+        match self.0 {
+            ObservedLeaseBehavior::Success
+            | ObservedLeaseBehavior::ReleaseFailure
+            | ObservedLeaseBehavior::OwnershipLost => Ok(true),
+            ObservedLeaseBehavior::Contention => Ok(false),
+            ObservedLeaseBehavior::AcquireFailure => Err(CatgaError::new(
+                ErrorCode::Unavailable,
+                "lease store is unavailable",
+            )),
+        }
+    }
+
+    async fn renew(&self, _: &str, _: &str, _: Duration) -> CatgaResult<bool> {
+        Ok(true)
+    }
+
+    async fn release(&self, _: &str, _: &str) -> CatgaResult<bool> {
+        match self.0 {
+            ObservedLeaseBehavior::ReleaseFailure => Err(CatgaError::new(
+                ErrorCode::Unavailable,
+                "lease store is unavailable",
+            )),
+            ObservedLeaseBehavior::OwnershipLost => Ok(false),
+            _ => Ok(true),
+        }
+    }
+}
+
+async fn observe_distributed_lock(
+    behavior: ObservedLeaseBehavior,
+    recorder: MetricRecorder,
+) -> CatgaResult<()> {
+    let mut registry = Registry::new();
+    registry
+        .register_request::<ObservedLockWork, _>(ObservedLockHandler(recorder))
+        .expect("observability handler is registered");
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(DistributedLockBehavior::new(
+        Arc::new(ObservedLeaseStore(behavior)),
+        "observability",
+        Duration::from_secs(1),
+    ));
+    mediator.send_with(ObservedLockWork, &pipeline).await
 }
 
 #[derive(Clone, Default)]
@@ -997,6 +1124,148 @@ async fn durable_behavior_metrics_count_completed_deliveries_retries_and_circuit
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn distributed_lock_metrics_record_acquisition_release_and_held_lock_outcomes() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+
+    observe_distributed_lock(ObservedLeaseBehavior::Success, recorder.clone())
+        .await
+        .expect("owned lock is released successfully");
+    assert_eq!(
+        observe_distributed_lock(ObservedLeaseBehavior::Contention, recorder.clone())
+            .await
+            .expect_err("contended lock is rejected")
+            .code(),
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        observe_distributed_lock(ObservedLeaseBehavior::AcquireFailure, recorder.clone())
+            .await
+            .expect_err("acquisition error is preserved")
+            .code(),
+        ErrorCode::Unavailable
+    );
+    assert_eq!(
+        observe_distributed_lock(ObservedLeaseBehavior::ReleaseFailure, recorder.clone())
+            .await
+            .expect_err("release error is preserved")
+            .code(),
+        ErrorCode::Unavailable
+    );
+    assert_eq!(
+        observe_distributed_lock(ObservedLeaseBehavior::OwnershipLost, recorder.clone())
+            .await
+            .expect_err("lost ownership is reported")
+            .code(),
+        ErrorCode::Internal
+    );
+    drop(guard);
+
+    assert_eq!(
+        recorder.histogram_samples("catga.distributed_lock.acquire.duration|outcome=success"),
+        3
+    );
+    assert_eq!(
+        recorder.histogram_samples("catga.distributed_lock.acquire.duration|outcome=contention"),
+        1
+    );
+    assert_eq!(
+        recorder.histogram_samples("catga.distributed_lock.acquire.duration|outcome=failure"),
+        1
+    );
+    assert_eq!(
+        recorder.counter("catga.distributed_lock.acquire.outcomes|outcome=success"),
+        3
+    );
+    assert_eq!(
+        recorder.counter("catga.distributed_lock.acquire.outcomes|outcome=contention"),
+        1
+    );
+    assert_eq!(
+        recorder.counter("catga.distributed_lock.acquire.outcomes|outcome=failure"),
+        1
+    );
+    assert_eq!(
+        recorder.counter("catga.distributed_lock.release.outcomes|outcome=success"),
+        1
+    );
+    assert_eq!(
+        recorder.counter("catga.distributed_lock.release.outcomes|outcome=failure"),
+        1
+    );
+    assert_eq!(
+        recorder.counter("catga.distributed_lock.release.outcomes|outcome=ownership_lost"),
+        1
+    );
+    assert_eq!(recorder.gauge("catga.distributed_lock.held|"), 0.0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cqrs_observability_metrics_record_retry_backlog_and_inbox_hits() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+
+    let mut retry_registry = Registry::new();
+    retry_registry
+        .register_request::<RetryReconcile, _>(SucceedsAfterOneRetry(AtomicUsize::new(0)))
+        .expect("one retry handler is accepted");
+    let retry_mediator = Mediator::new(retry_registry);
+    let retry_pipeline = Pipeline::new().with(RetryBehavior::new(1, Duration::from_millis(50)));
+    let mut retry = Box::pin(retry_mediator.send_with(RetryReconcile, &retry_pipeline));
+    tokio::select! {
+        result = &mut retry => panic!("retry completed before its configured backoff: {result:?}"),
+        () = tokio::time::sleep(Duration::from_millis(5)) => {}
+    }
+    assert_eq!(recorder.gauge("catga.resilience.retry.pending|"), 1.0);
+    retry.await.expect("retry completes after backoff");
+    assert_eq!(recorder.gauge("catga.resilience.retry.pending|"), 0.0);
+
+    let mut cancelled_retry_registry = Registry::new();
+    cancelled_retry_registry
+        .register_request::<RetryReconcile, _>(AlwaysTransient)
+        .expect("transient retry handler is accepted");
+    let cancelled_retry_mediator = Mediator::new(cancelled_retry_registry);
+    let mut cancelled_retry =
+        Box::pin(cancelled_retry_mediator.send_with(RetryReconcile, &retry_pipeline));
+    tokio::select! {
+        result = &mut cancelled_retry => panic!("retry completed before its configured backoff: {result:?}"),
+        () = tokio::time::sleep(Duration::from_millis(5)) => {}
+    }
+    assert_eq!(recorder.gauge("catga.resilience.retry.pending|"), 1.0);
+    drop(cancelled_retry);
+    assert_eq!(recorder.gauge("catga.resilience.retry.pending|"), 0.0);
+
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let mut inbox_registry = Registry::new();
+    inbox_registry
+        .register_request::<ObservedInboxRequest, _>(ObservedInboxHandler(Arc::clone(
+            &handler_calls,
+        )))
+        .expect("inbox handler is accepted");
+    let inbox_mediator = Mediator::new(inbox_registry);
+    let inbox_pipeline = Pipeline::new().with(InboxBehavior::new(
+        Arc::new(MemoryInbox::default()),
+        UnitResultCodec,
+    ));
+    inbox_mediator
+        .send_with(ObservedInboxRequest, &inbox_pipeline)
+        .await
+        .expect("first inbox request is processed");
+    inbox_mediator
+        .send_with(ObservedInboxRequest, &inbox_pipeline)
+        .await
+        .expect("second inbox request uses the cache");
+    drop(guard);
+
+    assert_eq!(handler_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        recorder.counter("catga.inbox.outcomes|outcome=processed"),
+        1
+    );
+    assert_eq!(recorder.counter("catga.inbox.outcomes|outcome=hit"), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labels() {
     let recorder = MetricRecorder::default();
     let guard = metrics::set_default_local_recorder(&recorder);
@@ -1012,6 +1281,18 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
         .append("order-73", vec![envelope], None)
         .await
         .expect("nonempty event batch succeeds");
+    let conflicting = Envelope::new(
+        74,
+        "order.updated",
+        vec![7, 4],
+        MessageMetadata::new(74, None),
+    );
+    assert!(
+        events
+            .append("order-73", vec![conflicting], Some(-1))
+            .await
+            .is_err()
+    );
     assert!(events.append("order-73", Vec::new(), None).await.is_err());
     events
         .read_page("order-73", 0, 8)
@@ -1136,6 +1417,12 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
             .expect("lease acquisition succeeds")
     );
     assert!(
+        !leases
+            .try_acquire("outbox", "worker-b", Duration::from_secs(1))
+            .await
+            .expect("owned lease reports contention without failing")
+    );
+    assert!(
         leases
             .renew("outbox", "worker-a", Duration::from_secs(1))
             .await
@@ -1158,6 +1445,12 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
     assert_eq!(
         recorder.counter(
             "catga.persistence.operations|backend=memory,component=event_store,operation=append,outcome=failure"
+        ),
+        2
+    );
+    assert_eq!(
+        recorder.counter(
+            "catga.persistence.conflicts|backend=memory,component=event_store,operation=append"
         ),
         1
     );
@@ -1182,6 +1475,12 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
     assert_eq!(
         recorder.counter(
             "catga.persistence.operations|backend=memory,component=lease,operation=renew,outcome=success"
+        ),
+        1
+    );
+    assert_eq!(
+        recorder.counter(
+            "catga.persistence.contention|backend=memory,component=lease,operation=try_acquire"
         ),
         1
     );

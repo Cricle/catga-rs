@@ -136,25 +136,34 @@ fn trace_context_round_trips_through_bounded_envelope_headers() {
 }
 
 #[test]
-fn trace_context_rejects_invalid_or_unbounded_w3c_values() {
-    assert!(
-        TraceContext::parse(
-            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
-            Some(" tenant@system = state, 1vendor = ok "),
-        )
-        .is_some()
+fn trace_context_parses_w3c_grammar_and_drops_invalid_tracestate() {
+    let traceparent = "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra";
+    let context = TraceContext::parse(traceparent, Some("\t1tenant@system= state, vendor1=ok\t"))
+        .expect("valid traceparent and multi-tenant tracestate are accepted");
+    assert_eq!(
+        context.tracestate(),
+        Some("\t1tenant@system= state, vendor1=ok\t")
     );
+
+    let oversized = "a=b".repeat(300);
+    for invalid_tracestate in [
+        "1vendor=invalid",
+        "tenant@1system=invalid",
+        "vendor =invalid",
+        "vendor=contains\ttab",
+        "vendor=state,,next=value",
+        "",
+        " \t ",
+        oversized.as_str(),
+    ] {
+        let context = TraceContext::parse(traceparent, Some(invalid_tracestate))
+            .expect("an invalid tracestate does not invalidate its traceparent");
+        assert_eq!(context.tracestate(), None);
+    }
     assert!(
         TraceContext::parse(
             "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-",
             None,
-        )
-        .is_none()
-    );
-    assert!(
-        TraceContext::parse(
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-            Some("vendor=contains\ttab"),
         )
         .is_none()
     );
@@ -163,13 +172,6 @@ fn trace_context_rejects_invalid_or_unbounded_w3c_values() {
         TraceContext::parse(
             "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
             None,
-        )
-        .is_none()
-    );
-    assert!(
-        TraceContext::parse(
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-            Some(&"a=b".repeat(300)),
         )
         .is_none()
     );

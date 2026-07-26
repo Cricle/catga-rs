@@ -43,7 +43,7 @@ impl NatsLeases {
 #[async_trait]
 impl LeaseStore for NatsLeases {
     async fn try_acquire(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
-        telemetry::record_persistence("nats", "lease", "try_acquire", async {
+        telemetry::record_persistence_claim("nats", "lease", "try_acquire", async {
             let value = value(owner, ttl);
             if self
                 .store

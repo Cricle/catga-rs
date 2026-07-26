@@ -15,12 +15,37 @@ use sha2::{Digest, Sha256};
 use crate::record::{create_record, decode_record};
 
 const MAX_CAS_RETRIES: usize = 8;
+const MAX_INDEX_PAGE_ENTRIES: usize = 32;
 
-/// A JetStream KV-backed flow store with a separate, compact flow-type index.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+struct TypeIndex {
+    tail_page: u64,
+    scan_page: u64,
+    scan_offset: u32,
+}
+
+impl Default for TypeIndex {
+    fn default() -> Self {
+        Self {
+            tail_page: 0,
+            scan_page: 0,
+            scan_offset: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+struct IndexMarker {
+    page: u64,
+}
+
+/// A JetStream KV-backed flow store with a paged, compact flow-type index.
 ///
-/// Flow identities and types are SHA-256-derived keys. Claims only inspect flows indexed for the
-/// requested type, rather than scanning the state bucket, while revisions provide cross-process
-/// optimistic concurrency.
+/// Flow identities and types are SHA-256-derived keys. Each type page has a fixed number of
+/// identities, and a revision-safe cursor visits one candidate at a time. This bounds recovery
+/// work while eventually revisiting every indexed flow without scanning the state bucket. Terminal
+/// and dangling identities are pruned best-effort, so cleanup races never change a committed flow
+/// transition into an error.
 pub struct NatsFlows {
     states: kv::Store,
     index: kv::Store,
@@ -55,13 +80,13 @@ impl NatsFlows {
     }
 
     async fn index_flow(&self, flow_type: &str, id: &str) -> CatgaResult<()> {
-        let key = type_key(flow_type);
+        let metadata_key = type_metadata_key(flow_type);
+        let marker_key = type_marker_key(flow_type, id);
         for _ in 0..MAX_CAS_RETRIES {
-            let entry = self.index.entry(&key).await.map_err(map_error)?;
+            let entry = self.index.entry(&metadata_key).await.map_err(map_error)?;
             let Some(entry) = entry else {
-                let values = vec![Box::<str>::from(id)];
-                if create(&self.index, &key, &values).await? {
-                    return Ok(());
+                if create(&self.index, &metadata_key, &TypeIndex::default()).await? {
+                    continue;
                 }
                 continue;
             };
@@ -69,30 +94,207 @@ impl NatsFlows {
                 entry.operation,
                 kv::Operation::Delete | kv::Operation::Purge
             ) {
-                let values = vec![Box::<str>::from(id)];
-                if create(&self.index, &key, &values).await? {
+                if create(&self.index, &metadata_key, &TypeIndex::default()).await? {
+                    continue;
+                }
+                continue;
+            }
+            let metadata_record = decode_record(&entry.value)?;
+            let metadata = decode::<TypeIndex>(metadata_record.payload())?;
+            let marker_entry = self.index.entry(&marker_key).await.map_err(map_error)?;
+            let Some(marker_entry) = marker_entry else {
+                if create(
+                    &self.index,
+                    &marker_key,
+                    &IndexMarker {
+                        page: metadata.tail_page,
+                    },
+                )
+                .await?
+                {
+                    continue;
+                }
+                continue;
+            };
+            if matches!(
+                marker_entry.operation,
+                kv::Operation::Delete | kv::Operation::Purge
+            ) {
+                if create(
+                    &self.index,
+                    &marker_key,
+                    &IndexMarker {
+                        page: metadata.tail_page,
+                    },
+                )
+                .await?
+                {
+                    continue;
+                }
+                continue;
+            }
+            let marker_record = decode_record(&marker_entry.value)?;
+            let marker = decode::<IndexMarker>(marker_record.payload())?;
+            let page_key = type_page_key(flow_type, marker.page);
+            let page = self.index.entry(&page_key).await.map_err(map_error)?;
+            let Some(page) = page else {
+                if create(&self.index, &page_key, &vec![Box::<str>::from(id)]).await? {
+                    return Ok(());
+                }
+                continue;
+            };
+            if matches!(page.operation, kv::Operation::Delete | kv::Operation::Purge) {
+                if create(&self.index, &page_key, &vec![Box::<str>::from(id)]).await? {
                     return Ok(());
                 }
                 continue;
             }
-            let record = decode_record(&entry.value)?;
-            let mut values = decode::<Vec<Box<str>>>(record.payload())?;
+            let page_record = decode_record(&page.value)?;
+            let mut values = decode::<Vec<Box<str>>>(page_record.payload())?;
+            validate_index_page(&values)?;
             if values.iter().any(|value| value.as_ref() == id) {
                 return Ok(());
             }
-            values.push(id.into());
+            if values.len() < MAX_INDEX_PAGE_ENTRIES {
+                values.push(id.into());
+                if compare_and_set(
+                    &self.index,
+                    &page_key,
+                    page_record.with_payload(&encode(&values)?),
+                    page.revision,
+                )
+                .await?
+                {
+                    return Ok(());
+                }
+                continue;
+            }
+            if marker.page != metadata.tail_page {
+                let next = IndexMarker {
+                    page: metadata.tail_page,
+                };
+                if compare_and_set(
+                    &self.index,
+                    &marker_key,
+                    marker_record.with_payload(&encode(&next)?),
+                    marker_entry.revision,
+                )
+                .await?
+                {
+                    continue;
+                }
+                continue;
+            }
+            let next_page = metadata.tail_page.checked_add(1).ok_or_else(|| {
+                CatgaError::new(
+                    ErrorCode::Transient,
+                    "NATS flow type index page limit reached",
+                )
+            })?;
+            let next = TypeIndex {
+                tail_page: next_page,
+                ..metadata
+            };
             if compare_and_set(
                 &self.index,
-                &key,
-                record.with_payload(&encode(&values)?),
+                &metadata_key,
+                metadata_record.with_payload(&encode(&next)?),
                 entry.revision,
             )
             .await?
             {
-                return Ok(());
+                continue;
             }
         }
         Err(cas_error("index flow"))
+    }
+
+    async fn next_indexed_flow(&self, flow_type: &str) -> CatgaResult<Option<Box<str>>> {
+        let metadata_key = type_metadata_key(flow_type);
+        for _ in 0..MAX_CAS_RETRIES {
+            let Some(entry) = self.index.entry(&metadata_key).await.map_err(map_error)? else {
+                return Ok(None);
+            };
+            if matches!(
+                entry.operation,
+                kv::Operation::Delete | kv::Operation::Purge
+            ) {
+                return Ok(None);
+            }
+            let metadata_record = decode_record(&entry.value)?;
+            let metadata = decode::<TypeIndex>(metadata_record.payload())?;
+            let page_key = type_page_key(flow_type, metadata.scan_page);
+            let page = self.index.entry(&page_key).await.map_err(map_error)?;
+            let candidate = match page {
+                Some(page) if matches!(page.operation, kv::Operation::Put) => {
+                    let page_record = decode_record(&page.value)?;
+                    let ids = decode::<Vec<Box<str>>>(page_record.payload())?;
+                    validate_index_page(&ids)?;
+                    let offset = usize::try_from(metadata.scan_offset).map_err(|_| {
+                        CatgaError::new(ErrorCode::Internal, "NATS flow index offset is invalid")
+                    })?;
+                    ids.get(offset).cloned()
+                }
+                _ => None,
+            };
+            let next = next_index_cursor(&metadata, candidate.is_some())?;
+            if compare_and_set(
+                &self.index,
+                &metadata_key,
+                metadata_record.with_payload(&encode(&next)?),
+                entry.revision,
+            )
+            .await?
+            {
+                return Ok(candidate);
+            }
+        }
+        Err(cas_error("advance flow index cursor"))
+    }
+
+    async fn prune_index(&self, flow_type: &str, id: &str) -> CatgaResult<()> {
+        let marker_key = type_marker_key(flow_type, id);
+        for _ in 0..MAX_CAS_RETRIES {
+            let Some(marker_entry) = self.index.entry(&marker_key).await.map_err(map_error)? else {
+                return Ok(());
+            };
+            if matches!(
+                marker_entry.operation,
+                kv::Operation::Delete | kv::Operation::Purge
+            ) {
+                return Ok(());
+            }
+            let marker_record = decode_record(&marker_entry.value)?;
+            let marker = decode::<IndexMarker>(marker_record.payload())?;
+            let page_key = type_page_key(flow_type, marker.page);
+            let page = self.index.entry(&page_key).await.map_err(map_error)?;
+            if let Some(page) = page.filter(|page| matches!(page.operation, kv::Operation::Put)) {
+                let page_record = decode_record(&page.value)?;
+                let mut ids = decode::<Vec<Box<str>>>(page_record.payload())?;
+                validate_index_page(&ids)?;
+                let original_len = ids.len();
+                ids.retain(|indexed_id| indexed_id.as_ref() != id);
+                if ids.len() != original_len {
+                    if compare_and_set(
+                        &self.index,
+                        &page_key,
+                        page_record.with_payload(&encode(&ids)?),
+                        page.revision,
+                    )
+                    .await?
+                    {
+                        continue;
+                    }
+                    continue;
+                }
+            }
+            self.index
+                .delete_expect_revision(&marker_key, Some(marker_entry.revision))
+                .await
+                .map_err(map_error)?;
+            return Ok(());
+        }
+        Err(cas_error("prune flow index"))
     }
 
     async fn replace(
@@ -114,18 +316,33 @@ impl NatsFlows {
 #[async_trait]
 impl FlowStore for NatsFlows {
     async fn create(&self, state: FlowState) -> CatgaResult<bool> {
-        let key = flow_key(state.id());
-        let created = create(&self.states, &key, &state).await?;
-        if created {
-            self.index_flow(state.flow_type(), state.id()).await?;
-            return Ok(true);
+        match self.get_state(state.id()).await? {
+            Some((_, current)) if current.flow_type() == state.flow_type() => {
+                if current.status().is_terminal() {
+                    let _ = self.prune_index(current.flow_type(), current.id()).await;
+                } else {
+                    self.index_flow(current.flow_type(), current.id()).await?;
+                }
+                return Ok(false);
+            }
+            Some(_) => return Ok(false),
+            None => {}
         }
-        if let Some((_, current)) = self.get_state(state.id()).await?
+        if !state.status().is_terminal() {
+            self.index_flow(state.flow_type(), state.id()).await?;
+        }
+        let created = create(&self.states, &flow_key(state.id()), &state).await?;
+        if !created
+            && let Some((_, current)) = self.get_state(state.id()).await?
             && current.flow_type() == state.flow_type()
         {
-            self.index_flow(current.flow_type(), current.id()).await?;
+            if current.status().is_terminal() {
+                let _ = self.prune_index(current.flow_type(), current.id()).await;
+            } else {
+                self.index_flow(current.flow_type(), current.id()).await?;
+            }
         }
-        Ok(false)
+        Ok(created)
     }
 
     async fn update(&self, expected_version: i64, next: FlowState) -> CatgaResult<bool> {
@@ -138,7 +355,11 @@ impl FlowStore for NatsFlows {
         if current.version() != expected_version {
             return Ok(false);
         }
-        self.replace(next.id(), entry.revision, &next).await
+        let updated = self.replace(next.id(), entry.revision, &next).await?;
+        if updated && next.status().is_terminal() {
+            let _ = self.prune_index(next.flow_type(), next.id()).await;
+        }
+        Ok(updated)
     }
 
     async fn get(&self, id: &str) -> CatgaResult<Option<FlowState>> {
@@ -153,29 +374,25 @@ impl FlowStore for NatsFlows {
         owner: &str,
         stale_after: Duration,
     ) -> CatgaResult<Option<FlowState>> {
-        let key = type_key(flow_type);
-        let Some(entry) = self.index.entry(&key).await.map_err(map_error)? else {
-            return Ok(None);
-        };
-        if matches!(
-            entry.operation,
-            kv::Operation::Delete | kv::Operation::Purge
-        ) {
-            return Ok(None);
-        }
-        let ids = decode::<Vec<Box<str>>>(decode_record(&entry.value)?.payload())?;
         let now = SystemTime::now();
-        for id in ids {
+        for _ in 0..MAX_INDEX_PAGE_ENTRIES {
+            let Some(id) = self.next_indexed_flow(flow_type).await? else {
+                return Ok(None);
+            };
             let Some((entry, current)) = self.get_state(&id).await? else {
+                let _ = self.prune_index(flow_type, &id).await;
                 continue;
             };
-            if current.flow_type() != flow_type
-                || current.status() != FlowStatus::Running
+            if current.flow_type() != flow_type || current.status().is_terminal() {
+                let _ = self.prune_index(flow_type, &id).await;
+                continue;
+            }
+            if current.status() != FlowStatus::Running
                 || !is_stale(current.heartbeat(), now, stale_after)
             {
                 continue;
             }
-            let next = current.clone().claimed_by(owner).next_version();
+            let next = current.claimed_by(owner).next_version();
             if self.replace(&id, entry.revision, &next).await? {
                 return Ok(Some(next));
             }
@@ -254,8 +471,49 @@ async fn compare_and_set(
 fn flow_key(id: &str) -> String {
     format!("f{:x}", Sha256::digest(id.as_bytes()))
 }
-fn type_key(flow_type: &str) -> String {
-    format!("t{:x}", Sha256::digest(flow_type.as_bytes()))
+fn type_metadata_key(flow_type: &str) -> String {
+    format!("m{:x}", Sha256::digest(flow_type.as_bytes()))
+}
+fn type_page_key(flow_type: &str, page: u64) -> String {
+    format!("p{:x}.{page}", Sha256::digest(flow_type.as_bytes()))
+}
+fn type_marker_key(flow_type: &str, id: &str) -> String {
+    format!(
+        "i{:x}.{:x}",
+        Sha256::digest(flow_type.as_bytes()),
+        Sha256::digest(id.as_bytes())
+    )
+}
+fn next_index_cursor(metadata: &TypeIndex, consumed: bool) -> CatgaResult<TypeIndex> {
+    if consumed {
+        return Ok(TypeIndex {
+            scan_offset: metadata.scan_offset.checked_add(1).ok_or_else(|| {
+                CatgaError::new(ErrorCode::Internal, "NATS flow index offset overflowed")
+            })?,
+            ..*metadata
+        });
+    }
+    let scan_page = if metadata.scan_page >= metadata.tail_page {
+        0
+    } else {
+        metadata.scan_page.checked_add(1).ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "NATS flow index page overflowed")
+        })?
+    };
+    Ok(TypeIndex {
+        scan_page,
+        scan_offset: 0,
+        ..*metadata
+    })
+}
+fn validate_index_page(ids: &[Box<str>]) -> CatgaResult<()> {
+    if ids.len() > MAX_INDEX_PAGE_ENTRIES {
+        return Err(CatgaError::new(
+            ErrorCode::Internal,
+            "NATS flow index page exceeds its entry limit",
+        ));
+    }
+    Ok(())
 }
 fn encode<T: Serialize>(value: &T) -> CatgaResult<Vec<u8>> {
     postcard::to_allocvec(value)

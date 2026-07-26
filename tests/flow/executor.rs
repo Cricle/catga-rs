@@ -6,9 +6,53 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_core::{CatgaError, ErrorCode};
+use async_trait::async_trait;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{FlowExecutor, FlowResult, FlowState, FlowStatus, FlowStore};
 use catga_memory::MemoryFlows;
+
+struct HeartbeatDuringTerminalUpdateStore {
+    inner: Arc<MemoryFlows>,
+    heartbeat_injected: AtomicUsize,
+}
+
+#[async_trait]
+impl FlowStore for HeartbeatDuringTerminalUpdateStore {
+    async fn create(&self, state: FlowState) -> CatgaResult<bool> {
+        self.inner.create(state).await
+    }
+
+    async fn update(&self, expected_version: i64, next: FlowState) -> CatgaResult<bool> {
+        if next.status().is_terminal()
+            && self.heartbeat_injected.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            assert!(
+                self.inner
+                    .heartbeat(next.id(), "node-a", expected_version)
+                    .await?
+            );
+            return Ok(false);
+        }
+        self.inner.update(expected_version, next).await
+    }
+
+    async fn get(&self, id: &str) -> CatgaResult<Option<FlowState>> {
+        self.inner.get(id).await
+    }
+
+    async fn try_claim(
+        &self,
+        flow_type: &str,
+        owner: &str,
+        stale_after: Duration,
+    ) -> CatgaResult<Option<FlowState>> {
+        self.inner.try_claim(flow_type, owner, stale_after).await
+    }
+
+    async fn heartbeat(&self, id: &str, owner: &str, version: i64) -> CatgaResult<bool> {
+        self.inner.heartbeat(id, owner, version).await
+    }
+}
 
 #[tokio::test]
 async fn executor_persists_terminal_results_and_deduplicates_completed_ids() {
@@ -123,6 +167,44 @@ async fn executor_completes_after_an_inflight_heartbeat() {
         store.get("flow-10").await.unwrap().unwrap().status(),
         FlowStatus::Done
     );
+}
+
+#[tokio::test]
+async fn executor_retries_terminal_persistence_after_a_same_version_heartbeat_race() {
+    let inner = Arc::new(MemoryFlows::default());
+    let store = Arc::new(HeartbeatDuringTerminalUpdateStore {
+        inner: Arc::clone(&inner),
+        heartbeat_injected: AtomicUsize::new(0),
+    });
+    let executor = FlowExecutor::new(store, "node-a", Duration::from_secs(30));
+    let invocations = Arc::new(AtomicUsize::new(0));
+
+    let run_count = Arc::clone(&invocations);
+    let result = executor
+        .execute(
+            "flow-terminal-heartbeat-race",
+            "payment",
+            b"input".to_vec(),
+            move |state| {
+                let invocations = Arc::clone(&run_count);
+                async move {
+                    invocations.fetch_add(1, Ordering::Relaxed);
+                    Ok(FlowResult::success(state.step() + 1))
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_success());
+    assert_eq!(invocations.load(Ordering::Relaxed), 1);
+    let persisted = inner
+        .get("flow-terminal-heartbeat-race")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.status(), FlowStatus::Done);
+    assert_eq!(persisted.step(), 1);
 }
 
 #[tokio::test]

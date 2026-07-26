@@ -66,7 +66,7 @@ impl RedisLeases {
 #[async_trait]
 impl LeaseStore for RedisLeases {
     async fn try_acquire(&self, resource: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
-        telemetry::record_persistence("redis", "lease", "try_acquire", async {
+        telemetry::record_persistence_claim("redis", "lease", "try_acquire", async {
             self.execute(ACQUIRE, resource, owner, Some(ttl)).await
         })
         .await

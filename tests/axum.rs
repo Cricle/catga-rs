@@ -27,7 +27,8 @@ use catga_axum::{
 use catga_cluster::{ClusterForwarder, RaftMember, RaftMessage, RaftTransport};
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeHeaders, ErrorCode, Event, EventHandler, Handler,
-    Mediator, MessageMetadata, Registry, Request, scope_correlation_id, scope_transport_context,
+    Mediator, MessageMetadata, Registry, Request, current_transport_context, scope_correlation_id,
+    scope_transport_context,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -429,6 +430,19 @@ impl Handler<ForwardRequest> for ForwardHandler {
     }
 }
 
+struct NestedTraceForwardHandler {
+    endpoint: Arc<str>,
+}
+
+#[async_trait]
+impl Handler<ForwardRequest> for NestedTraceForwardHandler {
+    async fn handle(&self, request: ForwardRequest) -> CatgaResult<u32> {
+        HttpClusterForwarder::new(reqwest::Client::new())
+            .forward(request, self.endpoint.as_ref())
+            .await
+    }
+}
+
 #[tokio::test]
 async fn http_cluster_forwarder_posts_a_typed_request_to_the_leader() {
     let mut registry = Registry::new();
@@ -573,6 +587,88 @@ async fn mediator_route_dispatches_a_typed_json_request_at_the_registered_path()
     assert_eq!(response.json::<u32>().await.unwrap(), 42);
 }
 
+#[tokio::test]
+async fn mediator_route_scopes_inbound_trace_context_for_nested_http_forwarding() {
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let downstream = Router::new().route(
+        "/api/catga/forward/ForwardRequest",
+        post({
+            let observed = Arc::clone(&observed);
+            move |headers: HeaderMap, Json(request): Json<ForwardRequest>| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    observed
+                        .lock()
+                        .expect("test observer lock is available")
+                        .push((
+                            headers
+                                .get("traceparent")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                            headers
+                                .get("tracestate")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                        ));
+                    Json(request.value + 1)
+                }
+            }
+        }),
+    );
+    let downstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("downstream listener binds");
+    let downstream_endpoint: Arc<str> = format!(
+        "http://{}",
+        downstream_listener.local_addr().expect("address")
+    )
+    .into();
+    let downstream_server =
+        tokio::spawn(axum::serve(downstream_listener, downstream).into_future());
+
+    let mut registry = Registry::new();
+    registry
+        .register_request::<ForwardRequest, _>(NestedTraceForwardHandler {
+            endpoint: Arc::clone(&downstream_endpoint),
+        })
+        .expect("nested forward handler is accepted");
+    let app =
+        mediator_route::<ForwardRequest>("/orders/forward", Arc::new(Mediator::new(registry)))
+            .expect("mediator route is valid");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("inbound listener binds");
+    let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+    let client = reqwest::Client::new();
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    for tracestate in ["vendor=state", "vendor=state,,next=value"] {
+        let response = client
+            .post(format!("{endpoint}/orders/forward"))
+            .header("traceparent", traceparent)
+            .header("tracestate", tracestate)
+            .json(&ForwardRequest { value: 41 })
+            .send()
+            .await
+            .expect("inbound request succeeds");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+    server.abort();
+    downstream_server.abort();
+
+    assert_eq!(
+        observed
+            .lock()
+            .expect("test observer lock is available")
+            .as_slice(),
+        [
+            (Some(traceparent.into()), Some("vendor=state".into())),
+            (Some(traceparent.into()), None),
+        ]
+    );
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 struct OrderPublished(u32);
 
@@ -585,6 +681,30 @@ struct PublishedValue(Arc<AtomicU32>);
 impl EventHandler<OrderPublished> for PublishedValue {
     async fn handle(&self, event: OrderPublished) -> CatgaResult<()> {
         self.0.store(event.0, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+struct TraceObservedEventHandler(Arc<std::sync::Mutex<Option<(String, Option<String>)>>>);
+
+#[async_trait]
+impl EventHandler<OrderPublished> for TraceObservedEventHandler {
+    async fn handle(&self, _: OrderPublished) -> CatgaResult<()> {
+        let traceparent = current_transport_context()
+            .and_then(|context| {
+                context
+                    .headers()
+                    .and_then(|headers| headers.get("traceparent"))
+                    .map(str::to_owned)
+            })
+            .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "missing scoped traceparent"))?;
+        let tracestate = current_transport_context().and_then(|context| {
+            context
+                .headers()
+                .and_then(|headers| headers.get("tracestate"))
+                .map(str::to_owned)
+        });
+        *self.0.lock().expect("test observer lock is available") = Some((traceparent, tracestate));
         Ok(())
     }
 }
@@ -610,6 +730,37 @@ async fn event_route_publishes_a_typed_json_event_at_the_registered_path() {
 
     assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
     assert_eq!(captured.load(Ordering::Relaxed), 42);
+}
+
+#[tokio::test]
+async fn event_route_scopes_inbound_trace_context() {
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let mut registry = Registry::new();
+    registry.register_event::<OrderPublished, _>(TraceObservedEventHandler(Arc::clone(&observed)));
+    let app = event_route::<OrderPublished>("/orders/published", Arc::new(Mediator::new(registry)))
+        .expect("event route is valid");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener binds");
+    let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    let response = reqwest::Client::new()
+        .post(format!("{endpoint}/orders/published"))
+        .header("traceparent", traceparent)
+        .header("tracestate", "vendor=state")
+        .json(&OrderPublished(42))
+        .send()
+        .await
+        .expect("event request succeeds");
+    server.abort();
+
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    assert_eq!(
+        *observed.lock().expect("test observer lock is available"),
+        Some((traceparent.into(), Some("vendor=state".into())))
+    );
 }
 
 #[tokio::test]

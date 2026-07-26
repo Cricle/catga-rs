@@ -26,5 +26,9 @@ pub trait FlowStore: Send + Sync {
     ) -> CatgaResult<Option<FlowState>>;
 
     /// Records owner liveness if both owner and version are still current.
+    ///
+    /// A heartbeat does not change the logical flow version, but may replace the physical stored
+    /// record. Callers that transition from the same version must handle a lost physical CAS by
+    /// reloading the state before deciding whether ownership was lost.
     async fn heartbeat(&self, id: &str, owner: &str, version: i64) -> CatgaResult<bool>;
 }

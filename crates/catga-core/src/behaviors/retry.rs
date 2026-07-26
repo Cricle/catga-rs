@@ -4,7 +4,8 @@ use async_trait::async_trait;
 
 use crate::{
     Behavior, CatgaError, CatgaResult, ErrorCode, Next, Request, RetryJitter,
-    retry_jitter::RetryJitterState, telemetry::RESILIENCE_RETRIES,
+    retry_jitter::RetryJitterState,
+    telemetry::{RESILIENCE_RETRIES, retry_pending},
 };
 
 /// Retries transient request failures with bounded exponential backoff.
@@ -55,6 +56,7 @@ where
                     let delay = self.delay_for(retry);
                     metrics::counter!(RESILIENCE_RETRIES).increment(1);
                     if !delay.is_zero() {
+                        let _pending = retry_pending();
                         tokio::time::sleep(delay).await;
                     }
                 }

@@ -52,7 +52,7 @@ impl IdempotencyStore for MemoryIdempotency {
                 Ok(true)
             }
         };
-        operation.complete(&result);
+        operation.complete_claim(&result);
         result
     }
 

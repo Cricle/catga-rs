@@ -82,6 +82,37 @@ macro_rules! flow_definition {
     }};
 }
 
+/// Converts a typed async callback closure into one that returns a boxed future.
+///
+/// This removes the repetitive `Box::pin(async move { ... })` wrapper required by callback APIs
+/// that return boxed futures, while preserving the closure parameter and result types exactly.
+/// The async block remains explicit, so callback errors continue to use the result type required
+/// by the receiving API (for example, [`catga_core::CatgaResult`]).
+///
+/// ```ignore
+/// let callback = catga_flow::flow_async!(|state: &mut State, event: Event| async move {
+///     state.apply(event)?;
+///     Ok(())
+/// });
+/// ```
+///
+/// A `move` closure is also supported when the callback needs to own captured values:
+///
+/// ```ignore
+/// let callback = catga_flow::flow_async!(move |request: Request| async move {
+///     service.handle(request).await
+/// });
+/// ```
+#[macro_export]
+macro_rules! flow_async {
+    (|$($argument:tt : $argument_ty:ty),+ $(,)?| async move $body:block) => {
+        |$($argument: $argument_ty),+| ::std::boxed::Box::pin(async move $body)
+    };
+    (move |$($argument:tt : $argument_ty:ty),+ $(,)?| async move $body:block) => {
+        move |$($argument: $argument_ty),+| ::std::boxed::Box::pin(async move $body)
+    };
+}
+
 /// Converts a natural async state action into a [`DslFlow`] action closure.
 ///
 /// ```ignore

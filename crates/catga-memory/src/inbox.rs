@@ -39,7 +39,7 @@ impl InboxStore for MemoryInbox {
                 Ok(claimed)
             }
         };
-        operation.complete(&result);
+        operation.complete_claim(&result);
         result
     }
 
