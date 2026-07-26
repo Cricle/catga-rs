@@ -705,9 +705,9 @@ async fn checkpointed_dsl_parallel_rejects_stream_and_concurrent_for_each_branch
 
     let concurrent = DslFlow::new().parallel(
         [DslFlow::new()
-            .for_each_concurrent(
+            .for_each_stream_concurrent(
                 1,
-                |_| vec![1_u32],
+                |_| Box::pin(futures::stream::iter([1_u32])),
                 |_, item| Box::pin(async move { Ok(item) }),
                 |_, _| Ok(()),
             )
@@ -901,12 +901,12 @@ async fn checkpointed_dsl_resumes_parallel_inside_a_match_branch() {
 }
 
 #[tokio::test]
-async fn checkpointed_dsl_rejects_concurrent_for_each_without_result_cursor() {
+async fn checkpointed_dsl_rejects_concurrent_stream_for_each_without_result_cursor() {
     let store = MemoryDslStepProgress::default();
     let flow = DslFlow::new()
-        .for_each_concurrent(
+        .for_each_stream_concurrent(
             1,
-            |_| vec![1_u32],
+            |_| Box::pin(futures::stream::iter([1_u32])),
             |_, item| Box::pin(async move { Ok(item) }),
             |_, _| Ok(()),
         )

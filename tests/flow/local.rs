@@ -1226,13 +1226,13 @@ async fn dsl_for_each_records_a_failed_item_before_returning_its_original_error(
 }
 
 #[tokio::test]
-async fn dsl_flow_for_each_concurrent_limits_work_and_merges_results_in_input_order() {
+async fn dsl_flow_for_each_stream_concurrent_limits_work_and_reduces_results_in_input_order() {
     let active = Arc::new(AtomicUsize::new(0));
     let maximum = Arc::new(AtomicUsize::new(0));
     let flow = DslFlow::new()
-        .for_each_concurrent(
+        .for_each_stream_concurrent(
             2,
-            |state: &BatchState| state.items.clone(),
+            |state: &BatchState| stream::iter(state.items.clone()).boxed(),
             {
                 let active = Arc::clone(&active);
                 let maximum = Arc::clone(&maximum);
@@ -1251,8 +1251,8 @@ async fn dsl_flow_for_each_concurrent_limits_work_and_merges_results_in_input_or
                     })
                 }
             },
-            |state, results| {
-                state.processed = results;
+            |state, result| {
+                state.processed.push(result);
                 Ok(())
             },
         )

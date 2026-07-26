@@ -21,11 +21,7 @@ use crate::{
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, Event, Mediator, RemoteRequest, Request, RequestClient,
 };
-use futures::{
-    StreamExt, TryStreamExt,
-    future::BoxFuture,
-    stream::{self, FuturesUnordered},
-};
+use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -193,7 +189,6 @@ enum Step<S> {
     },
     ReplayableForEach(ReplayableForEach<S>),
     StreamForEach(Action<S>),
-    ConcurrentForEach(Action<S>),
     ConcurrentStreamForEach(Action<S>),
     Retry {
         action: Action<S>,
@@ -878,83 +873,6 @@ impl<S: Send> DslFlow<S> {
         Ok(self)
     }
 
-    /// Runs selected items concurrently without permitting concurrent mutation of the flow state.
-    ///
-    /// Work functions observe `&S` and return one result per item. Once all work has succeeded,
-    /// `merge` receives results in the selector's input order and is the only operation allowed to
-    /// mutate `S`. This avoids locks and data races while bounding in-flight work to `limit`.
-    ///
-    /// The first work error stops admitting new items and is returned without running `merge`.
-    /// In-flight work emits the same low-cardinality ForEach metrics as [`DslFlow::for_each`],
-    /// including an `in_flight` gauge that is restored if a dropped future is cancelled.
-    pub fn for_each_concurrent<T, R, Select, Work, Merge>(
-        mut self,
-        limit: usize,
-        select: Select,
-        work: Work,
-        merge: Merge,
-    ) -> CatgaResult<Self>
-    where
-        S: Sync,
-        T: Send + 'static,
-        R: Send + 'static,
-        Select: Fn(&S) -> Vec<T> + Send + Sync + 'static,
-        Work: for<'a> Fn(&'a S, T) -> BoxFuture<'a, CatgaResult<R>> + Send + Sync + 'static,
-        Merge: Fn(&mut S, Vec<R>) -> CatgaResult<()> + Send + Sync + 'static,
-    {
-        if limit == 0 {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "concurrent for_each limit must be greater than zero",
-            ));
-        }
-        let select = Arc::new(select);
-        let work = Arc::new(work);
-        let merge = Arc::new(merge);
-        self.steps
-            .push(Step::ConcurrentForEach(Box::new(move |state| {
-                let select = Arc::clone(&select);
-                let work = Arc::clone(&work);
-                let merge = Arc::clone(&merge);
-                Box::pin(async move {
-                    let metrics = ForEachMetrics::new("concurrent");
-                    let mut indexed_results = {
-                        let state: &S = state;
-                        stream::iter(select(state).into_iter().enumerate())
-                            .map(|(index, item)| {
-                                let work = Arc::clone(&work);
-                                let metrics = Arc::clone(&metrics);
-                                async move {
-                                    let item_metrics = metrics.begin_item();
-                                    match work(state, item).await {
-                                        Ok(result) => {
-                                            item_metrics.complete(true);
-                                            Ok((index, result))
-                                        }
-                                        Err(error) => {
-                                            item_metrics.complete(false);
-                                            Err(error)
-                                        }
-                                    }
-                                }
-                            })
-                            .buffer_unordered(limit)
-                            .try_collect::<Vec<_>>()
-                            .await?
-                    };
-                    indexed_results.sort_unstable_by_key(|(index, _)| *index);
-                    merge(
-                        state,
-                        indexed_results
-                            .into_iter()
-                            .map(|(_, result)| result)
-                            .collect(),
-                    )
-                })
-            })));
-        Ok(self)
-    }
-
     /// Runs all selected steps against one mutable state value.
     pub fn run<'a>(&'a self, state: &'a mut S) -> BoxFuture<'a, CatgaResult<()>> {
         Box::pin(async move {
@@ -1148,12 +1066,6 @@ impl<S: Send> DslFlow<S> {
                     return Err(CatgaError::new(
                         ErrorCode::Validation,
                         "checkpointed for_each_stream requires a replay cursor",
-                    ));
-                }
-                Step::ConcurrentForEach(_) => {
-                    return Err(CatgaError::new(
-                        ErrorCode::Validation,
-                        "checkpointed for_each_concurrent requires a result cursor",
                     ));
                 }
                 Step::ConcurrentStreamForEach(_) => {
@@ -1436,9 +1348,7 @@ impl<S: Send> DslFlow<S> {
                         .await?;
                         continue;
                     }
-                    Step::StreamForEach(_)
-                    | Step::ConcurrentForEach(_)
-                    | Step::ConcurrentStreamForEach(_) => {
+                    Step::StreamForEach(_) | Step::ConcurrentStreamForEach(_) => {
                         return Err(CatgaError::new(
                             ErrorCode::Validation,
                             "checkpointed nested foreach operation has no replay cursor",
@@ -1614,7 +1524,6 @@ impl<S: Send> DslFlow<S> {
                     Ok(())
                 }
                 Step::StreamForEach(action) => action(state).await,
-                Step::ConcurrentForEach(action) => action(state).await,
                 Step::ConcurrentStreamForEach(action) => action(state).await,
                 Step::Retry {
                     action,
