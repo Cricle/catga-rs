@@ -14,6 +14,7 @@ mod execution;
 mod forward;
 mod health;
 mod leader_only;
+mod metrics;
 mod raft;
 mod runtime;
 mod singleton_task;

@@ -7,6 +7,7 @@ use catga_core::{CatgaError, CatgaResult};
 use crate::{
     RaftApplicationSnapshot, RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode,
     RaftNodeError,
+    metrics::{record_applied_command, record_failure},
 };
 
 const RECOVERY_PAGE_ENTRIES: usize = 128;
@@ -201,10 +202,14 @@ where
                 self.pending_entries.pop_front();
                 continue;
             }
-            self.machine.apply(entry)?;
+            if let Err(error) = self.machine.apply(entry) {
+                record_failure("apply");
+                return Err(error.into());
+            }
             self.applied_index = entry.index;
             self.pending_entries.pop_front();
             applied += 1;
+            record_applied_command();
         }
         Ok(applied)
     }

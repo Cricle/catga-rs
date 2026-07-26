@@ -17,7 +17,7 @@ use raft::{
 use slog::Logger;
 use tokio::sync::Notify;
 
-use crate::{ClusterCoordinator, RaftTiming, storage::RaftStorage};
+use crate::{ClusterCoordinator, RaftTiming, metrics::RaftMetrics, storage::RaftStorage};
 
 const DEFAULT_PENDING_COMMIT_CAPACITY: usize = 1_024;
 
@@ -245,6 +245,7 @@ pub struct RaftNode {
     pending_commit_capacity: usize,
     next_unqueued_commit_index: u64,
     installed_snapshots: Vec<RaftApplicationSnapshot>,
+    metrics: RaftMetrics,
     auto_acknowledge_apply: bool,
     last_acknowledged_index: u64,
     last_committed_index: u64,
@@ -402,7 +403,7 @@ impl RaftNode {
                 .collect(),
             members,
         });
-        Ok(Self {
+        let mut node = Self {
             raw,
             storage,
             coordinator,
@@ -411,10 +412,13 @@ impl RaftNode {
             pending_commit_capacity,
             next_unqueued_commit_index: 1,
             installed_snapshots: Vec::new(),
+            metrics: RaftMetrics::default(),
             auto_acknowledge_apply: true,
             last_acknowledged_index: 0,
             last_committed_index: 0,
-        })
+        };
+        node.publish_metrics();
+        Ok(node)
     }
 
     /// Returns the local numeric Raft node identifier.
@@ -456,14 +460,24 @@ impl RaftNode {
     /// Callers that need to distinguish Raft protocol failures from application backpressure
     /// should use this method instead of [`Self::propose`].
     pub fn try_propose(&mut self, data: impl Into<Vec<u8>>) -> Result<(), RaftNodeError> {
-        self.refill_committed()?;
+        if let Err(error) = self.refill_committed() {
+            self.metrics.record_failure("proposal");
+            return Err(error);
+        }
         if self.committed.len() >= self.pending_commit_capacity {
+            self.metrics.record_failure("proposal");
             return Err(RaftNodeError::PendingCommitCapacity {
                 capacity: self.pending_commit_capacity,
             });
         }
-        self.raw.propose(Vec::new(), data.into())?;
-        self.drive_ready()?;
+        if let Err(error) = self.raw.propose(Vec::new(), data.into()) {
+            self.metrics.record_failure("proposal");
+            return Err(error.into());
+        }
+        if let Err(error) = self.drive_ready() {
+            self.metrics.record_failure("proposal");
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -474,7 +488,9 @@ impl RaftNode {
 
     /// Takes committed non-empty normal entries for application to business state.
     pub fn drain_committed(&mut self) -> Vec<RaftCommittedEntry> {
-        self.committed.drain(..).collect()
+        let entries = self.committed.drain(..).collect();
+        self.publish_metrics();
+        entries
     }
 
     /// Takes at most the configured pending-commit capacity of application commands.
@@ -489,7 +505,9 @@ impl RaftNode {
 
     /// Returns and removes one committed application command, if one is pending.
     pub fn next_committed(&mut self) -> Option<RaftCommittedEntry> {
-        self.committed.pop_front()
+        let entry = self.committed.pop_front();
+        self.publish_metrics();
+        entry
     }
 
     /// Returns and removes one committed application command after refilling the
@@ -536,7 +554,9 @@ impl RaftNode {
             self.raw.advance_apply_to(index);
             self.last_acknowledged_index = index;
         }
-        self.drive_ready()
+        self.drive_ready()?;
+        self.publish_metrics();
+        Ok(())
     }
 
     pub(crate) fn acknowledge_recovered(&mut self, index: u64) -> raft::Result<()> {
@@ -612,6 +632,7 @@ impl RaftNode {
             }
         }
         self.publish_coordinator_state();
+        self.publish_metrics();
         Ok(())
     }
 
@@ -678,6 +699,18 @@ impl RaftNode {
                 .store(Arc::new(RaftCoordinatorState { leader_id }));
             self.coordinator.inner.changed.notify_waiters();
         }
+    }
+
+    fn publish_metrics(&mut self) {
+        let leader_id = (self.raw.raft.leader_id != 0).then_some(self.raw.raft.leader_id);
+        self.metrics.record_state(
+            self.raw.raft.state,
+            leader_id,
+            self.raw.raft.term,
+            self.raw.raft.raft_log.committed,
+            self.raw.raft.raft_log.applied,
+            self.committed.len(),
+        );
     }
 }
 

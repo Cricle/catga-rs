@@ -10,7 +10,10 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode};
+use crate::{
+    RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode,
+    metrics::{record_failure, record_queue_depth},
+};
 
 const COMMAND_BUFFER: usize = 64;
 const INBOUND_BUFFER: usize = 256;
@@ -106,6 +109,7 @@ impl RaftRuntime {
         let coordinator = node.coordinator();
         let (inbox, inbound) = mpsc::channel(INBOUND_BUFFER);
         let (commands, requests) = mpsc::channel(COMMAND_BUFFER);
+        record_queue_depth("raft", 0, 0);
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
         let transport: Arc<dyn RaftTransport> = transport;
@@ -186,6 +190,11 @@ impl RaftRuntime {
             .send(command(reply))
             .await
             .map_err(|_| RaftRuntimeError::Stopped)?;
+        record_queue_depth(
+            "raft",
+            INBOUND_BUFFER - self.inbox.capacity(),
+            COMMAND_BUFFER - self.commands.capacity(),
+        );
         result.await.map_err(|_| RaftRuntimeError::Stopped)??;
         Ok(())
     }
@@ -212,16 +221,19 @@ async fn run(
             biased;
             _ = shutdown.cancelled() => return Ok(()),
             _ = ticks.tick() => {
+                record_queue_depth("raft", inbound.len(), commands.len());
                 if !drive(node.tick(), &mut node, transport.as_ref(), &shutdown).await? {
                     return Ok(());
                 }
             }
             Some(message) = inbound.recv() => {
+                record_queue_depth("raft", inbound.len(), commands.len());
                 if !drive(node.step(message), &mut node, transport.as_ref(), &shutdown).await? {
                     return Ok(());
                 }
             }
             Some(command) = commands.recv() => {
+                record_queue_depth("raft", inbound.len(), commands.len());
                 match command {
                     Command::Campaign(reply) => {
                         if !respond_drive(
@@ -273,12 +285,30 @@ async fn drive(
     transport: &dyn RaftTransport,
     shutdown: &CancellationToken,
 ) -> Result<bool, RaftRuntimeError> {
-    result.map_err(RaftRuntimeError::Raft)?;
+    if let Err(error) = result {
+        record_failure("raft");
+        tracing::error!(
+            target: catga_core::TRACING_TARGET,
+            error = %error,
+            "catga Raft runtime operation failed"
+        );
+        return Err(RaftRuntimeError::Raft(error));
+    }
     for message in node.drain_messages() {
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => return Ok(false),
-            result = transport.send(message) => result.map_err(RaftRuntimeError::Transport)?,
+            result = transport.send(message) => {
+                if let Err(error) = result {
+                    record_failure("transport");
+                    tracing::error!(
+                        target: catga_core::TRACING_TARGET,
+                        error = %error,
+                        "catga Raft transport delivery failed"
+                    );
+                    return Err(RaftRuntimeError::Transport(error));
+                }
+            }
         }
     }
     Ok(true)

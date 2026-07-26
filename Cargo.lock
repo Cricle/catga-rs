@@ -305,12 +305,14 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "catga-core",
+ "metrics",
  "raft",
  "raft-engine",
  "serde",
  "slog",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    io,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -10,6 +11,10 @@ use std::{
 };
 
 use async_trait::async_trait;
+use catga_cluster::{
+    RaftCommittedEntry, RaftMember, RaftNode, RaftRuntime, RaftRuntimeError, RaftStateMachine,
+    RaftStateMachineDriver, RaftStateMachineRuntime, RaftStateMachineRuntimeError, RaftTransport,
+};
 use catga_core::{
     CatgaError, CatgaResult, CircuitBreakerBehavior, Envelope, ErrorCode, EventStore, Handler,
     IdempotencyStore, InboxStore, LeaseStore, LoggingBehavior, Mediator, MessageMetadata,
@@ -58,6 +63,35 @@ struct RejectReconcile;
 impl Handler<ReconcileStock> for RejectReconcile {
     async fn handle(&self, _: ReconcileStock) -> CatgaResult<u64> {
         Err(CatgaError::new(ErrorCode::Validation, "stock is invalid"))
+    }
+}
+
+struct FailingRaftTransport;
+
+#[async_trait]
+impl RaftTransport for FailingRaftTransport {
+    async fn send(
+        &self,
+        _: catga_cluster::RaftMessage,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Err(Box::new(io::Error::other("transport is unavailable")))
+    }
+}
+
+#[derive(Default)]
+struct MetricsStateMachine;
+
+impl RaftStateMachine for MetricsStateMachine {
+    fn apply(&mut self, _: &RaftCommittedEntry) -> CatgaResult<()> {
+        Ok(())
+    }
+
+    fn snapshot(&self) -> CatgaResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn restore(&mut self, _: &[u8]) -> CatgaResult<()> {
+        Ok(())
     }
 }
 
@@ -256,6 +290,181 @@ fn metric_key(key: &Key) -> String {
         .collect();
     labels.sort_unstable();
     format!("{}|{}", key.name(), labels.join(","))
+}
+
+#[test]
+fn raft_node_emits_low_cardinality_leadership_and_progress_metrics() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let mut node = RaftNode::new(
+        1,
+        "http://node-1",
+        vec![RaftMember::new(1, "http://node-1")],
+    )
+    .expect("a single-node Raft cluster is valid");
+
+    node.campaign().expect("the single node can become leader");
+    drop(guard);
+
+    assert_eq!(recorder.gauge("catga.cluster.raft.leader.id|"), 1.0);
+    assert_eq!(recorder.gauge("catga.cluster.raft.is_leader|"), 1.0);
+    assert_eq!(recorder.gauge("catga.cluster.raft.role|role=leader"), 1.0);
+    assert!(recorder.gauge("catga.cluster.raft.term|") >= 1.0);
+    assert!(recorder.gauge("catga.cluster.raft.commit.index|") >= 1.0);
+    assert!(recorder.gauge("catga.cluster.raft.apply.index|") >= 1.0);
+    assert_eq!(
+        recorder.counter("catga.cluster.raft.leadership.transitions|transition=acquired"),
+        1
+    );
+}
+
+#[test]
+fn raft_node_reports_pending_commands_and_rejected_proposals() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let mut node = RaftNode::new_with_pending_commit_capacity(
+        1,
+        "http://node-1",
+        vec![RaftMember::new(1, "http://node-1")],
+        1,
+    )
+    .expect("a single-node Raft cluster is valid");
+
+    assert!(node.try_propose(b"not-leader").is_err());
+    node.campaign().expect("the single node can become leader");
+    node.try_propose(b"apply-command")
+        .expect("the leader accepts one bounded command");
+    assert_eq!(recorder.gauge("catga.cluster.raft.pending_commits|"), 1.0);
+    let entries = node.drain_committed();
+    drop(guard);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(recorder.gauge("catga.cluster.raft.pending_commits|"), 0.0);
+    assert_eq!(
+        recorder.counter("catga.cluster.raft.failures|kind=proposal"),
+        1
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn raft_runtime_reports_queue_depth_and_transport_failures() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let runtime = RaftRuntime::spawn(
+        RaftNode::new(
+            1,
+            "http://node-1",
+            vec![
+                RaftMember::new(1, "http://node-1"),
+                RaftMember::new(2, "http://node-2"),
+            ],
+        )
+        .expect("the Raft node is valid"),
+        Arc::new(FailingRaftTransport),
+        Duration::from_millis(1),
+    )
+    .expect("the runtime starts");
+
+    assert!(matches!(
+        runtime.campaign().await,
+        Err(RaftRuntimeError::Stopped)
+    ));
+    runtime.shutdown();
+    assert!(matches!(
+        runtime.join().await,
+        Err(RaftRuntimeError::Transport(_))
+    ));
+    drop(guard);
+
+    assert_eq!(
+        recorder.gauge("catga.cluster.runtime.inbound.depth|runtime=raft"),
+        0.0
+    );
+    assert_eq!(
+        recorder.gauge("catga.cluster.runtime.command.depth|runtime=raft"),
+        0.0
+    );
+    assert_eq!(
+        recorder.counter("catga.cluster.raft.failures|kind=transport"),
+        1
+    );
+}
+
+#[test]
+fn raft_state_machine_records_applied_commands_and_progress() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let node = RaftNode::new(
+        1,
+        "http://node-1",
+        vec![RaftMember::new(1, "http://node-1")],
+    )
+    .expect("a single-node Raft cluster is valid");
+    let mut driver = RaftStateMachineDriver::new(node, MetricsStateMachine)
+        .expect("the state machine driver initializes");
+
+    driver
+        .campaign()
+        .expect("the single node can become leader");
+    driver
+        .propose(b"apply-command")
+        .expect("the leader accepts the application command");
+    assert_eq!(
+        driver
+            .apply_committed()
+            .expect("the state machine applies the committed command"),
+        1
+    );
+    drop(guard);
+
+    assert_eq!(recorder.counter("catga.cluster.raft.commands.applied|"), 1);
+    assert!(recorder.gauge("catga.cluster.raft.apply.index|") >= 1.0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn state_machine_runtime_reports_queue_depth_and_transport_failures() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let node = RaftNode::new(
+        1,
+        "http://node-1",
+        vec![
+            RaftMember::new(1, "http://node-1"),
+            RaftMember::new(2, "http://node-2"),
+        ],
+    )
+    .expect("the Raft node is valid");
+    let runtime = RaftStateMachineRuntime::spawn(
+        RaftStateMachineDriver::new(node, MetricsStateMachine)
+            .expect("the state machine driver initializes"),
+        Arc::new(FailingRaftTransport),
+        Duration::from_millis(1),
+    )
+    .expect("the runtime starts");
+
+    assert!(matches!(
+        runtime.campaign().await,
+        Err(RaftStateMachineRuntimeError::Stopped)
+    ));
+    runtime.shutdown();
+    assert!(matches!(
+        runtime.join().await,
+        Err(RaftStateMachineRuntimeError::Transport(_))
+    ));
+    drop(guard);
+
+    assert_eq!(
+        recorder.gauge("catga.cluster.runtime.inbound.depth|runtime=state_machine"),
+        0.0
+    );
+    assert_eq!(
+        recorder.gauge("catga.cluster.runtime.command.depth|runtime=state_machine"),
+        0.0
+    );
+    assert_eq!(
+        recorder.counter("catga.cluster.raft.failures|kind=transport"),
+        1
+    );
 }
 
 #[derive(Clone)]

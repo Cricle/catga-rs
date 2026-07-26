@@ -13,9 +13,11 @@ workspace = true
 arc-swap = "1"
 async-trait = "0.1"
 catga-core = { path = "../catga-core" }
+metrics = "0.24"
 raft = { version = "0.7", default-features = false, features = ["protobuf-codec"] }
 raft-engine = { version = "0.4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 slog = "2"
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"

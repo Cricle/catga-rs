@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     RaftClusterNode, RaftMessage, RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError,
     RaftTransport,
+    metrics::{record_failure, record_queue_depth},
 };
 
 const COMMAND_BUFFER: usize = 64;
@@ -95,6 +96,7 @@ impl RaftStateMachineRuntime {
         let coordinator = driver.coordinator();
         let (inbox, inbound) = mpsc::channel(INBOUND_BUFFER);
         let (commands, requests) = mpsc::channel(COMMAND_BUFFER);
+        record_queue_depth("state_machine", 0, 0);
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
         let transport: Arc<dyn RaftTransport> = transport;
@@ -175,6 +177,11 @@ impl RaftStateMachineRuntime {
             .send(command(reply))
             .await
             .map_err(|_| RaftStateMachineRuntimeError::Stopped)?;
+        record_queue_depth(
+            "state_machine",
+            INBOUND_BUFFER - self.inbox.capacity(),
+            COMMAND_BUFFER - self.commands.capacity(),
+        );
         result
             .await
             .map_err(|_| RaftStateMachineRuntimeError::Stopped)??;
@@ -209,17 +216,20 @@ where
             biased;
             _ = shutdown.cancelled() => return Ok(()),
             _ = ticks.tick() => {
+                record_queue_depth("state_machine", inbound.len(), commands.len());
                 if !drive(driver.tick(), &mut driver, transport.as_ref(), &shutdown).await? {
                     return Ok(());
                 }
             }
             Some(message) = inbound.recv() => {
+                record_queue_depth("state_machine", inbound.len(), commands.len());
                 if !drive(driver.step(message), &mut driver, transport.as_ref(), &shutdown).await? {
                     return Ok(());
                 }
             }
             Some(command) = commands.recv() => match command {
                 Command::Campaign(reply) => {
+                    record_queue_depth("state_machine", inbound.len(), commands.len());
                     if !respond_drive(
                         reply,
                         drive(driver.campaign(), &mut driver, transport.as_ref(), &shutdown).await,
@@ -228,6 +238,7 @@ where
                     }
                 }
                 Command::Propose(data, reply) => {
+                    record_queue_depth("state_machine", inbound.len(), commands.len());
                     if !respond_drive(
                         reply,
                         drive(driver.propose(data), &mut driver, transport.as_ref(), &shutdown).await,
@@ -236,7 +247,19 @@ where
                     }
                 }
                 Command::Checkpoint(reply) => {
-                    respond(reply, driver.checkpoint().map_err(RaftStateMachineRuntimeError::StateMachine))?;
+                    record_queue_depth("state_machine", inbound.len(), commands.len());
+                    let result = driver
+                        .checkpoint()
+                        .map_err(RaftStateMachineRuntimeError::StateMachine);
+                    if let Err(error) = &result {
+                        record_failure("checkpoint");
+                        tracing::error!(
+                            target: catga_core::TRACING_TARGET,
+                            error = %error,
+                            "catga Raft state-machine checkpoint failed"
+                        );
+                    }
+                    respond(reply, result)?;
                 }
             },
             else => return Ok(()),
@@ -279,13 +302,27 @@ async fn drive<M>(
 where
     M: RaftStateMachine,
 {
-    raft_result.map_err(RaftStateMachineRuntimeError::Raft)?;
+    if let Err(error) = raft_result {
+        record_failure("raft");
+        tracing::error!(
+            target: catga_core::TRACING_TARGET,
+            error = %error,
+            "catga Raft state-machine runtime operation failed"
+        );
+        return Err(RaftStateMachineRuntimeError::Raft(error));
+    }
     if !send_messages(driver, transport, shutdown).await? {
         return Ok(false);
     }
-    driver
-        .apply_committed()
-        .map_err(RaftStateMachineRuntimeError::StateMachine)?;
+    if let Err(error) = driver.apply_committed() {
+        record_failure("apply");
+        tracing::error!(
+            target: catga_core::TRACING_TARGET,
+            error = %error,
+            "catga Raft state-machine application failed"
+        );
+        return Err(RaftStateMachineRuntimeError::StateMachine(error));
+    }
     send_messages(driver, transport, shutdown).await
 }
 
@@ -301,7 +338,17 @@ where
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => return Ok(false),
-            result = transport.send(message) => result.map_err(RaftStateMachineRuntimeError::Transport)?,
+            result = transport.send(message) => {
+                if let Err(error) = result {
+                    record_failure("transport");
+                    tracing::error!(
+                        target: catga_core::TRACING_TARGET,
+                        error = %error,
+                        "catga Raft state-machine transport delivery failed"
+                    );
+                    return Err(RaftStateMachineRuntimeError::Transport(error));
+                }
+            }
         }
     }
     Ok(true)
