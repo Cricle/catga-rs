@@ -41,7 +41,8 @@ pub struct RedisTransport {
 impl RedisTransport {
     /// Connects with the default bounded cross-consumer pending-delivery recovery policy.
     pub async fn connect(config: RedisConfig) -> CatgaResult<Self> {
-        Self::connect_with_reclaim_options(config, RedisPendingReclaimOptions::default()).await
+        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        Self::from_client(client, config).await
     }
 
     /// Connects and idempotently provisions the configured stream and consumer group.
@@ -54,6 +55,39 @@ impl RedisTransport {
         reclaim_options: RedisPendingReclaimOptions,
     ) -> CatgaResult<Self> {
         let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        Self::connect_with_client(client, config, reclaim_options).await
+    }
+
+    /// Builds a transport from an application-owned Redis client.
+    ///
+    /// This preserves the client's configured TLS, authentication, reconnection, and
+    /// observability behavior while provisioning the stream and consumer group in `config`.
+    /// `config.server` is not opened by this constructor; it remains part of [`RedisConfig`] for
+    /// compatibility with [`Self::connect`]. The transport uses the default bounded
+    /// cross-consumer pending-delivery recovery policy.
+    pub async fn from_client(client: redis::Client, config: RedisConfig) -> CatgaResult<Self> {
+        Self::connect_with_client(client, config, RedisPendingReclaimOptions::default()).await
+    }
+
+    /// Builds a transport from an application-owned Redis client with an explicit recovery policy.
+    ///
+    /// Like [`Self::from_client`], this reuses the supplied client's TLS, authentication,
+    /// reconnection, and observability configuration instead of opening `config.server`. It
+    /// still idempotently provisions `config.stream` and `config.group`, and applies
+    /// `reclaim_options` to bounded recovery of deliveries abandoned by other consumers.
+    pub async fn connect_with_client(
+        client: redis::Client,
+        config: RedisConfig,
+        reclaim_options: RedisPendingReclaimOptions,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config, reclaim_options).await
+    }
+
+    async fn initialize(
+        client: redis::Client,
+        config: RedisConfig,
+        reclaim_options: RedisPendingReclaimOptions,
+    ) -> CatgaResult<Self> {
         let manager_config = ConnectionManagerConfig::new().set_response_timeout(None);
         let mut commands = client
             .get_connection_manager_with_config(manager_config)

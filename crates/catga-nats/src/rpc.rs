@@ -24,13 +24,29 @@ pub struct NatsRequestClient {
 impl NatsRequestClient {
     /// Connects a request client to one NATS service subject.
     pub async fn connect(server: &str, subject: &str) -> CatgaResult<Self> {
-        if subject.is_empty() {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "NATS request subject must not be empty",
-            ));
-        }
+        validate_subject(subject)?;
         let client = async_nats::connect(server).await.map_err(map_error)?;
+        Self::from_client(client, subject)
+    }
+
+    /// Builds a request client from an application-owned NATS client.
+    ///
+    /// This preserves the client's configured TLS, authentication, reconnection, and
+    /// observability behavior. The supplied client is used directly and no server is opened.
+    pub fn from_client(client: async_nats::Client, subject: &str) -> CatgaResult<Self> {
+        Self::initialize(client, subject)
+    }
+
+    /// Builds a request client from an application-owned NATS client.
+    ///
+    /// This is equivalent to [`Self::from_client`] and is available for applications that use
+    /// `connect_*` naming for their transport factories.
+    pub fn connect_with_client(client: async_nats::Client, subject: &str) -> CatgaResult<Self> {
+        Self::initialize(client, subject)
+    }
+
+    fn initialize(client: async_nats::Client, subject: &str) -> CatgaResult<Self> {
+        validate_subject(subject)?;
         Ok(Self {
             client,
             subject: subject.into(),
@@ -50,12 +66,7 @@ impl NatsRequestClient {
         request: Envelope,
         timeout: Duration,
     ) -> CatgaResult<Envelope> {
-        if subject.is_empty() {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "NATS request subject must not be empty",
-            ));
-        }
+        validate_subject(subject)?;
         if timeout.is_zero() {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
@@ -113,13 +124,34 @@ pub struct NatsRequestServer {
 impl NatsRequestServer {
     /// Connects a request server to one NATS service subject.
     pub async fn connect(server: &str, subject: &str) -> CatgaResult<Self> {
-        if subject.is_empty() {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "NATS request subject must not be empty",
-            ));
-        }
+        validate_subject(subject)?;
         let client = async_nats::connect(server).await.map_err(map_error)?;
+        Self::from_client(client, subject).await
+    }
+
+    /// Builds a request server from an application-owned NATS client.
+    ///
+    /// This preserves the client's configured TLS, authentication, reconnection, and
+    /// observability behavior. The configured subject is validated and subscribed before this
+    /// method returns.
+    pub async fn from_client(client: async_nats::Client, subject: &str) -> CatgaResult<Self> {
+        Self::initialize(client, subject).await
+    }
+
+    /// Builds a request server from an application-owned NATS client.
+    ///
+    /// This is equivalent to [`Self::from_client`] and is available for applications that use
+    /// `connect_*` naming for their transport factories. The configured subject is validated and
+    /// subscribed before the returned server can receive requests.
+    pub async fn connect_with_client(
+        client: async_nats::Client,
+        subject: &str,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, subject).await
+    }
+
+    async fn initialize(client: async_nats::Client, subject: &str) -> CatgaResult<Self> {
+        validate_subject(subject)?;
         let subscription = client
             .subscribe(async_nats::Subject::from(subject))
             .await
@@ -212,4 +244,39 @@ impl NatsRequest {
 
 fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
+}
+
+fn validate_subject(subject: &str) -> CatgaResult<()> {
+    if subject.trim().is_empty() {
+        return Err(CatgaError::new(
+            ErrorCode::Validation,
+            "NATS request subject must not be empty or whitespace-only",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::NatsRequestClient;
+
+    use super::validate_subject;
+
+    #[test]
+    fn request_subject_must_not_be_blank() {
+        assert!(validate_subject("orders.create").is_ok());
+        assert!(validate_subject("").is_err());
+        assert!(validate_subject(" \t").is_err());
+    }
+
+    #[test]
+    fn connect_validates_request_subject_before_opening_a_connection() {
+        let result =
+            futures::executor::block_on(NatsRequestClient::connect("nats://127.0.0.1:1", " "));
+
+        assert!(matches!(
+            result,
+            Err(error) if error.code() == catga_core::ErrorCode::Validation
+        ));
+    }
 }

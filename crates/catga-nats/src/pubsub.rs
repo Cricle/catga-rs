@@ -29,15 +29,40 @@ pub struct NatsPubSubTransport {
 impl NatsPubSubTransport {
     /// Connects and subscribes to the configured nonblank Core NATS subject.
     pub async fn connect(config: NatsPubSubConfig) -> CatgaResult<Self> {
-        if config.subject.trim().is_empty() {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "Core NATS subject must not be empty or whitespace-only",
-            ));
-        }
+        validate_subject(config.subject.as_ref())?;
         let client = async_nats::connect(config.server.as_ref())
             .await
             .map_err(map_error)?;
+        Self::from_client(client, config).await
+    }
+
+    /// Builds a Pub/Sub transport from an application-owned NATS client.
+    ///
+    /// This retains the supplied client's TLS, authentication, reconnection, and observability
+    /// configuration. `config.server` is not opened by this constructor; it remains part of
+    /// [`NatsPubSubConfig`] for compatibility with [`Self::connect`]. The configured subject is
+    /// validated and subscribed before this method returns.
+    pub async fn from_client(
+        client: async_nats::Client,
+        config: NatsPubSubConfig,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config).await
+    }
+
+    /// Builds a Pub/Sub transport from an application-owned NATS client.
+    ///
+    /// This is equivalent to [`Self::from_client`] and is available for applications that use
+    /// `connect_*` naming for their transport factories. The configured subject is validated and
+    /// subscribed before the returned transport can receive messages.
+    pub async fn connect_with_client(
+        client: async_nats::Client,
+        config: NatsPubSubConfig,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config).await
+    }
+
+    async fn initialize(client: async_nats::Client, config: NatsPubSubConfig) -> CatgaResult<Self> {
+        validate_subject(config.subject.as_ref())?;
         let subject: async_nats::Subject = config.subject.to_string().into();
         let subscription = client.subscribe(subject.clone()).await.map_err(map_error)?;
         Ok(Self {
@@ -133,4 +158,41 @@ impl Waitable for NatsPubSubTransport {
 
 fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
+}
+
+fn validate_subject(subject: &str) -> CatgaResult<()> {
+    if subject.trim().is_empty() {
+        return Err(CatgaError::new(
+            ErrorCode::Validation,
+            "Core NATS subject must not be empty or whitespace-only",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{NatsPubSubConfig, NatsPubSubTransport};
+
+    use super::validate_subject;
+
+    #[test]
+    fn pubsub_subject_must_not_be_blank() {
+        assert!(validate_subject("orders.created").is_ok());
+        assert!(validate_subject("").is_err());
+        assert!(validate_subject(" \t").is_err());
+    }
+
+    #[test]
+    fn connect_validates_pubsub_subject_before_opening_a_connection() {
+        let result = futures::executor::block_on(NatsPubSubTransport::connect(NatsPubSubConfig {
+            server: "nats://127.0.0.1:1".into(),
+            subject: " ".into(),
+        }));
+
+        assert!(matches!(
+            result,
+            Err(error) if error.code() == catga_core::ErrorCode::Validation
+        ));
+    }
 }

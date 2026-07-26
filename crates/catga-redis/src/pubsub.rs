@@ -56,13 +56,42 @@ impl RedisPubSubTransport {
     /// The subscription is created before this method returns, preventing a race in which a
     /// caller publishes the first broadcast before its local receiver is registered.
     pub async fn connect(config: RedisPubSubConfig) -> CatgaResult<Self> {
+        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        Self::from_client(client, config).await
+    }
+
+    /// Builds a Pub/Sub transport from an application-owned Redis client.
+    ///
+    /// This retains the supplied client's TLS, authentication, reconnection, and observability
+    /// configuration. `config.server` is not opened by this constructor; it remains part of
+    /// [`RedisPubSubConfig`] for compatibility with [`Self::connect`]. The configured channel is
+    /// validated and subscribed before this method returns.
+    pub async fn from_client(
+        client: redis::Client,
+        config: RedisPubSubConfig,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config).await
+    }
+
+    /// Builds a Pub/Sub transport from an application-owned Redis client.
+    ///
+    /// This is equivalent to [`Self::from_client`] and is available for applications that use
+    /// `connect_*` naming for their transport factories. The configured channel is validated and
+    /// subscribed before the returned transport can receive messages.
+    pub async fn connect_with_client(
+        client: redis::Client,
+        config: RedisPubSubConfig,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config).await
+    }
+
+    async fn initialize(client: redis::Client, config: RedisPubSubConfig) -> CatgaResult<Self> {
         if config.channel.trim().is_empty() {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
                 "Redis Pub/Sub channel must not be empty or whitespace-only",
             ));
         }
-        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
         let mut subscription = client.get_async_pubsub().await.map_err(map_error)?;
         subscription
             .subscribe(config.channel.as_ref())

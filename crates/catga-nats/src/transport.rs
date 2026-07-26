@@ -59,9 +59,37 @@ enum NatsPublishMode {
 impl NatsTransport {
     /// Connects and idempotently provisions the configured stream and durable consumer.
     pub async fn connect(config: NatsConfig) -> CatgaResult<Self> {
+        validate_config(&config)?;
         let client = async_nats::connect(config.server.as_ref())
             .await
             .map_err(map_error)?;
+        Self::from_client(client, config).await
+    }
+
+    /// Builds a transport from an application-owned NATS client.
+    ///
+    /// This preserves the client's configured TLS, authentication, reconnection, and
+    /// observability behavior while idempotently provisioning the stream and durable consumer in
+    /// `config`. `config.server` is not opened by this constructor; it remains part of
+    /// [`NatsConfig`] for compatibility with [`Self::connect`].
+    pub async fn from_client(client: async_nats::Client, config: NatsConfig) -> CatgaResult<Self> {
+        Self::initialize(client, config).await
+    }
+
+    /// Builds a transport from an application-owned NATS client.
+    ///
+    /// This is equivalent to [`Self::from_client`] and is available for applications that use
+    /// `connect_*` naming for their transport factories. The supplied client is reused without
+    /// opening `config.server`.
+    pub async fn connect_with_client(
+        client: async_nats::Client,
+        config: NatsConfig,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config).await
+    }
+
+    async fn initialize(client: async_nats::Client, config: NatsConfig) -> CatgaResult<Self> {
+        validate_config(&config)?;
         let context = jetstream::new(client.clone());
         let stream = context
             .get_or_create_stream(stream::Config {
@@ -376,6 +404,19 @@ fn validate_destination_config(config: &NatsDestinationConfig) -> CatgaResult<()
     Ok(())
 }
 
+fn validate_config(config: &NatsConfig) -> CatgaResult<()> {
+    if config.stream.trim().is_empty()
+        || config.subject.trim().is_empty()
+        || config.consumer.trim().is_empty()
+    {
+        return Err(CatgaError::new(
+            ErrorCode::Validation,
+            "NATS stream, subject, and consumer must not be empty",
+        ));
+    }
+    Ok(())
+}
+
 const fn publish_mode(quality_of_service: QualityOfService) -> NatsPublishMode {
     match quality_of_service {
         QualityOfService::AtMostOnce => NatsPublishMode::Core,
@@ -396,7 +437,9 @@ mod tests {
         Counter, CounterFn, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
     };
 
-    use super::{NatsPublishMode, publish_mode, record_broker_duplicate};
+    use crate::{NatsConfig, NatsTransport};
+
+    use super::{NatsPublishMode, publish_mode, record_broker_duplicate, validate_config};
 
     #[derive(Default)]
     struct CounterValue(AtomicU64);
@@ -459,5 +502,49 @@ mod tests {
         drop(guard);
 
         assert_eq!(recorder.0.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn transport_config_requires_nonblank_jetstream_resource_names() {
+        let valid = NatsConfig {
+            server: "nats://unused.invalid".into(),
+            stream: "orders".into(),
+            subject: "orders.created".into(),
+            consumer: "workers".into(),
+        };
+
+        assert!(validate_config(&valid).is_ok());
+
+        for config in [
+            NatsConfig {
+                stream: " ".into(),
+                ..valid.clone()
+            },
+            NatsConfig {
+                subject: " ".into(),
+                ..valid.clone()
+            },
+            NatsConfig {
+                consumer: " ".into(),
+                ..valid.clone()
+            },
+        ] {
+            assert!(validate_config(&config).is_err());
+        }
+    }
+
+    #[test]
+    fn connect_validates_transport_config_before_opening_a_connection() {
+        let result = futures::executor::block_on(NatsTransport::connect(NatsConfig {
+            server: "nats://127.0.0.1:1".into(),
+            stream: " ".into(),
+            subject: "orders.created".into(),
+            consumer: "workers".into(),
+        }));
+
+        assert!(matches!(
+            result,
+            Err(error) if error.code() == catga_core::ErrorCode::Validation
+        ));
     }
 }
