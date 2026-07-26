@@ -191,6 +191,33 @@ async fn time_travel_rebuilds_aggregate_state_at_versions_times_and_comparison_b
 }
 
 #[tokio::test]
+async fn time_travel_rejects_a_comparison_history_larger_than_its_bounded_result() -> CatgaResult<()>
+{
+    let store = MemoryEventStore::default();
+    let events = (0..=1_024).map(|index| event(index, 1)).collect::<Vec<_>>();
+    store
+        .append("counter:bounded-comparison", events, None)
+        .await?;
+    let time_travel = TimeTravelService::<Counter, _>::new(&store);
+
+    let error = match time_travel
+        .compare_versions("bounded-comparison", -1, 1_024)
+        .await
+    {
+        Ok(_) => {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "a whole history must not be accumulated without a bound",
+            ));
+        }
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    Ok(())
+}
+
+#[tokio::test]
 async fn snapshot_time_travel_replays_only_events_after_the_selected_snapshot() {
     let events = MemoryEventStore::default();
     events

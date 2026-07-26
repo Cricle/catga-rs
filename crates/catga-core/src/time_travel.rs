@@ -8,6 +8,14 @@ use crate::{
     MAX_EVENT_STORE_PAGE_SIZE, VersionHistoryPage, VersionInfo,
 };
 
+/// Maximum event metadata records retained by one [`StateComparison`].
+///
+/// [`TimeTravelService::compare_versions`] reconstructs both requested states with bounded event
+/// pages, but its caller-owned comparison result also contains event metadata. Limiting that
+/// output prevents a wide version range from materializing an unbounded history. Call
+/// [`TimeTravelService::version_history_page`] to process a larger history incrementally.
+pub const MAX_STATE_COMPARISON_EVENTS: usize = MAX_EVENT_STORE_PAGE_SIZE;
+
 /// A pair of reconstructed aggregate states and the events between their versions.
 #[derive(Clone, Debug)]
 pub struct StateComparison<A> {
@@ -174,25 +182,30 @@ where
             return Ok(Vec::new());
         }
         let mut cursor = 0;
-        let mut history = Vec::new();
+        let mut history = Vec::with_capacity(MAX_STATE_COMPARISON_EVENTS);
         loop {
             let page = self
                 .events
                 .read_to_version_page(stream_id, cursor, to, MAX_EVENT_STORE_PAGE_SIZE)
                 .await?;
-            history.extend(
-                page.stream()
-                    .events()
-                    .iter()
-                    .filter(|event| event.version() > from)
-                    .map(|event| {
-                        VersionInfo::new(
-                            event.version(),
-                            event.timestamp(),
-                            event.envelope().message_type(),
-                        )
-                    }),
-            );
+            for event in page
+                .stream()
+                .events()
+                .iter()
+                .filter(|event| event.version() > from)
+            {
+                if history.len() == MAX_STATE_COMPARISON_EVENTS {
+                    return Err(CatgaError::new(
+                        ErrorCode::Validation,
+                        "state comparison history exceeds the bounded result limit",
+                    ));
+                }
+                history.push(VersionInfo::new(
+                    event.version(),
+                    event.timestamp(),
+                    event.envelope().message_type(),
+                ));
+            }
             let Some(next) = page.next_version() else {
                 break;
             };

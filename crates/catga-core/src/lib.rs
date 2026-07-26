@@ -138,7 +138,9 @@ pub use subscription::{
     SubscriptionHandler, SubscriptionLoopOptions, SubscriptionRun, SubscriptionRunner,
     SubscriptionStore,
 };
-pub use time_travel::{SnapshotTimeTravelService, StateComparison, TimeTravelService};
+pub use time_travel::{
+    MAX_STATE_COMPARISON_EVENTS, SnapshotTimeTravelService, StateComparison, TimeTravelService,
+};
 pub use trace_context::{
     MAX_TRACEPARENT_BYTES, MAX_TRACESTATE_BYTES, TRACEPARENT_HEADER, TRACESTATE_HEADER,
     TraceContext,
