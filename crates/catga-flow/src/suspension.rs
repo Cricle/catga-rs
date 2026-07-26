@@ -4,6 +4,7 @@ use std::{
 };
 
 use catga_core::CatgaError;
+use catga_core::{CatgaResult, ErrorCode};
 use serde::{Deserialize, Serialize};
 
 use crate::FlowState;
@@ -17,6 +18,53 @@ pub enum WaitPolicy {
     Any,
 }
 
+/// Maximum number of durable child identities or retained results in one wait condition.
+pub const MAX_WAIT_CHILDREN: usize = 1_024;
+/// Maximum byte length of one successful child payload retained by a wait condition.
+pub const MAX_WAIT_RESULT_BYTES: usize = 64 * 1_024;
+
+/// Persisted state of one stable child-launch intent.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum FlowChildLaunchState {
+    /// No process currently owns launching this child.
+    Pending,
+    /// One runtime holds the launch claim until `expires_at`.
+    Claimed {
+        /// Runtime owner that obtained the claim.
+        owner: Box<str>,
+        /// Wall-clock deadline after which another runtime may retry the stable child identity.
+        expires_at: SystemTime,
+    },
+    /// A launcher successfully accepted the stable child identity.
+    Launched,
+}
+
+/// One bounded, stable child identity retained by a durable wait condition.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FlowChildLaunch {
+    child_id: Box<str>,
+    state: FlowChildLaunchState,
+}
+
+impl FlowChildLaunch {
+    fn pending(child_id: impl Into<Box<str>>) -> Self {
+        Self {
+            child_id: child_id.into(),
+            state: FlowChildLaunchState::Pending,
+        }
+    }
+
+    /// Returns the stable application-supplied child identity.
+    pub fn child_id(&self) -> &str {
+        &self.child_id
+    }
+
+    /// Returns the persisted launch state.
+    pub const fn state(&self) -> &FlowChildLaunchState {
+        &self.state
+    }
+}
+
 /// One immutable child result recorded against a wait condition.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WaitResult {
@@ -26,6 +74,18 @@ pub struct WaitResult {
 }
 
 impl WaitResult {
+    pub(crate) fn from_legacy(
+        child_id: Box<str>,
+        payload: Option<Arc<[u8]>>,
+        error: Option<CatgaError>,
+    ) -> Self {
+        Self {
+            child_id,
+            payload,
+            error,
+        }
+    }
+
     fn success(child_id: impl Into<Box<str>>, payload: impl Into<Arc<[u8]>>) -> Self {
         Self {
             child_id: child_id.into(),
@@ -77,9 +137,29 @@ pub struct WaitCondition {
     results: Arc<[WaitResult]>,
     created_at: SystemTime,
     timeout: Duration,
+    child_launches: Arc<[FlowChildLaunch]>,
 }
 
 impl WaitCondition {
+    pub(crate) fn from_legacy(
+        correlation_id: Box<str>,
+        policy: WaitPolicy,
+        expected_count: u32,
+        results: Vec<WaitResult>,
+        created_at: SystemTime,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            correlation_id,
+            policy,
+            expected_count,
+            results: Arc::from(results),
+            created_at,
+            timeout,
+            child_launches: Arc::from([]),
+        }
+    }
+
     /// Creates an empty condition waiting for `expected_count` distinct child results.
     pub fn new(
         correlation_id: impl Into<Box<str>>,
@@ -95,7 +175,62 @@ impl WaitCondition {
             results: Arc::from([]),
             created_at,
             timeout,
+            child_launches: Arc::from([]),
         }
+    }
+
+    /// Creates a wait condition that launches exactly the supplied stable child identities.
+    ///
+    /// Child identities are persisted before launch. They must be unique, non-empty, and no more
+    /// than [`MAX_WAIT_CHILDREN`]. A caller can recover a parent after a crash by invoking
+    /// [`crate::FlowRuntime::launch_waiting_children`] again with an idempotent launcher.
+    pub fn for_children<I, Id>(
+        correlation_id: impl Into<Box<str>>,
+        policy: WaitPolicy,
+        child_ids: I,
+        created_at: SystemTime,
+        timeout: Duration,
+    ) -> CatgaResult<Self>
+    where
+        I: IntoIterator<Item = Id>,
+        Id: Into<Box<str>>,
+    {
+        let mut children = Vec::new();
+        for child_id in child_ids {
+            let child_id = child_id.into();
+            if child_id.is_empty()
+                || children
+                    .iter()
+                    .any(|child: &FlowChildLaunch| child.child_id == child_id)
+            {
+                return Err(CatgaError::new(
+                    ErrorCode::Validation,
+                    "flow child identities must be non-empty and unique",
+                ));
+            }
+            if children.len() == MAX_WAIT_CHILDREN {
+                return Err(CatgaError::new(
+                    ErrorCode::Validation,
+                    "flow child wait exceeds the supported child limit",
+                ));
+            }
+            children.push(FlowChildLaunch::pending(child_id));
+        }
+        if children.is_empty() {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "a durable child wait requires at least one child identity",
+            ));
+        }
+        Ok(Self {
+            correlation_id: correlation_id.into(),
+            policy,
+            expected_count: u32::try_from(children.len()).unwrap_or(u32::MAX),
+            results: Arc::from([]),
+            created_at,
+            timeout,
+            child_launches: Arc::from(children),
+        })
     }
 
     /// Returns the stable condition identity.
@@ -123,6 +258,11 @@ impl WaitCondition {
         &self.results
     }
 
+    /// Returns stable child launch intents, or an empty slice for an externally completed wait.
+    pub fn child_launches(&self) -> &[FlowChildLaunch] {
+        &self.child_launches
+    }
+
     /// Returns when the condition was created.
     pub const fn created_at(&self) -> SystemTime {
         self.created_at
@@ -146,10 +286,15 @@ impl WaitCondition {
         payload: impl Into<Arc<[u8]>>,
     ) -> Self {
         let child_id = child_id.into();
-        if self
-            .results
-            .iter()
-            .any(|result| result.child_id == child_id)
+        let payload: Arc<[u8]> = payload.into();
+        if payload.len() > MAX_WAIT_RESULT_BYTES
+            || self.results.len() >= MAX_WAIT_CHILDREN
+            || self.results.len() >= usize::try_from(self.expected_count).unwrap_or(usize::MAX)
+            || !self.accepts_child(&child_id)
+            || self
+                .results
+                .iter()
+                .any(|result| result.child_id == child_id)
         {
             return self.clone();
         }
@@ -165,10 +310,13 @@ impl WaitCondition {
     /// Adds a failed child result unless the child has already reported.
     pub fn record_failure(&self, child_id: impl Into<Box<str>>, error: CatgaError) -> Self {
         let child_id = child_id.into();
-        if self
-            .results
-            .iter()
-            .any(|result| result.child_id == child_id)
+        if self.results.len() >= MAX_WAIT_CHILDREN
+            || self.results.len() >= usize::try_from(self.expected_count).unwrap_or(usize::MAX)
+            || !self.accepts_child(&child_id)
+            || self
+                .results
+                .iter()
+                .any(|result| result.child_id == child_id)
         {
             return self.clone();
         }
@@ -179,6 +327,129 @@ impl WaitCondition {
             results: Arc::from(results),
             ..self.clone()
         }
+    }
+
+    /// Returns whether this wait accepts a completion from `child_id`.
+    ///
+    /// Generic external waits created with [`Self::new`] accept any child identity. Durable child
+    /// fan-out accepts only its persisted child identities.
+    pub fn accepts_child(&self, child_id: &str) -> bool {
+        self.child_launches.is_empty()
+            || self
+                .child_launches
+                .iter()
+                .any(|child| child.child_id.as_ref() == child_id)
+    }
+
+    /// Returns whether `payload_len` is safe to retain for this condition.
+    pub const fn accepts_payload_len(&self, payload_len: usize) -> bool {
+        payload_len <= MAX_WAIT_RESULT_BYTES
+    }
+
+    pub(crate) fn claim_next_child(
+        &self,
+        owner: impl Into<Box<str>>,
+        now: SystemTime,
+        claim_for: Duration,
+    ) -> Option<(Box<str>, Self)> {
+        let expires_at = now.checked_add(claim_for)?;
+        let owner = owner.into();
+        let index = self
+            .child_launches
+            .iter()
+            .position(|child| match child.state {
+                FlowChildLaunchState::Pending => true,
+                FlowChildLaunchState::Claimed { expires_at, .. } => expires_at <= now,
+                FlowChildLaunchState::Launched => false,
+            })?;
+        let child_id = self.child_launches[index].child_id.clone();
+        let mut children: Vec<FlowChildLaunch> = self.child_launches.iter().cloned().collect();
+        children[index].state = FlowChildLaunchState::Claimed { owner, expires_at };
+        Some((
+            child_id,
+            Self {
+                child_launches: Arc::from(children),
+                ..self.clone()
+            },
+        ))
+    }
+
+    pub(crate) fn mark_child_launched(&self, child_id: &str, owner: &str) -> Option<Self> {
+        let index = self.child_launches.iter().position(|child| {
+            child.child_id.as_ref() == child_id
+                && matches!(
+                    &child.state,
+                    FlowChildLaunchState::Claimed {
+                        owner: claim_owner,
+                        ..
+                    } if claim_owner.as_ref() == owner
+                )
+        })?;
+        let mut children: Vec<FlowChildLaunch> = self.child_launches.iter().cloned().collect();
+        children[index].state = FlowChildLaunchState::Launched;
+        Some(Self {
+            child_launches: Arc::from(children),
+            ..self.clone()
+        })
+    }
+
+    pub(crate) fn release_child_claim(&self, child_id: &str, owner: &str) -> Option<Self> {
+        let index = self.child_launches.iter().position(|child| {
+            child.child_id.as_ref() == child_id
+                && matches!(
+                    &child.state,
+                    FlowChildLaunchState::Claimed {
+                        owner: claim_owner,
+                        ..
+                    } if claim_owner.as_ref() == owner
+                )
+        })?;
+        let mut children: Vec<FlowChildLaunch> = self.child_launches.iter().cloned().collect();
+        children[index].state = FlowChildLaunchState::Pending;
+        Some(Self {
+            child_launches: Arc::from(children),
+            ..self.clone()
+        })
+    }
+
+    pub(crate) fn validate(&self) -> CatgaResult<()> {
+        if self.expected_count as usize > MAX_WAIT_CHILDREN
+            || self.results.len() > MAX_WAIT_CHILDREN
+            || self.results.len() > self.expected_count as usize
+            || self.results.iter().any(|result| {
+                result
+                    .payload()
+                    .is_some_and(|payload| payload.len() > MAX_WAIT_RESULT_BYTES)
+            })
+        {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "flow wait condition exceeds supported bounds",
+            ));
+        }
+        if !self.child_launches.is_empty()
+            && (self.child_launches.len() > MAX_WAIT_CHILDREN
+                || self.child_launches.len() != self.expected_count as usize
+                || self
+                    .child_launches
+                    .iter()
+                    .any(|child| child.child_id.is_empty())
+                || self
+                    .child_launches
+                    .iter()
+                    .enumerate()
+                    .any(|(index, child)| {
+                        self.child_launches[..index]
+                            .iter()
+                            .any(|previous| previous.child_id == child.child_id)
+                    }))
+        {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "flow child launch intents are invalid",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -209,6 +480,10 @@ impl FlowContinuation {
             resume_at,
             schedule_id,
         }
+    }
+
+    pub(crate) fn with_created_at(self, created_at: SystemTime) -> Self {
+        Self { created_at, ..self }
     }
 
     /// Creates a continuation ready to execute `step_name`.

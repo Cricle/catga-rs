@@ -7,9 +7,12 @@ use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use tracing::Instrument;
 
 use crate::{
-    FlowContinuation, FlowDefinition, FlowScheduler, FlowState, FlowStatus, FlowStepOutcome,
-    SuspendedFlowStore, WaitCondition, WaitPolicy, metrics::FlowMetrics,
+    FlowChildLauncher, FlowContinuation, FlowDefinition, FlowScheduler, FlowState, FlowStatus,
+    FlowStepOutcome, FlowTagPolicy, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    metrics::FlowMetrics,
 };
+
+const MAX_CHILD_LAUNCH_CAS_RETRIES: usize = 8;
 
 /// The observable state after starting, resuming, or recording a durable flow trigger.
 #[derive(Clone, Debug)]
@@ -65,6 +68,7 @@ pub struct FlowRuntime<S: ?Sized, H: ?Sized> {
     owner: Box<str>,
     stale_after: Duration,
     metrics: FlowMetrics,
+    tag_policy: Option<FlowTagPolicy>,
 }
 
 impl<S, H> FlowRuntime<S, H>
@@ -86,6 +90,7 @@ where
             owner: owner.into(),
             stale_after: Duration::from_secs(30),
             metrics: FlowMetrics::default(),
+            tag_policy: None,
         }
     }
 
@@ -95,6 +100,16 @@ where
     /// retained for deterministic forced-recovery tests and disables automatic renewal.
     pub fn with_stale_after(mut self, stale_after: Duration) -> Self {
         self.stale_after = stale_after;
+        self
+    }
+
+    /// Applies timeout and retry rules to explicitly tagged durable steps.
+    ///
+    /// Timeouts and retries stay within the caller-owned `start` or `resume` future; no
+    /// background task is spawned. Only transient execution errors retry, and every durable
+    /// transition remains persisted regardless of policy persistence markers.
+    pub fn with_tag_policy(mut self, tag_policy: FlowTagPolicy) -> Self {
+        self.tag_policy = Some(tag_policy);
         self
     }
 
@@ -113,6 +128,7 @@ where
             owner: owner.into(),
             stale_after,
             metrics,
+            tag_policy: None,
         }
     }
 
@@ -264,6 +280,24 @@ where
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
         self.ensure_definition(&continuation)?;
+        let wait = continuation.wait().ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "flow is not waiting for child results",
+            )
+        })?;
+        if !wait.accepts_child(child_id) {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "child result does not belong to this flow wait",
+            ));
+        }
+        if !wait.accepts_payload_len(payload.len()) {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "flow child result payload exceeds the supported bound",
+            ));
+        }
         if !self
             .store
             .record_wait_success(flow_id, continuation.state().version(), child_id, payload)
@@ -288,6 +322,18 @@ where
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
         self.ensure_definition(&continuation)?;
+        let wait = continuation.wait().ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "flow is not waiting for child results",
+            )
+        })?;
+        if !wait.accepts_child(child_id) {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "child result does not belong to this flow wait",
+            ));
+        }
         if !self
             .store
             .record_wait_failure(flow_id, continuation.state().version(), child_id, error)
@@ -296,6 +342,51 @@ where
             return self.current_result(flow_id).await;
         }
         self.resume(flow_id).await
+    }
+
+    /// Launches every currently unlaunched stable child of `flow_id` without retaining tasks.
+    ///
+    /// The parent continuation records the child identities before this method invokes `launcher`.
+    /// Each launch transitions through an owner-bound, expiring durable claim. A crash after the
+    /// external launcher accepts a child can therefore cause a later call to launch the same
+    /// identity again; [`FlowChildLauncher`] implementations must de-duplicate that stable pair.
+    /// At most one launch future is active at a time and the method retains no child result.
+    pub async fn launch_waiting_children<L>(
+        &self,
+        flow_id: &str,
+        launcher: &L,
+    ) -> CatgaResult<usize>
+    where
+        L: FlowChildLauncher + ?Sized,
+    {
+        let mut launched = 0_usize;
+        loop {
+            let Some((child_id, correlation_id)) = self.claim_next_wait_child(flow_id).await?
+            else {
+                return Ok(launched);
+            };
+            match launcher.launch(flow_id, &child_id, &correlation_id).await {
+                Ok(()) => {
+                    self.finish_wait_child_claim(flow_id, &child_id, true)
+                        .await?;
+                    launched = launched.saturating_add(1);
+                }
+                Err(error) => {
+                    if let Err(release_error) = self
+                        .finish_wait_child_claim(flow_id, &child_id, false)
+                        .await
+                    {
+                        tracing::warn!(
+                            flow_id,
+                            child_id = child_id.as_ref(),
+                            error = ?release_error,
+                            "child launch failed and its durable launch claim could not be released"
+                        );
+                    }
+                    return Err(error);
+                }
+            }
+        }
     }
 
     /// Refreshes the caller's durable execution lease without changing its business version.
@@ -432,6 +523,7 @@ where
                             .await;
                     };
                     let completed_steps = state.step().saturating_add(1);
+                    wait.validate()?;
                     let suspended = continuation
                         .clone()
                         .at_step(next_step)
@@ -466,18 +558,84 @@ where
         state: FlowState,
         span: tracing::Span,
     ) -> CatgaResult<FlowStepOutcome> {
+        let Some(tag) = self.definition.step_tag(continuation.step_name()) else {
+            return self
+                .execute_step_attempt(continuation, state, span, None)
+                .await;
+        };
+        let Some(tag_policy) = self.tag_policy.as_ref() else {
+            return self
+                .execute_step_attempt(continuation, state, span, None)
+                .await;
+        };
+        let timeout = tag_policy.timeout_for(tag);
+        let retries = tag_policy.retries_for(tag);
+        for attempt in 0..=retries {
+            match self
+                .execute_step_attempt(continuation, state.clone(), span.clone(), Some(timeout))
+                .await
+            {
+                Err(error) if error.code() == ErrorCode::Transient && attempt < retries => {
+                    if !self
+                        .store
+                        .heartbeat(
+                            continuation.state().id(),
+                            &self.owner,
+                            continuation.state().version(),
+                        )
+                        .await?
+                    {
+                        return Err(CatgaError::new(
+                            ErrorCode::Conflict,
+                            "flow execution ownership was lost before a tagged retry",
+                        ));
+                    }
+                }
+                result => return result,
+            }
+        }
+        Err(CatgaError::new(
+            ErrorCode::Internal,
+            "tagged retry loop completed without an execution result",
+        ))
+    }
+
+    async fn execute_step_attempt(
+        &self,
+        continuation: &FlowContinuation,
+        state: FlowState,
+        span: tracing::Span,
+        timeout: Option<Duration>,
+    ) -> CatgaResult<FlowStepOutcome> {
         let execution = self
             .definition
             .execute(continuation.step_name(), state)
             .instrument(span);
         if self.stale_after.is_zero() {
-            return execution.await;
+            return match timeout {
+                Some(timeout) => tokio::time::timeout(timeout, execution)
+                    .await
+                    .map_err(|_| {
+                        CatgaError::new(ErrorCode::Timeout, "tagged flow step timed out")
+                    })?,
+                None => execution.await,
+            };
         }
         tokio::pin!(execution);
+        let deadline = async move {
+            match timeout {
+                Some(timeout) => tokio::time::sleep(timeout).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(deadline);
         let heartbeat_interval = (self.stale_after / 2).max(Duration::from_nanos(1));
         loop {
             tokio::select! {
                 result = &mut execution => return result,
+                _ = &mut deadline => {
+                    return Err(CatgaError::new(ErrorCode::Timeout, "tagged flow step timed out"));
+                }
                 _ = tokio::time::sleep(heartbeat_interval) => {
                     if !self.store.heartbeat(
                         continuation.state().id(),
@@ -554,6 +712,83 @@ where
             .claim(&continuation, running.clone())
             .await?
             .then_some(running))
+    }
+
+    async fn claim_next_wait_child(
+        &self,
+        flow_id: &str,
+    ) -> CatgaResult<Option<(Box<str>, Box<str>)>> {
+        for _ in 0..MAX_CHILD_LAUNCH_CAS_RETRIES {
+            let Some(continuation) = self.store.get(flow_id).await? else {
+                return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
+            };
+            self.ensure_definition(&continuation)?;
+            if continuation.state().status().is_terminal() {
+                return Ok(None);
+            }
+            let Some(wait) = continuation.wait() else {
+                return Ok(None);
+            };
+            wait.validate()?;
+            let now = SystemTime::now();
+            let claim_for = self.stale_after.max(Duration::from_nanos(1));
+            let Some((child_id, claimed_wait)) =
+                wait.claim_next_child(self.owner.clone(), now, claim_for)
+            else {
+                return Ok(None);
+            };
+            let correlation_id: Box<str> = wait.correlation_id().into();
+            let next = continuation
+                .clone()
+                .with_wait(claimed_wait)
+                .with_state(continuation.state().clone().suspended().next_version());
+            if self.store.claim(&continuation, next).await? {
+                return Ok(Some((child_id, correlation_id)));
+            }
+        }
+        Err(CatgaError::new(
+            ErrorCode::Transient,
+            "flow child launch claim did not stabilize",
+        ))
+    }
+
+    async fn finish_wait_child_claim(
+        &self,
+        flow_id: &str,
+        child_id: &str,
+        launched: bool,
+    ) -> CatgaResult<()> {
+        for _ in 0..MAX_CHILD_LAUNCH_CAS_RETRIES {
+            let Some(continuation) = self.store.get(flow_id).await? else {
+                return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
+            };
+            self.ensure_definition(&continuation)?;
+            if continuation.state().status().is_terminal() {
+                return Ok(());
+            }
+            let Some(wait) = continuation.wait() else {
+                return Ok(());
+            };
+            let next_wait = if launched {
+                wait.mark_child_launched(child_id, &self.owner)
+            } else {
+                wait.release_child_claim(child_id, &self.owner)
+            };
+            let Some(next_wait) = next_wait else {
+                return Ok(());
+            };
+            let next = continuation
+                .clone()
+                .with_wait(next_wait)
+                .with_state(continuation.state().clone().suspended().next_version());
+            if self.store.claim(&continuation, next).await? {
+                return Ok(());
+            }
+        }
+        Err(CatgaError::new(
+            ErrorCode::Transient,
+            "flow child launch completion did not stabilize",
+        ))
     }
 
     async fn current_result(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {

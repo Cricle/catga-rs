@@ -9,15 +9,358 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowDefinition, FlowQuery, FlowRuntime, FlowState, FlowStepOutcome,
-    FlowSummary, FlowTimeoutOptions, FlowTimeoutService, MAX_FLOW_TIMEOUT_BATCH_SIZE,
-    MAX_FLOW_TIMEOUT_SCAN_LIMIT, MemoryFlowScheduler, SuspendedFlowStore, TimedOutFlowPoll,
+    FlowChildLauncher, FlowContinuation, FlowDefinition, FlowQuery, FlowRuntime, FlowState,
+    FlowStepOutcome, FlowSummary, FlowTagPolicy, FlowTimeoutOptions, FlowTimeoutService,
+    MAX_FLOW_TIMEOUT_BATCH_SIZE, MAX_FLOW_TIMEOUT_SCAN_LIMIT, MAX_WAIT_CHILDREN,
+    MAX_WAIT_RESULT_BYTES, MemoryFlowScheduler, SuspendedFlowStore, TimedOutFlowPoll,
     TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_memory::MemorySuspendedFlows;
 use tokio_util::sync::CancellationToken;
 
 mod timeout_store_contract;
+
+#[tokio::test]
+async fn tagged_durable_step_retries_only_transient_failures_within_its_bound() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("tagged-retry").step_with_tag("request", "remote", {
+            let attempts = Arc::clone(&attempts);
+            move |_| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                        Err(CatgaError::new(
+                            ErrorCode::Transient,
+                            "upstream unavailable",
+                        ))
+                    } else {
+                        Ok(FlowStepOutcome::complete())
+                    }
+                }
+            }
+        }),
+        "node-a",
+    )
+    .with_tag_policy(FlowTagPolicy::new(Duration::from_secs(1), 2));
+
+    assert!(
+        runtime
+            .start("tagged-retry-1", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_success()
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn tagged_durable_step_timeout_returns_a_structured_timeout_without_background_work() {
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("tagged-timeout").step_with_tag("request", "remote", |_| async {
+            std::future::pending::<CatgaResult<FlowStepOutcome>>().await
+        }),
+        "node-a",
+    )
+    .with_tag_policy(FlowTagPolicy::new(Duration::from_millis(1), 0));
+
+    let result = runtime
+        .start("tagged-timeout-1", b"input".to_vec())
+        .await
+        .unwrap();
+    assert!(result.is_failure());
+    assert_eq!(result.state().error().unwrap().code(), ErrorCode::Timeout);
+}
+
+#[tokio::test]
+async fn tagged_durable_step_does_not_retry_a_non_transient_failure() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("tagged-validation").step_with_tag("request", "remote", {
+            let attempts = Arc::clone(&attempts);
+            move |_| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(CatgaError::new(ErrorCode::Validation, "request is invalid"))
+                }
+            }
+        }),
+        "node-a",
+    )
+    .with_tag_policy(FlowTagPolicy::new(Duration::from_secs(1), 3));
+
+    let result = runtime
+        .start("tagged-validation-1", b"input".to_vec())
+        .await
+        .unwrap();
+    assert!(result.is_failure());
+    assert_eq!(
+        result.state().error().unwrap().code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[derive(Default)]
+struct RecordingChildLauncher {
+    calls: std::sync::Mutex<Vec<(Box<str>, Box<str>, Box<str>)>>,
+}
+
+struct RecordThenPanicLauncher {
+    child_ids: Arc<std::sync::Mutex<Vec<Box<str>>>>,
+}
+
+#[async_trait]
+impl FlowChildLauncher for RecordThenPanicLauncher {
+    async fn launch(&self, _: &str, child_id: &str, _: &str) -> CatgaResult<()> {
+        self.child_ids.lock().unwrap().push(child_id.into());
+        panic!("simulated process crash after accepting the child launch");
+    }
+}
+
+struct RecordingOneChildLauncher {
+    child_ids: Arc<std::sync::Mutex<Vec<Box<str>>>>,
+}
+
+#[async_trait]
+impl FlowChildLauncher for RecordingOneChildLauncher {
+    async fn launch(&self, _: &str, child_id: &str, _: &str) -> CatgaResult<()> {
+        self.child_ids.lock().unwrap().push(child_id.into());
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl FlowChildLauncher for RecordingChildLauncher {
+    async fn launch(
+        &self,
+        parent_flow_id: &str,
+        child_id: &str,
+        correlation_id: &str,
+    ) -> CatgaResult<()> {
+        self.calls.lock().unwrap().push((
+            parent_flow_id.into(),
+            child_id.into(),
+            correlation_id.into(),
+        ));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn durable_child_fan_out_launches_each_stable_child_once_and_rejects_unknown_results() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let wait = WaitCondition::for_children(
+        "parent-wait",
+        WaitPolicy::All,
+        ["child-a", "child-b"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        scheduler,
+        FlowDefinition::new("parent")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+    let launcher = RecordingChildLauncher::default();
+
+    assert!(
+        runtime
+            .start("parent-1", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    assert_eq!(
+        runtime
+            .launch_waiting_children("parent-1", &launcher)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        runtime
+            .launch_waiting_children("parent-1", &launcher)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        launcher.calls.lock().unwrap().as_slice(),
+        [
+            ("parent-1".into(), "child-a".into(), "parent-wait".into()),
+            ("parent-1".into(), "child-b".into(), "parent-wait".into()),
+        ]
+    );
+
+    assert_eq!(
+        runtime
+            .record_wait_success("parent-1", "unknown-child", b"ignored".to_vec())
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::Validation
+    );
+    assert!(
+        runtime
+            .record_wait_success("parent-1", "child-a", b"a".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    assert!(
+        runtime
+            .record_wait_success("parent-1", "child-a", b"duplicate".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    assert!(
+        runtime
+            .record_wait_success("parent-1", "child-b", b"b".to_vec())
+            .await
+            .unwrap()
+            .is_success()
+    );
+}
+
+#[tokio::test]
+async fn durable_child_launch_recovers_an_expired_claim_with_the_same_child_identity() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let wait = WaitCondition::for_children(
+        "crash-wait",
+        WaitPolicy::All,
+        ["stable-child"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let runtime = Arc::new(
+        FlowRuntime::new(
+            store,
+            scheduler,
+            FlowDefinition::new("crash-parent")
+                .step("wait", move |_| {
+                    let wait = wait.clone();
+                    async move { Ok(FlowStepOutcome::wait(wait)) }
+                })
+                .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+            "node-a",
+        )
+        .with_stale_after(Duration::ZERO),
+    );
+    let child_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let crashing = RecordThenPanicLauncher {
+        child_ids: Arc::clone(&child_ids),
+    };
+    let recovering = RecordingOneChildLauncher {
+        child_ids: Arc::clone(&child_ids),
+    };
+
+    assert!(
+        runtime
+            .start("crash-parent-1", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_suspended()
+    );
+    let crashed = tokio::spawn({
+        let runtime = Arc::clone(&runtime);
+        async move {
+            runtime
+                .launch_waiting_children("crash-parent-1", &crashing)
+                .await
+        }
+    })
+    .await;
+    assert!(crashed.is_err());
+
+    assert_eq!(
+        runtime
+            .launch_waiting_children("crash-parent-1", &recovering)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        child_ids.lock().unwrap().as_slice(),
+        [
+            Box::<str>::from("stable-child"),
+            Box::<str>::from("stable-child")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn durable_child_wait_rejects_excess_children_and_oversized_results_before_retention() {
+    let too_many = (0..=MAX_WAIT_CHILDREN).map(|index| format!("child-{index}"));
+    assert_eq!(
+        WaitCondition::for_children(
+            "too-many",
+            WaitPolicy::All,
+            too_many,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        )
+        .unwrap_err()
+        .code(),
+        ErrorCode::Validation
+    );
+
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let wait = WaitCondition::for_children(
+        "bounded-result",
+        WaitPolicy::All,
+        ["child"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("bounded-result")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+    runtime
+        .start("bounded-result", b"input".to_vec())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        runtime
+            .record_wait_success(
+                "bounded-result",
+                "child",
+                vec![0; MAX_WAIT_RESULT_BYTES + 1]
+            )
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::Validation
+    );
+}
 
 struct ObservingTimeoutStore {
     inner: MemorySuspendedFlows,

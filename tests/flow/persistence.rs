@@ -15,6 +15,33 @@ struct VersionOneContinuation {
     resume_at: Option<SystemTime>,
 }
 
+#[derive(Serialize)]
+struct VersionThreeWaitCondition {
+    correlation_id: Box<str>,
+    policy: WaitPolicy,
+    expected_count: u32,
+    results: Vec<VersionThreeWaitResult>,
+    created_at: SystemTime,
+    timeout: Duration,
+}
+
+#[derive(Serialize)]
+struct VersionThreeWaitResult {
+    child_id: Box<str>,
+    payload: Option<Vec<u8>>,
+    error: Option<CatgaError>,
+}
+
+#[derive(Serialize)]
+struct VersionThreeContinuation {
+    state: FlowState,
+    step_name: Box<str>,
+    wait: Option<VersionThreeWaitCondition>,
+    resume_at: Option<SystemTime>,
+    schedule_id: Option<Box<str>>,
+    created_at: SystemTime,
+}
+
 #[test]
 fn continuation_codec_preserves_terminal_error_and_wait_results() {
     let state = FlowState::new("payment-42", "payment", b"input".to_vec(), "node-a")
@@ -42,13 +69,46 @@ fn continuation_codec_preserves_terminal_error_and_wait_results() {
 
 #[test]
 fn continuation_codec_rejects_unknown_format_versions_explicitly() {
-    let error = decode_continuation(&[4]).expect_err("unknown format version must fail");
+    let error = decode_continuation(&[5]).expect_err("unknown format version must fail");
 
     assert_eq!(error.code(), ErrorCode::Internal);
     assert_eq!(
         error.message(),
-        "unsupported flow continuation format version 4"
+        "unsupported flow continuation format version 5"
     );
+}
+
+#[test]
+fn continuation_codec_migrates_v3_waits_without_child_launch_intents() {
+    let created_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100);
+    let legacy = VersionThreeContinuation {
+        state: FlowState::new("payment-44", "payment", b"input".to_vec(), "node-a"),
+        step_name: "charge".into(),
+        wait: Some(VersionThreeWaitCondition {
+            correlation_id: "payment-44-children".into(),
+            policy: WaitPolicy::All,
+            expected_count: 1,
+            results: vec![VersionThreeWaitResult {
+                child_id: "receipt".into(),
+                payload: Some(b"approved".to_vec()),
+                error: None,
+            }],
+            created_at,
+            timeout: Duration::from_secs(30),
+        }),
+        resume_at: None,
+        schedule_id: None,
+        created_at,
+    };
+    let mut encoded = vec![3];
+    encoded.extend(postcard::to_allocvec(&legacy).expect("encode v3 continuation"));
+
+    let restored = decode_continuation(&encoded).expect("v3 layout must migrate");
+    let wait = restored.wait().expect("migrated wait");
+
+    assert_eq!(restored.created_at(), created_at);
+    assert_eq!(wait.results().len(), 1);
+    assert!(wait.child_launches().is_empty());
 }
 
 #[test]
