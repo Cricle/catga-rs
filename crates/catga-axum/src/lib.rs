@@ -25,8 +25,8 @@ use catga_cluster::{
     ClusterForwarder, RaftMember, RaftMessage, RaftTransport, RaftTransportResult,
 };
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, Event, Mediator, Request, current_correlation_id,
-    current_correlation_value,
+    CatgaError, CatgaResult, ErrorCode, Event, Mediator, Request, TraceContext,
+    current_correlation_id, current_correlation_value, current_transport_context,
 };
 use futures::FutureExt;
 use protobuf::Message as ProtobufMessage;
@@ -67,6 +67,37 @@ pub fn propagate_correlation_header(headers: &mut HeaderMap) {
         return;
     };
     headers.insert(CORRELATION_ID_HEADER, value);
+}
+
+/// Adds the current delivery's validated W3C trace context to outgoing HTTP headers.
+///
+/// Explicit HTTP trace headers always win as one pair: when either `traceparent` or `tracestate`
+/// is already present, this function leaves both unchanged. Invalid inbound envelope values and
+/// values rejected by HTTP header validation are ignored without affecting the caller's request.
+pub fn propagate_trace_context_headers(headers: &mut HeaderMap) {
+    if headers.contains_key(catga_core::TRACEPARENT_HEADER)
+        || headers.contains_key(catga_core::TRACESTATE_HEADER)
+    {
+        return;
+    }
+    let Some(context) = current_transport_context().and_then(|context| {
+        context
+            .headers()
+            .and_then(TraceContext::from_envelope_headers)
+    }) else {
+        return;
+    };
+    let Ok(traceparent) = HeaderValue::from_str(context.traceparent()) else {
+        return;
+    };
+    let tracestate = context.tracestate().map(HeaderValue::from_str).transpose();
+    let Ok(tracestate) = tracestate else {
+        return;
+    };
+    headers.insert(catga_core::TRACEPARENT_HEADER, traceparent);
+    if let Some(tracestate) = tracestate {
+        headers.insert(catga_core::TRACESTATE_HEADER, tracestate);
+    }
 }
 
 /// HTTP endpoint used to receive raw protobuf Raft protocol messages.
@@ -541,7 +572,9 @@ where
             "{}/api/catga/forward/{request_type}",
             leader_endpoint.trim_end_matches('/')
         );
-        let request = self.client.post(url).json(&request);
+        let mut trace_headers = HeaderMap::new();
+        propagate_trace_context_headers(&mut trace_headers);
+        let request = self.client.post(url).headers(trace_headers).json(&request);
         // Formatting occurs only for an already-scoped request, so ordinary
         // leader forwarding adds neither a header allocation nor a global lookup.
         let request = match current_correlation_id() {

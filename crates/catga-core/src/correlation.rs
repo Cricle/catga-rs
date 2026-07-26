@@ -28,7 +28,7 @@ pub struct TransportContext {
 }
 
 impl TransportContext {
-    fn from_envelope(envelope: &Envelope) -> Self {
+    pub(crate) fn from_envelope(envelope: &Envelope) -> Self {
         Self {
             correlation_id: envelope.metadata().correlation_id(),
             priority: envelope.metadata().priority(),
@@ -103,7 +103,13 @@ pub async fn scope_correlation_value<T>(
 /// timing; nested typed publication can inherit this immutable context without a
 /// background task, payload copy, or mutable global dictionary.
 pub async fn scope_transport_context<T>(envelope: &Envelope, future: impl Future<Output = T>) -> T {
-    let context = TransportContext::from_envelope(envelope);
+    scope_transport_context_value(TransportContext::from_envelope(envelope), future).await
+}
+
+pub(crate) async fn scope_transport_context_value<T>(
+    context: TransportContext,
+    future: impl Future<Output = T>,
+) -> T {
     let correlation_id = context.correlation_id();
     TRANSPORT_CONTEXT
         .scope(context, async move {

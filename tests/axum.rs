@@ -21,12 +21,13 @@ use catga_axum::{
     HttpClusterForwarder, HttpRaftTransport, IntoCatgaHttpResponse, axum_routes,
     catga_endpoint_metadata, catga_routes, correlation_id, correlation_middleware,
     endpoint_panic_middleware, event_route, leader_forward_route, mediator_route,
-    propagate_correlation_header, raft_message_route, validate_min_length, validate_required,
+    propagate_correlation_header, propagate_trace_context_headers, raft_message_route,
+    validate_min_length, validate_required,
 };
 use catga_cluster::{ClusterForwarder, RaftMember, RaftMessage, RaftTransport};
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Mediator, Registry, Request,
-    scope_correlation_id,
+    CatgaError, CatgaResult, Envelope, EnvelopeHeaders, ErrorCode, Event, EventHandler, Handler,
+    Mediator, MessageMetadata, Registry, Request, scope_correlation_id, scope_transport_context,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -181,6 +182,65 @@ async fn outgoing_http_headers_inherit_the_scoped_correlation_without_overwritin
             .and_then(|value| value.to_str().ok()),
         Some("client-value")
     );
+}
+
+#[tokio::test]
+async fn outgoing_http_headers_inherit_scoped_w3c_trace_context_without_overwriting_explicit_values()
+ {
+    let envelope = Envelope::new(
+        71,
+        "orders.created",
+        Vec::new(),
+        MessageMetadata::new(71, None),
+    )
+    .with_headers(
+        EnvelopeHeaders::try_new([
+            (
+                "traceparent",
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            ),
+            ("tracestate", "vendor=state"),
+        ])
+        .expect("valid trace headers"),
+    );
+    let inherited = scope_transport_context(&envelope, async {
+        let mut headers = HeaderMap::new();
+        propagate_trace_context_headers(&mut headers);
+        headers
+    })
+    .await;
+    assert_eq!(
+        inherited
+            .get("traceparent")
+            .and_then(|value| value.to_str().ok()),
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    );
+    assert_eq!(
+        inherited
+            .get("tracestate")
+            .and_then(|value| value.to_str().ok()),
+        Some("vendor=state")
+    );
+
+    let explicit = scope_transport_context(&envelope, async {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+                .parse()
+                .expect("valid header"),
+        );
+        propagate_trace_context_headers(&mut headers);
+        headers
+    })
+    .await;
+    assert_eq!(
+        explicit
+            .get("traceparent")
+            .and_then(|value| value.to_str().ok()),
+        Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
+    );
+    assert!(explicit.get("tracestate").is_none());
 }
 
 #[derive(Deserialize, Serialize)]
@@ -428,6 +488,61 @@ async fn http_cluster_forwarder_propagates_the_ambient_correlation_header() {
             .expect("test observer lock is available")
             .as_deref(),
         Some("717")
+    );
+}
+
+#[tokio::test]
+async fn http_cluster_forwarder_propagates_scoped_w3c_trace_headers() {
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let app = Router::new().route(
+        "/api/catga/forward/ForwardRequest",
+        post({
+            let observed = Arc::clone(&observed);
+            move |headers: HeaderMap, Json(request): Json<ForwardRequest>| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    *observed.lock().expect("test observer lock is available") = headers
+                        .get("traceparent")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    Json(request.value + 1)
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+    let envelope = Envelope::new(
+        72,
+        "orders.created",
+        Vec::new(),
+        MessageMetadata::new(72, None),
+    )
+    .with_headers(
+        EnvelopeHeaders::try_new([(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        )])
+        .expect("valid trace header"),
+    );
+
+    let result = scope_transport_context(&envelope, async {
+        HttpClusterForwarder::new(reqwest::Client::new())
+            .forward(ForwardRequest { value: 41 }, &endpoint)
+            .await
+    })
+    .await
+    .expect("leader forwarding succeeds");
+    server.abort();
+
+    assert_eq!(result, 42);
+    assert_eq!(
+        observed
+            .lock()
+            .expect("test observer lock is available")
+            .as_deref(),
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
     );
 }
 

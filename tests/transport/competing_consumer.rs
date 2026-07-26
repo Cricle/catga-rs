@@ -3,8 +3,8 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -12,7 +12,8 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, CompetingConsumer, DeadLetter, DeadLetterStore,
-    Delivery, DeliveryHandler, Envelope, ErrorCode, MessageMetadata, MessageTransport,
+    Delivery, DeliveryHandler, Envelope, EnvelopeHeaders, ErrorCode, MessageMetadata,
+    MessageTransport, current_transport_context,
 };
 use catga_memory::MemoryDeadLetters;
 use tokio::sync::Mutex;
@@ -301,6 +302,268 @@ async fn competing_consumer_nacks_terminal_failure_when_dead_letter_persistence_
     assert_eq!(
         transport.acknowledgements.rejected.load(Ordering::Acquire),
         1
+    );
+    Ok(())
+}
+
+struct ContextCapturingHandler {
+    cancel: CancellationToken,
+    processing_span: Arc<StdMutex<Option<String>>>,
+    processing_span_id: Arc<StdMutex<Option<tracing::Id>>>,
+}
+
+struct ContextTransport {
+    ack_context_scoped: AtomicBool,
+    ack_processing_span: Arc<StdMutex<Option<String>>>,
+    ack_processing_span_id: Arc<StdMutex<Option<tracing::Id>>>,
+    nack_context_scoped: AtomicBool,
+    nack_processing_span: Arc<StdMutex<Option<String>>>,
+    nack_processing_span_id: Arc<StdMutex<Option<tracing::Id>>>,
+    delivered: AtomicBool,
+}
+
+impl ContextTransport {
+    fn new(
+        ack_processing_span: Arc<StdMutex<Option<String>>>,
+        ack_processing_span_id: Arc<StdMutex<Option<tracing::Id>>>,
+        nack_processing_span: Arc<StdMutex<Option<String>>>,
+        nack_processing_span_id: Arc<StdMutex<Option<tracing::Id>>>,
+    ) -> Self {
+        Self {
+            ack_context_scoped: AtomicBool::new(false),
+            ack_processing_span,
+            ack_processing_span_id,
+            nack_context_scoped: AtomicBool::new(false),
+            nack_processing_span,
+            nack_processing_span_id,
+            delivered: AtomicBool::new(false),
+        }
+    }
+}
+
+#[async_trait]
+impl MessageTransport for ContextTransport {
+    async fn publish(&self, _: Envelope) -> CatgaResult<()> {
+        Ok(())
+    }
+
+    async fn receive(&self) -> CatgaResult<Delivery> {
+        if self.delivered.swap(true, Ordering::AcqRel) {
+            std::future::pending().await
+        }
+        Ok(Delivery::new(
+            Envelope::new(
+                19,
+                "orders.created",
+                Vec::new(),
+                MessageMetadata::new(19, None),
+            )
+            .with_headers(EnvelopeHeaders::try_new([("tenant", "blue")])?),
+        ))
+    }
+
+    async fn ack(&self, _: Delivery) -> CatgaResult<()> {
+        let scoped = current_transport_context().is_some_and(|context| {
+            context.headers().and_then(|headers| headers.get("tenant")) == Some("blue")
+        });
+        self.ack_context_scoped.store(scoped, Ordering::Release);
+        let span = tracing::Span::current();
+        *self
+            .ack_processing_span
+            .lock()
+            .expect("test observer lock is available") =
+            span.metadata().map(|metadata| metadata.name().to_owned());
+        *self
+            .ack_processing_span_id
+            .lock()
+            .expect("test observer lock is available") = span.id();
+        Ok(())
+    }
+
+    async fn nack(&self, _: Delivery) -> CatgaResult<()> {
+        let scoped = current_transport_context().is_some_and(|context| {
+            context.headers().and_then(|headers| headers.get("tenant")) == Some("blue")
+        });
+        self.nack_context_scoped.store(scoped, Ordering::Release);
+        let span = tracing::Span::current();
+        *self
+            .nack_processing_span
+            .lock()
+            .expect("test observer lock is available") =
+            span.metadata().map(|metadata| metadata.name().to_owned());
+        *self
+            .nack_processing_span_id
+            .lock()
+            .expect("test observer lock is available") = span.id();
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DeliveryHandler for ContextCapturingHandler {
+    async fn handle(&self, _: &Envelope) -> CatgaResult<()> {
+        let context = current_transport_context().ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "transport context must be scoped")
+        })?;
+        if context.headers().and_then(|headers| headers.get("tenant")) != Some("blue") {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "transport headers must be scoped",
+            ));
+        }
+        let span = tracing::Span::current();
+        *self
+            .processing_span
+            .lock()
+            .expect("test observer lock is available") =
+            span.metadata().map(|metadata| metadata.name().to_owned());
+        *self
+            .processing_span_id
+            .lock()
+            .expect("test observer lock is available") = span.id();
+        self.cancel.cancel();
+        Ok(())
+    }
+}
+
+struct RejectingContextHandler {
+    cancel: CancellationToken,
+    processing_span_id: Arc<StdMutex<Option<tracing::Id>>>,
+}
+
+#[async_trait]
+impl DeliveryHandler for RejectingContextHandler {
+    async fn handle(&self, _: &Envelope) -> CatgaResult<()> {
+        let scoped = current_transport_context().is_some_and(|context| {
+            context.headers().and_then(|headers| headers.get("tenant")) == Some("blue")
+        });
+        if !scoped {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "transport context must stay scoped for rejected work",
+            ));
+        }
+        *self
+            .processing_span_id
+            .lock()
+            .expect("test observer lock is available") = tracing::Span::current().id();
+        self.cancel.cancel();
+        Err(CatgaError::new(
+            ErrorCode::Validation,
+            "handler rejects delivery",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn competing_consumer_scopes_inbound_transport_context_while_handling_and_acknowledging()
+-> CatgaResult<()> {
+    let handler_processing_span = Arc::new(StdMutex::new(None));
+    let handler_processing_span_id = Arc::new(StdMutex::new(None));
+    let ack_processing_span = Arc::new(StdMutex::new(None));
+    let ack_processing_span_id = Arc::new(StdMutex::new(None));
+    let nack_processing_span = Arc::new(StdMutex::new(None));
+    let nack_processing_span_id = Arc::new(StdMutex::new(None));
+    let transport = Arc::new(ContextTransport::new(
+        Arc::clone(&ack_processing_span),
+        Arc::clone(&ack_processing_span_id),
+        nack_processing_span,
+        nack_processing_span_id,
+    ));
+    let cancel = CancellationToken::new();
+    let subscriber_guard = tracing::subscriber::set_default(tracing_subscriber::registry());
+    let consumer = CompetingConsumer::new(
+        Arc::clone(&transport),
+        Arc::new(ContextCapturingHandler {
+            cancel: cancel.clone(),
+            processing_span: Arc::clone(&handler_processing_span),
+            processing_span_id: Arc::clone(&handler_processing_span_id),
+        }),
+        1,
+    )?;
+
+    let run = tokio::time::timeout(Duration::from_secs(1), consumer.run_until_cancelled(cancel))
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "consumer did not stop"))??;
+    drop(subscriber_guard);
+
+    assert_eq!(run.acknowledged(), 1);
+    assert!(transport.ack_context_scoped.load(Ordering::Acquire));
+    assert_eq!(
+        handler_processing_span
+            .lock()
+            .expect("test observer lock is available")
+            .as_deref(),
+        Some("catga.message.process")
+    );
+    assert_eq!(
+        handler_processing_span_id
+            .lock()
+            .expect("test observer lock is available")
+            .as_ref(),
+        ack_processing_span_id
+            .lock()
+            .expect("test observer lock is available")
+            .as_ref()
+    );
+    assert_eq!(
+        ack_processing_span
+            .lock()
+            .expect("test observer lock is available")
+            .as_deref(),
+        Some("catga.message.process")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn competing_consumer_scopes_inbound_transport_context_while_nacking_rejected_work()
+-> CatgaResult<()> {
+    let handler_processing_span_id = Arc::new(StdMutex::new(None));
+    let ack_processing_span = Arc::new(StdMutex::new(None));
+    let ack_processing_span_id = Arc::new(StdMutex::new(None));
+    let nack_processing_span = Arc::new(StdMutex::new(None));
+    let nack_processing_span_id = Arc::new(StdMutex::new(None));
+    let transport = Arc::new(ContextTransport::new(
+        ack_processing_span,
+        ack_processing_span_id,
+        Arc::clone(&nack_processing_span),
+        Arc::clone(&nack_processing_span_id),
+    ));
+    let cancel = CancellationToken::new();
+    let subscriber_guard = tracing::subscriber::set_default(tracing_subscriber::registry());
+    let consumer = CompetingConsumer::new(
+        Arc::clone(&transport),
+        Arc::new(RejectingContextHandler {
+            cancel: cancel.clone(),
+            processing_span_id: Arc::clone(&handler_processing_span_id),
+        }),
+        1,
+    )?;
+
+    let run = tokio::time::timeout(Duration::from_secs(1), consumer.run_until_cancelled(cancel))
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "consumer did not stop"))??;
+    drop(subscriber_guard);
+
+    assert_eq!(run.rejected(), 1);
+    assert!(transport.nack_context_scoped.load(Ordering::Acquire));
+    assert_eq!(
+        nack_processing_span
+            .lock()
+            .expect("test observer lock is available")
+            .as_deref(),
+        Some("catga.message.process")
+    );
+    assert_eq!(
+        handler_processing_span_id
+            .lock()
+            .expect("test observer lock is available")
+            .as_ref(),
+        nack_processing_span_id
+            .lock()
+            .expect("test observer lock is available")
+            .as_ref()
     );
     Ok(())
 }

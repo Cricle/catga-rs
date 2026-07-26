@@ -39,6 +39,7 @@ mod store;
 mod subscription;
 pub mod telemetry;
 mod time_travel;
+mod trace_context;
 mod transport;
 mod upgrading_event_store;
 mod versioned_transport;
@@ -137,6 +138,10 @@ pub use subscription::{
     SubscriptionStore,
 };
 pub use time_travel::{SnapshotTimeTravelService, StateComparison, TimeTravelService};
+pub use trace_context::{
+    MAX_TRACEPARENT_BYTES, MAX_TRACESTATE_BYTES, TRACEPARENT_HEADER, TRACESTATE_HEADER,
+    TraceContext,
+};
 pub use transport::{
     Acknowledger, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination, DestinationTransport,
     MessageTransport,

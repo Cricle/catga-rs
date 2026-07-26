@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use catga_core::{
     DeliveryMode, Envelope, EnvelopeHeaders, ErrorCode, MAX_ENVELOPE_HEADER_BYTES,
     MAX_ENVELOPE_HEADERS, Message, MessageMetadata, MessagePriority, QualityOfService, Request,
+    TraceContext,
 };
 
 #[derive(Debug)]
@@ -106,6 +107,72 @@ fn envelope_header_merge_overrides_existing_keys_and_preserves_resource_limits()
         .expect_err("merged headers retain the configured limit");
 
     assert_eq!(error.code(), ErrorCode::Validation);
+}
+
+#[test]
+fn trace_context_round_trips_through_bounded_envelope_headers() {
+    let context = TraceContext::parse(
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        Some("vendor=state"),
+    )
+    .expect("a valid W3C context is accepted");
+    let headers = EnvelopeHeaders::try_new([
+        ("tenant", "blue"),
+        (
+            "traceparent",
+            "00-00000000000000000000000000000000-0000000000000000-00",
+        ),
+    ])
+    .expect("valid application headers");
+
+    let propagated = context
+        .inject_into_envelope_headers(Some(&headers))
+        .expect("trace headers stay within the envelope budget");
+    let extracted = TraceContext::from_envelope_headers(&propagated)
+        .expect("the injected context is extracted");
+
+    assert_eq!(propagated.get("tenant"), Some("blue"));
+    assert_eq!(extracted, context);
+}
+
+#[test]
+fn trace_context_rejects_invalid_or_unbounded_w3c_values() {
+    assert!(
+        TraceContext::parse(
+            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
+            Some(" tenant@system = state, 1vendor = ok "),
+        )
+        .is_some()
+    );
+    assert!(
+        TraceContext::parse(
+            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-",
+            None,
+        )
+        .is_none()
+    );
+    assert!(
+        TraceContext::parse(
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            Some("vendor=contains\ttab"),
+        )
+        .is_none()
+    );
+    assert!(TraceContext::parse("not-a-traceparent", None).is_none());
+    assert!(
+        TraceContext::parse(
+            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+            None,
+        )
+        .is_none()
+    );
+    assert!(
+        TraceContext::parse(
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            Some(&"a=b".repeat(300)),
+        )
+        .is_none()
+    );
 }
 
 #[test]

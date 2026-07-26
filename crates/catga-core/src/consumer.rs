@@ -8,10 +8,12 @@ use std::{
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
+use crate::correlation::scope_transport_context_value;
 use crate::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterStore, Delivery, Envelope, ErrorCode,
-    MessageTransport,
+    MessageTransport, TransportContext, observability::TRACING_TARGET,
 };
 
 /// Handles one delivered envelope before the framework acknowledges it.
@@ -208,34 +210,62 @@ where
     T: ?Sized + MessageTransport,
     H: ?Sized + DeliveryHandler,
 {
-    match handler.handle(delivery.envelope()).await {
-        Ok(()) => {
-            transport.ack(delivery).await?;
-            Ok(DeliveryOutcome::Acknowledged)
-        }
-        Err(error) => {
-            if let Some(policy) = dead_letters
-                && delivery.attempts() >= policy.max_attempts.get()
-            {
-                let letter = DeadLetter::from_failure(
-                    delivery.envelope().clone(),
-                    &error,
-                    delivery.attempts(),
-                    "consumer.handle",
-                )?;
-                match policy.store.enqueue(letter).await {
-                    Ok(()) => {
-                        transport.ack(delivery).await?;
-                        return Ok(DeliveryOutcome::DeadLettered);
-                    }
-                    Err(_) => {
-                        transport.nack(delivery).await?;
-                        return Ok(DeliveryOutcome::Rejected);
+    let context = TransportContext::from_envelope(delivery.envelope());
+    let span = tracing::info_span!(
+        target: TRACING_TARGET,
+        "catga.message.process",
+        catga_kind = "messaging",
+        outcome = tracing::field::Empty,
+        error = tracing::field::Empty,
+    );
+    let result: CatgaResult<DeliveryOutcome> = scope_transport_context_value(context, async move {
+        match handler.handle(delivery.envelope()).await {
+            Ok(()) => {
+                transport.ack(delivery).await?;
+                Ok(DeliveryOutcome::Acknowledged)
+            }
+            Err(error) => {
+                if let Some(policy) = dead_letters
+                    && delivery.attempts() >= policy.max_attempts.get()
+                {
+                    let letter = DeadLetter::from_failure(
+                        delivery.envelope().clone(),
+                        &error,
+                        delivery.attempts(),
+                        "consumer.handle",
+                    )?;
+                    match policy.store.enqueue(letter).await {
+                        Ok(()) => {
+                            transport.ack(delivery).await?;
+                            return Ok(DeliveryOutcome::DeadLettered);
+                        }
+                        Err(_) => {
+                            transport.nack(delivery).await?;
+                            return Ok(DeliveryOutcome::Rejected);
+                        }
                     }
                 }
+                transport.nack(delivery).await?;
+                Ok(DeliveryOutcome::Rejected)
             }
-            transport.nack(delivery).await?;
-            Ok(DeliveryOutcome::Rejected)
+        }
+    })
+    .instrument(span.clone())
+    .await;
+    match &result {
+        Ok(DeliveryOutcome::Acknowledged) => {
+            span.record("outcome", "acknowledged");
+        }
+        Ok(DeliveryOutcome::Rejected) => {
+            span.record("outcome", "rejected");
+        }
+        Ok(DeliveryOutcome::DeadLettered) => {
+            span.record("outcome", "dead_lettered");
+        }
+        Err(error) => {
+            span.record("outcome", "failure");
+            span.record("error", error.message());
         }
     }
+    result
 }
