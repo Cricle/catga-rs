@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    DslProgressKind, DslStateCodec, DslStepProgressStore,
+    DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore,
     dsl_checkpoint::{CheckpointFrame, CheckpointLevel, CheckpointWork, MAX_CHECKPOINT_PATH_DEPTH},
     dsl_parallel_recovery::run_checkpointed_parallel,
     dsl_recovery::{
@@ -26,7 +26,7 @@ use futures::{
     future::BoxFuture,
     stream::{self, FuturesUnordered},
 };
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 type Action<S> = Box<dyn for<'a> Fn(&'a mut S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
@@ -48,6 +48,13 @@ struct ReplayableForEach<S> {
 }
 
 const DEFAULT_BRANCH: u32 = u32::MAX;
+
+// Top-level DSL step indices cannot use this reserved progress slot.
+const DSL_TERMINAL_STEP_INDEX: u32 = u32::MAX;
+const MAX_DSL_TERMINAL_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CheckpointTerminal(Vec<u8>);
 
 /// Largest number of branches one DSL parallel or `when_any` step may retain.
 ///
@@ -1049,7 +1056,10 @@ impl<S: Send> DslFlow<S> {
     /// execution, not a durable scheduler: use
     /// [`crate::FlowDefinition`] and [`crate::FlowStepOutcome::delay`] or
     /// [`crate::FlowStepOutcome::suspend_until`] for restart-safe delay and
-    /// schedule-at behavior.
+    /// schedule-at behavior. A successful run writes one bounded terminal state before
+    /// announcing [`DslFlowLifecycleEvent::FlowSucceeded`]; later invocations with the same
+    /// `flow_id` restore that state without replaying steps or lifecycle hooks. Failed runs keep
+    /// their existing recovery behavior so transient step failures can be retried.
     pub async fn run_checkpointed<C, P>(
         &self,
         flow_id: &str,
@@ -1061,11 +1071,13 @@ impl<S: Send> DslFlow<S> {
         C: DslStateCodec<S>,
         P: DslStepProgressStore + ?Sized,
     {
+        if let Some(terminal) = load_checkpoint_terminal(flow_id, progress).await? {
+            return terminal_result(terminal, codec);
+        }
         let mut start = 0;
         let mut cursor = None;
         for index in (0..self.steps.len()).rev() {
-            let step = u32::try_from(index)
-                .map_err(|_| CatgaError::new(ErrorCode::Internal, "DSL step index exceeds u32"))?;
+            let step = top_level_step_index(index)?;
             if let Some(saved) = progress.get(flow_id, step).await? {
                 if saved.kind() == DslProgressKind::CheckpointFrame {
                     let frame = CheckpointFrame::decode(saved.payload())?.ok_or_else(|| {
@@ -1085,8 +1097,7 @@ impl<S: Send> DslFlow<S> {
             }
         }
         for (index, step) in self.steps.iter().enumerate().skip(start) {
-            let step_index = u32::try_from(index)
-                .map_err(|_| CatgaError::new(ErrorCode::Internal, "DSL step index exceeds u32"))?;
+            let step_index = top_level_step_index(index)?;
             let step_cursor = if index == start { cursor.take() } else { None };
             let context = CheckpointContext {
                 flow_id,
@@ -1106,6 +1117,15 @@ impl<S: Send> DslFlow<S> {
                 }
             }
             persist_completed_checkpoint(&initial, &context).await?;
+        }
+        let (terminal, created) = persist_checkpoint_terminal(
+            flow_id,
+            progress,
+            CheckpointTerminal(codec.encode(&initial)?),
+        )
+        .await?;
+        if !created {
+            return terminal_result(terminal, codec);
         }
         self.notify_flow_succeeded(&mut initial).await?;
         Ok(initial)
@@ -1697,6 +1717,83 @@ impl<S: Send> DslFlow<S> {
             }
         })
     }
+}
+
+async fn load_checkpoint_terminal<P>(
+    flow_id: &str,
+    progress: &P,
+) -> CatgaResult<Option<CheckpointTerminal>>
+where
+    P: DslStepProgressStore + ?Sized,
+{
+    progress
+        .get(flow_id, DSL_TERMINAL_STEP_INDEX)
+        .await?
+        .map(|progress| {
+            if progress.kind() != DslProgressKind::Terminal {
+                return Err(CatgaError::new(
+                    ErrorCode::Conflict,
+                    "DSL terminal progress slot is not a terminal record",
+                ));
+            }
+            postcard::from_bytes(progress.payload()).map_err(|error| {
+                CatgaError::new(ErrorCode::Validation, "DSL terminal record is invalid")
+                    .with_details(error.to_string())
+            })
+        })
+        .transpose()
+}
+
+async fn persist_checkpoint_terminal<P>(
+    flow_id: &str,
+    progress: &P,
+    terminal: CheckpointTerminal,
+) -> CatgaResult<(CheckpointTerminal, bool)>
+where
+    P: DslStepProgressStore + ?Sized,
+{
+    let payload = postcard::to_allocvec(&terminal).map_err(|error| {
+        CatgaError::new(ErrorCode::Internal, "encode DSL terminal record")
+            .with_details(error.to_string())
+    })?;
+    if payload.len() > MAX_DSL_TERMINAL_BYTES {
+        return Err(CatgaError::new(
+            ErrorCode::Validation,
+            "DSL terminal record exceeds the size limit",
+        ));
+    }
+    let marker = DslStepProgress::new(flow_id, DSL_TERMINAL_STEP_INDEX, []).terminal(payload);
+    if progress.create(marker).await? {
+        return Ok((terminal, true));
+    }
+    let terminal = load_checkpoint_terminal(flow_id, progress)
+        .await?
+        .ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Conflict,
+                "DSL terminal record disappeared while completing the flow",
+            )
+        })?;
+    Ok((terminal, false))
+}
+
+fn terminal_result<S, C>(terminal: CheckpointTerminal, codec: &C) -> CatgaResult<S>
+where
+    C: DslStateCodec<S>,
+{
+    codec.decode(&terminal.0)
+}
+
+fn top_level_step_index(index: usize) -> CatgaResult<u32> {
+    let index = u32::try_from(index)
+        .map_err(|_| CatgaError::new(ErrorCode::Internal, "DSL step index exceeds u32"))?;
+    if index == DSL_TERMINAL_STEP_INDEX {
+        return Err(CatgaError::new(
+            ErrorCode::Validation,
+            "DSL step index is reserved for the terminal record",
+        ));
+    }
+    Ok(index)
 }
 
 fn validate_parallel_branch_count(count: usize) -> CatgaResult<()> {

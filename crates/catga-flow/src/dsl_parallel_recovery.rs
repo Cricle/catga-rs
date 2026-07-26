@@ -63,6 +63,11 @@ impl BranchProgressStore {
 #[async_trait]
 impl DslStepProgressStore for BranchProgressStore {
     async fn create(&self, progress: DslStepProgress) -> CatgaResult<bool> {
+        if progress.kind() == DslProgressKind::Terminal {
+            // Branch completion is owned by the outer parallel checkpoint. Retaining this marker
+            // here would hide the branch's last recoverable checkpoint from that outer cursor.
+            return Ok(true);
+        }
         let mut current = self.progress.lock().await;
         match current.as_ref() {
             None => {

@@ -17,6 +17,8 @@ pub enum DslProgressKind {
     ApplicationState,
     /// Catga-owned, versioned internal execution cursor bytes.
     CheckpointFrame,
+    /// Catga-owned terminal success state for a completed checkpointed DSL run.
+    Terminal,
 }
 
 /// Encodes and restores application state at an explicit durable DSL checkpoint.
@@ -129,6 +131,15 @@ impl DslStepProgress {
     pub(crate) fn checkpoint_frame(self, payload: impl Into<Arc<[u8]>>) -> Self {
         Self {
             kind: DslProgressKind::CheckpointFrame,
+            payload: payload.into(),
+            ..self
+        }
+    }
+
+    /// Replaces the payload with a Catga-owned terminal outcome frame.
+    pub(crate) fn terminal(self, payload: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            kind: DslProgressKind::Terminal,
             payload: payload.into(),
             ..self
         }

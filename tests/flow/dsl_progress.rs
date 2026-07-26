@@ -222,6 +222,46 @@ async fn checkpointed_dsl_restores_the_last_state_without_replaying_completed_st
 }
 
 #[tokio::test]
+async fn checkpointed_dsl_persists_success_terminal_state_before_notifying_once() {
+    let store = MemoryDslStepProgress::default();
+    let actions = Arc::new(AtomicUsize::new(0));
+    let successes = Arc::new(AtomicUsize::new(0));
+    let action_count = Arc::clone(&actions);
+    let success_count = Arc::clone(&successes);
+    let flow = DslFlow::new()
+        .with_lifecycle_hooks(DslFlowLifecycleHooks::new().on_flow_succeeded(move |_| {
+            let successes = Arc::clone(&success_count);
+            Box::pin(async move {
+                successes.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }))
+        .action(move |value: &mut u32| {
+            let actions = Arc::clone(&action_count);
+            Box::pin(async move {
+                actions.fetch_add(1, Ordering::SeqCst);
+                *value += 1;
+                Ok(())
+            })
+        });
+
+    assert_eq!(
+        flow.run_checkpointed("payment/terminal-success", 0, &store, &U32Codec)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        flow.run_checkpointed("payment/terminal-success", 99, &store, &U32Codec)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(actions.load(Ordering::SeqCst), 1);
+    assert_eq!(successes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn checkpointed_dsl_resumes_an_if_branch_after_its_completed_child() {
     let store = MemoryDslStepProgress::default();
     let completed = Arc::new(AtomicUsize::new(0));
