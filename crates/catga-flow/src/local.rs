@@ -156,6 +156,7 @@ impl Flow {
             let result = match cancellation {
                 Some(cancellation) => {
                     tokio::select! {
+                        biased;
                         _ = cancellation.cancelled() => Err(CatgaError::new(
                             ErrorCode::Cancelled,
                             "local flow execution was cancelled",
