@@ -54,7 +54,11 @@ const HEARTBEAT: &str = r#"
 if redis.call('HGET', KEYS[1], 'version') ~= ARGV[1] then return 0 end
 if redis.call('HGET', KEYS[1], 'owner') ~= ARGV[2] then return 0 end
 redis.call('HSET', KEYS[1], 'value', ARGV[3], 'heartbeat', ARGV[4])
-redis.call('ZADD', KEYS[2], ARGV[4], KEYS[1])
+if redis.call('HGET', KEYS[1], 'status') == 'running' then
+  redis.call('ZADD', KEYS[2], ARGV[4], KEYS[1])
+else
+  redis.call('ZREM', KEYS[2], KEYS[1])
+end
 return 1
 "#;
 
@@ -278,5 +282,16 @@ const fn status_code(status: FlowStatus) -> &'static str {
         FlowStatus::Done => "done",
         FlowStatus::Failed => "failed",
         FlowStatus::Cancelled => "cancelled",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HEARTBEAT;
+
+    #[test]
+    fn heartbeat_removes_non_running_flows_from_claim_index() {
+        assert!(HEARTBEAT.contains("if redis.call('HGET', KEYS[1], 'status') == 'running' then"));
+        assert!(HEARTBEAT.contains("redis.call('ZREM', KEYS[2], KEYS[1])"));
     }
 }
