@@ -1,10 +1,12 @@
 use std::{
     any::{Any, TypeId},
+    future::Future,
+    panic::AssertUnwindSafe,
     sync::{Arc, OnceLock},
     time::Instant,
 };
 
-use futures::{Stream, StreamExt, stream};
+use futures::{FutureExt, Stream, StreamExt, stream};
 use tracing::Instrument;
 
 use crate::{
@@ -85,14 +87,18 @@ impl Mediator {
     }
 
     /// Routes a request to its sole registered handler.
+    ///
+    /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust panic strategy is
+    /// unwinding. Builds configured with `panic = "abort"` terminate instead and cannot be
+    /// recovered by this method.
     pub async fn send<M: Request>(&self, message: M) -> CatgaResult<M::Response> {
         let request_type = std::any::type_name::<M>();
         let span = observability::request_span(request_type);
         observability::record_message_tags(&span, &message);
         let started = Instant::now();
-        let result = Self::dispatch(&self.registry, message)
-            .instrument(span.clone())
-            .await;
+        let result =
+            isolate_request_panic(Self::dispatch(&self.registry, message).instrument(span.clone()))
+                .await;
         observability::record_request(&span, request_type, started.elapsed(), &result);
         result
     }
@@ -111,6 +117,10 @@ impl Mediator {
     }
 
     /// Routes a request through a typed pipeline before its registered handler.
+    ///
+    /// A panic in either a behavior or the terminal handler is returned as
+    /// [`ErrorCode::Internal`] when the Rust panic strategy is unwinding. Builds configured with
+    /// `panic = "abort"` terminate instead and cannot be recovered by this method.
     pub async fn send_with<M: Request>(
         &self,
         message: M,
@@ -126,11 +136,13 @@ impl Mediator {
         let span = observability::request_span(request_type);
         observability::record_message_tags(&span, &message);
         let started = Instant::now();
-        let result = pipeline
-            .wrap(terminal)
-            .run(message)
-            .instrument(span.clone())
-            .await;
+        let result = isolate_request_panic(
+            pipeline
+                .wrap(terminal)
+                .run(message)
+                .instrument(span.clone()),
+        )
+        .await;
         observability::record_request(&span, request_type, started.elapsed(), &result);
         result
     }
@@ -309,5 +321,22 @@ impl Mediator {
         .await;
         observability::record_event(&span, event_type, started.elapsed(), &result);
         result
+    }
+}
+
+/// Converts a recoverable unwind from request processing into a structured framework error.
+///
+/// Rust builds configured with `panic = "abort"` cannot recover from panics; this boundary only
+/// isolates the normal unwinding panic strategy. Keeping the boundary around the complete future
+/// also covers both registered handlers and every pipeline behavior.
+async fn isolate_request_panic<T>(
+    operation: impl Future<Output = CatgaResult<T>>,
+) -> CatgaResult<T> {
+    match AssertUnwindSafe(operation).catch_unwind().await {
+        Ok(result) => result,
+        Err(_) => Err(CatgaError::new(
+            ErrorCode::Internal,
+            "mediator request processing panicked",
+        )),
     }
 }

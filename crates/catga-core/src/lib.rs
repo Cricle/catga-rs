@@ -103,8 +103,9 @@ pub use projection::{
     ProjectionCheckpointStore, ProjectionRun,
 };
 pub use read_model::{
-    BatchSyncStrategy, ChangeKind, ChangeRecord, ChangeTracker, ReadModelStore,
-    ReadModelSynchronizer, RealtimeSyncStrategy, ScheduledSyncStrategy, SyncStrategy,
+    BatchSyncStrategy, ChangeKind, ChangeRecord, ChangeTracker, MAX_READ_MODEL_PAGE_SIZE,
+    ReadModelStore, ReadModelSynchronizer, RealtimeSyncStrategy, ScheduledSyncStrategy,
+    SyncStrategy, validate_read_model_page_size,
 };
 pub use registry::Registry;
 pub use reliability::{

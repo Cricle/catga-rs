@@ -54,6 +54,11 @@ impl FlowRuntimeResult {
     pub fn is_running(&self) -> bool {
         self.state.status() == FlowStatus::Running
     }
+
+    /// Returns whether the runtime is durably retrying rollback actions.
+    pub fn is_compensating(&self) -> bool {
+        self.state.status() == FlowStatus::Compensating
+    }
 }
 
 /// Executes named flow definitions against a durable continuation store.
@@ -236,18 +241,22 @@ where
         if continuation.state().status().is_terminal() {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
-        let is_stale_running = continuation.state().status() == FlowStatus::Running
-            && is_stale(continuation.state().heartbeat(), now, self.stale_after);
-        if continuation.state().status() == FlowStatus::Running && !is_stale_running {
+        let is_owned = matches!(
+            continuation.state().status(),
+            FlowStatus::Running | FlowStatus::Compensating
+        );
+        let is_stale_owned =
+            is_owned && is_stale(continuation.state().heartbeat(), now, self.stale_after);
+        if is_owned && !is_stale_owned {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
-        if continuation.state().status() != FlowStatus::Suspended && !is_stale_running {
+        if continuation.state().status() != FlowStatus::Suspended && !is_stale_owned {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
                 "flow is not resumable",
             ));
         }
-        if !is_stale_running && let Some(wait) = continuation.wait() {
+        if !is_stale_owned && let Some(wait) = continuation.wait() {
             match evaluate_wait(wait, now) {
                 WaitEvaluation::Pending => {
                     return Ok(FlowRuntimeResult::new(continuation.state().clone()));
@@ -256,11 +265,15 @@ where
                 WaitEvaluation::Ready => {}
             }
         }
-        if !is_stale_running && continuation.resume_at().is_some_and(|due_at| due_at > now) {
+        if !is_stale_owned && continuation.resume_at().is_some_and(|due_at| due_at > now) {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
         }
         if let Some(running) = self.claim(continuation).await? {
-            self.drive(running).await
+            if running.state().status() == FlowStatus::Compensating {
+                self.compensate(running, None).await
+            } else {
+                self.drive(running).await
+            }
         } else {
             self.current_result(flow_id).await
         }
@@ -423,11 +436,12 @@ where
             };
             match outcome {
                 FlowStepOutcome::Advance => {
+                    let compensated = self.record_step_compensation(&continuation)?;
                     let Some(next_step) = self.definition.next_step_name(continuation.step_name())
                     else {
                         return self
                             .fail(
-                                continuation,
+                                compensated,
                                 CatgaError::new(
                                     ErrorCode::Validation,
                                     "an advancing flow step requires a following step",
@@ -437,8 +451,7 @@ where
                             .await;
                     };
                     let flow_id: Box<str> = continuation.state().id().into();
-                    if let Some(running) =
-                        self.transition_to(continuation, state, next_step).await?
+                    if let Some(running) = self.transition_to(compensated, state, next_step).await?
                     {
                         continuation = running;
                     } else {
@@ -446,10 +459,11 @@ where
                     }
                 }
                 FlowStepOutcome::Goto(next_step) => {
+                    let compensated = self.record_step_compensation(&continuation)?;
                     if !self.definition.has_step(&next_step) {
                         return self
                             .fail(
-                                continuation,
+                                compensated,
                                 CatgaError::new(
                                     ErrorCode::NotFound,
                                     "a flow transition references an unregistered step",
@@ -460,7 +474,7 @@ where
                     }
                     let flow_id: Box<str> = continuation.state().id().into();
                     if let Some(running) =
-                        self.transition_to(continuation, state, &next_step).await?
+                        self.transition_to(compensated, state, &next_step).await?
                     {
                         continuation = running;
                     } else {
@@ -468,11 +482,12 @@ where
                     }
                 }
                 FlowStepOutcome::SuspendUntil(resume_at) => {
+                    let compensated = self.record_step_compensation(&continuation)?;
                     let Some(next_step) = self.definition.next_step_name(continuation.step_name())
                     else {
                         return self
                             .fail(
-                                continuation,
+                                compensated,
                                 CatgaError::new(
                                     ErrorCode::Validation,
                                     "a delayed flow step requires a following step",
@@ -482,7 +497,8 @@ where
                             .await;
                     };
                     let completed_steps = state.step().saturating_add(1);
-                    let pending = continuation
+                    let expected_version = state.version();
+                    let pending = compensated
                         .clone()
                         .at_step(next_step)
                         .with_state(state.at_step(completed_steps).suspended().next_version())
@@ -494,14 +510,11 @@ where
                     {
                         Ok(schedule_id) => schedule_id,
                         Err(error) => {
-                            return self.fail(continuation, error, Some(&mut execution)).await;
+                            return self.fail(compensated, error, Some(&mut execution)).await;
                         }
                     };
                     let suspended = pending.with_schedule_id(schedule_id.clone());
-                    if let Err(error) = self
-                        .persist(continuation.state().version(), suspended.clone())
-                        .await
-                    {
+                    if let Err(error) = self.persist(expected_version, suspended.clone()).await {
                         let _ = self.scheduler.cancel_resume(&schedule_id).await;
                         return Err(error);
                     }
@@ -509,11 +522,12 @@ where
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
                 FlowStepOutcome::Wait(wait) => {
+                    let compensated = self.record_step_compensation(&continuation)?;
                     let Some(next_step) = self.definition.next_step_name(continuation.step_name())
                     else {
                         return self
                             .fail(
-                                continuation,
+                                compensated,
                                 CatgaError::new(
                                     ErrorCode::Validation,
                                     "a waiting flow step requires a following step",
@@ -523,14 +537,15 @@ where
                             .await;
                     };
                     let completed_steps = state.step().saturating_add(1);
-                    wait.validate()?;
-                    let suspended = continuation
-                        .clone()
+                    let expected_version = state.version();
+                    if let Err(error) = wait.validate() {
+                        return self.fail(compensated, error, Some(&mut execution)).await;
+                    }
+                    let suspended = compensated
                         .at_step(next_step)
                         .with_state(state.at_step(completed_steps).suspended().next_version())
                         .with_wait(wait);
-                    self.persist(continuation.state().version(), suspended.clone())
-                        .await?;
+                    self.persist(expected_version, suspended.clone()).await?;
                     execution.complete("suspended");
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
@@ -658,6 +673,19 @@ where
         error: CatgaError,
         execution: Option<&mut crate::metrics::FlowExecution>,
     ) -> CatgaResult<FlowRuntimeResult> {
+        if !continuation.compensation_steps().is_empty() {
+            let compensating = continuation.clone().ready().with_state(
+                continuation
+                    .state()
+                    .clone()
+                    .with_error(error)
+                    .compensating()
+                    .next_version(),
+            );
+            self.persist(continuation.state().version(), compensating.clone())
+                .await?;
+            return self.compensate(compensating, execution).await;
+        }
         let failed = continuation
             .clone()
             .ready()
@@ -669,6 +697,76 @@ where
             execution.complete("failure");
         }
         Ok(FlowRuntimeResult::new(failed.state().clone()))
+    }
+
+    async fn compensate(
+        &self,
+        mut continuation: FlowContinuation,
+        execution: Option<&mut crate::metrics::FlowExecution>,
+    ) -> CatgaResult<FlowRuntimeResult> {
+        while let Some(step_name) = continuation.next_compensation().map(str::to_owned) {
+            self.execute_compensation_with_heartbeat(
+                &continuation,
+                continuation.state().clone(),
+                &step_name,
+            )
+            .await?;
+            let next = continuation
+                .clone()
+                .complete_compensation()
+                .with_state(continuation.state().clone().compensating().next_version());
+            self.persist(continuation.state().version(), next.clone())
+                .await?;
+            continuation = next;
+        }
+        let error = continuation.state().error().cloned().ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "a compensating flow is missing its original failure",
+            )
+        })?;
+        let failed = continuation
+            .clone()
+            .ready()
+            .with_state(continuation.state().clone().failed(error).next_version());
+        self.persist(continuation.state().version(), failed.clone())
+            .await?;
+        self.metrics.record_failed();
+        if let Some(execution) = execution {
+            execution.complete("failure");
+        }
+        Ok(FlowRuntimeResult::new(failed.state().clone()))
+    }
+
+    async fn execute_compensation_with_heartbeat(
+        &self,
+        continuation: &FlowContinuation,
+        state: FlowState,
+        step_name: &str,
+    ) -> CatgaResult<()> {
+        let compensation = self.definition.compensate(step_name, state);
+        if self.stale_after.is_zero() {
+            return compensation.await;
+        }
+        tokio::pin!(compensation);
+        let heartbeat_interval = (self.stale_after / 2).max(Duration::from_nanos(1));
+        loop {
+            tokio::select! {
+                result = &mut compensation => return result,
+                _ = tokio::time::sleep(heartbeat_interval) => {
+                    if !self.store.heartbeat(
+                        continuation.state().id(),
+                        &self.owner,
+                        continuation.state().version(),
+                    ).await? {
+                        return Err(CatgaError::new(
+                            ErrorCode::Conflict,
+                            "flow compensation ownership was lost while its action was running",
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     async fn transition_to(
@@ -687,6 +785,18 @@ where
         self.claim(next).await
     }
 
+    fn record_step_compensation(
+        &self,
+        continuation: &FlowContinuation,
+    ) -> CatgaResult<FlowContinuation> {
+        if self.definition.has_compensation(continuation.step_name()) {
+            return continuation
+                .clone()
+                .record_compensation(continuation.step_name());
+        }
+        Ok(continuation.clone())
+    }
+
     async fn persist(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<()> {
         if self.store.update(expected_version, next).await? {
             Ok(())
@@ -699,14 +809,16 @@ where
     }
 
     async fn claim(&self, continuation: FlowContinuation) -> CatgaResult<Option<FlowContinuation>> {
-        let running = continuation.clone().ready().with_state(
-            continuation
-                .state()
-                .clone()
-                .claimed_by(self.owner.clone())
-                .running()
-                .next_version(),
-        );
+        let claimed_state = continuation.state().clone().claimed_by(self.owner.clone());
+        let claimed_state = if continuation.state().status() == FlowStatus::Compensating {
+            claimed_state.compensating()
+        } else {
+            claimed_state.running()
+        };
+        let running = continuation
+            .clone()
+            .ready()
+            .with_state(claimed_state.next_version());
         Ok(self
             .store
             .claim(&continuation, running.clone())

@@ -12,6 +12,29 @@ use async_trait::async_trait;
 
 use crate::{CatgaError, CatgaResult, Envelope};
 
+/// Largest number of pending changes one read-model synchronization pass may retain at once.
+///
+/// Callers with a larger backlog invoke [`ReadModelSynchronizer::sync`] repeatedly. This keeps
+/// the synchronizer's change records and acknowledgement identifiers bounded independently of
+/// how many changes a tracker has retained.
+pub const MAX_READ_MODEL_PAGE_SIZE: usize = 1_024;
+
+const DEFAULT_READ_MODEL_PAGE_SIZE: usize = 256;
+
+/// Validates a requested pending-change page size.
+///
+/// Trackers must call this before allocating a pending-change page so all implementations share
+/// the same bound.
+pub fn validate_read_model_page_size(max_count: usize) -> CatgaResult<()> {
+    if max_count == 0 || max_count > MAX_READ_MODEL_PAGE_SIZE {
+        return Err(CatgaError::new(
+            crate::ErrorCode::Validation,
+            "read-model page size must be between 1 and MAX_READ_MODEL_PAGE_SIZE",
+        ));
+    }
+    Ok(())
+}
+
 /// The lifecycle operation represented by one read-model change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChangeKind {
@@ -84,8 +107,15 @@ impl ChangeRecord {
 pub trait ChangeTracker: Send + Sync {
     /// Adds or replaces a pending change by its stable identifier.
     fn track(&self, change: ChangeRecord);
-    /// Returns a point-in-time view of unsynchronized changes.
-    async fn pending(&self) -> CatgaResult<Vec<ChangeRecord>>;
+
+    /// Returns at most `max_count` unsynchronized changes from a point-in-time view.
+    ///
+    /// Implementations must validate `max_count` with [`validate_read_model_page_size`] before
+    /// allocating the page. The returned vector must contain no more than `max_count` records;
+    /// callers invoke this method again after acknowledging a successful page to drain a larger
+    /// backlog without materializing it all at once.
+    async fn pending_page(&self, max_count: usize) -> CatgaResult<Vec<ChangeRecord>>;
+
     /// Marks only the supplied change identifiers as synchronized.
     async fn mark_synced(&self, change_ids: &[Box<str>]) -> CatgaResult<()>;
 }
@@ -228,6 +258,7 @@ where
 pub struct ReadModelSynchronizer<'a, T: ?Sized, S: ?Sized> {
     tracker: &'a T,
     strategy: &'a S,
+    page_size: NonZeroUsize,
     last_sync_millis: AtomicU64,
 }
 
@@ -237,16 +268,44 @@ where
     S: SyncStrategy,
 {
     /// Creates a synchronizer with no completed runs.
-    pub const fn new(tracker: &'a T, strategy: &'a S) -> Self {
+    ///
+    /// Each invocation of [`Self::sync`] processes at most 256 pending changes. Use
+    /// [`Self::with_page_size`] when a different bounded page size is required.
+    pub fn new(tracker: &'a T, strategy: &'a S) -> Self {
+        Self::with_page_size(
+            tracker,
+            strategy,
+            NonZeroUsize::new(DEFAULT_READ_MODEL_PAGE_SIZE).unwrap_or(NonZeroUsize::MIN),
+        )
+    }
+
+    /// Creates a synchronizer with an explicit bounded pending-change page size.
+    ///
+    /// Values above [`MAX_READ_MODEL_PAGE_SIZE`] are capped to the shared limit. One call to
+    /// [`Self::sync`] obtains, executes, and acknowledges no more than this many changes; call
+    /// it repeatedly to drain a larger backlog.
+    pub fn with_page_size(tracker: &'a T, strategy: &'a S, page_size: NonZeroUsize) -> Self {
         Self {
             tracker,
             strategy,
+            page_size: NonZeroUsize::new(page_size.get().min(MAX_READ_MODEL_PAGE_SIZE))
+                .unwrap_or(NonZeroUsize::MIN),
             last_sync_millis: AtomicU64::new(0),
         }
     }
-    /// Applies all pending changes and acknowledges them only after strategy success.
+
+    /// Returns the maximum number of changes one [`Self::sync`] call can retain.
+    pub const fn page_size(&self) -> NonZeroUsize {
+        self.page_size
+    }
+
+    /// Applies one bounded pending-change page and acknowledges it only after strategy success.
+    ///
+    /// A successful invocation leaves later pending changes untouched. This lets callers drain
+    /// arbitrarily large backlogs through repeated calls while retaining only one page and its
+    /// identifier list in memory. A strategy error leaves the complete page pending.
     pub async fn sync(&self) -> CatgaResult<()> {
-        let pending = self.tracker.pending().await?;
+        let pending = self.tracker.pending_page(self.page_size.get()).await?;
         if pending.is_empty() {
             return Ok(());
         }

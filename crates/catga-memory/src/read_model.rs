@@ -1,49 +1,36 @@
 //! Lock-free in-memory read-model change tracking and shared state storage.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, ChangeRecord, ChangeTracker, ReadModelStore};
+use catga_core::{
+    CatgaResult, ChangeRecord, ChangeTracker, ReadModelStore, validate_read_model_page_size,
+};
 use dashmap::DashMap;
 
-/// A sharded in-memory tracker with per-change atomic completion state.
+/// A sharded in-memory tracker that releases each change after it is acknowledged.
 #[derive(Default)]
 pub struct MemoryChangeTracker {
-    changes: DashMap<Box<str>, Arc<TrackedChange>>,
-}
-
-struct TrackedChange {
-    record: ChangeRecord,
-    synced: AtomicBool,
+    changes: DashMap<Box<str>, ChangeRecord>,
 }
 
 #[async_trait]
 impl ChangeTracker for MemoryChangeTracker {
     fn track(&self, change: ChangeRecord) {
-        self.changes.insert(
-            change.id().into(),
-            Arc::new(TrackedChange {
-                record: change,
-                synced: AtomicBool::new(false),
-            }),
-        );
+        self.changes.insert(change.id().into(), change);
     }
-    async fn pending(&self) -> CatgaResult<Vec<ChangeRecord>> {
+    async fn pending_page(&self, max_count: usize) -> CatgaResult<Vec<ChangeRecord>> {
+        validate_read_model_page_size(max_count)?;
         Ok(self
             .changes
             .iter()
-            .filter(|change| !change.synced.load(Ordering::Acquire))
-            .map(|change| change.record.clone())
+            .take(max_count)
+            .map(|change| change.value().clone())
             .collect())
     }
     async fn mark_synced(&self, change_ids: &[Box<str>]) -> CatgaResult<()> {
         for id in change_ids {
-            if let Some(change) = self.changes.get(id.as_ref()) {
-                change.synced.store(true, Ordering::Release);
-            }
+            self.changes.remove(id.as_ref());
         }
         Ok(())
     }

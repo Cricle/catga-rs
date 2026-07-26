@@ -7,8 +7,8 @@ use std::sync::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler, Handler, Mediator,
-    MediatorHandle, Registry, Request,
+    Behavior, CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler, Handler,
+    Mediator, MediatorHandle, Next, Pipeline, Registry, Request,
 };
 
 #[derive(Debug)]
@@ -27,6 +27,86 @@ impl Handler<Double> for DoubleHandler {
     async fn handle(&self, message: Double) -> CatgaResult<u64> {
         Ok(message.0 * 2)
     }
+}
+
+struct PanickingDoubleHandler;
+
+#[async_trait]
+impl Handler<Double> for PanickingDoubleHandler {
+    async fn handle(&self, _: Double) -> CatgaResult<u64> {
+        panic!("request handler panic must not escape the mediator");
+    }
+}
+
+struct PanickingDoubleBehavior;
+
+#[async_trait]
+impl Behavior<Double> for PanickingDoubleBehavior {
+    async fn handle(&self, _: Double, _: Next<Double>) -> CatgaResult<u64> {
+        panic!("pipeline behavior panic must not escape the mediator");
+    }
+}
+
+#[tokio::test]
+async fn request_handler_panics_become_internal_errors() -> CatgaResult<()> {
+    let mut registry = Registry::new();
+    registry.register_request::<Double, _>(PanickingDoubleHandler)?;
+    let mediator = Mediator::new(registry);
+
+    let error = match mediator.send(Double(1)).await {
+        Ok(_) => {
+            return Err(catga_core::CatgaError::new(
+                ErrorCode::Internal,
+                "panic must be isolated",
+            ));
+        }
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code(), ErrorCode::Internal);
+    Ok(())
+}
+
+#[tokio::test]
+async fn pipeline_behavior_panics_become_internal_errors() -> CatgaResult<()> {
+    let mut registry = Registry::new();
+    registry.register_request::<Double, _>(DoubleHandler)?;
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(PanickingDoubleBehavior);
+
+    let error = match mediator.send_with(Double(1), &pipeline).await {
+        Ok(_) => {
+            return Err(catga_core::CatgaError::new(
+                ErrorCode::Internal,
+                "panic must be isolated",
+            ));
+        }
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code(), ErrorCode::Internal);
+    Ok(())
+}
+
+#[tokio::test]
+async fn pipeline_terminal_handler_panics_become_internal_errors() -> CatgaResult<()> {
+    let mut registry = Registry::new();
+    registry.register_request::<Double, _>(PanickingDoubleHandler)?;
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new();
+
+    let error = match mediator.send_with(Double(1), &pipeline).await {
+        Ok(_) => {
+            return Err(catga_core::CatgaError::new(
+                ErrorCode::Internal,
+                "panic must be isolated",
+            ));
+        }
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code(), ErrorCode::Internal);
+    Ok(())
 }
 
 #[derive(Debug)]

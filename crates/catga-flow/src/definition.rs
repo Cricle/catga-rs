@@ -10,6 +10,7 @@ use crate::{FlowState, WaitCondition};
 
 type StepHandler =
     Box<dyn Fn(FlowState) -> BoxFuture<'static, CatgaResult<FlowStepOutcome>> + Send + Sync>;
+type StepCompensation = Box<dyn Fn(FlowState) -> BoxFuture<'static, CatgaResult<()>> + Send + Sync>;
 
 /// The outcome returned by one registered durable flow step.
 #[derive(Clone, Debug)]
@@ -85,6 +86,7 @@ struct RegisteredStep {
     name: Box<str>,
     tag: Option<Box<str>>,
     handler: StepHandler,
+    compensation: Option<StepCompensation>,
 }
 
 impl FlowDefinition {
@@ -110,6 +112,34 @@ impl FlowDefinition {
             name: name.into(),
             tag: None,
             handler: Box::new(move |state| Box::pin(handler(state))),
+            compensation: None,
+        });
+        self
+    }
+
+    /// Registers one named durable step and its idempotent rollback action.
+    ///
+    /// After the forward action reports a successful non-terminal transition, the runtime
+    /// records this step name in the continuation. If a later step fails, rollback actions run
+    /// in reverse completion order. A rollback failure leaves the continuation in its durable
+    /// compensating phase so a later stale-owner recovery retries the same action.
+    pub fn step_with_compensation<Handler, HandlerFuture, Compensate, CompensateFuture>(
+        mut self,
+        name: impl Into<Box<str>>,
+        handler: Handler,
+        compensate: Compensate,
+    ) -> Self
+    where
+        Handler: Fn(FlowState) -> HandlerFuture + Send + Sync + 'static,
+        HandlerFuture: Future<Output = CatgaResult<FlowStepOutcome>> + Send + 'static,
+        Compensate: Fn(FlowState) -> CompensateFuture + Send + Sync + 'static,
+        CompensateFuture: Future<Output = CatgaResult<()>> + Send + 'static,
+    {
+        self.steps.push(RegisteredStep {
+            name: name.into(),
+            tag: None,
+            handler: Box::new(move |state| Box::pin(handler(state))),
+            compensation: Some(Box::new(move |state| Box::pin(compensate(state)))),
         });
         self
     }
@@ -133,6 +163,7 @@ impl FlowDefinition {
             name: name.into(),
             tag: Some(tag.into()),
             handler: Box::new(move |state| Box::pin(handler(state))),
+            compensation: None,
         });
         self
     }
@@ -178,5 +209,28 @@ impl FlowDefinition {
             ));
         };
         (step.handler)(state).await
+    }
+
+    pub(crate) fn has_compensation(&self, name: &str) -> bool {
+        self.steps
+            .iter()
+            .find(|step| step.name.as_ref() == name)
+            .is_some_and(|step| step.compensation.is_some())
+    }
+
+    pub(crate) async fn compensate(&self, name: &str, state: FlowState) -> CatgaResult<()> {
+        let Some(step) = self.steps.iter().find(|step| step.name.as_ref() == name) else {
+            return Err(CatgaError::new(
+                ErrorCode::NotFound,
+                "flow compensation references an unregistered step",
+            ));
+        };
+        let Some(compensation) = step.compensation.as_ref() else {
+            return Err(CatgaError::new(
+                ErrorCode::NotFound,
+                "flow compensation handler is no longer registered for a completed step",
+            ));
+        };
+        compensation(state).await
     }
 }

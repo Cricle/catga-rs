@@ -42,6 +42,16 @@ struct VersionThreeContinuation {
     created_at: SystemTime,
 }
 
+#[derive(Serialize)]
+struct VersionFourContinuation {
+    state: FlowState,
+    step_name: Box<str>,
+    wait: Option<WaitCondition>,
+    resume_at: Option<SystemTime>,
+    schedule_id: Option<Box<str>>,
+    created_at: SystemTime,
+}
+
 #[test]
 fn continuation_codec_preserves_terminal_error_and_wait_results() {
     let state = FlowState::new("payment-42", "payment", b"input".to_vec(), "node-a")
@@ -69,12 +79,12 @@ fn continuation_codec_preserves_terminal_error_and_wait_results() {
 
 #[test]
 fn continuation_codec_rejects_unknown_format_versions_explicitly() {
-    let error = decode_continuation(&[5]).expect_err("unknown format version must fail");
+    let error = decode_continuation(&[6]).expect_err("unknown format version must fail");
 
     assert_eq!(error.code(), ErrorCode::Internal);
     assert_eq!(
         error.message(),
-        "unsupported flow continuation format version 5"
+        "unsupported flow continuation format version 6"
     );
 }
 
@@ -109,6 +119,29 @@ fn continuation_codec_migrates_v3_waits_without_child_launch_intents() {
     assert_eq!(restored.created_at(), created_at);
     assert_eq!(wait.results().len(), 1);
     assert!(wait.child_launches().is_empty());
+}
+
+#[test]
+fn continuation_codec_migrates_v4_records_without_compensations() {
+    let created_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_200);
+    let legacy = VersionFourContinuation {
+        state: FlowState::new("payment-45", "payment", b"input".to_vec(), "node-a"),
+        step_name: "charge".into(),
+        wait: None,
+        resume_at: None,
+        schedule_id: Some("schedule-45".into()),
+        created_at,
+    };
+    let mut encoded = vec![4];
+    encoded.extend(postcard::to_allocvec(&legacy).expect("encode v4 continuation"));
+
+    let restored = decode_continuation(&encoded).expect("v4 layout must migrate");
+
+    assert_eq!(restored.state(), &legacy.state);
+    assert_eq!(restored.step_name(), legacy.step_name.as_ref());
+    assert_eq!(restored.schedule_id(), legacy.schedule_id.as_deref());
+    assert_eq!(restored.created_at(), created_at);
+    assert!(restored.compensation_steps().is_empty());
 }
 
 #[test]

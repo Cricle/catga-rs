@@ -139,6 +139,14 @@ impl FlowState {
         }
     }
 
+    /// Retains a failure while completed actions are being undone.
+    pub fn with_error(self, error: CatgaError) -> Self {
+        Self {
+            error: Some(error),
+            ..self
+        }
+    }
+
     /// Marks the flow as persisted and waiting for a later resume.
     pub fn suspended(self) -> Self {
         Self {

@@ -51,8 +51,8 @@ pub use state_machine::{
 };
 pub use store::FlowStore;
 pub use suspension::{
-    FlowChildLaunch, FlowChildLaunchState, FlowContinuation, MAX_WAIT_CHILDREN,
-    MAX_WAIT_RESULT_BYTES, WaitCondition, WaitPolicy, WaitResult,
+    FlowChildLaunch, FlowChildLaunchState, FlowContinuation, MAX_FLOW_COMPENSATIONS,
+    MAX_WAIT_CHILDREN, MAX_WAIT_RESULT_BYTES, WaitCondition, WaitPolicy, WaitResult,
 };
 pub use suspension_store::{
     FlowQuery, FlowSummary, MAX_FLOW_QUERY_RESULTS, MAX_FLOW_QUERY_SCAN, SuspendedFlowStore,

@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{FlowContinuation, FlowState, WaitCondition, WaitPolicy, WaitResult};
 
-const FORMAT_VERSION: u8 = 4;
+const FORMAT_VERSION: u8 = 5;
 
 #[derive(Deserialize)]
 struct VersionThreeWaitResult {
@@ -74,9 +74,19 @@ struct VersionThreeContinuation {
     created_at: SystemTime,
 }
 
+#[derive(Deserialize)]
+struct VersionFourContinuation {
+    state: FlowState,
+    step_name: Box<str>,
+    wait: Option<WaitCondition>,
+    resume_at: Option<SystemTime>,
+    schedule_id: Option<Box<str>>,
+    created_at: SystemTime,
+}
+
 /// Encodes a suspended flow continuation for a durable provider.
 ///
-/// The emitted frame starts with the current format version (v4). Providers must store the
+/// The emitted frame starts with the current format version (v5). Providers must store the
 /// complete frame unchanged.
 pub fn encode_continuation(value: &FlowContinuation) -> CatgaResult<Vec<u8>> {
     let payload = postcard::to_allocvec(value).map_err(|error| {
@@ -93,9 +103,10 @@ pub fn encode_continuation(value: &FlowContinuation) -> CatgaResult<Vec<u8>> {
 
 /// Decodes a continuation previously produced by [`encode_continuation`].
 ///
-/// Versions 1 through 3 are migrated in memory. Versions 1 and 2 reconstruct their creation
+/// Versions 1 through 4 are migrated in memory. Versions 1 and 2 reconstruct their creation
 /// time from the initial state heartbeat; version 3 has no durable child-launch intents and
-/// therefore migrates them to an empty list. Unknown versions are rejected before Postcard
+/// versions before 5 have no durable compensation stack, so those fields migrate to empty
+/// lists. Unknown versions are rejected before Postcard
 /// decoding instead of being mistaken for corrupt current data.
 pub fn decode_continuation(bytes: &[u8]) -> CatgaResult<FlowContinuation> {
     let Some((&version, payload)) = bytes.split_first() else {
@@ -161,9 +172,54 @@ pub fn decode_continuation(bytes: &[u8]) -> CatgaResult<FlowContinuation> {
                     format!("cannot decode v3 flow continuation: {error}"),
                 )
             }),
+        4 => postcard::from_bytes::<VersionFourContinuation>(payload)
+            .map(|value| {
+                FlowContinuation::from_legacy(
+                    value.state,
+                    value.step_name,
+                    value.wait,
+                    value.resume_at,
+                    value.schedule_id,
+                )
+                .with_created_at(value.created_at)
+            })
+            .map_err(|error| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    format!("cannot decode v4 flow continuation: {error}"),
+                )
+            }),
         _ => Err(CatgaError::new(
             ErrorCode::Internal,
             format!("unsupported flow continuation format version {version}"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_continuation, encode_continuation};
+    use crate::{FlowContinuation, FlowState};
+
+    #[test]
+    fn continuation_codec_preserves_the_durable_compensation_stack() {
+        let continuation = FlowContinuation::new(
+            FlowState::new("payment-rollback", "payment", [], "node-a"),
+            "charge",
+        )
+        .record_compensation("reserve")
+        .expect("record reserve rollback")
+        .record_compensation("charge")
+        .expect("record charge rollback");
+
+        let encoded = encode_continuation(&continuation).expect("encode continuation");
+        let restored = decode_continuation(&encoded).expect("decode continuation");
+
+        let steps: Vec<&str> = restored
+            .compensation_steps()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect();
+        assert_eq!(steps, ["reserve", "charge"]);
     }
 }

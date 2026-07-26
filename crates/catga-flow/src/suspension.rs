@@ -22,6 +22,8 @@ pub enum WaitPolicy {
 pub const MAX_WAIT_CHILDREN: usize = 1_024;
 /// Maximum byte length of one successful child payload retained by a wait condition.
 pub const MAX_WAIT_RESULT_BYTES: usize = 64 * 1_024;
+/// Maximum successful rollback-capable steps retained by one durable flow.
+pub const MAX_FLOW_COMPENSATIONS: usize = 1_024;
 
 /// Persisted state of one stable child-launch intent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -461,6 +463,7 @@ pub struct FlowContinuation {
     wait: Option<WaitCondition>,
     resume_at: Option<SystemTime>,
     schedule_id: Option<Box<str>>,
+    compensations: Arc<[Box<str>]>,
     created_at: SystemTime,
 }
 
@@ -479,6 +482,7 @@ impl FlowContinuation {
             wait,
             resume_at,
             schedule_id,
+            compensations: Arc::from([]),
         }
     }
 
@@ -494,6 +498,7 @@ impl FlowContinuation {
             wait: None,
             resume_at: None,
             schedule_id: None,
+            compensations: Arc::from([]),
             created_at: SystemTime::now(),
         }
     }
@@ -506,6 +511,7 @@ impl FlowContinuation {
             wait: Some(wait),
             resume_at: None,
             schedule_id: None,
+            compensations: Arc::from([]),
             created_at: SystemTime::now(),
         }
     }
@@ -538,6 +544,14 @@ impl FlowContinuation {
     /// Returns the cancellation identity of the delayed resume, when it has been scheduled.
     pub fn schedule_id(&self) -> Option<&str> {
         self.schedule_id.as_deref()
+    }
+
+    /// Returns forward steps whose rollback action is still required, in completion order.
+    ///
+    /// The runtime consumes the last entry first. The returned names identify handlers in the
+    /// currently registered flow definition and are retained across process restart.
+    pub fn compensation_steps(&self) -> &[Box<str>] {
+        &self.compensations
     }
 
     /// Returns a delayed copy that will resume at `resume_at`.
@@ -591,5 +605,34 @@ impl FlowContinuation {
     /// Returns a copy whose flow state has been atomically advanced by a store.
     pub fn with_state(self, state: FlowState) -> Self {
         Self { state, ..self }
+    }
+
+    pub(crate) fn record_compensation(self, step_name: impl Into<Box<str>>) -> CatgaResult<Self> {
+        if self.compensations.len() == MAX_FLOW_COMPENSATIONS {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "flow compensation stack exceeds the supported bound",
+            ));
+        }
+        let mut compensations = Vec::with_capacity(self.compensations.len().saturating_add(1));
+        compensations.extend(self.compensations.iter().cloned());
+        compensations.push(step_name.into());
+        Ok(Self {
+            compensations: Arc::from(compensations),
+            ..self
+        })
+    }
+
+    pub(crate) fn next_compensation(&self) -> Option<&str> {
+        self.compensations.last().map(AsRef::as_ref)
+    }
+
+    pub(crate) fn complete_compensation(self) -> Self {
+        let mut compensations: Vec<Box<str>> = self.compensations.iter().cloned().collect();
+        let _ = compensations.pop();
+        Self {
+            compensations: Arc::from(compensations),
+            ..self
+        }
     }
 }

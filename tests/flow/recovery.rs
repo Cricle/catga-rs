@@ -1,5 +1,8 @@
 use std::{
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -332,4 +335,141 @@ async fn cancellation_is_terminal_and_resume_is_idempotent() {
     assert!(runtime.cancel("cancel").await.unwrap().is_cancelled());
     assert!(runtime.cancel("cancel").await.unwrap().is_cancelled());
     assert!(runtime.resume("cancel").await.unwrap().is_cancelled());
+}
+
+#[tokio::test]
+async fn restart_retries_the_persisted_durable_compensation_before_marking_failed() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let reserve_events = Arc::clone(&events);
+    let compensate_attempts = Arc::clone(&attempts);
+    let compensate_events = Arc::clone(&events);
+    let definition = FlowDefinition::new("payment")
+        .step_with_compensation(
+            "reserve",
+            move |_| {
+                let events = Arc::clone(&reserve_events);
+                async move {
+                    events.lock().unwrap().push("reserve");
+                    Ok(FlowStepOutcome::Advance)
+                }
+            },
+            move |_| {
+                let attempts = Arc::clone(&compensate_attempts);
+                let events = Arc::clone(&compensate_events);
+                async move {
+                    events.lock().unwrap().push("release");
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        return Err(catga_core::CatgaError::new(
+                            catga_core::ErrorCode::Transient,
+                            "release is temporarily unavailable",
+                        ));
+                    }
+                    Ok(())
+                }
+            },
+        )
+        .step("charge", |_| async {
+            Err(catga_core::CatgaError::new(
+                catga_core::ErrorCode::Validation,
+                "charge was rejected",
+            ))
+        });
+    let runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::new(MemoryFlowScheduler::default()),
+        definition,
+        "node-a",
+    )
+    .with_stale_after(Duration::ZERO);
+
+    let first = runtime.start("compensate-after-restart", []).await;
+    assert!(first.is_err());
+    assert_eq!(
+        store
+            .get("compensate-after-restart")
+            .await
+            .unwrap()
+            .unwrap()
+            .state()
+            .status(),
+        catga_flow::FlowStatus::Compensating
+    );
+    let cancellation = runtime
+        .cancel("compensate-after-restart")
+        .await
+        .expect_err("cancellation must not abandon persisted rollback actions");
+    assert_eq!(cancellation.code(), catga_core::ErrorCode::Conflict);
+
+    let recovered = runtime.resume("compensate-after-restart").await.unwrap();
+
+    assert!(recovered.is_failure());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(*events.lock().unwrap(), ["reserve", "release", "release"]);
+}
+
+#[tokio::test]
+async fn durable_compensation_runs_successful_steps_in_reverse_completion_order() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let reserve_events = Arc::clone(&events);
+    let release_events = Arc::clone(&events);
+    let charge_events = Arc::clone(&events);
+    let refund_events = Arc::clone(&events);
+    let definition = FlowDefinition::new("payment")
+        .step_with_compensation(
+            "reserve",
+            move |_| {
+                let events = Arc::clone(&reserve_events);
+                async move {
+                    events.lock().unwrap().push("reserve");
+                    Ok(FlowStepOutcome::Advance)
+                }
+            },
+            move |_| {
+                let events = Arc::clone(&release_events);
+                async move {
+                    events.lock().unwrap().push("release");
+                    Ok(())
+                }
+            },
+        )
+        .step_with_compensation(
+            "charge",
+            move |_| {
+                let events = Arc::clone(&charge_events);
+                async move {
+                    events.lock().unwrap().push("charge");
+                    Ok(FlowStepOutcome::Advance)
+                }
+            },
+            move |_| {
+                let events = Arc::clone(&refund_events);
+                async move {
+                    events.lock().unwrap().push("refund");
+                    Ok(())
+                }
+            },
+        )
+        .step("finalize", |_| async {
+            Err(catga_core::CatgaError::new(
+                catga_core::ErrorCode::Validation,
+                "finalization was rejected",
+            ))
+        });
+    let runtime = FlowRuntime::new(
+        store,
+        Arc::new(MemoryFlowScheduler::default()),
+        definition,
+        "node-a",
+    );
+
+    let result = runtime.start("reverse-compensation", []).await.unwrap();
+
+    assert!(result.is_failure());
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["reserve", "charge", "refund", "release"]
+    );
 }
