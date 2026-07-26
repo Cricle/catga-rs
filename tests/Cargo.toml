@@ -354,7 +354,3 @@ path = "flow/wait_policies.rs"
 [[test]]
 name = "flow_recovery"
 path = "flow/recovery.rs"
-
-[[test]]
-name = "flow_hot_reload"
-path = "flow/hot_reload.rs"

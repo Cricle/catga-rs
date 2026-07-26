@@ -11,7 +11,6 @@ mod dsl_recovery;
 mod dsl_when_any;
 mod due_service;
 mod executor;
-mod hot_reload;
 mod local;
 mod metrics;
 mod persistence;
@@ -35,9 +34,6 @@ pub use dsl::{
 pub use dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
 pub use due_service::{DueFlowOptions, FlowDueService};
 pub use executor::{FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions};
-pub use hot_reload::{
-    FlowRegistry, FlowReloaded, FlowVersionManager, RegistryFlowRuntime, VersionedFlowDefinition,
-};
 pub use local::{Flow, FlowResult};
 pub use persistence::{decode_continuation, encode_continuation};
 pub use runtime::{FlowRuntime, FlowRuntimeResult};

@@ -61,7 +61,6 @@ Expected: PASS.
 
 **Files:**
 - Modify: `crates/catga-flow/src/runtime.rs`
-- Modify: `crates/catga-flow/src/hot_reload/mod.rs` only if its shared runtime constructor needs the metric handle
 - Test: `tests/observability.rs`
 
 - [x] **Step 1: Add cancellation regression test**

@@ -16,7 +16,7 @@ place of Roslyn analyzers, reflection discovery, and module initializers.
 | `Analyzers/ScopedLifetimeMismatchAnalyzer.cs` | `Arc` ownership and `Send + Sync + 'static` trait bounds express runtime sharing without DI lifetimes. | crate public trait bounds |
 | `EndpointRegistrationGenerator.cs` | `catga_routes!` emits explicit typed Axum route registrations. | `tests/axum.rs` |
 | `EventRouterGenerator.cs` | `catga_handlers!` emits static event handler registration. | `tests/macros.rs`, `tests/mediator.rs` |
-| `FlowDslRegistrationGenerator.cs` | Explicit `FlowDefinition`, `FlowRegistry`, and `RegistryFlowRuntime` construction. | `tests/flow/{hot_reload,recovery}.rs` |
+| `FlowDslRegistrationGenerator.cs` | Explicit `FlowDefinition` and `FlowRuntime` construction. Dynamic flow hot reload is intentionally excluded. | `tests/flow/{local,executor,recovery}.rs` |
 | `FlowStateChangeTrackingGenerator.cs` | Immutable versioned `FlowState` revisions and explicit DSL checkpoints. | `tests/flow/{state,persistence,dsl_progress}.rs` |
 | `MessageIdGenerator.cs` | `DistributedIdGenerator` and lock-free `SnowflakeIdGenerator`; `fill` and `try_write_next_id` use caller-owned buffers. | `tests/distributed_id.rs` |
 | `UnifiedModuleInitializerGenerator.cs` | Explicit application startup composition; Rust has no global module initializer registration. | `Registry::new`, `catga_handlers!` |

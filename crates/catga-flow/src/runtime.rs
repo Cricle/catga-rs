@@ -118,25 +118,6 @@ where
         self
     }
 
-    pub(crate) fn with_shared_definition(
-        store: Arc<S>,
-        scheduler: Arc<H>,
-        definition: Arc<FlowDefinition>,
-        owner: impl Into<Box<str>>,
-        stale_after: Duration,
-        metrics: FlowMetrics,
-    ) -> Self {
-        Self {
-            store,
-            scheduler,
-            definition,
-            owner: owner.into(),
-            stale_after,
-            metrics,
-            tag_policy: None,
-        }
-    }
-
     /// Starts a new flow and executes until it suspends or reaches a terminal state.
     pub async fn start(
         &self,
