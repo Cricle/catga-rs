@@ -10,14 +10,103 @@ use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
     FlowContinuation, FlowDefinition, FlowQuery, FlowRuntime, FlowState, FlowStepOutcome,
-    FlowSummary, FlowTimeoutOptions, FlowTimeoutService, MAX_FLOW_TIMEOUT_BATCH_SIZE,
-    MAX_FLOW_TIMEOUT_SCAN_LIMIT, MemoryFlowScheduler, SuspendedFlowStore, TimedOutFlowPoll,
-    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
+    FlowSummary, FlowTagPolicy, FlowTimeoutOptions, FlowTimeoutService,
+    MAX_FLOW_TIMEOUT_BATCH_SIZE, MAX_FLOW_TIMEOUT_SCAN_LIMIT, MemoryFlowScheduler,
+    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
+    WaitPolicy,
 };
 use catga_memory::MemorySuspendedFlows;
 use tokio_util::sync::CancellationToken;
 
 mod timeout_store_contract;
+
+#[tokio::test]
+async fn tagged_durable_step_retries_only_transient_failures_within_its_bound() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("tagged-retry").step_with_tag("request", "remote", {
+            let attempts = Arc::clone(&attempts);
+            move |_| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                        Err(CatgaError::new(
+                            ErrorCode::Transient,
+                            "upstream unavailable",
+                        ))
+                    } else {
+                        Ok(FlowStepOutcome::complete())
+                    }
+                }
+            }
+        }),
+        "node-a",
+    )
+    .with_tag_policy(FlowTagPolicy::new(Duration::from_secs(1), 2));
+
+    assert!(
+        runtime
+            .start("tagged-retry-1", b"input".to_vec())
+            .await
+            .unwrap()
+            .is_success()
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn tagged_durable_step_timeout_returns_a_structured_timeout_without_background_work() {
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("tagged-timeout").step_with_tag("request", "remote", |_| async {
+            std::future::pending::<CatgaResult<FlowStepOutcome>>().await
+        }),
+        "node-a",
+    )
+    .with_tag_policy(FlowTagPolicy::new(Duration::from_millis(1), 0));
+
+    let result = runtime
+        .start("tagged-timeout-1", b"input".to_vec())
+        .await
+        .unwrap();
+    assert!(result.is_failure());
+    assert_eq!(result.state().error().unwrap().code(), ErrorCode::Timeout);
+}
+
+#[tokio::test]
+async fn tagged_durable_step_does_not_retry_a_non_transient_failure() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let runtime = FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("tagged-validation").step_with_tag("request", "remote", {
+            let attempts = Arc::clone(&attempts);
+            move |_| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(CatgaError::new(ErrorCode::Validation, "request is invalid"))
+                }
+            }
+        }),
+        "node-a",
+    )
+    .with_tag_policy(FlowTagPolicy::new(Duration::from_secs(1), 3));
+
+    let result = runtime
+        .start("tagged-validation-1", b"input".to_vec())
+        .await
+        .unwrap();
+    assert!(result.is_failure());
+    assert_eq!(
+        result.state().error().unwrap().code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
 
 struct ObservingTimeoutStore {
     inner: MemorySuspendedFlows,
