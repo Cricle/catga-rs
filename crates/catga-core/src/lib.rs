@@ -63,7 +63,7 @@ pub use behaviors::{
 pub use cache::CachedResultCodec;
 pub use cancellation::{current_cancellation, scope_cancellation};
 pub use catga_macros::{Message, catga_handlers};
-pub use codec::EnvelopeCodec;
+pub use codec::{EnvelopeCodec, PayloadDecoder, PayloadEncoder};
 pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
     compress_into, compress_to_slice, decompress, decompress_limited, is_compressed,

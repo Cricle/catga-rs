@@ -14,9 +14,9 @@ use catga_core::{
     CatgaError, CatgaResult, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination,
     DestinationTransport, DistributedIdGenerator, Envelope, EnvelopeCodec, EnvelopeHeaders,
     EnvelopeRequestClient, ErrorCode, Event, Message, MessageMetadata, MessagePriority,
-    MessageTransport, OutboxMessage, OutboxStore, QualityOfService, RemoteRequest, Request,
-    RequestClient, RequestTransport, SnapshotCodec, TransportContext, current_correlation_id,
-    current_transport_context, scope_transport_context,
+    MessageTransport, OutboxMessage, OutboxStore, PayloadDecoder, PayloadEncoder, QualityOfService,
+    RemoteRequest, Request, RequestClient, RequestTransport, SnapshotCodec, TransportContext,
+    current_correlation_id, current_transport_context, scope_transport_context,
 };
 use futures::{StreamExt, future::BoxFuture, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -39,6 +39,18 @@ impl EnvelopeCodec for PostcardCodec {
             }
             Err(error) => Err(map_error(error)),
         }
+    }
+}
+
+impl<T: Serialize> PayloadEncoder<T> for PostcardCodec {
+    fn encode_payload(&self, value: &T) -> CatgaResult<Vec<u8>> {
+        self.encode_value(value)
+    }
+}
+
+impl<T: DeserializeOwned> PayloadDecoder<T> for PostcardCodec {
+    fn decode_payload(&self, bytes: &[u8]) -> CatgaResult<T> {
+        self.decode_value(bytes)
     }
 }
 

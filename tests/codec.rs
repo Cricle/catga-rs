@@ -13,8 +13,8 @@ use catga_codec_postcard::{
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, Delivery, DeliveryMode, Destination,
     DestinationTransport, Envelope, EnvelopeCodec, EnvelopeHeaders, ErrorCode, Event, Message,
-    MessageMetadata, MessagePriority, MessageTransport, QualityOfService, SnowflakeIdGenerator,
-    SnowflakeLayout,
+    MessageMetadata, MessagePriority, MessageTransport, PayloadDecoder, PayloadEncoder,
+    QualityOfService, SnowflakeIdGenerator, SnowflakeLayout,
 };
 use catga_memory::MemoryTransport;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,24 @@ impl Event for BestEffortEvent {}
 struct ReliableEvent(u8);
 
 impl Message for ReliableEvent {}
+
+#[test]
+fn postcard_payload_traits_keep_encoding_and_decoding_bounds_separate() {
+    let codec = PostcardCodec;
+    let encoded =
+        <PostcardCodec as PayloadEncoder<ReliableEvent>>::encode_payload(&codec, &ReliableEvent(7))
+            .expect("serialize-only messages must encode");
+    let decoded = <PostcardCodec as PayloadDecoder<BestEffortEvent>>::decode_payload(
+        &codec,
+        &codec
+            .encode_value(&BestEffortEvent(9))
+            .expect("decodable message must encode"),
+    )
+    .expect("deserializable messages must decode");
+
+    assert_eq!(encoded, codec.encode_value(&ReliableEvent(7)).unwrap());
+    assert_eq!(decoded.0, 9);
+}
 impl Event for ReliableEvent {}
 
 #[derive(Deserialize, Serialize)]
