@@ -18,9 +18,9 @@ use axum::{
     routing::post,
 };
 use catga_axum::{
-    CORRELATION_ID_HEADER, CatgaHttpError, EndpointKind, EndpointMetadata, EndpointValidation,
-    HttpClusterForwarder, HttpRaftTransport, IntoCatgaHttpResponse, axum_routes,
-    catga_endpoint_metadata, catga_routes, correlation_id, correlation_middleware,
+    CORRELATION_ID_HEADER, CatgaHttpError, CorrelationHttpClient, EndpointKind, EndpointMetadata,
+    EndpointValidation, HttpClusterForwarder, HttpRaftTransport, IntoCatgaHttpResponse,
+    axum_routes, catga_endpoint_metadata, catga_routes, correlation_id, correlation_middleware,
     endpoint_panic_middleware, event_route, leader_forward_route, mediator_route,
     propagate_correlation_header, propagate_trace_context_headers, raft_message_route,
     validate_min_length, validate_required,
@@ -191,6 +191,52 @@ async fn outgoing_http_headers_inherit_the_scoped_correlation_without_overwritin
             .get(CORRELATION_ID_HEADER)
             .and_then(|value| value.to_str().ok()),
         Some("client-value")
+    );
+}
+
+#[tokio::test]
+async fn correlation_http_client_applies_scoped_headers_to_explicit_requests() {
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let app = Router::new().route(
+        "/correlated-client",
+        post({
+            let observed = Arc::clone(&observed);
+            move |headers: HeaderMap| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    *observed.lock().expect("test observer lock is available") = headers
+                        .get(CORRELATION_ID_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    StatusCode::NO_CONTENT
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/correlated-client",
+        listener.local_addr().unwrap()
+    );
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+
+    let response = scope_correlation_id(717, async {
+        CorrelationHttpClient::new(reqwest::Client::new())
+            .post(&endpoint, HeaderMap::new())
+            .send()
+            .await
+    })
+    .await
+    .unwrap();
+    server.abort();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        observed
+            .lock()
+            .expect("test observer lock is available")
+            .as_deref(),
+        Some("717")
     );
 }
 

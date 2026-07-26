@@ -113,6 +113,41 @@ pub fn propagate_trace_context_headers(headers: &mut HeaderMap) {
     }
 }
 
+/// An explicit Reqwest client wrapper that propagates task-scoped Catga correlation and trace
+/// headers to outgoing requests.
+///
+/// The wrapper owns no background work and shares the supplied reusable [`reqwest::Client`]. Each
+/// request begins with caller-provided headers, so an explicit correlation or W3C trace header
+/// takes precedence over ambient Catga context.
+#[derive(Clone)]
+pub struct CorrelationHttpClient {
+    client: reqwest::Client,
+}
+
+impl CorrelationHttpClient {
+    /// Wraps an application-owned reusable Reqwest client.
+    pub const fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+
+    /// Builds an outgoing request with caller headers followed by ambient Catga propagation.
+    pub fn request(
+        &self,
+        method: reqwest::Method,
+        url: impl reqwest::IntoUrl,
+        mut headers: HeaderMap,
+    ) -> reqwest::RequestBuilder {
+        propagate_trace_context_headers(&mut headers);
+        propagate_correlation_header(&mut headers);
+        self.client.request(method, url).headers(headers)
+    }
+
+    /// Builds a POST request with caller headers followed by ambient Catga propagation.
+    pub fn post(&self, url: impl reqwest::IntoUrl, headers: HeaderMap) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::POST, url, headers)
+    }
+}
+
 /// HTTP endpoint used to receive raw protobuf Raft protocol messages.
 pub const RAFT_MESSAGE_PATH: &str = "/api/catga/raft";
 
