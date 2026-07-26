@@ -8,7 +8,8 @@ use tracing::Instrument;
 
 use crate::{
     FlowChildLauncher, FlowContinuation, FlowDefinition, FlowScheduler, FlowState, FlowStatus,
-    FlowStepOutcome, SuspendedFlowStore, WaitCondition, WaitPolicy, metrics::FlowMetrics,
+    FlowStepOutcome, FlowTagPolicy, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    metrics::FlowMetrics,
 };
 
 const MAX_CHILD_LAUNCH_CAS_RETRIES: usize = 8;
@@ -67,6 +68,7 @@ pub struct FlowRuntime<S: ?Sized, H: ?Sized> {
     owner: Box<str>,
     stale_after: Duration,
     metrics: FlowMetrics,
+    tag_policy: Option<FlowTagPolicy>,
 }
 
 impl<S, H> FlowRuntime<S, H>
@@ -88,6 +90,7 @@ where
             owner: owner.into(),
             stale_after: Duration::from_secs(30),
             metrics: FlowMetrics::default(),
+            tag_policy: None,
         }
     }
 
@@ -97,6 +100,16 @@ where
     /// retained for deterministic forced-recovery tests and disables automatic renewal.
     pub fn with_stale_after(mut self, stale_after: Duration) -> Self {
         self.stale_after = stale_after;
+        self
+    }
+
+    /// Applies timeout and retry rules to explicitly tagged durable steps.
+    ///
+    /// Timeouts and retries stay within the caller-owned `start` or `resume` future; no
+    /// background task is spawned. Only transient execution errors retry, and every durable
+    /// transition remains persisted regardless of policy persistence markers.
+    pub fn with_tag_policy(mut self, tag_policy: FlowTagPolicy) -> Self {
+        self.tag_policy = Some(tag_policy);
         self
     }
 
@@ -115,6 +128,7 @@ where
             owner: owner.into(),
             stale_after,
             metrics,
+            tag_policy: None,
         }
     }
 
@@ -544,18 +558,84 @@ where
         state: FlowState,
         span: tracing::Span,
     ) -> CatgaResult<FlowStepOutcome> {
+        let Some(tag) = self.definition.step_tag(continuation.step_name()) else {
+            return self
+                .execute_step_attempt(continuation, state, span, None)
+                .await;
+        };
+        let Some(tag_policy) = self.tag_policy.as_ref() else {
+            return self
+                .execute_step_attempt(continuation, state, span, None)
+                .await;
+        };
+        let timeout = tag_policy.timeout_for(tag);
+        let retries = tag_policy.retries_for(tag);
+        for attempt in 0..=retries {
+            match self
+                .execute_step_attempt(continuation, state.clone(), span.clone(), Some(timeout))
+                .await
+            {
+                Err(error) if error.code() == ErrorCode::Transient && attempt < retries => {
+                    if !self
+                        .store
+                        .heartbeat(
+                            continuation.state().id(),
+                            &self.owner,
+                            continuation.state().version(),
+                        )
+                        .await?
+                    {
+                        return Err(CatgaError::new(
+                            ErrorCode::Conflict,
+                            "flow execution ownership was lost before a tagged retry",
+                        ));
+                    }
+                }
+                result => return result,
+            }
+        }
+        Err(CatgaError::new(
+            ErrorCode::Internal,
+            "tagged retry loop completed without an execution result",
+        ))
+    }
+
+    async fn execute_step_attempt(
+        &self,
+        continuation: &FlowContinuation,
+        state: FlowState,
+        span: tracing::Span,
+        timeout: Option<Duration>,
+    ) -> CatgaResult<FlowStepOutcome> {
         let execution = self
             .definition
             .execute(continuation.step_name(), state)
             .instrument(span);
         if self.stale_after.is_zero() {
-            return execution.await;
+            return match timeout {
+                Some(timeout) => tokio::time::timeout(timeout, execution)
+                    .await
+                    .map_err(|_| {
+                        CatgaError::new(ErrorCode::Timeout, "tagged flow step timed out")
+                    })?,
+                None => execution.await,
+            };
         }
         tokio::pin!(execution);
+        let deadline = async move {
+            match timeout {
+                Some(timeout) => tokio::time::sleep(timeout).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(deadline);
         let heartbeat_interval = (self.stale_after / 2).max(Duration::from_nanos(1));
         loop {
             tokio::select! {
                 result = &mut execution => return result,
+                _ = &mut deadline => {
+                    return Err(CatgaError::new(ErrorCode::Timeout, "tagged flow step timed out"));
+                }
                 _ = tokio::time::sleep(heartbeat_interval) => {
                     if !self.store.heartbeat(
                         continuation.state().id(),

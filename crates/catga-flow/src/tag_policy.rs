@@ -34,7 +34,12 @@ impl FlowTagPolicy {
         self
     }
 
-    /// Returns a copy that requires steps tagged `tag` to persist.
+    /// Marks a tag as requiring durable persistence in execution models that support optional
+    /// checkpoints.
+    ///
+    /// [`crate::FlowRuntime`] always persists every durable transition, so this marker has no
+    /// additional runtime effect there. It remains available for explicit process-local DSL
+    /// checkpoint composition rather than silently weakening durable recovery.
     pub fn with_persist(mut self, tag: impl Into<Box<str>>) -> Self {
         self.persisted.insert(tag.into());
         self

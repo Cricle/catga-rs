@@ -94,23 +94,23 @@ Expected: focused test passes.
 - Modify: `crates/catga-flow/src/{definition.rs,tag_policy.rs,runtime.rs}`
 - Test: `tests/flow/{dsl.rs,recovery.rs}`
 
-- [ ] **Step 1: Write failing persist-tag test**
+- [x] **Step 1: Write failing tagged-execution tests**
 
-Add a definition step tagged `persist`. Start it with a policy containing that tag and assert a restart resumes from the persisted named step; assert an untagged step retains current behavior.
+Add tagged definition tests that assert transient execution failures retry only within the configured bound, non-transient failures do not retry, and timeout returns `ErrorCode::Timeout` through the caller-owned runtime future. Existing durable recovery tests prove every named-step transition is already persisted, regardless of a source-style persist marker.
 
-- [ ] **Step 2: Run RED test**
+- [x] **Step 2: Run RED test**
 
-Run: `rtk cargo test -p catga-tests --test flow -- persist_tag`
+Run: `rtk cargo test -p catga-tests --test flow_suspension tagged_durable_step_retries_only_transient_failures_within_its_bound -- --exact`
 
 Expected: compilation failure naming `with_tag_policy` or `step_with_tag`.
 
-- [ ] **Step 3: Implement explicit policy composition**
+- [x] **Step 3: Implement explicit policy composition**
 
-Store each step's optional static tag, expose `FlowRuntime::with_tag_policy`, and use `FlowTagPolicy::should_persist` only at durable continuation boundaries. Do not introduce default hidden retries or timeout tasks.
+Store each step's optional static tag and expose `FlowRuntime::with_tag_policy`. Execute timeout and retries in the caller-owned runtime future, retry only structured `Transient` errors while the owner heartbeat remains valid, and never spawn a detached retry task. `FlowRuntime` always persists every durable transition, so source-style persist markers do not weaken that recovery invariant.
 
-- [ ] **Step 4: Run focused GREEN test**
+- [x] **Step 4: Run focused GREEN tests**
 
-Run: `rtk cargo test -p catga-tests --test flow -- persist_tag`
+Run: `rtk cargo test -p catga-tests --test flow_suspension tagged_durable_step_retries_only_transient_failures_within_its_bound -- --exact`
 
 Expected: focused test passes.
 

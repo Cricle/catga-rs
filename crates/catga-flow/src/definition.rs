@@ -83,6 +83,7 @@ pub struct FlowDefinition {
 
 struct RegisteredStep {
     name: Box<str>,
+    tag: Option<Box<str>>,
     handler: StepHandler,
 }
 
@@ -107,6 +108,30 @@ impl FlowDefinition {
     {
         self.steps.push(RegisteredStep {
             name: name.into(),
+            tag: None,
+            handler: Box::new(move |state| Box::pin(handler(state))),
+        });
+        self
+    }
+
+    /// Registers one named durable step with a static policy tag.
+    ///
+    /// Tags select explicit [`crate::FlowTagPolicy`] timeout and retry rules at execution time.
+    /// They do not make a durable transition optional: every [`FlowRuntime`](crate::FlowRuntime)
+    /// transition remains persisted so restart recovery cannot silently skip work.
+    pub fn step_with_tag<Handler, HandlerFuture>(
+        mut self,
+        name: impl Into<Box<str>>,
+        tag: impl Into<Box<str>>,
+        handler: Handler,
+    ) -> Self
+    where
+        Handler: Fn(FlowState) -> HandlerFuture + Send + Sync + 'static,
+        HandlerFuture: Future<Output = CatgaResult<FlowStepOutcome>> + Send + 'static,
+    {
+        self.steps.push(RegisteredStep {
+            name: name.into(),
+            tag: Some(tag.into()),
             handler: Box::new(move |state| Box::pin(handler(state))),
         });
         self
@@ -132,6 +157,13 @@ impl FlowDefinition {
     /// Returns whether a step with `name` is registered.
     pub fn has_step(&self, name: &str) -> bool {
         self.steps.iter().any(|step| step.name.as_ref() == name)
+    }
+
+    pub(crate) fn step_tag(&self, name: &str) -> Option<&str> {
+        self.steps
+            .iter()
+            .find(|step| step.name.as_ref() == name)
+            .and_then(|step| step.tag.as_deref())
     }
 
     pub(crate) async fn execute(
