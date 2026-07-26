@@ -15,7 +15,7 @@ pub use records::{
     DeadLetterMessageRecord, FlowStateRecord, ForEachProgressRecord, InboxMessageRecord,
     NatsStoredSnapshotRecord, OutboxMessageRecord, StoredSnapshotMetadataRecord,
 };
-pub use value::{MemoryPackValueCodec, decode_value, encode_value};
+pub use value::{MemoryPackPayloadCodec, MemoryPackValueCodec, decode_value, encode_value};
 pub use writer::MemoryPackWriter;
 
 #[cfg(test)]

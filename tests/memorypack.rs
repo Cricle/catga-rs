@@ -2,10 +2,10 @@ use std::{fs, path::Path};
 
 use catga_codec_memorypack::{
     DeadLetterMessageRecord, FlowStateRecord, ForEachProgressRecord, InboxMessageRecord,
-    MemoryPackLimits, MemoryPackReader, MemoryPackValueCodec, MemoryPackWriter,
-    NatsStoredSnapshotRecord, OutboxMessageRecord, StoredSnapshotMetadataRecord,
+    MemoryPackLimits, MemoryPackPayloadCodec, MemoryPackReader, MemoryPackValueCodec,
+    MemoryPackWriter, NatsStoredSnapshotRecord, OutboxMessageRecord, StoredSnapshotMetadataRecord,
 };
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, PayloadDecoder, PayloadEncoder};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -114,6 +114,26 @@ fn explicit_value_codecs_round_trip_and_reject_invalid_frames_and_budgets() {
             .code(),
         ErrorCode::Validation
     );
+}
+
+#[test]
+fn memorypack_payload_adapter_uses_its_fixed_schema_and_limits() {
+    let codec = MemoryPackPayloadCodec::new(OrderCodec, MemoryPackLimits::default());
+    let order = Order {
+        id: 7,
+        reference: Box::from("B2"),
+        description: Box::from("adapter"),
+    };
+    let encoded = <MemoryPackPayloadCodec<OrderCodec> as PayloadEncoder<Order>>::encode_payload(
+        &codec, &order,
+    )
+    .expect("schema payload encodes");
+    let decoded = <MemoryPackPayloadCodec<OrderCodec> as PayloadDecoder<Order>>::decode_payload(
+        &codec, &encoded,
+    )
+    .expect("schema payload decodes");
+
+    assert_eq!(decoded, order);
 }
 
 #[test]
