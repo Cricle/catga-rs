@@ -49,6 +49,13 @@ struct ReplayableForEach<S> {
 
 const DEFAULT_BRANCH: u32 = u32::MAX;
 
+/// Largest number of branches one DSL parallel or `when_any` step may retain.
+///
+/// The caller-owned execution future keeps one cloned state and one nested future per branch, so
+/// this bound prevents an untrusted or accidentally unbounded iterator from retaining unbounded
+/// state or scheduling unbounded work. Checkpointed and in-process DSL execution share it.
+pub const MAX_DSL_PARALLEL_BRANCHES: usize = 64;
+
 /// One observable outcome from a top-level [`DslFlow`] step or the flow itself.
 #[derive(Clone, Debug)]
 pub enum DslFlowLifecycleEvent {
@@ -494,7 +501,7 @@ impl<S: Send> DslFlow<S> {
         M: Fn(&mut S, Vec<S>) -> CatgaResult<()> + Send + Sync + 'static,
     {
         self.steps.push(Step::Parallel {
-            branches: branches.into_iter().collect(),
+            branches: Self::collect_parallel_branches(branches),
             clone_state: Clone::clone,
             merge: Box::new(merge),
         });
@@ -525,11 +532,21 @@ impl<S: Send> DslFlow<S> {
         M: Fn(&mut S, S) -> CatgaResult<()> + Send + Sync + 'static,
     {
         self.steps.push(Step::WhenAny {
-            branches: branches.into_iter().collect(),
+            branches: Self::collect_parallel_branches(branches),
             clone_state: Clone::clone,
             merge: Box::new(merge),
         });
         self
+    }
+
+    fn collect_parallel_branches<I>(branches: I) -> Vec<Self>
+    where
+        I: IntoIterator<Item = Self>,
+    {
+        branches
+            .into_iter()
+            .take(MAX_DSL_PARALLEL_BRANCHES.saturating_add(1))
+            .collect()
     }
 
     /// Appends an action that runs sequentially for every item selected from the state.
@@ -1639,6 +1656,7 @@ impl<S: Send> DslFlow<S> {
                     clone_state,
                     merge,
                 } => {
+                    validate_parallel_branch_count(branches.len())?;
                     let mut branch_states = branches
                         .iter()
                         .map(|_| clone_state(state))
@@ -1661,6 +1679,7 @@ impl<S: Send> DslFlow<S> {
                     clone_state,
                     merge,
                 } => {
+                    validate_parallel_branch_count(branches.len())?;
                     let mut pending = FuturesUnordered::new();
                     for branch in branches {
                         let mut branch_state = clone_state(state);
@@ -1678,6 +1697,16 @@ impl<S: Send> DslFlow<S> {
             }
         })
     }
+}
+
+fn validate_parallel_branch_count(count: usize) -> CatgaResult<()> {
+    if count > MAX_DSL_PARALLEL_BRANCHES {
+        return Err(CatgaError::new(
+            ErrorCode::Validation,
+            "DSL parallel branch count exceeds the supported limit",
+        ));
+    }
+    Ok(())
 }
 
 impl<S: Send> Default for DslFlow<S> {

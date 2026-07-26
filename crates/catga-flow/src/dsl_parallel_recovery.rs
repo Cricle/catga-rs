@@ -9,12 +9,12 @@ use tokio::sync::Mutex;
 
 use crate::{
     DslFlow, DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore,
+    dsl::MAX_DSL_PARALLEL_BRANCHES,
     dsl::{CloneState, Merge},
     dsl_checkpoint::{CheckpointFrame, CheckpointLevel, CheckpointWork, ParallelBranchProgress},
     dsl_recovery::{CheckpointContext, persist_checkpoint_payload},
 };
 
-const MAX_CHECKPOINT_PARALLEL_BRANCHES: usize = 64;
 const MAX_PARALLEL_BRANCH_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -268,7 +268,7 @@ where
     P: DslStepProgressStore + ?Sized + 'a,
 {
     Box::pin(async move {
-        if branches.len() > MAX_CHECKPOINT_PARALLEL_BRANCHES {
+        if branches.len() > MAX_DSL_PARALLEL_BRANCHES {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
                 "parallel branch count exceeds the checkpoint limit",

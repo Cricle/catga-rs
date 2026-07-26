@@ -14,7 +14,7 @@ use catga_core::{
 };
 use catga_flow::{
     DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver, Flow,
-    FlowTagPolicy, FlowThrottle, dsl_action, dsl_each_action,
+    FlowTagPolicy, FlowThrottle, MAX_DSL_PARALLEL_BRANCHES, dsl_action, dsl_each_action,
 };
 use futures::{StreamExt, stream};
 use metrics::{
@@ -978,6 +978,49 @@ async fn dsl_flow_when_any_commits_the_first_completed_branch_without_waiting_fo
         .unwrap();
 
     assert_eq!(state.value, 42);
+}
+
+#[tokio::test]
+async fn dsl_flow_rejects_oversized_live_parallel_fan_out_before_running_a_branch() {
+    let parallel_calls = Arc::new(AtomicUsize::new(0));
+    let parallel_branches = (0..=MAX_DSL_PARALLEL_BRANCHES).map(|_| {
+        let calls = Arc::clone(&parallel_calls);
+        DslFlow::new().action(move |_: &mut ParallelState| {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        })
+    });
+    let parallel = DslFlow::new().parallel(parallel_branches, |_, _| Ok(()));
+    let mut parallel_state = ParallelState { value: 0 };
+
+    assert_eq!(
+        parallel.run(&mut parallel_state).await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(parallel_calls.load(Ordering::Relaxed), 0);
+
+    let any_calls = Arc::new(AtomicUsize::new(0));
+    let any_branches = (0..=MAX_DSL_PARALLEL_BRANCHES).map(|_| {
+        let calls = Arc::clone(&any_calls);
+        DslFlow::new().action(move |_: &mut ParallelState| {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        })
+    });
+    let any = DslFlow::new().when_any(any_branches, |_, _| Ok(()));
+    let mut any_state = ParallelState { value: 0 };
+
+    assert_eq!(
+        any.run(&mut any_state).await.unwrap_err().code(),
+        ErrorCode::Validation
+    );
+    assert_eq!(any_calls.load(Ordering::Relaxed), 0);
 }
 
 #[derive(Debug)]
