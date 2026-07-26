@@ -68,23 +68,23 @@ Expected: focused test passes.
 - Modify: `crates/catga-flow/src/{runtime.rs,suspension.rs,lib.rs}`
 - Test: `tests/flow/{suspension.rs,recovery.rs}`
 
-- [ ] **Step 1: Write failing fan-out test**
+- [x] **Step 1: Write failing fan-out test**
 
 Add a test with a `WhenAll` wait for two child identities and a launcher recording exactly two requests. Verify duplicate launch attempts do not relaunch, duplicate child completion is idempotent, and the parent drives only after its second child result.
 
-- [ ] **Step 2: Run RED test**
+- [x] **Step 2: Run RED test**
 
-Run: `rtk cargo test -p catga-tests --test flow -- durable_child_fan_out`
+Run: `rtk cargo test -p catga-tests --test flow_suspension durable_child_fan_out_launches_each_stable_child_once_and_rejects_unknown_results -- --exact`
 
 Expected: compilation failure naming `FlowChildLauncher` or `launch_waiting_children`.
 
-- [ ] **Step 3: Implement bounded launcher boundary**
+- [x] **Step 3: Implement bounded launcher boundary**
 
-Add `FlowChildLauncher` with `launch(parent_id, child_id, correlation_id) -> CatgaResult<()>`. Add `FlowRuntime::launch_waiting_children` which validates expected count against an explicit maximum, launches only missing children from an immutable continuation, and never retains task handles. Completion remains `record_wait_success`/`record_wait_failure` followed by existing CAS resume.
+Add `FlowChildLauncher` with `launch(parent_id, child_id, correlation_id) -> CatgaResult<()>`. `WaitCondition::for_children` persists stable identities before any external call. `FlowRuntime::launch_waiting_children` advances each identity through a bounded pending/claimed/launched state with an expiring owner claim and exact-continuation CAS. A crash after external dispatch can repeat the stable identity, so the launcher owns idempotency. Completion remains `record_wait_success`/`record_wait_failure` followed by existing CAS resume; unknown children and oversized payloads are rejected before retention.
 
-- [ ] **Step 4: Run focused GREEN test**
+- [x] **Step 4: Run focused GREEN test**
 
-Run: `rtk cargo test -p catga-tests --test flow -- durable_child_fan_out`
+Run: `rtk cargo test -p catga-tests --test flow_suspension durable_child_fan_out_launches_each_stable_child_once_and_rejects_unknown_results -- --exact`
 
 Expected: focused test passes.
 
@@ -158,4 +158,3 @@ Expected: every command exits zero.
 - [ ] **Step 3: Commit and push**
 
 Run: `rtk git add crates tests docs && rtk git commit -m "feat: close bounded flow and cluster runtime gaps" && rtk git push -u origin feature/flow-cluster-runtime-audit`
-

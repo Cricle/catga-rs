@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Durable and compensating flow primitives for Catga.
 
+mod child_launch;
 mod definition;
 mod dsl;
 mod dsl_checkpoint;
@@ -24,6 +25,7 @@ mod suspension_store;
 mod tag_policy;
 mod timeout;
 
+pub use child_launch::FlowChildLauncher;
 pub use definition::{FlowDefinition, FlowStepOutcome};
 pub use dsl::{
     DslFlow, DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks,
@@ -48,7 +50,10 @@ pub use state_machine::{
     encode_state_machine_snapshot,
 };
 pub use store::FlowStore;
-pub use suspension::{FlowContinuation, WaitCondition, WaitPolicy, WaitResult};
+pub use suspension::{
+    FlowChildLaunch, FlowChildLaunchState, FlowContinuation, MAX_WAIT_CHILDREN,
+    MAX_WAIT_RESULT_BYTES, WaitCondition, WaitPolicy, WaitResult,
+};
 pub use suspension_store::{
     FlowQuery, FlowSummary, MAX_FLOW_QUERY_RESULTS, MAX_FLOW_QUERY_SCAN, SuspendedFlowStore,
 };
