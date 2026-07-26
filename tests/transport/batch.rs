@@ -5,7 +5,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -13,6 +13,7 @@ use catga_core::{
     CatgaError, CatgaResult, Delivery, Envelope, EnvelopeHeaders, ErrorCode, MessageMetadata,
     MessageTransport, QualityOfService, TransportBatchOptions, TransportBatcher,
 };
+use futures::{StreamExt, stream};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -279,6 +280,54 @@ async fn transport_batcher_cancellation_rejects_unstarted_work_then_drains_start
     assert!(first.await.unwrap().is_ok());
     assert!(second.await.unwrap().is_ok());
     assert!(runner_task.await.unwrap().is_ok());
+}
+
+/// Measures bounded automatic-batch admission and flush throughput without a timing threshold.
+///
+/// Run manually with:
+/// `cargo test --manifest-path tests/Cargo.toml --test transport_batch transport_batcher_throughput_benchmark -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "manual performance benchmark; run with --ignored --nocapture"]
+async fn transport_batcher_throughput_benchmark() -> CatgaResult<()> {
+    const MESSAGE_COUNT: usize = 2_048;
+    const BATCH_SIZE: usize = 64;
+
+    let transport = Arc::new(RecordingBatchTransport::default());
+    let transport_for_batcher: Arc<dyn MessageTransport> = transport.clone();
+    let (batcher, runner) = TransportBatcher::new(
+        transport_for_batcher,
+        TransportBatchOptions {
+            max_batch_size: BATCH_SIZE,
+            batch_timeout: Duration::from_secs(5),
+            max_queue_length: BATCH_SIZE,
+            publish_concurrency: 16,
+        },
+    )?;
+    let shutdown = CancellationToken::new();
+    let runner_task = tokio::spawn(runner.run_until_cancelled(shutdown.clone()));
+
+    let started = Instant::now();
+    let mut publishes = stream::iter((1..=MESSAGE_COUNT as u64).map(envelope))
+        .map(|envelope| batcher.publish(envelope))
+        .buffer_unordered(BATCH_SIZE);
+    while let Some(result) = publishes.next().await {
+        result?;
+    }
+    let elapsed = started.elapsed();
+    shutdown.cancel();
+    runner_task.await.map_err(|error| {
+        CatgaError::new(ErrorCode::Internal, "transport benchmark runner panicked")
+            .with_details(error.to_string())
+    })??;
+
+    let batches = transport.batches();
+    assert_eq!(batches.len(), MESSAGE_COUNT / BATCH_SIZE);
+    assert!(batches.iter().all(|(batch, _)| batch.len() == BATCH_SIZE));
+    let messages_per_second = (MESSAGE_COUNT as f64) / elapsed.as_secs_f64();
+    println!(
+        "transport_batcher_throughput: messages={MESSAGE_COUNT}, batch_size={BATCH_SIZE}, total={elapsed:?}, messages_per_second={messages_per_second:.2}"
+    );
+    Ok(())
 }
 
 #[test]
