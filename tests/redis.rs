@@ -20,12 +20,12 @@ use catga_core::{
 };
 use catga_flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
-    FlowState, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_redis::{
     MAX_REDIS_PENDING_RECLAIM_SCANS, RedisConfig, RedisDeadLetters, RedisDslStepProgress,
-    RedisEnhancedSnapshots, RedisEventStore, RedisFlowScheduler, RedisIdempotency, RedisInbox,
-    RedisLeases, RedisOutbox, RedisPendingReclaimOptions, RedisProjectionCheckpoints,
+    RedisEnhancedSnapshots, RedisEventStore, RedisFlowScheduler, RedisFlows, RedisIdempotency,
+    RedisInbox, RedisLeases, RedisOutbox, RedisPendingReclaimOptions, RedisProjectionCheckpoints,
     RedisPubSubConfig, RedisPubSubTransport, RedisRequestClient, RedisRequestServer,
     RedisSnapshotStore, RedisSubscriptions, RedisSuspendedFlows, RedisTransport,
 };
@@ -889,6 +889,54 @@ async fn redis_dsl_progress_uses_versioned_create_update_and_delete() -> CatgaRe
     );
     assert!(store.delete("order-flow", 4).await?);
     assert!(!store.delete("order-flow", 4).await?);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_flows_use_atomic_versions_and_claim_only_stale_matching_type() -> CatgaResult<()> {
+    let config = redis_config();
+    let store =
+        RedisFlows::connect(&config.server, format!("{}:plain-flows", config.stream)).await?;
+    let initial = FlowState::new("redis-flow", "payment", b"input".to_vec(), "node-a");
+
+    assert!(store.create(initial.clone()).await?);
+    assert!(!store.create(initial.clone()).await?);
+    assert!(!store.update(1, initial.clone().next_version()).await?);
+
+    let next = initial.clone().next_version();
+    assert!(store.update(0, next.clone()).await?);
+    assert!(
+        store
+            .heartbeat("redis-flow", "node-a", next.version())
+            .await?
+    );
+    assert!(
+        store
+            .try_claim("invoice", "node-b", Duration::from_secs(86_400))
+            .await?
+            .is_none()
+    );
+
+    let terminal = FlowState::new("redis-terminal", "payment", b"input".to_vec(), "node-a")
+        .heartbeated_at(SystemTime::UNIX_EPOCH);
+    assert!(store.create(terminal.clone()).await?);
+    assert!(
+        store
+            .update(terminal.version(), terminal.done(1).next_version())
+            .await?
+    );
+
+    let stale = FlowState::new("redis-stale", "payment", b"input".to_vec(), "node-a")
+        .heartbeated_at(SystemTime::UNIX_EPOCH);
+    assert!(store.create(stale).await?);
+    let claimed = store
+        .try_claim("payment", "node-b", Duration::from_secs(86_400))
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "stale Redis flow was not claimed"))?;
+    assert_eq!(claimed.id(), "redis-stale");
+    assert_eq!(claimed.owner(), Some("node-b"));
+    assert_eq!(claimed.version(), 1);
     Ok(())
 }
 

@@ -12,6 +12,7 @@ mod dead_letter;
 mod dsl_progress;
 mod enhanced_snapshot;
 mod event_store;
+mod flow;
 mod idempotency;
 mod inbox;
 mod lease;
@@ -37,6 +38,7 @@ pub use dead_letter::RedisDeadLetters;
 pub use dsl_progress::RedisDslStepProgress;
 pub use enhanced_snapshot::RedisEnhancedSnapshots;
 pub use event_store::RedisEventStore;
+pub use flow::RedisFlows;
 pub use idempotency::RedisIdempotency;
 pub use inbox::RedisInbox;
 pub use lease::RedisLeases;
@@ -52,3 +54,6 @@ pub use streams_rpc::{RedisStreamsRequest, RedisStreamsRequestClient, RedisStrea
 pub use subscription::RedisSubscriptions;
 pub use suspended_flow::RedisSuspendedFlows;
 pub use transport::RedisTransport;
+
+#[cfg(test)]
+mod flow_unit_tests;

@@ -7,9 +7,8 @@
 //!   [`SqlSuspendedFlowStore`], [`SqlDslStepProgressStore`], and [`SqlStateMachineStore`].
 //!   Multiple SQL features may be enabled in one binary; the constructor selects the concrete
 //!   pool without dynamic SQL or a driver-wide connection abstraction.
-//! - `redis` re-exports `RedisSuspendedFlows` for the existing Redis continuation, timeout, and
-//!   scheduling contract. Redis does not pretend to implement the separate plain
-//!   [`catga_flow::FlowStore`] contract.
+//! - `redis` re-exports `RedisFlows` and `RedisSuspendedFlows` for the plain state and
+//!   continuation contracts, plus Redis-backed timeout and scheduling support.
 //! - `tls-rustls` enables Rustls support for whichever network SQL drivers are selected.
 //!
 //! SQL backends share versioned Postcard frames, fixed SHA-256 identity keys, bounded
@@ -124,6 +123,6 @@ pub use suspended_store::SqlSuspendedFlowStore;
 #[cfg(feature = "mssql")]
 pub type MssqlPool = bb8::Pool<bb8_tiberius::ConnectionManager>;
 
-/// Re-exports the existing Redis suspended-flow store when the `redis` feature is enabled.
+/// Re-exports Redis plain-state and suspended-flow stores when the `redis` feature is enabled.
 #[cfg(feature = "redis")]
-pub use catga_redis::RedisSuspendedFlows;
+pub use catga_redis::{RedisFlows, RedisSuspendedFlows};
