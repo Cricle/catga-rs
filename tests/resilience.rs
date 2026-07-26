@@ -21,6 +21,15 @@ fn options() -> ResilienceOptions {
     }
 }
 
+fn error_with_retryability(code: ErrorCode, retryable: bool) -> CatgaError {
+    serde_json::from_value(serde_json::json!({
+        "code": code,
+        "message": "configured retryability",
+        "retryable": retryable,
+    }))
+    .expect("a CatgaError wire override is valid")
+}
+
 #[test]
 fn jitter_is_bounded_and_fixed_jitter_is_predictable() {
     let base = Duration::from_millis(100);
@@ -102,6 +111,95 @@ async fn executor_retries_only_transient_failures_and_preserves_validation_error
         validation_attempts.load(std::sync::atomic::Ordering::Relaxed),
         1
     );
+}
+
+#[tokio::test]
+async fn executor_retries_unavailable_errors() {
+    let executor = ResilienceExecutor::new(options()).expect("valid options");
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let retry_attempts = Arc::clone(&attempts);
+
+    let value = executor
+        .execute(CancellationToken::new(), move |_| {
+            let attempts = Arc::clone(&retry_attempts);
+            async move {
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    Err(CatgaError::new(ErrorCode::Unavailable, "retry me"))
+                } else {
+                    Ok(42_u8)
+                }
+            }
+        })
+        .await;
+
+    assert_eq!(value, Ok(42));
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn executor_honors_retryability_overrides() {
+    let executor = ResilienceExecutor::new(options()).expect("valid options");
+    let retryable_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let retryable_counter = Arc::clone(&retryable_attempts);
+
+    let value = executor
+        .execute(CancellationToken::new(), move |_| {
+            let attempts = Arc::clone(&retryable_counter);
+            async move {
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    Err(error_with_retryability(ErrorCode::Validation, true))
+                } else {
+                    Ok(42_u8)
+                }
+            }
+        })
+        .await;
+
+    assert_eq!(value, Ok(42));
+    assert_eq!(
+        retryable_attempts.load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+
+    let non_retryable_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let non_retryable_counter = Arc::clone(&non_retryable_attempts);
+    let error = executor
+        .execute(CancellationToken::new(), move |_| {
+            let attempts = Arc::clone(&non_retryable_counter);
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Err::<(), _>(error_with_retryability(ErrorCode::Transient, false))
+            }
+        })
+        .await
+        .expect_err("an explicit non-retryable override is returned");
+
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(
+        non_retryable_attempts.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+#[tokio::test]
+async fn executor_never_retries_cancelled_errors() {
+    let executor = ResilienceExecutor::new(options()).expect("valid options");
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let retry_attempts = Arc::clone(&attempts);
+
+    let error = executor
+        .execute(CancellationToken::new(), move |_| {
+            let attempts = Arc::clone(&retry_attempts);
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Err::<(), _>(error_with_retryability(ErrorCode::Cancelled, true))
+            }
+        })
+        .await
+        .expect_err("cancelled work is returned");
+
+    assert_eq!(error.code(), ErrorCode::Cancelled);
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
 #[tokio::test]

@@ -2,6 +2,7 @@
 
 use std::{marker::PhantomData, time::SystemTime};
 
+use crate::aggregate::next_event_version;
 use crate::{
     Aggregate, CatgaError, CatgaResult, EnhancedSnapshotStore, ErrorCode, EventStore,
     MAX_EVENT_STORE_PAGE_SIZE, VersionHistoryPage, VersionInfo,
@@ -233,8 +234,10 @@ where
             .snapshots
             .load_at_version::<A>(&stream_id, version)
             .await?;
-        let (mut aggregate, from_version, mut found) = snapshot_state(id, snapshot)?;
-        let mut cursor = u64::try_from(from_version).unwrap_or(0);
+        let (mut aggregate, next_cursor, mut found) = snapshot_state(id, snapshot)?;
+        let Some(mut cursor) = next_cursor else {
+            return Ok(found.then_some(aggregate));
+        };
         loop {
             let page = self
                 .events
@@ -277,8 +280,11 @@ where
             .snapshots
             .load_at_version::<A>(&stream_id, target)
             .await?;
-        let (mut aggregate, from_version, _) = snapshot_state(id, snapshot)?;
-        let mut cursor = u64::try_from(from_version).unwrap_or(0);
+        let (mut aggregate, next_cursor, _) = snapshot_state(id, snapshot)?;
+        let Some(mut cursor) = next_cursor else {
+            return Ok(Some(aggregate));
+        };
+        let from_version = i64::try_from(cursor).unwrap_or(i64::MAX);
         loop {
             let page = self
                 .events
@@ -364,7 +370,7 @@ fn apply_event<A: Aggregate>(
 fn snapshot_state<A: Aggregate>(
     id: &str,
     snapshot: Option<crate::Snapshot<A>>,
-) -> CatgaResult<(A, i64, bool)> {
+) -> CatgaResult<(A, Option<u64>, bool)> {
     match snapshot {
         Some(snapshot) => {
             let aggregate = (*snapshot.shared_state()).clone();
@@ -374,8 +380,8 @@ fn snapshot_state<A: Aggregate>(
                     "aggregate snapshot version does not match its state",
                 ));
             }
-            Ok((aggregate, snapshot.version().saturating_add(1), true))
+            Ok((aggregate, next_event_version(snapshot.version()), true))
         }
-        None => Ok((A::new(id), 0, false)),
+        None => Ok((A::new(id), Some(0), false)),
     }
 }

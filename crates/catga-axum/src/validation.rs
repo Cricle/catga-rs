@@ -99,10 +99,10 @@ pub fn validate_required(value: Option<&str>, field: &str) -> Option<Box<str>> {
         .then(|| format!("{field} is required").into())
 }
 
-/// Returns an error when a present string is shorter than `minimum` Unicode scalar values.
+/// Returns an error when `value` is missing or shorter than `minimum` Unicode scalar values.
 pub fn validate_min_length(value: Option<&str>, minimum: usize, field: &str) -> Option<Box<str>> {
     value
-        .is_some_and(|value| value.chars().count() < minimum)
+        .is_none_or(|value| value.chars().count() < minimum)
         .then(|| format!("{field} must be at least {minimum} characters").into())
 }
 

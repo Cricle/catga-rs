@@ -1,10 +1,15 @@
 //! Aggregate time-travel contract tests.
 
-use std::time::{Duration, SystemTime};
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, SystemTime},
+};
 
+use async_trait::async_trait;
 use catga_core::{
-    Aggregate, Envelope, EventStore, MessageMetadata, Snapshot, SnapshotStore,
-    SnapshotTimeTravelService, TimeTravelService,
+    Aggregate, CatgaError, CatgaResult, Envelope, ErrorCode, EventPage, EventStore, EventStream,
+    MessageMetadata, Snapshot, SnapshotStore, SnapshotTimeTravelService, StreamIdsPage,
+    TimeTravelService, VersionHistoryPage,
 };
 use catga_memory::{MemoryEnhancedSnapshots, MemoryEventStore};
 
@@ -58,6 +63,87 @@ fn event(id: u64, amount: u8) -> Envelope {
         vec![amount],
         MessageMetadata::new(id, None),
     )
+}
+
+struct TerminalSnapshotEventStore {
+    read_calls: AtomicUsize,
+}
+
+impl TerminalSnapshotEventStore {
+    const fn new() -> Self {
+        Self {
+            read_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl EventStore for TerminalSnapshotEventStore {
+    async fn append(
+        &self,
+        _stream_id: &str,
+        _events: Vec<Envelope>,
+        _expected_version: Option<i64>,
+    ) -> CatgaResult<i64> {
+        Err(CatgaError::new(
+            ErrorCode::Unsupported,
+            "read-only test store",
+        ))
+    }
+
+    async fn read_page(
+        &self,
+        stream_id: &str,
+        _from_version: u64,
+        _max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        self.read_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(EventPage::new(
+            EventStream::new(stream_id, i64::MAX, Vec::new()),
+            None,
+        ))
+    }
+
+    async fn version(&self, _stream_id: &str) -> CatgaResult<i64> {
+        Ok(i64::MAX)
+    }
+
+    async fn read_to_version_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        _to_version: i64,
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        self.read_page(stream_id, from_version, max_count).await
+    }
+
+    async fn read_to_time_page(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        _upper_bound: SystemTime,
+        max_count: usize,
+    ) -> CatgaResult<EventPage> {
+        self.read_page(stream_id, from_version, max_count).await
+    }
+
+    async fn version_history_page(
+        &self,
+        _stream_id: &str,
+        _from_version: u64,
+        _max_count: usize,
+    ) -> CatgaResult<VersionHistoryPage> {
+        Ok(VersionHistoryPage::new(Vec::new(), None))
+    }
+
+    async fn stream_ids_page(
+        &self,
+        _after: Option<&str>,
+        _max_count: usize,
+    ) -> CatgaResult<StreamIdsPage> {
+        Ok(StreamIdsPage::new(Vec::new(), None))
+    }
 }
 
 #[tokio::test]
@@ -169,4 +255,34 @@ async fn snapshot_time_travel_rejects_a_snapshot_with_a_mismatched_aggregate_ver
         Ok(_) => panic!("mismatched snapshot version must fail"),
     };
     assert_eq!(error.code(), catga_core::ErrorCode::Validation);
+}
+
+#[tokio::test]
+async fn snapshot_time_travel_does_not_replay_a_terminal_snapshot_event() {
+    let events = TerminalSnapshotEventStore::new();
+    let snapshots = MemoryEnhancedSnapshots::default();
+    snapshots
+        .save(Snapshot::new(
+            "counter:one",
+            Counter {
+                id: "one".into(),
+                version: i64::MAX,
+                total: 42,
+                from_snapshot: true,
+            },
+            i64::MAX,
+        ))
+        .await
+        .unwrap();
+    let time_travel = SnapshotTimeTravelService::<Counter, _, _>::new(&events, &snapshots);
+
+    let state = time_travel
+        .state_at_version("one", i64::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(state.version(), i64::MAX);
+    assert_eq!(state.total, 42);
+    assert_eq!(events.read_calls.load(Ordering::Relaxed), 0);
 }

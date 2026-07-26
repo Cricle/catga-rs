@@ -5,13 +5,40 @@ use std::time::{Duration, SystemTime};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowQuery, FlowState, FlowStore, SuspendedFlowStore, TimedOutFlowPoll,
-    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
+    DslStepProgress, DslStepProgressStore, FlowContinuation, FlowQuery, FlowState, FlowStore,
+    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
+    WaitPolicy,
 };
-use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
+use catga_flow_store::{SqlDslStepProgressStore, SqlFlowStore, SqlSuspendedFlowStore};
 
 #[path = "../../../tests/flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
+
+#[tokio::test]
+async fn sqlite_dsl_progress_store_preserves_versioned_step_progress() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("dsl-progress.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlDslStepProgressStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let initial = DslStepProgress::new("sql-dsl-progress", 4, b"initial".as_slice());
+    assert!(store.create(initial.clone()).await?);
+    assert!(!store.create(initial.clone()).await?);
+    assert_eq!(
+        store.get("sql-dsl-progress", 4).await?,
+        Some(initial.clone())
+    );
+
+    let next = initial.clone().next_version(b"next".as_slice());
+    assert!(store.update(initial.version(), next.clone()).await?);
+    assert!(!store.update(initial.version(), initial).await?);
+    assert_eq!(store.get("sql-dsl-progress", 4).await?, Some(next));
+    assert!(store.delete("sql-dsl-progress", 4).await?);
+    assert!(!store.delete("sql-dsl-progress", 4).await?);
+    assert!(store.get("sql-dsl-progress", 4).await?.is_none());
+    Ok(())
+}
 
 #[tokio::test]
 async fn sqlite_flow_store_creates_and_loads_a_flow_state() -> CatgaResult<()> {

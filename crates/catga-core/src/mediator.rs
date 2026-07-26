@@ -8,10 +8,11 @@ use futures::{Stream, StreamExt, stream};
 use tracing::Instrument;
 
 use crate::{
-    CatgaError, CatgaResult, ErrorCode, Event, Next, Pipeline, Registry, Request, observability,
+    CatgaError, CatgaResult, Command, ErrorCode, Event, Next, Pipeline, Registry, Request,
+    observability,
 };
 
-/// Dispatches typed requests and events through an immutable handler registry.
+/// Dispatches typed requests, commands, and events through an immutable handler registry.
 pub struct Mediator {
     registry: Arc<Registry>,
 }
@@ -20,8 +21,8 @@ pub struct Mediator {
 ///
 /// Clone this handle into handlers while building a [`Registry`], build the [`Mediator`], and
 /// then call [`Self::bind`] once.  Successful dispatch reads a completed [`OnceLock`] and adds no
-/// allocation, mutex, or global lookup.  Calling [`Self::send`] or [`Self::publish`] before
-/// binding returns [`ErrorCode::Unavailable`].
+/// allocation, mutex, or global lookup.  Calling [`Self::send`], [`Self::send_command`], or
+/// [`Self::publish`] before binding returns [`ErrorCode::Unavailable`].
 #[derive(Clone, Default)]
 pub struct MediatorHandle {
     mediator: Arc<OnceLock<Arc<Mediator>>>,
@@ -53,6 +54,11 @@ impl MediatorHandle {
     /// Sends one request through the bound mediator.
     pub async fn send<M: Request>(&self, message: M) -> CatgaResult<M::Response> {
         self.bound()?.send(message).await
+    }
+
+    /// Sends one command through the bound mediator.
+    pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
+        self.bound()?.send_command(command).await
     }
 
     /// Publishes one event through the bound mediator.
@@ -88,6 +94,19 @@ impl Mediator {
             .instrument(span.clone())
             .await;
         observability::record_request(&span, request_type, started.elapsed(), &result);
+        result
+    }
+
+    /// Routes a command to its sole registered handler.
+    pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
+        let command_type = std::any::type_name::<C>();
+        let span = observability::command_span(command_type);
+        observability::record_message_tags(&span, &command);
+        let started = Instant::now();
+        let result = Self::dispatch_command(&self.registry, command)
+            .instrument(span.clone())
+            .await;
+        observability::record_command(&span, command_type, started.elapsed(), &result);
         result
     }
 
@@ -130,6 +149,13 @@ impl Mediator {
                     "request handler returned an invalid response type",
                 )
             })
+    }
+
+    async fn dispatch_command<C: Command>(registry: &Registry, command: C) -> CatgaResult<()> {
+        let handler = registry.commands.get(&TypeId::of::<C>()).ok_or_else(|| {
+            CatgaError::new(ErrorCode::NotFound, "command handler is not registered")
+        })?;
+        handler.handle(Box::new(command)).await
     }
 
     /// Routes requests concurrently while preserving their input order.

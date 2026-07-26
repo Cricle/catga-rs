@@ -49,7 +49,9 @@ pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
 /// Adds the current task's correlation identifier to an outgoing HTTP header map.
 ///
 /// A caller-supplied correlation header is preserved, allowing an explicit
-/// downstream boundary to take precedence. When no correlation is scoped, this
+/// downstream boundary to take precedence. Otherwise, an opaque scoped value
+/// or correlation header from the current transport context takes precedence
+/// over a numeric correlation identifier. When no correlation is scoped, this
 /// function leaves `headers` unchanged. It is transport-neutral and can be
 /// used before building requests for any Rust HTTP client.
 pub fn propagate_correlation_header(headers: &mut HeaderMap) {
@@ -58,6 +60,14 @@ pub fn propagate_correlation_header(headers: &mut HeaderMap) {
     }
     if let Some(correlation_value) = current_correlation_value()
         && let Ok(value) = HeaderValue::from_str(&correlation_value)
+    {
+        headers.insert(CORRELATION_ID_HEADER, value);
+        return;
+    }
+    if let Some(context) = current_transport_context()
+        && let Some(context_headers) = context.headers()
+        && let Some(correlation_value) = context_headers.get(CORRELATION_ID_HEADER)
+        && let Ok(value) = HeaderValue::from_str(correlation_value)
     {
         headers.insert(CORRELATION_ID_HEADER, value);
         return;
@@ -574,17 +584,10 @@ where
             "{}/api/catga/forward/{request_type}",
             leader_endpoint.trim_end_matches('/')
         );
-        let mut trace_headers = HeaderMap::new();
-        propagate_trace_context_headers(&mut trace_headers);
-        let request = self.client.post(url).headers(trace_headers).json(&request);
-        // Formatting occurs only for an already-scoped request, so ordinary
-        // leader forwarding adds neither a header allocation nor a global lookup.
-        let request = match current_correlation_id() {
-            Some(correlation_id) => {
-                request.header(CORRELATION_ID_HEADER, correlation_id.to_string())
-            }
-            None => request,
-        };
+        let mut headers = HeaderMap::new();
+        propagate_trace_context_headers(&mut headers);
+        propagate_correlation_header(&mut headers);
+        let request = self.client.post(url).headers(headers).json(&request);
         let response = request
             .send()
             .await

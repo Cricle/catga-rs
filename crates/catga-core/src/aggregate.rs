@@ -121,6 +121,14 @@ pub struct AggregateRepository<'a, A, E: ?Sized, S: ?Sized> {
     aggregate: PhantomData<A>,
 }
 
+/// Returns the cursor immediately after a persisted event version.
+///
+/// `i64::MAX` is terminal in the signed event-version domain, so it has no
+/// following cursor.
+pub(crate) fn next_event_version(version: i64) -> Option<u64> {
+    (version != i64::MAX).then(|| u64::try_from(version + 1).unwrap_or(0))
+}
+
 impl<'a, A, E: ?Sized, S: ?Sized> AggregateRepository<'a, A, E, S>
 where
     A: Aggregate,
@@ -146,7 +154,7 @@ where
         let stream_id = A::stream_id(id);
         let snapshot = self.snapshots.load::<A>(&stream_id).await?;
         let has_snapshot = snapshot.is_some();
-        let (mut aggregate, from_version) = match snapshot {
+        let (mut aggregate, next_version) = match snapshot {
             Some(snapshot) => {
                 let aggregate = (*snapshot.shared_state()).clone();
                 if aggregate.version() != snapshot.version() {
@@ -155,11 +163,13 @@ where
                         "aggregate snapshot version does not match its state",
                     ));
                 }
-                (aggregate, snapshot.version().saturating_add(1))
+                (aggregate, next_event_version(snapshot.version()))
             }
-            None => (A::new(id), 0),
+            None => (A::new(id), Some(0)),
         };
-        let mut next_version = u64::try_from(from_version).unwrap_or(0);
+        let Some(mut next_version) = next_version else {
+            return Ok(Some(aggregate));
+        };
         let mut found_event = false;
         loop {
             let page = self

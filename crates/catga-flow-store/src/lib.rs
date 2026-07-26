@@ -3,9 +3,10 @@
 //!
 //! Enable only the adapters an application deploys:
 //!
-//! - `sqlite`, `mysql`, `postgres`, and `mssql` provide [`SqlFlowStore`] and
-//!   [`SqlSuspendedFlowStore`]. Multiple SQL features may be enabled in one binary; the constructor
-//!   selects the concrete pool without dynamic SQL or a driver-wide connection abstraction.
+//! - `sqlite`, `mysql`, `postgres`, and `mssql` provide [`SqlFlowStore`],
+//!   [`SqlSuspendedFlowStore`], and [`SqlDslStepProgressStore`]. Multiple SQL features may be
+//!   enabled in one binary; the constructor selects the concrete pool without dynamic SQL or a
+//!   driver-wide connection abstraction.
 //! - `redis` re-exports `RedisSuspendedFlows` for the existing Redis continuation, timeout, and
 //!   scheduling contract. Redis does not pretend to implement the separate plain
 //!   [`catga_flow::FlowStore`] contract.
@@ -17,6 +18,14 @@
 //! duplicating the public store contract. No adapter creates a worker or background task.
 
 mod backend;
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
+mod dsl_progress_codec;
+mod dsl_progress_store;
 #[cfg(any(
     feature = "sqlite",
     feature = "mysql",
@@ -35,11 +44,15 @@ mod key;
 #[cfg(feature = "mssql")]
 mod mssql;
 #[cfg(feature = "mssql")]
+mod mssql_dsl_progress;
+#[cfg(feature = "mssql")]
 mod mssql_suspended;
 #[cfg(feature = "mssql")]
 mod mssql_timeout;
 #[cfg(feature = "mysql")]
 mod mysql;
+#[cfg(feature = "mysql")]
+mod mysql_dsl_progress;
 #[cfg(feature = "mysql")]
 mod mysql_suspended;
 #[cfg(feature = "mysql")]
@@ -47,9 +60,13 @@ mod mysql_timeout;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "postgres")]
+mod postgres_dsl_progress;
+#[cfg(feature = "postgres")]
 mod postgres_suspended;
 #[cfg(feature = "postgres")]
 mod postgres_timeout;
+#[cfg(any(feature = "mysql", feature = "postgres"))]
+mod server_dsl_progress;
 #[cfg(any(feature = "mysql", feature = "postgres"))]
 mod server_suspended;
 #[cfg(any(feature = "mysql", feature = "postgres"))]
@@ -66,6 +83,8 @@ mod sql_common;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 #[cfg(feature = "sqlite")]
+mod sqlite_dsl_progress;
+#[cfg(feature = "sqlite")]
 mod sqlite_suspended;
 #[cfg(feature = "sqlite")]
 mod sqlite_timeout;
@@ -78,6 +97,7 @@ mod sqlite_timeout;
 mod state_codec;
 mod suspended_store;
 
+pub use dsl_progress_store::SqlDslStepProgressStore;
 pub use flow_store::SqlFlowStore;
 pub use suspended_store::SqlSuspendedFlowStore;
 

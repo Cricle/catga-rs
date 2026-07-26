@@ -118,6 +118,14 @@ fn endpoint_validation_aggregates_ordered_errors_into_a_catga_validation_failure
 }
 
 #[test]
+fn validate_min_length_rejects_a_missing_value() {
+    assert_eq!(
+        validate_min_length(None, 4, "name").as_deref(),
+        Some("name must be at least 4 characters")
+    );
+}
+
+#[test]
 fn axum_correlation_id_uses_the_request_header_or_a_lock_free_fallback() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(CORRELATION_ID_HEADER, "42".parse().unwrap());
@@ -502,6 +510,58 @@ async fn http_cluster_forwarder_propagates_the_ambient_correlation_header() {
             .expect("test observer lock is available")
             .as_deref(),
         Some("717")
+    );
+}
+
+#[tokio::test]
+async fn http_cluster_forwarder_preserves_an_opaque_scoped_correlation_header() {
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let app = Router::new().route(
+        "/api/catga/forward/ForwardRequest",
+        post({
+            let observed = Arc::clone(&observed);
+            move |headers: HeaderMap, Json(request): Json<ForwardRequest>| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    *observed.lock().expect("test observer lock is available") = headers
+                        .get(CORRELATION_ID_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    Json(request.value + 1)
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+    let envelope = Envelope::new(
+        72,
+        "orders.created",
+        Vec::new(),
+        MessageMetadata::new(72, Some(72)),
+    )
+    .with_headers(
+        EnvelopeHeaders::try_new([(CORRELATION_ID_HEADER, "browser-request-4f8c")])
+            .expect("valid correlation header"),
+    );
+
+    let result = scope_transport_context(&envelope, async {
+        HttpClusterForwarder::new(reqwest::Client::new())
+            .forward(ForwardRequest { value: 41 }, &endpoint)
+            .await
+    })
+    .await
+    .expect("leader forwarding succeeds");
+    server.abort();
+
+    assert_eq!(result, 42);
+    assert_eq!(
+        observed
+            .lock()
+            .expect("test observer lock is available")
+            .as_deref(),
+        Some("browser-request-4f8c")
     );
 }
 

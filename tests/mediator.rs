@@ -7,8 +7,8 @@ use std::sync::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaResult, ErrorCode, Event, EventHandler, Handler, Mediator, MediatorHandle, Registry,
-    Request,
+    CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler, Handler, Mediator,
+    MediatorHandle, Registry, Request,
 };
 
 #[derive(Debug)]
@@ -27,6 +27,89 @@ impl Handler<Double> for DoubleHandler {
     async fn handle(&self, message: Double) -> CatgaResult<u64> {
         Ok(message.0 * 2)
     }
+}
+
+#[derive(Debug)]
+struct ShipOrder(u64);
+
+impl catga_core::Message for ShipOrder {}
+impl Command for ShipOrder {}
+
+struct ShipOrderHandler {
+    shipped_order: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl CommandHandler<ShipOrder> for ShipOrderHandler {
+    async fn handle(&self, command: ShipOrder) -> CatgaResult<()> {
+        self.shipped_order
+            .store(command.0 as usize, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn command_routes_to_its_sole_handler() -> CatgaResult<()> {
+    let shipped_order = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry.register_command::<ShipOrder, _>(ShipOrderHandler {
+        shipped_order: Arc::clone(&shipped_order),
+    })?;
+    let mediator = Mediator::new(registry);
+
+    mediator.send_command(ShipOrder(42)).await?;
+
+    assert_eq!(shipped_order.load(Ordering::Relaxed), 42);
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_registration_rejects_duplicates_without_replacing_the_handler() -> CatgaResult<()>
+{
+    let first_shipped_order = Arc::new(AtomicUsize::new(0));
+    let replacement_shipped_order = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry.register_command::<ShipOrder, _>(ShipOrderHandler {
+        shipped_order: Arc::clone(&first_shipped_order),
+    })?;
+
+    assert!(matches!(
+        registry.register_command::<ShipOrder, _>(ShipOrderHandler {
+            shipped_order: Arc::clone(&replacement_shipped_order),
+        }),
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+
+    Mediator::new(registry).send_command(ShipOrder(42)).await?;
+    assert_eq!(first_shipped_order.load(Ordering::Relaxed), 42);
+    assert_eq!(replacement_shipped_order.load(Ordering::Relaxed), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_dispatch_reports_missing_handler_and_unbound_handle() -> CatgaResult<()> {
+    let handle = MediatorHandle::new();
+
+    assert!(matches!(
+        handle.send_command(ShipOrder(7)).await,
+        Err(error) if error.code() == ErrorCode::Unavailable
+    ));
+    assert!(matches!(
+        Mediator::new(Registry::new()).send_command(ShipOrder(7)).await,
+        Err(error) if error.code() == ErrorCode::NotFound
+    ));
+
+    let shipped_order = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry.register_command::<ShipOrder, _>(ShipOrderHandler {
+        shipped_order: Arc::clone(&shipped_order),
+    })?;
+    let mediator = Arc::new(Mediator::new(registry));
+    handle.bind(Arc::clone(&mediator))?;
+
+    handle.send_command(ShipOrder(7)).await?;
+    assert_eq!(shipped_order.load(Ordering::Relaxed), 7);
+    Ok(())
 }
 
 #[derive(Clone, Debug)]

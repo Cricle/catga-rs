@@ -30,7 +30,7 @@ const HALF_OPEN: u8 = 2;
 ///
 /// A zero `max_concurrent` disables admission limiting. Otherwise, at most
 /// `max_concurrent + max_queued` calls are retained. The timeout applies to
-/// each attempt; only `Transient` and `Timeout` errors are retried or counted
+/// each attempt; retryable errors other than `Cancelled` are retried or counted
 /// by the circuit breaker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResilienceOptions {
@@ -406,7 +406,7 @@ impl OutcomeWindow {
 }
 
 fn recoverable(error: &CatgaError) -> bool {
-    matches!(error.code(), ErrorCode::Transient | ErrorCode::Timeout)
+    error.code() != ErrorCode::Cancelled && error.is_retryable()
 }
 fn cancelled() -> CatgaError {
     CatgaError::new(ErrorCode::Cancelled, "resilience operation was cancelled")

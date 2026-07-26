@@ -81,7 +81,7 @@ pub use event_store::{
 };
 pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
-pub use handler::{EventHandler, Handler};
+pub use handler::{CommandHandler, EventHandler, Handler};
 pub use lease::LeaseStore;
 pub use lifecycle::{
     AcceptanceGate, AsyncInitializable, AutoRecoveryOptions, HealthCheckable, OperationGuard,

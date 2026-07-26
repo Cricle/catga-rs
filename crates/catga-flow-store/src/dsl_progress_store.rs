@@ -1,4 +1,4 @@
-//! The plain durable [`catga_flow::FlowStore`] implementation.
+//! The public feature-selected SQL store for durable DSL step checkpoints.
 
 #[cfg(feature = "sqlite")]
 use std::str::FromStr;
@@ -30,16 +30,17 @@ use catga_core::CatgaResult;
     feature = "postgres",
     feature = "mssql"
 ))]
-use catga_flow::{FlowState, FlowStore};
+use catga_flow::{DslStepProgress, DslStepProgressStore};
 
 use crate::backend::Backend;
 
-/// A feature-selected SQL implementation of the FlowStore contract.
+/// A feature-selected SQL implementation of durable DSL step progress.
 ///
-/// Construct the store with the constructor for its enabled backend, then migrate it
-/// once before serving flow traffic. Each instance owns one bounded pool and has no background
-/// tasks.
-pub struct SqlFlowStore {
+/// Construct this store with the constructor for an enabled backend, then migrate that backend
+/// before accepting recoverable DSL flow traffic. Rows use a SHA-256 flow identity key plus the
+/// step index, retain the original ID for collision detection, and perform mutations through
+/// version and physical-revision compare-and-set guards. The store creates no background tasks.
+pub struct SqlDslStepProgressStore {
     #[cfg_attr(
         not(any(
             feature = "sqlite",
@@ -52,8 +53,8 @@ pub struct SqlFlowStore {
     backend: Backend,
 }
 
-impl SqlFlowStore {
-    /// Opens a SQL Server store with a bounded bb8/Tiberius pool.
+impl SqlDslStepProgressStore {
+    /// Opens a SQL Server progress store with a bounded bb8/Tiberius pool.
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql(url: &str) -> CatgaResult<Self> {
         let manager = bb8_tiberius::ConnectionManager::build(url)
@@ -67,7 +68,7 @@ impl SqlFlowStore {
         Ok(Self::from_mssql_pool(pool))
     }
 
-    /// Adopts an application-owned SQL Server pool without creating another pool.
+    /// Adopts an application-owned SQL Server pool without allocating another pool.
     #[cfg(feature = "mssql")]
     pub fn from_mssql_pool(pool: crate::MssqlPool) -> Self {
         Self {
@@ -75,7 +76,7 @@ impl SqlFlowStore {
         }
     }
 
-    /// Opens a MySQL 8 store with a bounded SQLx pool.
+    /// Opens a MySQL 8 progress store with a bounded SQLx pool.
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql(url: &str) -> CatgaResult<Self> {
         use sqlx::mysql::MySqlPoolOptions;
@@ -89,7 +90,7 @@ impl SqlFlowStore {
         Ok(Self::from_mysql_pool(pool))
     }
 
-    /// Adopts an application-owned MySQL pool without creating another connection pool.
+    /// Adopts an application-owned MySQL pool without allocating another pool.
     #[cfg(feature = "mysql")]
     pub fn from_mysql_pool(pool: sqlx::MySqlPool) -> Self {
         Self {
@@ -97,7 +98,7 @@ impl SqlFlowStore {
         }
     }
 
-    /// Opens a PostgreSQL store with a bounded SQLx pool.
+    /// Opens a PostgreSQL progress store with a bounded SQLx pool.
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres(url: &str) -> CatgaResult<Self> {
         use sqlx::postgres::PgPoolOptions;
@@ -111,7 +112,7 @@ impl SqlFlowStore {
         Ok(Self::from_postgres_pool(pool))
     }
 
-    /// Adopts an application-owned PostgreSQL pool without creating another connection pool.
+    /// Adopts an application-owned PostgreSQL pool without allocating another pool.
     #[cfg(feature = "postgres")]
     pub fn from_postgres_pool(pool: sqlx::PgPool) -> Self {
         Self {
@@ -119,7 +120,7 @@ impl SqlFlowStore {
         }
     }
 
-    /// Opens a SQLite store with a bounded pool, WAL journaling, and a five-second busy timeout.
+    /// Opens a SQLite progress store with a bounded WAL pool and five-second busy timeout.
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
         use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -141,7 +142,7 @@ impl SqlFlowStore {
         })
     }
 
-    /// Applies this backend's idempotent FlowStore schema migration.
+    /// Applies this backend's idempotent DSL step-progress schema migration.
     #[cfg(any(
         feature = "sqlite",
         feature = "mysql",
@@ -151,13 +152,13 @@ impl SqlFlowStore {
     pub async fn migrate(&self) -> CatgaResult<()> {
         match &self.backend {
             #[cfg(feature = "sqlite")]
-            Backend::Sqlite(pool) => crate::sqlite::migrate(pool).await,
+            Backend::Sqlite(pool) => crate::sqlite_dsl_progress::migrate(pool).await,
             #[cfg(feature = "mysql")]
-            Backend::MySql(pool) => crate::mysql::migrate(pool).await,
+            Backend::MySql(pool) => crate::mysql_dsl_progress::migrate(pool).await,
             #[cfg(feature = "postgres")]
-            Backend::Postgres(pool) => crate::postgres::migrate(pool).await,
+            Backend::Postgres(pool) => crate::postgres_dsl_progress::migrate(pool).await,
             #[cfg(feature = "mssql")]
-            Backend::Mssql(pool) => crate::mssql::migrate(pool).await,
+            Backend::Mssql(pool) => crate::mssql_dsl_progress::migrate(pool).await,
         }
     }
 }
@@ -169,82 +170,76 @@ impl SqlFlowStore {
     feature = "mssql"
 ))]
 #[async_trait]
-impl FlowStore for SqlFlowStore {
-    async fn create(&self, state: FlowState) -> CatgaResult<bool> {
+impl DslStepProgressStore for SqlDslStepProgressStore {
+    async fn create(&self, progress: DslStepProgress) -> CatgaResult<bool> {
         match &self.backend {
             #[cfg(feature = "sqlite")]
-            Backend::Sqlite(pool) => crate::sqlite::create(pool, state).await,
+            Backend::Sqlite(pool) => crate::sqlite_dsl_progress::create(pool, progress).await,
             #[cfg(feature = "mysql")]
-            Backend::MySql(pool) => crate::mysql::create(pool, state).await,
+            Backend::MySql(pool) => crate::mysql_dsl_progress::create(pool, progress).await,
             #[cfg(feature = "postgres")]
-            Backend::Postgres(pool) => crate::postgres::create(pool, state).await,
+            Backend::Postgres(pool) => crate::postgres_dsl_progress::create(pool, progress).await,
             #[cfg(feature = "mssql")]
-            Backend::Mssql(pool) => crate::mssql::create(pool, state).await,
+            Backend::Mssql(pool) => crate::mssql_dsl_progress::create(pool, progress).await,
         }
     }
 
-    async fn update(&self, expected_version: i64, next: FlowState) -> CatgaResult<bool> {
-        match &self.backend {
-            #[cfg(feature = "sqlite")]
-            Backend::Sqlite(pool) => crate::sqlite::update(pool, expected_version, next).await,
-            #[cfg(feature = "mysql")]
-            Backend::MySql(pool) => crate::mysql::update(pool, expected_version, next).await,
-            #[cfg(feature = "postgres")]
-            Backend::Postgres(pool) => crate::postgres::update(pool, expected_version, next).await,
-            #[cfg(feature = "mssql")]
-            Backend::Mssql(pool) => crate::mssql::update(pool, expected_version, next).await,
-        }
-    }
-
-    async fn get(&self, id: &str) -> CatgaResult<Option<FlowState>> {
-        match &self.backend {
-            #[cfg(feature = "sqlite")]
-            Backend::Sqlite(pool) => crate::sqlite::get(pool, id).await,
-            #[cfg(feature = "mysql")]
-            Backend::MySql(pool) => crate::mysql::get(pool, id).await,
-            #[cfg(feature = "postgres")]
-            Backend::Postgres(pool) => crate::postgres::get(pool, id).await,
-            #[cfg(feature = "mssql")]
-            Backend::Mssql(pool) => crate::mssql::get(pool, id).await,
-        }
-    }
-
-    async fn try_claim(
-        &self,
-        flow_type: &str,
-        owner: &str,
-        stale_after: Duration,
-    ) -> CatgaResult<Option<FlowState>> {
+    async fn update(&self, expected_version: i64, next: DslStepProgress) -> CatgaResult<bool> {
         match &self.backend {
             #[cfg(feature = "sqlite")]
             Backend::Sqlite(pool) => {
-                crate::sqlite::try_claim(pool, flow_type, owner, stale_after).await
+                crate::sqlite_dsl_progress::update(pool, expected_version, next).await
             }
             #[cfg(feature = "mysql")]
             Backend::MySql(pool) => {
-                crate::mysql::try_claim(pool, flow_type, owner, stale_after).await
+                crate::mysql_dsl_progress::update(pool, expected_version, next).await
             }
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => {
-                crate::postgres::try_claim(pool, flow_type, owner, stale_after).await
+                crate::postgres_dsl_progress::update(pool, expected_version, next).await
             }
             #[cfg(feature = "mssql")]
             Backend::Mssql(pool) => {
-                crate::mssql::try_claim(pool, flow_type, owner, stale_after).await
+                crate::mssql_dsl_progress::update(pool, expected_version, next).await
             }
         }
     }
 
-    async fn heartbeat(&self, id: &str, owner: &str, version: i64) -> CatgaResult<bool> {
+    async fn get(&self, flow_id: &str, step_index: u32) -> CatgaResult<Option<DslStepProgress>> {
         match &self.backend {
             #[cfg(feature = "sqlite")]
-            Backend::Sqlite(pool) => crate::sqlite::heartbeat(pool, id, owner, version).await,
+            Backend::Sqlite(pool) => {
+                crate::sqlite_dsl_progress::get(pool, flow_id, step_index).await
+            }
             #[cfg(feature = "mysql")]
-            Backend::MySql(pool) => crate::mysql::heartbeat(pool, id, owner, version).await,
+            Backend::MySql(pool) => crate::mysql_dsl_progress::get(pool, flow_id, step_index).await,
             #[cfg(feature = "postgres")]
-            Backend::Postgres(pool) => crate::postgres::heartbeat(pool, id, owner, version).await,
+            Backend::Postgres(pool) => {
+                crate::postgres_dsl_progress::get(pool, flow_id, step_index).await
+            }
             #[cfg(feature = "mssql")]
-            Backend::Mssql(pool) => crate::mssql::heartbeat(pool, id, owner, version).await,
+            Backend::Mssql(pool) => crate::mssql_dsl_progress::get(pool, flow_id, step_index).await,
+        }
+    }
+
+    async fn delete(&self, flow_id: &str, step_index: u32) -> CatgaResult<bool> {
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite(pool) => {
+                crate::sqlite_dsl_progress::delete(pool, flow_id, step_index).await
+            }
+            #[cfg(feature = "mysql")]
+            Backend::MySql(pool) => {
+                crate::mysql_dsl_progress::delete(pool, flow_id, step_index).await
+            }
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(pool) => {
+                crate::postgres_dsl_progress::delete(pool, flow_id, step_index).await
+            }
+            #[cfg(feature = "mssql")]
+            Backend::Mssql(pool) => {
+                crate::mssql_dsl_progress::delete(pool, flow_id, step_index).await
+            }
         }
     }
 }

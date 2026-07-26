@@ -24,6 +24,23 @@ pub(crate) fn request_span(request_type: &'static str) -> tracing::Span {
     span
 }
 
+pub(crate) fn command_span(command_type: &'static str) -> tracing::Span {
+    let span = tracing::info_span!(
+        target: TRACING_TARGET,
+        "catga.command",
+        catga_kind = "command",
+        command_type,
+        correlation_id = tracing::field::Empty,
+        success = tracing::field::Empty,
+        error = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+    );
+    if let Some(correlation_id) = current_correlation_id() {
+        span.record("correlation_id", correlation_id);
+    }
+    span
+}
+
 pub(crate) fn event_span(event_type: &'static str, handler_count: usize) -> tracing::Span {
     let span = tracing::info_span!(
         target: TRACING_TARGET,
@@ -70,6 +87,22 @@ pub(crate) fn record_request<T>(
         "catga.command.duration",
         span,
         request_type,
+        elapsed,
+        result,
+    );
+}
+
+pub(crate) fn record_command(
+    span: &tracing::Span,
+    command_type: &'static str,
+    elapsed: Duration,
+    result: &CatgaResult<()>,
+) {
+    record_result(
+        "catga.commands.executed",
+        "catga.command.duration",
+        span,
+        command_type,
         elapsed,
         result,
     );

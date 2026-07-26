@@ -50,6 +50,27 @@ impl Handler<Work> for TerminalFailure {
     }
 }
 
+struct FailsOnceWith(Arc<AtomicUsize>, CatgaError);
+
+#[async_trait]
+impl Handler<Work> for FailsOnceWith {
+    async fn handle(&self, _: Work) -> CatgaResult<&'static str> {
+        if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+            return Err(self.1.clone());
+        }
+        Ok("ok")
+    }
+}
+
+fn error_with_retryability(code: ErrorCode, retryable: bool) -> CatgaError {
+    serde_json::from_value(serde_json::json!({
+        "code": code,
+        "message": "configured retryability",
+        "retryable": retryable,
+    }))
+    .expect("a CatgaError wire override is valid")
+}
+
 struct SlowHandler;
 
 #[async_trait]
@@ -222,6 +243,84 @@ async fn retry_behavior_replays_transient_errors_but_not_terminal_errors() {
             .unwrap_err()
             .code(),
         ErrorCode::Validation
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn retry_behavior_retries_unavailable_errors() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+        .register_request::<Work, _>(FailsOnceWith(
+            Arc::clone(&attempts),
+            CatgaError::new(ErrorCode::Unavailable, "temporarily unavailable"),
+        ))
+        .expect("handler is accepted");
+    let mediator = Mediator::new(registry);
+
+    assert_eq!(mediator.send_with(Work, &pipeline()).await, Ok("ok"));
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn retry_behavior_honors_retryability_overrides() {
+    let retryable_attempts = Arc::new(AtomicUsize::new(0));
+    let mut retryable_registry = Registry::new();
+    retryable_registry
+        .register_request::<Work, _>(FailsOnceWith(
+            Arc::clone(&retryable_attempts),
+            error_with_retryability(ErrorCode::Validation, true),
+        ))
+        .expect("handler is accepted");
+    let retryable_mediator = Mediator::new(retryable_registry);
+
+    assert_eq!(
+        retryable_mediator.send_with(Work, &pipeline()).await,
+        Ok("ok")
+    );
+    assert_eq!(retryable_attempts.load(Ordering::Relaxed), 2);
+
+    let non_retryable_attempts = Arc::new(AtomicUsize::new(0));
+    let mut non_retryable_registry = Registry::new();
+    non_retryable_registry
+        .register_request::<Work, _>(FailsOnceWith(
+            Arc::clone(&non_retryable_attempts),
+            error_with_retryability(ErrorCode::Transient, false),
+        ))
+        .expect("handler is accepted");
+    let non_retryable_mediator = Mediator::new(non_retryable_registry);
+
+    assert_eq!(
+        non_retryable_mediator
+            .send_with(Work, &pipeline())
+            .await
+            .expect_err("an explicit non-retryable override is returned")
+            .code(),
+        ErrorCode::Transient
+    );
+    assert_eq!(non_retryable_attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn retry_behavior_never_retries_cancelled_errors() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+        .register_request::<Work, _>(FailsOnceWith(
+            Arc::clone(&attempts),
+            error_with_retryability(ErrorCode::Cancelled, true),
+        ))
+        .expect("handler is accepted");
+    let mediator = Mediator::new(registry);
+
+    assert_eq!(
+        mediator
+            .send_with(Work, &pipeline())
+            .await
+            .expect_err("cancelled work is returned")
+            .code(),
+        ErrorCode::Cancelled
     );
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
 }

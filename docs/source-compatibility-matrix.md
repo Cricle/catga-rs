@@ -29,14 +29,17 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 ## Verification Boundaries
 
 The workspace's deterministic tests, formatting, Clippy, and Rustdoc gates run
-without services. Broker-backed NATS, Redis, and RobustMQ tests are marked
-ignored by default and require their endpoint variables (`CATGA_NATS_URL`,
-`CATGA_REDIS_URL`, or `CATGA_ROBUSTMQ_URL`); run them explicitly with
-`cargo test -- --ignored` when those services are available. The optional
-mailbox-protocol request/server test intentionally requires
+without services. `cargo test -p catga-tests --test nats` starts one isolated
+JetStream container per test when `CATGA_NATS_URL` is absent, waits for it to
+be removed before returning, and uses a configured URL without deleting that
+external service. Redis and RobustMQ integration tests remain ignored by
+default and require `CATGA_REDIS_URL` or `CATGA_ROBUSTMQ_URL`; run them
+explicitly with `cargo test -- --ignored` when those services are available.
+The optional mailbox-protocol request/server test intentionally requires
 `CATGA_ROBUSTMQ_URL`, because a plain NATS server does not implement the
-protocol's mailbox-control endpoint. Examples and benchmarks are
-documentation/performance artifacts, not runtime contracts.
+protocol's mailbox-control endpoint. The manual NATS throughput baseline is
+`cargo test -p catga-tests --test nats_performance -- --ignored --nocapture`;
+it reports measurements without asserting a host-dependent threshold.
 
 ## Migration Rules
 

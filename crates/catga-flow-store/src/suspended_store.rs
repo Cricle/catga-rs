@@ -43,7 +43,7 @@ use crate::backend::Backend;
 
 /// A feature-selected SQL store for restart-safe Flow continuations.
 ///
-/// Call [`Self::migrate`] once before use. The store maintains a physical revision in addition to
+/// Migrate the selected backend once before use. The store maintains a physical revision in addition to
 /// the Flow business version so a stale continuation cannot overwrite a heartbeat or wait result.
 pub struct SqlSuspendedFlowStore {
     #[cfg_attr(

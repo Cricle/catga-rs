@@ -8,7 +8,7 @@ use crate::{
     telemetry::{RESILIENCE_RETRIES, retry_pending},
 };
 
-/// Retries transient request failures with bounded exponential backoff.
+/// Retries retryable request failures with bounded exponential backoff.
 pub struct RetryBehavior {
     max_retries: usize,
     initial_delay: Duration,
@@ -52,7 +52,11 @@ where
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         for retry in 0..=self.max_retries {
             match next.run(message.clone()).await {
-                Err(error) if error.code() == ErrorCode::Transient && retry < self.max_retries => {
+                Err(error)
+                    if error.code() != ErrorCode::Cancelled
+                        && error.is_retryable()
+                        && retry < self.max_retries =>
+                {
                     let delay = self.delay_for(retry);
                     metrics::counter!(RESILIENCE_RETRIES).increment(1);
                     if !delay.is_zero() {
