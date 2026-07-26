@@ -16,6 +16,12 @@ use crate::{
     Registry, Request, observability, scope_cancellation,
 };
 
+/// Maximum number of requests retained by one [`Mediator::send_batch`] call.
+///
+/// Use [`Mediator::send_stream`] when the producer is unbounded or the caller does not need all
+/// responses retained in one result vector.
+pub const MAX_MEDIATOR_BATCH_SIZE: usize = 1024;
+
 /// Dispatches typed requests, commands, and events through an immutable handler registry.
 pub struct Mediator {
     registry: Arc<Registry>,
@@ -249,7 +255,11 @@ impl Mediator {
         handler.handle(Box::new(command)).await
     }
 
-    /// Routes requests concurrently while preserving their input order.
+    /// Routes a bounded request batch concurrently while preserving input order.
+    ///
+    /// This method retains every response in its returned vector, so it accepts at most
+    /// [`MAX_MEDIATOR_BATCH_SIZE`] messages. Larger inputs return [`ErrorCode::Validation`]
+    /// before any request is dispatched; use [`Self::send_stream`] for unbounded producers.
     pub async fn send_batch<M>(
         &self,
         messages: impl IntoIterator<Item = M>,
@@ -265,7 +275,21 @@ impl Mediator {
             ));
         }
 
-        Ok(stream::iter(messages)
+        let mut bounded = Vec::with_capacity(MAX_MEDIATOR_BATCH_SIZE);
+        for message in messages
+            .into_iter()
+            .take(MAX_MEDIATOR_BATCH_SIZE.saturating_add(1))
+        {
+            bounded.push(message);
+        }
+        if bounded.len() > MAX_MEDIATOR_BATCH_SIZE {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "batch request count exceeds the configured limit; use send_stream",
+            ));
+        }
+
+        Ok(stream::iter(bounded)
             .map(|message| self.send(message))
             .buffered(concurrency_limit)
             .collect()

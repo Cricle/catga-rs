@@ -91,7 +91,7 @@ pub use lifecycle::{
     OperationTracker, RecoverableComponent, RecoveryManager, RecoveryResult, ShutdownCoordinator,
     Stoppable, TransportLifecycle, TransportLifecycleOptions, TransportShutdown, Waitable,
 };
-pub use mediator::{Mediator, MediatorHandle};
+pub use mediator::{MAX_MEDIATOR_BATCH_SIZE, Mediator, MediatorHandle};
 pub use message::{
     BatchKeyProvider, BatchOptionsProvider, Command, DeliveryMode, Event, Message, MessageMetadata,
     MessagePriority, QualityOfService, Request,

@@ -9,7 +9,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, Event, EventHandler, Handler, Mediator, Registry, Request};
+use catga_core::{
+    CatgaResult, ErrorCode, Event, EventHandler, Handler, MAX_MEDIATOR_BATCH_SIZE, Mediator,
+    Registry, Request,
+};
 use futures::{StreamExt, stream};
 
 #[derive(Debug)]
@@ -78,6 +81,22 @@ async fn batch_dispatch_preserves_input_order_and_respects_concurrency_limit() {
 
     assert_eq!(results, vec![Ok(2), Ok(4), Ok(6)]);
     assert_eq!(probe.max_in_flight.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn batch_dispatch_rejects_more_than_the_bounded_input_limit_before_work_starts() {
+    let probe = Arc::new(Probe::default());
+
+    let error = mediator(Arc::clone(&probe))
+        .send_batch(
+            (0..=MAX_MEDIATOR_BATCH_SIZE).map(|value| Work(value as u64)),
+            2,
+        )
+        .await
+        .expect_err("oversized batches must use the streaming API");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(probe.max_in_flight.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
