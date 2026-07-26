@@ -49,6 +49,49 @@ async fn sqlite_state_machine_store_preserves_snapshots_and_version_cas() -> Cat
     assert!(store.update(initial.version(), next.clone()).await?);
     assert!(!store.update(initial.version(), next.clone()).await?);
     assert_eq!(store.get("order-7").await?, Some(next));
+
+    let racing = StateMachineSnapshot::new(
+        "order-race",
+        PersistedStateMachine {
+            quantity: 1,
+            paid: false,
+        },
+    );
+    assert!(store.create(racing.clone()).await?);
+    let (first, second) = tokio::join!(
+        store.update(
+            racing.version(),
+            racing.next_version(PersistedStateMachine {
+                quantity: 2,
+                paid: true,
+            }),
+        ),
+        store.update(
+            racing.version(),
+            racing.next_version(PersistedStateMachine {
+                quantity: 3,
+                paid: true,
+            }),
+        ),
+    );
+    assert_eq!(usize::from(first?) + usize::from(second?), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_state_machine_store_rejects_oversized_snapshots() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("state-machine-payload-limit.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlStateMachineStore::<Vec<u8>>::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let oversized = StateMachineSnapshot::new("large-state", vec![0; 1024 * 1024 + 1]);
+    let error = store
+        .create(oversized)
+        .await
+        .expect_err("snapshot must be bounded");
+    assert_eq!(error.code(), ErrorCode::Validation);
     Ok(())
 }
 
