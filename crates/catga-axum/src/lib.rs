@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     future::Future,
     io,
+    num::NonZeroUsize,
     panic::AssertUnwindSafe,
     sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
@@ -30,7 +31,7 @@ use catga_core::{
     TraceContext, current_correlation_id, current_correlation_value, current_transport_context,
     scope_transport_context,
 };
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 use protobuf::Message as ProtobufMessage;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::mpsc;
@@ -559,12 +560,35 @@ macro_rules! catga_endpoint_metadata {
 /// HTTP implementation of [`ClusterForwarder`] for Serde request and response types.
 pub struct HttpClusterForwarder {
     client: reqwest::Client,
+    response_limit: usize,
 }
 
+/// Default maximum JSON response body accepted from a cluster leader.
+///
+/// A one-mebibyte limit bounds memory retained while decoding a successful forwarded response.
+pub const DEFAULT_HTTP_CLUSTER_FORWARD_RESPONSE_LIMIT_BYTES: usize = 1024 * 1024;
+
 impl HttpClusterForwarder {
-    /// Creates a forwarder using the supplied reusable HTTP client.
+    /// Creates a forwarder using the supplied reusable HTTP client and default response limit.
     pub const fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            response_limit: DEFAULT_HTTP_CLUSTER_FORWARD_RESPONSE_LIMIT_BYTES,
+        }
+    }
+
+    /// Creates a forwarder with a strict nonzero JSON response body limit in bytes.
+    ///
+    /// The limit is enforced while streaming the body, so a peer cannot bypass it by omitting or
+    /// lying about `Content-Length`. Use [`Self::new`] to retain the default one-mebibyte limit.
+    pub const fn with_response_limit(
+        client: reqwest::Client,
+        response_limit: NonZeroUsize,
+    ) -> Self {
+        Self {
+            client,
+            response_limit: response_limit.get(),
+        }
     }
 }
 
@@ -598,11 +622,42 @@ where
                 format!("leader forwarding failed with status {}", response.status()),
             ));
         }
-        response
-            .json()
-            .await
+        let body = read_limited_json_response(response, self.response_limit).await?;
+        serde_json::from_slice(&body)
             .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))
     }
+}
+
+async fn read_limited_json_response(
+    response: reqwest::Response,
+    limit: usize,
+) -> CatgaResult<Vec<u8>> {
+    let mut body = Vec::new();
+    let mut chunks = response.bytes_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk =
+            chunk.map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?;
+        let next_len = body.len().checked_add(chunk.len()).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Transient,
+                "leader forwarding response body length overflowed",
+            )
+        })?;
+        if next_len > limit {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "leader forwarding response body exceeds the configured limit",
+            ));
+        }
+        body.try_reserve(chunk.len()).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Transient,
+                "leader forwarding response body allocation failed",
+            )
+        })?;
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// HTTP implementation of [`RaftTransport`] using compact protobuf protocol frames.

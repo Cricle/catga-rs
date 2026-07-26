@@ -1,5 +1,6 @@
 use std::{
     future::IntoFuture,
+    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -469,6 +470,37 @@ async fn http_cluster_forwarder_posts_a_typed_request_to_the_leader() {
     server.abort();
 
     assert_eq!(result, 42);
+}
+
+#[tokio::test]
+async fn http_cluster_forwarder_rejects_a_success_response_larger_than_its_limit() {
+    let body = format!("42{}", " ".repeat(128));
+    let app = Router::new().route(
+        "/api/catga/forward/ForwardRequest",
+        post(move || {
+            let body = body.clone();
+            async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    body,
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+
+    let error = HttpClusterForwarder::with_response_limit(
+        reqwest::Client::new(),
+        NonZeroUsize::new(16).expect("nonzero response limit"),
+    )
+    .forward(ForwardRequest { value: 41 }, &endpoint)
+    .await
+    .expect_err("oversized leader response must be rejected");
+    server.abort();
+
+    assert_eq!(error.code(), ErrorCode::Transient);
 }
 
 #[tokio::test]
