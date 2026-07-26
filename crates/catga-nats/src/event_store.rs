@@ -20,15 +20,17 @@ use async_trait::async_trait;
 use catga_codec_postcard::PostcardCodec;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
-    EventStream, StoredEvent, StreamIdsPage, VersionHistoryPage, VersionInfo, telemetry,
-    validate_event_store_page_size,
+    EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage, VersionHistoryPage,
+    VersionInfo, telemetry, validate_event_store_page_size,
 };
 use futures::{
     Stream as FuturesStream, StreamExt, TryStream, TryStreamExt, stream as futures_stream,
 };
+use serde::Serialize;
 
 const VERSION: &str = "Catga-Version";
 const TIMESTAMP: &str = "Catga-Timestamp";
+const MAX_EVENT_STORE_HISTORY_SCAN: usize = MAX_EVENT_STORE_PAGE_SIZE;
 
 /// JetStream-backed event store with optimistic, subject-sequence writes.
 ///
@@ -40,9 +42,11 @@ const TIMESTAMP: &str = "Catga-Timestamp";
 /// pre-existing JetStream resources, including when another connector creates the identifier
 /// bucket concurrently.
 pub struct NatsEventStore {
+    client: async_nats::Client,
     context: jetstream::Context,
     stream: Stream,
     ids: kv::Store,
+    stream_name: Box<str>,
     subject_prefix: Box<str>,
     codec: PostcardCodec,
 }
@@ -70,7 +74,7 @@ impl NatsEventStore {
         let subject_prefix = subject_prefix.into();
         validate_subject_prefix(&subject_prefix)?;
         let client = async_nats::connect(server).await.map_err(map_error)?;
-        let context = jetstream::new(client);
+        let context = jetstream::new(client.clone());
         let mut stream = context
             .get_or_create_stream(stream::Config {
                 name: stream_name.to_string(),
@@ -109,9 +113,11 @@ impl NatsEventStore {
         .await
         .map_err(map_error)?;
         Ok(Self {
+            client,
             context,
             stream,
             ids,
+            stream_name,
             subject_prefix,
             codec: PostcardCodec,
         })
@@ -151,13 +157,10 @@ impl NatsEventStore {
     ) -> CatgaResult<Vec<StoredEvent>> {
         let from_version = i64::try_from(from_version).unwrap_or(i64::MAX);
         let subject = self.subject(stream_id)?;
-        let events = self.subject_messages(subject).try_filter_map(|message| {
-            futures::future::ready(
-                self.decode_message(&message)
-                    .map(|event| (event.version() >= from_version).then_some(event)),
-            )
-        });
-        take_at_most(events, max_count).await
+        let events = self
+            .subject_messages(subject)
+            .and_then(|message| futures::future::ready(self.decode_message(&message)));
+        take_matching_at_most(events, max_count, |event| event.version() >= from_version).await
     }
 
     fn subject_messages(
@@ -170,24 +173,50 @@ impl NatsEventStore {
                 let message = match sequence {
                     Some(sequence) => match next_direct_sequence(sequence) {
                         Some(sequence) => {
-                            self.stream
-                                .direct_get_next_for_subject(&subject, Some(sequence))
-                                .await
+                            self.direct_get_next_for_subject(&subject, Some(sequence))
+                                .await?
                         }
                         None => return Ok(None),
                     },
-                    None => self.stream.direct_get_first_for_subject(&subject).await,
+                    None => self.direct_get_next_for_subject(&subject, None).await?,
                 };
                 match message {
-                    Ok(message) => {
+                    Some(message) => {
                         let sequence = message_sequence(&message)?;
-                        Ok(Some((message.into(), Some(sequence))))
+                        Ok(Some((message, Some(sequence))))
                     }
-                    Err(error) if error.kind() == DirectGetErrorKind::NotFound => Ok(None),
-                    Err(error) => Err(map_error(error)),
+                    None => Ok(None),
                 }
             }
         })
+    }
+
+    async fn direct_get_next_for_subject(
+        &self,
+        subject: &str,
+        sequence: Option<u64>,
+    ) -> CatgaResult<Option<Message>> {
+        let payload =
+            serde_json::to_vec(&DirectGetNextRequest { subject, sequence }).map_err(map_error)?;
+        let message = self
+            .client
+            .request(
+                format!("$JS.API.DIRECT.GET.{}", self.stream_name),
+                payload.into(),
+            )
+            .await
+            .map_err(map_error)?;
+        match (message.status, message.description.as_deref()) {
+            (Some(async_nats::StatusCode::NOT_FOUND), Some(_)) => Ok(None),
+            (Some(async_nats::StatusCode::TIMEOUT), Some(_)) => {
+                Err(CatgaError::new(ErrorCode::Transient, "invalid subject"))
+            }
+            (Some(status), Some(description)) => Err(CatgaError::new(
+                ErrorCode::Transient,
+                format!("JetStream direct get failed with {status}: {description}"),
+            )),
+            _ => Ok(Some(message)),
+        }
     }
 
     fn decode_message(&self, message: &async_nats::Message) -> CatgaResult<StoredEvent> {
@@ -197,6 +226,14 @@ impl NatsEventStore {
             from_unix_millis(message_timestamp(message)?),
         ))
     }
+}
+
+#[derive(Serialize)]
+struct DirectGetNextRequest<'a> {
+    #[serde(rename = "next_by_subj")]
+    subject: &'a str,
+    #[serde(rename = "seq", skip_serializing_if = "Option::is_none")]
+    sequence: Option<u64>,
 }
 
 #[async_trait]
@@ -518,19 +555,33 @@ fn message_sequence(message: &async_nats::Message) -> CatgaResult<u64> {
             )
         })
 }
-async fn take_at_most<T, E, S>(stream: S, max_count: usize) -> Result<Vec<T>, E>
+async fn take_matching_at_most<T, S, F>(
+    stream: S,
+    max_count: usize,
+    mut matches: F,
+) -> CatgaResult<Vec<T>>
 where
-    S: FuturesStream<Item = Result<T, E>>,
+    S: FuturesStream<Item = CatgaResult<T>>,
+    F: FnMut(&T) -> bool,
 {
     futures::pin_mut!(stream);
-    let mut values = Vec::new();
-    for _ in 0..max_count {
+    let mut values = Vec::with_capacity(max_count);
+    for _ in 0..MAX_EVENT_STORE_HISTORY_SCAN {
         let Some(value) = stream.next().await else {
-            break;
+            return Ok(values);
         };
-        values.push(value?);
+        let value = value?;
+        if matches(&value) {
+            values.push(value);
+            if values.len() == max_count {
+                return Ok(values);
+            }
+        }
     }
-    Ok(values)
+    Err(CatgaError::new(
+        ErrorCode::Unavailable,
+        "NATS event history scan limit reached before filling page",
+    ))
 }
 fn unix_millis(time: SystemTime) -> u64 {
     u64::try_from(
@@ -569,9 +620,10 @@ mod tests {
     use futures::{StreamExt, future, stream};
 
     use super::{
-        get_or_create_with_reopen, next_direct_sequence, stream_subjects_cover_prefix,
-        take_at_most, validate_subject_prefix,
+        MAX_EVENT_STORE_HISTORY_SCAN, get_or_create_with_reopen, next_direct_sequence,
+        stream_subjects_cover_prefix, take_matching_at_most, validate_subject_prefix,
     };
+    use catga_core::{CatgaError, ErrorCode};
 
     #[test]
     fn direct_next_sequence_is_strictly_after_the_current_sequence() {
@@ -642,15 +694,34 @@ mod tests {
             let polled = Arc::clone(&polled);
             move |value| {
                 polled.fetch_add(1, Ordering::Relaxed);
-                Ok::<_, ()>(value)
+                Ok::<_, CatgaError>(value)
             }
         });
 
-        let values = take_at_most(source, 2)
+        let values = take_matching_at_most(source, 2, |_| true)
             .await
             .expect("integer source does not fail");
 
         assert_eq!(values, [0, 1]);
         assert_eq!(polled.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn matching_collector_rejects_history_that_exceeds_its_scan_budget() {
+        let polled = Arc::new(AtomicUsize::new(0));
+        let source = stream::iter(0..=MAX_EVENT_STORE_HISTORY_SCAN).map({
+            let polled = Arc::clone(&polled);
+            move |value| {
+                polled.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, CatgaError>(value)
+            }
+        });
+
+        let error = take_matching_at_most(source, 1, |_| false)
+            .await
+            .expect_err("the collector must not scan past its fixed history budget");
+
+        assert_eq!(error.code(), ErrorCode::Unavailable);
+        assert_eq!(polled.load(Ordering::Relaxed), MAX_EVENT_STORE_HISTORY_SCAN);
     }
 }

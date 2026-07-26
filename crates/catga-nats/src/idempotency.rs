@@ -185,6 +185,12 @@ impl NatsIdempotency {
             let Some(entry) = self.entry(&key).await? else {
                 continue;
             };
+            if matches!(
+                entry.operation,
+                kv::Operation::Delete | kv::Operation::Purge
+            ) {
+                continue;
+            }
             let created_at: SystemTime = entry.created.into();
             if state(&entry.value)? == ProcessingState::Completed
                 && now
@@ -282,10 +288,16 @@ impl IdempotencyStore for NatsIdempotency {
 
     async fn state(&self, key: &str) -> CatgaResult<Option<ProcessingState>> {
         telemetry::record_persistence("nats", "idempotency", "state", async {
-            self.entry(&kv_key(key))
-                .await?
-                .map(|entry| state(&entry.value))
-                .transpose()
+            let Some(entry) = self.entry(&kv_key(key)).await? else {
+                return Ok(None);
+            };
+            if matches!(
+                entry.operation,
+                kv::Operation::Delete | kv::Operation::Purge
+            ) {
+                return Ok(None);
+            }
+            state(&entry.value).map(Some)
         })
         .await
     }

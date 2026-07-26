@@ -31,14 +31,35 @@ use tokio_util::sync::CancellationToken;
 
 #[path = "flow/dsl_progress_contract.rs"]
 mod dsl_progress_contract;
+#[path = "support/nats_e2e.rs"]
+mod nats_e2e;
 #[path = "flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
+async fn nats_e2e_starts_a_jetstream_container_when_no_url_is_configured() {
+    let server = nats_e2e::server_url().await;
+    let client = async_nats::connect(server.url())
+        .await
+        .expect("the test container accepts NATS connections");
+    let context = jetstream::new(client);
+    context
+        .create_key_value(kv::Config {
+            bucket: format!("CATGA_E2E_PROBE_{}", std::process::id()),
+            ..Default::default()
+        })
+        .await
+        .expect("the test container enables JetStream");
+    drop(context);
+    server
+        .close()
+        .await
+        .expect("the test container is removed before the test returns");
+}
+
+#[tokio::test]
 async fn nats_subscriptions_persist_hashed_definitions_checkpoints_and_owner_leases() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = NatsSubscriptions::with_lease_ttl(
         &server,
         format!("CATGA_SUBSCRIPTIONS_{}", std::process::id()),
@@ -103,10 +124,8 @@ async fn nats_subscriptions_persist_hashed_definitions_checkpoints_and_owner_lea
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_projection_checkpoints_are_isolated_by_projection_and_stream() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let checkpoints = NatsProjectionCheckpoints::connect(
         &server,
         format!("CATGA_PROJECTION_CHECKPOINTS_{}", std::process::id()),
@@ -162,10 +181,8 @@ async fn nats_projection_checkpoints_are_isolated_by_projection_and_stream() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_enhanced_snapshots_query_history_and_cleanup_versions() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let snapshots = NatsEnhancedSnapshots::<u64>::connect(
         &server,
         format!("CATGA_ENHANCED_SNAPSHOTS_{}", std::process::id()),
@@ -219,10 +236,8 @@ async fn nats_enhanced_snapshots_query_history_and_cleanup_versions() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_flows_use_hashed_states_and_type_indexes_for_stale_claims() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let flows = NatsFlows::connect(&server, format!("CATGA_FLOWS_{}", std::process::id()))
         .await
         .unwrap();
@@ -250,10 +265,8 @@ async fn nats_flows_use_hashed_states_and_type_indexes_for_stale_claims() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_flow_scheduler_claims_recovers_and_releases_target_indexes() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -319,10 +332,8 @@ async fn nats_flow_scheduler_claims_recovers_and_releases_target_indexes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_flow_scheduler_concurrent_target_schedules_have_one_winner() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -351,10 +362,8 @@ async fn nats_flow_scheduler_concurrent_target_schedules_have_one_winner() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_flow_scheduler_fences_owners_and_requires_a_live_lease_to_renew() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -433,10 +442,8 @@ async fn nats_flow_scheduler_fences_owners_and_requires_a_live_lease_to_renew() 
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_flow_scheduler_keeps_zero_limit_and_cancellation_non_destructive() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -483,12 +490,10 @@ async fn nats_flow_scheduler_keeps_zero_limit_and_cancellation_non_destructive()
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
     const INDEX_PAGE_CAPACITY: usize = 32;
 
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -517,7 +522,7 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
             .unwrap()
     );
 
-    let context = jetstream::new(async_nats::connect(&server).await.unwrap());
+    let context = jetstream::new(async_nats::connect(server.url()).await.unwrap());
     let index = context
         .get_key_value(format!("{bucket}_IDX"))
         .await
@@ -597,10 +602,8 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_dsl_step_progress_uses_hashed_keys_and_revision_updates() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = NatsDslStepProgress::connect(
         &server,
         format!("CATGA_DSL_PROGRESS_{}", std::process::id()),
@@ -626,10 +629,8 @@ async fn nats_dsl_step_progress_uses_hashed_keys_and_revision_updates() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_dsl_progress_runs_durable_recovery_contract() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -643,10 +644,8 @@ async fn nats_dsl_progress_runs_durable_recovery_contract() -> CatgaResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_suspended_flows_preserve_wait_results_and_claims() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = NatsSuspendedFlows::connect(&server, format!("CATGA_FLOWS_{}", std::process::id()))
         .await
         .unwrap();
@@ -693,10 +692,8 @@ async fn nats_suspended_flows_preserve_wait_results_and_claims() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_suspended_flows_retry_only_real_revision_conflicts() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = Arc::new(
         NatsSuspendedFlows::connect(&server, format!("CATGA_FLOWS_RACE_{}", std::process::id()))
             .await
@@ -729,10 +726,8 @@ async fn nats_suspended_flows_retry_only_real_revision_conflicts() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_suspended_flows_page_bounded_timeout_queries() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = NatsSuspendedFlows::connect(
         &server,
         format!("CATGA_TIMEOUT_CONTRACT_{}", std::process::id()),
@@ -757,12 +752,10 @@ fn waiting_continuation(id: &str) -> FlowContinuation {
 
 /// Core NATS broadcasts are ephemeral and do not carry acknowledgement tokens.
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn core_nats_pubsub_transport_broadcasts_at_most_once() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let transport = NatsPubSubTransport::connect(NatsPubSubConfig {
-        server: server.into(),
+        server: server.url().into(),
         subject: format!("catga.pubsub.{}", std::process::id()).into(),
     })
     .await?;
@@ -799,12 +792,10 @@ async fn core_nats_pubsub_transport_broadcasts_at_most_once() -> CatgaResult<()>
 
 /// Core NATS must not claim durable guarantees that only JetStream can provide.
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn core_nats_pubsub_transport_rejects_durable_qos() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let transport = NatsPubSubTransport::connect(NatsPubSubConfig {
-        server: server.into(),
+        server: server.url().into(),
         subject: format!("catga.pubsub.qos.{}", std::process::id()).into(),
     })
     .await?;
@@ -827,10 +818,8 @@ async fn core_nats_pubsub_transport_rejects_durable_qos() -> CatgaResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_leases_compare_owner_with_kv_revisions() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let leases = NatsLeases::connect(&server, format!("CATGA_LEASE_{}", std::process::id()))
         .await
         .unwrap();
@@ -857,13 +846,11 @@ async fn nats_leases_compare_owner_with_kv_revisions() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn jetstream_round_trip_and_ack() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
     let transport = NatsTransport::connect(NatsConfig {
-        server: server.into(),
+        server: server.url().into(),
         stream: format!("CATGA_{suffix}").into(),
         subject: format!("catga.{suffix}").into(),
         consumer: format!("catga_{suffix}").into(),
@@ -922,13 +909,11 @@ async fn jetstream_round_trip_and_ack() {
 /// greater attempt count. This is the value the competing consumer uses to decide when an
 /// unrecoverable message belongs in the dead-letter store.
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn jetstream_delivery_reports_native_redelivery_attempts() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = format!("{}_attempts", std::process::id());
     let transport = NatsTransport::connect(NatsConfig {
-        server: server.into(),
+        server: server.url().into(),
         stream: format!("CATGA_{suffix}").into(),
         subject: format!("catga.{suffix}").into(),
         consumer: format!("catga_{suffix}").into(),
@@ -953,13 +938,11 @@ async fn jetstream_delivery_reports_native_redelivery_attempts() -> CatgaResult<
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn jetstream_destination_requires_explicit_resource_provisioning() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
     let transport = NatsTransport::connect(NatsConfig {
-        server: server.into(),
+        server: server.url().into(),
         stream: format!("CATGA_DEST_MAIN_{suffix}").into(),
         subject: format!("catga.destination.main.{suffix}").into(),
         consumer: format!("catga_destination_main_{suffix}").into(),
@@ -1005,13 +988,11 @@ async fn jetstream_destination_requires_explicit_resource_provisioning() -> Catg
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn jetstream_exactly_once_deduplicates_repeated_envelope_ids() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
     let transport = NatsTransport::connect(NatsConfig {
-        server: server.into(),
+        server: server.url().into(),
         stream: format!("CATGA_QOS_{suffix}").into(),
         subject: format!("catga.qos.{suffix}").into(),
         consumer: format!("catga_qos_{suffix}").into(),
@@ -1042,10 +1023,8 @@ async fn jetstream_exactly_once_deduplicates_repeated_envelope_ids() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_event_store_persists_versioned_history_with_subject_cas() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
     let store = Arc::new(
         NatsEventStore::connect(
@@ -1160,10 +1139,8 @@ async fn nats_event_store_persists_versioned_history_with_subject_cas() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_snapshots_round_trip_and_reject_stale_writers_with_kv_revisions() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
     let store = Arc::new(
         NatsSnapshotStore::<u64>::connect(&server, format!("CATGA_SNAPSHOTS_{suffix}"))
@@ -1217,10 +1194,8 @@ async fn nats_snapshots_round_trip_and_reject_stale_writers_with_kv_revisions() 
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_idempotency_claims_exclusively_retries_failures_and_caches_results() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = NatsIdempotency::connect(&server, format!("CATGA_IDEMP_{}", std::process::id()))
         .await
         .unwrap();
@@ -1244,10 +1219,8 @@ async fn nats_idempotency_claims_exclusively_retries_failures_and_caches_results
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_idempotency_concurrent_claims_have_exactly_one_owner() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = Arc::new(
         NatsIdempotency::connect(&server, format!("CATGA_IDEMP_RACE_{}", std::process::id()))
             .await
@@ -1266,10 +1239,8 @@ async fn nats_idempotency_concurrent_claims_have_exactly_one_owner() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_idempotency_honors_configured_retention_and_bounds_cleanup() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let store = NatsIdempotency::with_retention(
         &server,
         format!("CATGA_IDEMP_RETENTION_{}", std::process::id()),
@@ -1286,16 +1257,20 @@ async fn nats_idempotency_honors_configured_retention_and_bounds_cleanup() -> Ca
         Err(error) if error.code() == ErrorCode::Validation
     ));
     assert_eq!(store.cleanup_completed(1).await?, 0);
-    tokio::time::sleep(Duration::from_millis(250)).await;
-    assert_eq!(store.state("retained-key").await?, None);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while store.state("retained-key").await?.is_some() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        Ok::<(), catga_core::CatgaError>(())
+    })
+    .await
+    .expect("JetStream removes records after the configured retention")?;
     Ok(())
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_inbox_claims_exclusively_retries_failures_and_caches_results() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(&server, format!("CATGA_INBOX_{}", std::process::id()))
         .await
         .unwrap();
@@ -1312,10 +1287,8 @@ async fn nats_inbox_claims_exclusively_retries_failures_and_caches_results() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_inbox_reclaims_an_expired_processing_lease() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(&server, format!("CATGA_INBOX_LEASE_{}", std::process::id()))
         .await
         .unwrap();
@@ -1336,10 +1309,8 @@ async fn nats_inbox_reclaims_an_expired_processing_lease() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_inbox_removes_completed_records_with_a_bounded_scan() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(
         &server,
         format!("CATGA_INBOX_RETENTION_{}", std::process::id()),
@@ -1365,10 +1336,8 @@ async fn nats_inbox_removes_completed_records_with_a_bounded_scan() -> CatgaResu
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_dead_letters_preserve_queue_order_and_envelopes() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let letters = NatsDeadLetters::connect(
         &server,
         format!("CATGA_DLQ_{}", std::process::id()),
@@ -1397,10 +1366,8 @@ async fn nats_dead_letters_preserve_queue_order_and_envelopes() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_outbox_claims_and_acknowledges_only_the_current_owner() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(&server, format!("CATGA_OUTBOX_{}", std::process::id()))
         .await
         .unwrap();
@@ -1441,10 +1408,8 @@ async fn nats_outbox_claims_and_acknowledges_only_the_current_owner() {
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_outbox_reclaims_an_expired_claim_without_accepting_a_stale_ack() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
         &server,
         format!("CATGA_OUTBOX_CLAIM_LEASE_{}", std::process::id()),
@@ -1489,13 +1454,11 @@ async fn nats_outbox_reclaims_an_expired_claim_without_accepting_a_stale_ack() -
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_outbox_updates_legacy_keys_and_releases_for_immediate_reclaim() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let bucket = format!("CATGA_OUTBOX_LEGACY_{}", std::process::id());
     let context = jetstream::new(
-        async_nats::connect(&server)
+        async_nats::connect(server.url())
             .await
             .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?,
     );
@@ -1563,10 +1526,8 @@ async fn nats_outbox_updates_legacy_keys_and_releases_for_immediate_reclaim() ->
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_outbox_retains_published_records_until_bounded_cleanup() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
         &server,
         format!("CATGA_OUTBOX_RETENTION_{}", std::process::id()),
@@ -1619,10 +1580,8 @@ async fn nats_outbox_retains_published_records_until_bounded_cleanup() -> CatgaR
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_outbox_stops_reclaiming_after_its_failure_limit() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
         &server,
         format!("CATGA_OUTBOX_FAILURES_{}", std::process::id()),
@@ -1651,10 +1610,8 @@ async fn nats_outbox_stops_reclaiming_after_its_failure_limit() -> CatgaResult<(
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_outbox_rejects_claims_above_the_shared_memory_budget() -> CatgaResult<()> {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
         &server,
         format!("CATGA_OUTBOX_CLAIM_BOUND_{}", std::process::id()),
@@ -1669,10 +1626,8 @@ async fn nats_outbox_rejects_claims_above_the_shared_memory_budget() -> CatgaRes
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn nats_outbox_does_not_claim_a_message_before_its_delivery_time() {
-    let server =
-        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
         &server,
         format!("CATGA_OUTBOX_SCHEDULED_{}", std::process::id()),
