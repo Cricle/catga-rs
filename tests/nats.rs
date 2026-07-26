@@ -17,14 +17,14 @@ use catga_core::{
     SubscriptionCheckpoint, SubscriptionStore, Waitable,
 };
 use catga_flow::{
-    DslStepProgress, DslStepProgressStore, FlowContinuation, FlowState, FlowStore,
-    SuspendedFlowStore, WaitCondition, WaitPolicy,
+    DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
+    FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_nats::{
     NatsConfig, NatsDeadLetters, NatsDestinationConfig, NatsDslStepProgress, NatsEnhancedSnapshots,
-    NatsEventStore, NatsFlows, NatsIdempotency, NatsInbox, NatsLeases, NatsOutbox,
-    NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport, NatsSnapshotStore,
-    NatsSubscriptions, NatsSuspendedFlows, NatsTransport,
+    NatsEventStore, NatsFlowScheduler, NatsFlows, NatsIdempotency, NatsInbox, NatsLeases,
+    NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport,
+    NatsSnapshotStore, NatsSubscriptions, NatsSuspendedFlows, NatsTransport,
 };
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -247,6 +247,246 @@ async fn nats_flows_use_hashed_states_and_type_indexes_for_stale_claims() {
     assert_eq!(claimed.owner(), Some("node-b"));
     assert_eq!(claimed.version(), 1);
     assert!(flows.heartbeat("order/8", "node-b", 1).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_NATS_URL"]
+async fn nats_flow_scheduler_claims_recovers_and_releases_target_indexes() {
+    let server =
+        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let scheduler = NatsFlowScheduler::connect(
+        &server,
+        format!("CATGA_FLOW_SCHEDULER_{}_{}", std::process::id(), suffix),
+    )
+    .await
+    .unwrap();
+    let now = SystemTime::now();
+    let id = scheduler
+        .schedule_resume("nats-payment", "charge", now)
+        .await
+        .unwrap();
+    let duplicate = scheduler
+        .schedule_resume("nats-payment", "charge", now)
+        .await
+        .unwrap_err();
+    assert_eq!(duplicate.code(), ErrorCode::Conflict);
+
+    assert_eq!(
+        scheduler
+            .claim_due("worker-a", now, Duration::from_secs(1), 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        scheduler
+            .claim_due("worker-b", now, Duration::from_secs(1), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!scheduler.ack_due("worker-b", &id).await.unwrap());
+    assert_eq!(
+        scheduler
+            .claim_due(
+                "worker-b",
+                now + Duration::from_secs(2),
+                Duration::from_secs(1),
+                1
+            )
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(scheduler.ack_due("worker-b", &id).await.unwrap());
+    assert!(
+        scheduler
+            .schedule_resume("nats-payment", "charge", now)
+            .await
+            .is_ok()
+    );
+
+    let error = scheduler
+        .claim_due("worker", now, Duration::ZERO, 1)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Validation);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CATGA_NATS_URL"]
+async fn nats_flow_scheduler_concurrent_target_schedules_have_one_winner() {
+    let server =
+        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let bucket = format!(
+        "CATGA_FLOW_SCHEDULER_RACE_{}_{}",
+        std::process::id(),
+        suffix
+    );
+    let first = NatsFlowScheduler::connect(&server, bucket.clone())
+        .await
+        .unwrap();
+    let second = NatsFlowScheduler::connect(&server, bucket).await.unwrap();
+    let due_at = SystemTime::now();
+    let (first, second) = tokio::join!(
+        first.schedule_resume("nats-payment-race", "charge", due_at),
+        second.schedule_resume("nats-payment-race", "charge", due_at),
+    );
+
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    assert!(
+        [first, second]
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .all(|error| error.code() == ErrorCode::Conflict)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_NATS_URL"]
+async fn nats_flow_scheduler_fences_owners_and_requires_a_live_lease_to_renew() {
+    let server =
+        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let scheduler = NatsFlowScheduler::connect(
+        &server,
+        format!(
+            "CATGA_FLOW_SCHEDULER_OWNERS_{}_{}",
+            std::process::id(),
+            suffix
+        ),
+    )
+    .await
+    .unwrap();
+    let now = SystemTime::now();
+    let id = scheduler
+        .schedule_resume("nats-payment-owner", "charge", now)
+        .await
+        .unwrap();
+
+    assert!(
+        scheduler
+            .claim_due("worker-a", now, Duration::from_secs(2), 1)
+            .await
+            .unwrap()
+            .len()
+            == 1
+    );
+    assert!(!scheduler.ack_due("worker-b", &id).await.unwrap());
+    assert!(!scheduler.release_due("worker-b", &id).await.unwrap());
+    assert!(
+        !scheduler
+            .renew_due("worker-b", &id, now, Duration::from_secs(2))
+            .await
+            .unwrap()
+    );
+    assert!(
+        scheduler
+            .renew_due("worker-a", &id, now, Duration::from_secs(2))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !scheduler
+            .renew_due(
+                "worker-a",
+                &id,
+                now + Duration::from_secs(3),
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        scheduler
+            .claim_due(
+                "worker-b",
+                now + Duration::from_secs(3),
+                Duration::from_secs(2),
+                1,
+            )
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(scheduler.release_due("worker-b", &id).await.unwrap());
+    assert_eq!(
+        scheduler
+            .claim_due("worker-c", now, Duration::from_secs(2), 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(scheduler.ack_due("worker-c", &id).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_NATS_URL"]
+async fn nats_flow_scheduler_keeps_zero_limit_and_cancellation_non_destructive() {
+    let server =
+        std::env::var("CATGA_NATS_URL").expect("CATGA_NATS_URL must be set for ignored NATS tests");
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let scheduler = NatsFlowScheduler::connect(
+        &server,
+        format!(
+            "CATGA_FLOW_SCHEDULER_CANCEL_{}_{}",
+            std::process::id(),
+            suffix
+        ),
+    )
+    .await
+    .unwrap();
+    let now = SystemTime::now();
+    let id = scheduler
+        .schedule_resume("nats-payment-cancel", "charge", now)
+        .await
+        .unwrap();
+
+    assert!(
+        scheduler
+            .claim_due("worker", now, Duration::from_secs(1), 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(scheduler.cancel_resume(&id).await.unwrap());
+    assert!(!scheduler.cancel_resume(&id).await.unwrap());
+    let replacement = scheduler
+        .schedule_resume("nats-payment-cancel", "charge", now)
+        .await
+        .unwrap();
+    assert!(
+        scheduler
+            .claim_due("worker", now, Duration::from_secs(1), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        scheduler
+            .claim_due("worker", now, Duration::from_secs(1), 1)
+            .await
+            .unwrap()
+            .len(),
+        1,
+    );
+    assert!(!scheduler.cancel_resume(&replacement).await.unwrap());
+    assert!(scheduler.release_due("worker", &replacement).await.unwrap());
+    assert!(scheduler.cancel_resume(&replacement).await.unwrap());
 }
 
 #[tokio::test]
