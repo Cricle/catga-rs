@@ -17,21 +17,11 @@ use crate::record::{create_record, decode_record};
 const MAX_CAS_RETRIES: usize = 8;
 const MAX_INDEX_PAGE_ENTRIES: usize = 32;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 struct TypeIndex {
     tail_page: u64,
     scan_page: u64,
     scan_offset: u32,
-}
-
-impl Default for TypeIndex {
-    fn default() -> Self {
-        Self {
-            tail_page: 0,
-            scan_page: 0,
-            scan_offset: 0,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]

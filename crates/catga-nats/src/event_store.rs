@@ -2,6 +2,7 @@
 
 use std::{
     collections::BinaryHeap,
+    future::Future,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -29,7 +30,15 @@ use futures::{
 const VERSION: &str = "Catga-Version";
 const TIMESTAMP: &str = "Catga-Timestamp";
 
-/// JetStream event store that uses subject-sequence preconditions for optimistic writes.
+/// JetStream-backed event store with optimistic, subject-sequence writes.
+///
+/// The store places each event stream below a caller-selected NATS subject prefix and uses
+/// JetStream's expected-last-subject-sequence precondition to reject stale appends. It also keeps
+/// an internal one-history KV bucket named `<stream_name>_IDS` to enumerate stream identifiers.
+///
+/// Construct the store with [`Self::connect`]. Connection provisioning reuses compatible
+/// pre-existing JetStream resources, including when another connector creates the identifier
+/// bucket concurrently.
 pub struct NatsEventStore {
     context: jetstream::Context,
     stream: Stream,
@@ -39,7 +48,19 @@ pub struct NatsEventStore {
 }
 
 impl NatsEventStore {
-    /// Connects and provisions a direct-read JetStream stream for one event-store namespace.
+    /// Connects to NATS and provisions one direct-read event-store namespace.
+    ///
+    /// `server` is the NATS server URL. `stream_name` names the JetStream stream and the
+    /// associated `<stream_name>_IDS` identifier bucket. `subject_prefix` is the literal NATS
+    /// subject prefix under which this store writes event streams.
+    ///
+    /// An existing stream must cover `subject_prefix`; when necessary, this method enables direct
+    /// reads on it. The identifier bucket is created with one revision of history. If another
+    /// connector creates that bucket after this connection's initial lookup, this method reopens
+    /// the bucket and completes successfully.
+    ///
+    /// Returns [`CatgaError`] with [`ErrorCode::Validation`] for an invalid subject prefix or an
+    /// incompatible existing stream, and maps NATS and JetStream failures to transient errors.
     pub async fn connect(
         server: &str,
         stream_name: impl Into<Box<str>>,
@@ -75,17 +96,18 @@ impl NatsEventStore {
         }
         let stream = context.get_stream(&stream_name).await.map_err(map_error)?;
         let bucket = format!("{stream_name}_IDS");
-        let ids = match context.get_key_value(&bucket).await {
-            Ok(store) => store,
-            Err(_) => context
-                .create_key_value(kv::Config {
-                    bucket,
+        let ids = get_or_create_with_reopen(
+            || context.get_key_value(&bucket),
+            || {
+                context.create_key_value(kv::Config {
+                    bucket: bucket.to_string(),
                     history: 1,
                     ..Default::default()
                 })
-                .await
-                .map_err(map_error)?,
-        };
+            },
+        )
+        .await
+        .map_err(map_error)?;
         Ok(Self {
             context,
             stream,
@@ -395,6 +417,25 @@ impl EventStore for NatsEventStore {
     }
 }
 
+async fn get_or_create_with_reopen<T, GetError, CreateError, Get, Create, GetFuture, CreateFuture>(
+    mut get: Get,
+    create: Create,
+) -> Result<T, GetError>
+where
+    Get: FnMut() -> GetFuture,
+    Create: FnOnce() -> CreateFuture,
+    GetFuture: Future<Output = Result<T, GetError>>,
+    CreateFuture: Future<Output = Result<T, CreateError>>,
+{
+    match get().await {
+        Ok(store) => Ok(store),
+        Err(_) => match create().await {
+            Ok(store) => Ok(store),
+            Err(_) => get().await,
+        },
+    }
+}
+
 fn validate_subject_prefix(subject_prefix: &str) -> CatgaResult<()> {
     if subject_prefix.is_empty()
         || subject_prefix
@@ -517,15 +558,19 @@ fn map_append_error(error: impl std::fmt::Display) -> CatgaError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        cell::Cell,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
-    use futures::{StreamExt, stream};
+    use futures::{StreamExt, future, stream};
 
     use super::{
-        next_direct_sequence, stream_subjects_cover_prefix, take_at_most, validate_subject_prefix,
+        get_or_create_with_reopen, next_direct_sequence, stream_subjects_cover_prefix,
+        take_at_most, validate_subject_prefix,
     };
 
     #[test]
@@ -561,6 +606,33 @@ mod tests {
             &["catga.events.*".to_string()],
             "catga.events"
         ));
+    }
+
+    #[tokio::test]
+    async fn failed_create_reopens_the_key_value_bucket() {
+        let get_calls = Cell::new(0);
+        let create_calls = Cell::new(0);
+
+        let store = get_or_create_with_reopen(
+            || {
+                let call = get_calls.get();
+                get_calls.set(call + 1);
+                future::ready(if call == 0 {
+                    Err("bucket is absent")
+                } else {
+                    Ok("reopened bucket")
+                })
+            },
+            || {
+                create_calls.set(create_calls.get() + 1);
+                future::ready(Err("bucket already exists"))
+            },
+        )
+        .await;
+
+        assert_eq!(store, Ok("reopened bucket"));
+        assert_eq!(get_calls.get(), 2);
+        assert_eq!(create_calls.get(), 1);
     }
 
     #[tokio::test]

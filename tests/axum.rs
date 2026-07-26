@@ -685,7 +685,10 @@ impl EventHandler<OrderPublished> for PublishedValue {
     }
 }
 
-struct TraceObservedEventHandler(Arc<std::sync::Mutex<Option<(String, Option<String>)>>>);
+type ObservedTraceContext = (String, Option<String>);
+type SharedObservedTraceContext = Arc<std::sync::Mutex<Option<ObservedTraceContext>>>;
+
+struct TraceObservedEventHandler(SharedObservedTraceContext);
 
 #[async_trait]
 impl EventHandler<OrderPublished> for TraceObservedEventHandler {

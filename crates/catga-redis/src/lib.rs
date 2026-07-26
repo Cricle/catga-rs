@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 //! Redis Streams transport for Catga.
+//!
+//! Enable the `streams-rpc` Cargo feature to use the durable
+//! `RedisStreamsRequestClient` and `RedisStreamsRequestServer` APIs. They write request
+//! ingress through a [`catga_core::DestinationTransport`] such as [`RedisTransport`] while using
+//! a private Redis Pub/Sub inbox only for the one correlated reply.
 
 mod acknowledgement;
 mod config;
@@ -17,6 +22,8 @@ mod rpc;
 mod scheduler;
 mod snapshot;
 mod state_machine;
+#[cfg(feature = "streams-rpc")]
+mod streams_rpc;
 mod subscription;
 mod suspended_flow;
 mod suspended_flow_timeout;
@@ -40,6 +47,8 @@ pub use rpc::{RedisRequest, RedisRequestClient, RedisRequestServer};
 pub use scheduler::RedisFlowScheduler;
 pub use snapshot::RedisSnapshotStore;
 pub use state_machine::RedisStateMachines;
+#[cfg(feature = "streams-rpc")]
+pub use streams_rpc::{RedisStreamsRequest, RedisStreamsRequestClient, RedisStreamsRequestServer};
 pub use subscription::RedisSubscriptions;
 pub use suspended_flow::RedisSuspendedFlows;
 pub use transport::RedisTransport;

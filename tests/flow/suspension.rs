@@ -108,9 +108,11 @@ async fn tagged_durable_step_does_not_retry_a_non_transient_failure() {
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
+type ChildLaunchCall = (Box<str>, Box<str>, Box<str>);
+
 #[derive(Default)]
 struct RecordingChildLauncher {
-    calls: std::sync::Mutex<Vec<(Box<str>, Box<str>, Box<str>)>>,
+    calls: std::sync::Mutex<Vec<ChildLaunchCall>>,
 }
 
 struct RecordThenPanicLauncher {

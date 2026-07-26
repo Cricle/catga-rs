@@ -426,6 +426,16 @@ fn postcard_codec_decodes_legacy_rpc_failure_without_new_error_fields() {
 }
 
 #[test]
+fn postcard_codec_decodes_legacy_rpc_success() {
+    let codec = PostcardCodec;
+    let bytes = postcard::to_allocvec(&LegacyPostcardRpcResponse::Success(17_u32)).unwrap();
+
+    let decoded = codec.decode_rpc_response::<u32>(&bytes).unwrap();
+
+    assert!(matches!(decoded, PostcardRpcResponse::Success(17)));
+}
+
+#[test]
 fn postcard_codec_bounds_received_error_details() {
     let codec = PostcardCodec;
     let bytes = postcard::to_allocvec(&UnboundedCatgaErrorWire {
