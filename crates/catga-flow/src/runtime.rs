@@ -194,6 +194,8 @@ where
     ///
     /// A handler that was already executing can still complete external effects; its stale
     /// continuation version cannot persist a later flow state after this cancellation wins.
+    /// A flow that is durably compensating cannot be cancelled because cancellation would abandon
+    /// rollback actions that are required to restore its previously completed effects.
     pub async fn cancel(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {
         let Some(continuation) = self.store.get(flow_id).await? else {
             return Err(CatgaError::new(ErrorCode::NotFound, "flow does not exist"));
@@ -201,6 +203,12 @@ where
         self.ensure_definition(&continuation)?;
         if continuation.state().status().is_terminal() {
             return Ok(FlowRuntimeResult::new(continuation.state().clone()));
+        }
+        if continuation.state().status() == FlowStatus::Compensating {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "a compensating flow cannot be cancelled before its rollback completes",
+            ));
         }
         let schedule_id: Option<Box<str>> = continuation.schedule_id().map(Into::into);
         let cancelled = continuation
