@@ -43,6 +43,7 @@ mod time_travel;
 mod trace_context;
 mod transport;
 mod transport_batching;
+mod typed_transport;
 mod upgrading_event_store;
 mod versioned_transport;
 
@@ -153,5 +154,6 @@ pub use transport::{
     MessageTransport,
 };
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
+pub use typed_transport::{TypedDelivery, TypedProcessOutcome, TypedTransport};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use versioned_transport::VersionedMessageTransport;

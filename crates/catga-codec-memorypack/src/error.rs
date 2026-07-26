@@ -1,20 +1,49 @@
-use catga_core::{CatgaError, ErrorCode};
+use thiserror::Error;
 
-pub(crate) fn invalid(message: impl Into<Box<str>>) -> CatgaError {
-    CatgaError::new(ErrorCode::Validation, message)
-}
+#[derive(Debug, Error)]
+pub enum MemoryPackError {
+    #[error("MemoryPack receive limit exceeded for {resource}: maximum is {limit}")]
+    LimitExceeded {
+        resource: &'static str,
+        limit: usize,
+    },
 
-pub(crate) fn limit(message: impl Into<Box<str>>) -> CatgaError {
-    CatgaError::new(ErrorCode::Validation, message)
-}
+    #[error("invalid MemoryPack decode limit: {0}")]
+    InvalidLimit(String),
 
-pub(crate) fn truncated() -> CatgaError {
-    CatgaError::new(ErrorCode::Validation, "truncated MemoryPack frame")
-}
+    #[error("trailing bytes remain after decoding a MemoryPack frame")]
+    TrailingBytes,
 
-pub(crate) fn allocation() -> CatgaError {
-    CatgaError::new(
-        ErrorCode::Internal,
-        "cannot reserve bounded MemoryPack allocation",
-    )
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Utf8Error(#[from] std::string::FromUtf8Error),
+
+    #[error("Invalid UTF-8 or UTF-16 string data")]
+    InvalidUtf8,
+
+    #[error("Invalid length: {0}")]
+    InvalidLength(i32),
+
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+
+    #[error("Deserialization error: {0}")]
+    DeserializationError(String),
+
+    #[error("Buffer too small")]
+    BufferTooSmall,
+
+    #[error("Invalid Unicode code point")]
+    InvalidCodePoint,
+
+    #[error("Unexpected end of data")]
+    UnexpectedEnd,
+
+    #[error("Unexpected end of buffer")]
+    UnexpectedEndOfBuffer,
+
+    #[error("UTF-16 strings are not supported for zero-copy deserialization")]
+    Utf16NotSupportedForZeroCopy,
 }

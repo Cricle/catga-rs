@@ -48,6 +48,10 @@ name = "message"
 path = "message.rs"
 
 [[test]]
+name = "typed_transport"
+path = "typed_transport.rs"
+
+[[test]]
 name = "message_types"
 path = "message_types.rs"
 
