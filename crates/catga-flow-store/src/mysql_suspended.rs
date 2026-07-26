@@ -38,6 +38,13 @@ pub(crate) async fn migrate(pool: &MySqlPool) -> catga_core::CatgaResult<()> {
         .execute(pool).await.map_err(|error| crate::error::database_error("backfill MySQL continuation update time", error))?;
     sqlx::query("CREATE INDEX IF NOT EXISTS catga_flow_continuations_order_idx ON catga_flow_continuations(created_at_ms, created_at_subsec_ns, flow_key)")
         .execute(pool).await.map_err(|error| crate::error::database_error("create MySQL continuation order index", error))?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS catga_flow_continuations_due_idx \
+         ON catga_flow_continuations(deadline_ms, lease_until_ms, flow_key)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| crate::error::database_error("create MySQL continuation due index", error))?;
     Ok(())
 }
 

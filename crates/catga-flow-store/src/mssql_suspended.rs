@@ -77,7 +77,11 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
              IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
                AND name = N'catga_flow_continuations_query_idx') \
                CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
-                 (status, created_at_ms, flow_key);",
+                 (status, created_at_ms, flow_key); \
+             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+               AND name = N'catga_flow_continuations_due_idx') \
+               CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
+                 (deadline_ms, lease_until_ms, flow_key);",
             &[],
         )
         .await
