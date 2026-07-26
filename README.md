@@ -13,7 +13,7 @@ queue growth.
 | `catga-core` | Typed mediator, pipeline contracts, reliability stores, event sourcing, and lifecycle APIs. |
 | `catga-memory` | Bounded in-memory transport and persistence implementations. |
 | `catga-codec-postcard` | Compact Postcard envelope, request/reply, snapshot, and scheduled-outbox codecs. |
-| `catga-flow` | Durable Flow DSL, state machines, suspension, scheduling, and hot reload. |
+| `catga-flow` | Durable Flow DSL, state machines, suspension, and scheduling. |
 | `catga-redis` | Redis Streams transport and Redis-backed persistence. |
 | `catga-nats` | JetStream transport and NATS-backed persistence. |
 | `catga-axum` | Typed Axum routes and cluster forwarding. |
