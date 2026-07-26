@@ -1462,6 +1462,22 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
         ),
         1
     );
+    for operation in [
+        "read_page",
+        "version",
+        "read_to_version_page",
+        "read_to_time_page",
+        "version_history_page",
+        "stream_ids_page",
+    ] {
+        assert_eq!(
+            recorder.counter(&format!(
+                "catga.persistence.operations|backend=memory,component=event_store,operation={operation},outcome=success"
+            )),
+            1,
+            "{operation} must emit one successful memory event-store observation"
+        );
+    }
     assert_eq!(
         recorder.counter(
             "catga.persistence.operations|backend=memory,component=inbox,operation=complete,outcome=success"
