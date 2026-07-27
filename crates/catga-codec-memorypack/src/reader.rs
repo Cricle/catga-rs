@@ -6,8 +6,13 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use simdutf8::basic;
 use std::io::{Cursor, Read};
 
+/// Stateful reader for a single MemoryPack frame.
+///
+/// Use [`Self::new_bounded`] for untrusted input so collection, allocation, and nesting budgets
+/// are applied before materializing values.
 pub struct MemoryPackReader<'a> {
     pub(crate) cursor: Cursor<&'a [u8]>,
+    /// Optional object-reference state used by reference-preserving schemas.
     pub optional_state: Option<MemoryPackReaderOptionalState>,
     limits: Option<MemoryPackDecodeLimits>,
     allocated_bytes: usize,
@@ -106,6 +111,7 @@ impl<'a> MemoryPackReader<'a> {
         self.nesting_depth = self.nesting_depth.saturating_sub(1);
     }
 
+    /// Reads an owned string, accepting the UTF-8 and UTF-16 MemoryPack representations.
     pub fn read_string(&mut self) -> Result<String, MemoryPackError> {
         let length_or_marker = self.read_i32()?;
 
@@ -136,6 +142,10 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline]
+    /// Reads a zero-copy UTF-8 string slice.
+    ///
+    /// UTF-16 wire values require allocation and return
+    /// [`MemoryPackError::Utf16NotSupportedForZeroCopy`].
     pub fn read_str(&mut self) -> Result<&'a str, MemoryPackError> {
         let length_or_marker = self.read_i32()?;
 
@@ -162,6 +172,7 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline]
+    /// Reads exactly `length` bytes as a zero-copy slice.
     pub fn read_bytes(&mut self, length: usize) -> Result<&'a [u8], MemoryPackError> {
         let pos = self.cursor.position() as usize;
         let buffer = self.cursor.get_ref();
@@ -176,12 +187,14 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline]
+    /// Reads exactly `length` bytes into an owned vector after checking the allocation budget.
     pub fn read_bytes_vec(&mut self, length: usize) -> Result<Vec<u8>, MemoryPackError> {
         self.reserve_allocation(length)?;
         Ok(self.read_bytes(length)?.to_vec())
     }
 
     #[inline]
+    /// Reads a fixed-size byte array.
     pub fn read_fixed_bytes<const N: usize>(&mut self) -> Result<[u8; N], MemoryPackError> {
         let mut buffer = [0u8; N];
         self.cursor.read_exact(&mut buffer)?;
@@ -250,6 +263,7 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline(always)]
+    /// Reads a canonical one-byte Boolean value.
     pub fn read_bool(&mut self) -> Result<bool, MemoryPackError> {
         match self.cursor.read_u8()? {
             0 => Ok(false),
@@ -261,66 +275,79 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline(always)]
+    /// Reads a little-endian signed 8-bit integer.
     pub fn read_i8(&mut self) -> Result<i8, MemoryPackError> {
         Ok(self.cursor.read_i8()?)
     }
 
     #[inline(always)]
+    /// Reads an unsigned 8-bit integer.
     pub fn read_u8(&mut self) -> Result<u8, MemoryPackError> {
         Ok(self.cursor.read_u8()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian signed 16-bit integer.
     pub fn read_i16(&mut self) -> Result<i16, MemoryPackError> {
         Ok(self.cursor.read_i16::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian unsigned 16-bit integer.
     pub fn read_u16(&mut self) -> Result<u16, MemoryPackError> {
         Ok(self.cursor.read_u16::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian signed 32-bit integer.
     pub fn read_i32(&mut self) -> Result<i32, MemoryPackError> {
         Ok(self.cursor.read_i32::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian unsigned 32-bit integer.
     pub fn read_u32(&mut self) -> Result<u32, MemoryPackError> {
         Ok(self.cursor.read_u32::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian signed 64-bit integer.
     pub fn read_i64(&mut self) -> Result<i64, MemoryPackError> {
         Ok(self.cursor.read_i64::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian unsigned 64-bit integer.
     pub fn read_u64(&mut self) -> Result<u64, MemoryPackError> {
         Ok(self.cursor.read_u64::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian IEEE-754 single-precision value.
     pub fn read_f32(&mut self) -> Result<f32, MemoryPackError> {
         Ok(self.cursor.read_f32::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian IEEE-754 double-precision value.
     pub fn read_f64(&mut self) -> Result<f64, MemoryPackError> {
         Ok(self.cursor.read_f64::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian signed 128-bit integer.
     pub fn read_i128(&mut self) -> Result<i128, MemoryPackError> {
         Ok(self.cursor.read_i128::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads a little-endian unsigned 128-bit integer.
     pub fn read_u128(&mut self) -> Result<u128, MemoryPackError> {
         Ok(self.cursor.read_u128::<LittleEndian>()?)
     }
 
     #[inline(always)]
+    /// Reads one UTF-16 scalar value, validating any surrogate pair.
     pub fn read_char(&mut self) -> Result<char, MemoryPackError> {
         let code_unit = self.read_u16()?;
 
@@ -347,6 +374,7 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline]
+    /// Advances the cursor by `n` bytes without decoding them.
     pub fn skip(&mut self, n: usize) -> Result<(), MemoryPackError> {
         let position = usize::try_from(self.cursor.position())
             .map_err(|_| MemoryPackError::UnexpectedEndOfBuffer)?;
@@ -359,6 +387,7 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline]
+    /// Moves the cursor backward by `n` bytes.
     pub fn rewind(&mut self, n: usize) -> Result<(), MemoryPackError> {
         let position = self.cursor.position();
         let rewind = u64::try_from(n).map_err(|_| MemoryPackError::UnexpectedEndOfBuffer)?;
@@ -370,6 +399,7 @@ impl<'a> MemoryPackReader<'a> {
     }
 
     #[inline]
+    /// Returns the current byte offset within the frame.
     pub fn position(&self) -> u64 {
         self.cursor.position()
     }

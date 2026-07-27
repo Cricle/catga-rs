@@ -8,8 +8,6 @@ repository.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
-# The crate carries the complete upstream public API.  Upstream does not yet document every
-# item, so preserve its source without weakening the workspace policy for Catga-owned crates.
 missing_docs = "allow"
 
 [dependencies]

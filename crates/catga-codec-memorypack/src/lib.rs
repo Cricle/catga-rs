@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Catga's vendored, bounded implementation of crates.io `memorypack` 1.2.2.
 //!
 //! [`MemoryPackCodec`] is the Catga transport adapter. It applies
@@ -14,10 +15,15 @@ mod limits;
 mod reader;
 mod writer;
 
+/// Error types produced by MemoryPack operations.
 pub mod error;
+/// High-level serializer helpers.
 pub mod serializer;
+/// Per-frame object-reference state.
 pub mod state;
+/// Serialization traits and standard type implementations.
 pub mod traits;
+/// Compact integer wire helpers.
 pub mod varint;
 
 pub use api::{
@@ -52,6 +58,7 @@ pub use traits::MultiDimArray;
 #[cfg(feature = "derive")]
 pub use memorypack_derive::MemoryPackable;
 
+/// Common MemoryPack types and traits for application models.
 pub mod prelude {
     pub use crate::error::MemoryPackError;
     pub use crate::reader::MemoryPackReader;

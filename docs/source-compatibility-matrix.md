@@ -65,11 +65,9 @@ no machine-dependent timing threshold.
   input aliases. MemoryPack RPC errors preserve the supported fields and every
   decode consumes one exact bounded frame; legacy binary layouts are rejected
   instead of remaining a runtime dependency.
-* Catga-authored public APIs are compiled with documentation warnings denied, so
-  broken links and documentation warnings fail the quality gate instead of
-  reaching consumers. The copied upstream-compatible MemoryPack surface retains
-  its upstream item names and is documented at the crate and module boundary;
-  Catga's bounded codec API remains fully documented.
+* Public APIs, including the copied upstream-compatible MemoryPack surface, are
+  compiled with documentation warnings denied, so broken links and missing
+  documentation fail the quality gate instead of reaching consumers.
 * EventStore has no whole-history or whole-catalog read API. Consumers follow
   validated event, metadata, and lexical stream-ID cursors, applying a page before
   requesting the next one. Redis uses bounded stream ranges and a sorted index;

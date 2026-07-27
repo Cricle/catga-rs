@@ -2,12 +2,16 @@ use crate::error::MemoryPackError;
 use crate::state::MemoryPackWriterOptionalState;
 use crate::varint;
 
+/// Stateful writer for one MemoryPack frame.
 pub struct MemoryPackWriter {
+    /// The caller-visible encoded frame buffer.
     pub buffer: Vec<u8>,
+    /// Optional object-reference state used by reference-preserving schemas.
     pub optional_state: Option<MemoryPackWriterOptionalState>,
 }
 
 impl MemoryPackWriter {
+    /// Creates an empty writer without object-reference tracking.
     pub fn new() -> Self {
         Self {
             buffer: Vec::new(),
@@ -15,6 +19,7 @@ impl MemoryPackWriter {
         }
     }
 
+    /// Creates an empty writer with object-reference tracking enabled.
     pub fn new_with_state() -> Self {
         Self {
             buffer: Vec::new(),
@@ -22,6 +27,7 @@ impl MemoryPackWriter {
         }
     }
 
+    /// Creates an empty writer that preallocates `capacity` bytes.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(capacity),
@@ -44,11 +50,13 @@ impl MemoryPackWriter {
     }
 
     #[inline]
+    /// Returns the encoded byte length accumulated so far.
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
 
     #[inline]
+    /// Returns whether no bytes have been encoded.
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
@@ -65,6 +73,7 @@ impl MemoryPackWriter {
     }
 
     #[inline]
+    /// Writes a UTF-8 string using MemoryPack's compact string representation.
     pub fn write_string(&mut self, value: &str) -> Result<(), MemoryPackError> {
         if value.is_empty() {
             return self.write_i32(0);
@@ -80,6 +89,7 @@ impl MemoryPackWriter {
     }
 
     #[inline]
+    /// Writes an optional string, using MemoryPack's null marker for `None`.
     pub fn write_string_option(&mut self, value: Option<&str>) -> Result<(), MemoryPackError> {
         match value {
             Some(s) => self.write_string(s),
@@ -88,84 +98,98 @@ impl MemoryPackWriter {
     }
 
     #[inline(always)]
+    /// Writes a canonical one-byte Boolean value.
     pub fn write_bool(&mut self, value: bool) -> Result<(), MemoryPackError> {
         self.buffer.push(value as u8);
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a signed 8-bit integer.
     pub fn write_i8(&mut self, value: i8) -> Result<(), MemoryPackError> {
         self.buffer.push(value as u8);
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes an unsigned 8-bit integer.
     pub fn write_u8(&mut self, value: u8) -> Result<(), MemoryPackError> {
         self.buffer.push(value);
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian signed 16-bit integer.
     pub fn write_i16(&mut self, value: i16) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian unsigned 16-bit integer.
     pub fn write_u16(&mut self, value: u16) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian signed 32-bit integer.
     pub fn write_i32(&mut self, value: i32) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian unsigned 32-bit integer.
     pub fn write_u32(&mut self, value: u32) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian signed 64-bit integer.
     pub fn write_i64(&mut self, value: i64) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian unsigned 64-bit integer.
     pub fn write_u64(&mut self, value: u64) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian IEEE-754 single-precision value.
     pub fn write_f32(&mut self, value: f32) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian IEEE-754 double-precision value.
     pub fn write_f64(&mut self, value: f64) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian signed 128-bit integer.
     pub fn write_i128(&mut self, value: i128) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes a little-endian unsigned 128-bit integer.
     pub fn write_u128(&mut self, value: u128) -> Result<(), MemoryPackError> {
         self.buffer.extend_from_slice(&value.to_le_bytes());
         Ok(())
     }
 
     #[inline(always)]
+    /// Writes one Unicode scalar as one or two UTF-16 code units.
     pub fn write_char(&mut self, value: char) -> Result<(), MemoryPackError> {
         let code = value as u32;
         if code <= 0xFFFF {
@@ -181,11 +205,13 @@ impl MemoryPackWriter {
     }
 
     #[inline]
+    /// Consumes the writer and returns its encoded frame without copying.
     pub fn into_bytes(self) -> Vec<u8> {
         self.buffer
     }
 
     #[inline]
+    /// Borrows the encoded frame accumulated so far.
     pub fn as_bytes(&self) -> &[u8] {
         &self.buffer
     }
@@ -198,6 +224,7 @@ impl Default for MemoryPackWriter {
 }
 
 impl MemoryPackWriter {
+    /// Writes a back-reference marker for a previously registered object ID.
     pub fn write_object_reference_id(&mut self, reference_id: u32) -> Result<(), MemoryPackError> {
         self.write_u8(250)?;
         varint::write_varint(self, reference_id as i64)?;

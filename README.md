@@ -57,9 +57,8 @@ assert_eq!(mediator.send(Double(21)).await?, 42);
 
 - Public operational failures use `CatgaResult`; production source does not
   use panic-prone `unwrap` or `expect`.
-- Catga-authored public API documentation is a compile-time requirement. The
-  vendored MemoryPack compatibility surface keeps its upstream API shape and
-  is documented at its module boundary.
+- Public API documentation is a compile-time requirement, including the
+  vendored MemoryPack compatibility surface.
 - Batch, transport, consumer, and outbox operations have explicit positive
   concurrency limits and retain only bounded in-flight work.
 - The core has no dependency on adapter crates. Applications compose concrete

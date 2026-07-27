@@ -16,6 +16,7 @@ mod codes {
     pub const INT64: i8 = -128;
 }
 
+/// Writes an `i64` using MemoryPack's signed compact-integer encoding.
 pub fn write_varint(writer: &mut MemoryPackWriter, value: i64) -> Result<(), MemoryPackError> {
     if value >= 0 {
         if value <= codes::MAX_SINGLE_VALUE as i64 {
@@ -48,6 +49,7 @@ pub fn write_varint(writer: &mut MemoryPackWriter, value: i64) -> Result<(), Mem
     Ok(())
 }
 
+/// Reads one `i64` encoded with MemoryPack's signed compact-integer encoding.
 pub fn read_varint(reader: &mut MemoryPackReader) -> Result<i64, MemoryPackError> {
     let type_code = reader.read_i8()?;
 

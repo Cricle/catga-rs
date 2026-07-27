@@ -4,8 +4,11 @@ use crate::traits::{MemoryPackDeserialize, MemoryPackSerialize};
 use crate::writer::MemoryPackWriter;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Dense multidimensional array represented by row-major data and its shape.
 pub struct MultiDimArray<T> {
+    /// Length of each dimension, in row-major order.
     pub dimensions: Vec<usize>,
+    /// Row-major element storage matching [`Self::dimensions`].
     pub data: Vec<T>,
 }
 
@@ -18,6 +21,7 @@ impl<T> MultiDimArray<T> {
     }
 
     #[inline]
+    /// Returns the number of dimensions.
     pub fn rank(&self) -> usize {
         self.dimensions.len()
     }

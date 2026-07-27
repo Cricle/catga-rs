@@ -123,6 +123,7 @@ mod option_impls {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    /// A nullable owned string with MemoryPack's explicit null representation.
     pub struct NullableString(pub Option<String>);
 
     impl MemoryPackSerialize for NullableString {
@@ -150,6 +151,7 @@ mod option_impls {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    /// A nullable vector with MemoryPack's explicit null representation.
     pub struct NullableVec<T>(pub Option<Vec<T>>);
 
     impl<T: MemoryPackSerialize> MemoryPackSerialize for NullableVec<T> {

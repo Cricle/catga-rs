@@ -2,12 +2,14 @@ use crate::error::MemoryPackError;
 use std::any::Any;
 use std::collections::HashMap;
 
+/// Object-identity table used while encoding reference-preserving object graphs.
 pub struct MemoryPackWriterOptionalState {
     next_id: u32,
     object_to_ref: HashMap<usize, u32>,
 }
 
 impl MemoryPackWriterOptionalState {
+    /// Creates an empty object-identity table.
     pub fn new() -> Self {
         Self {
             next_id: 0,
@@ -15,11 +17,13 @@ impl MemoryPackWriterOptionalState {
         }
     }
 
+    /// Clears every recorded object identity for the next frame.
     pub fn reset(&mut self) {
         self.object_to_ref.clear();
         self.next_id = 0;
     }
 
+    /// Returns whether `value` was known and its stable per-frame reference ID.
     pub fn get_or_add_reference<T: ?Sized>(&mut self, value: &T) -> (bool, u32) {
         let ptr = value as *const T as *const () as usize;
 
@@ -40,21 +44,25 @@ impl Default for MemoryPackWriterOptionalState {
     }
 }
 
+/// Object-reference table used while decoding reference-preserving object graphs.
 pub struct MemoryPackReaderOptionalState {
     ref_to_object: HashMap<u32, Box<dyn Any>>,
 }
 
 impl MemoryPackReaderOptionalState {
+    /// Creates an empty object-reference table.
     pub fn new() -> Self {
         Self {
             ref_to_object: HashMap::new(),
         }
     }
 
+    /// Clears every decoded object reference for the next frame.
     pub fn reset(&mut self) {
         self.ref_to_object.clear();
     }
 
+    /// Clones the previously decoded object stored under `id` when its type matches `T`.
     pub fn get_object_reference<T: 'static + Clone>(&self, id: u32) -> Result<T, MemoryPackError> {
         self.ref_to_object
             .get(&id)
@@ -68,6 +76,7 @@ impl MemoryPackReaderOptionalState {
             })
     }
 
+    /// Registers a newly decoded object under an unused reference ID.
     pub fn add_object_reference<T: 'static>(
         &mut self,
         id: u32,
@@ -83,6 +92,7 @@ impl MemoryPackReaderOptionalState {
         Ok(())
     }
 
+    /// Replaces the object stored under an existing reference ID.
     pub fn update_object_reference<T: 'static>(
         &mut self,
         id: u32,

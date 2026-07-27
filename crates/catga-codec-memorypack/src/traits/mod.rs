@@ -29,14 +29,20 @@ use crate::error::MemoryPackError;
 use crate::reader::MemoryPackReader;
 use crate::writer::MemoryPackWriter;
 
+/// Encodes a value into a [`MemoryPackWriter`].
 pub trait MemoryPackSerialize {
+    /// Appends this value's MemoryPack representation to `writer`.
     fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError>;
 }
 
+/// Decodes an owned value from a [`MemoryPackReader`].
 pub trait MemoryPackDeserialize: Sized {
+    /// Decodes one value from `reader`.
     fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError>;
 }
 
+/// Decodes a value that may borrow directly from a received frame.
 pub trait MemoryPackDeserializeZeroCopy<'a>: Sized {
+    /// Decodes one value from `reader` without requiring owned string or byte allocations.
     fn deserialize(reader: &mut MemoryPackReader<'a>) -> Result<Self, MemoryPackError>;
 }
