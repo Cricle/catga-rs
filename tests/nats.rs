@@ -1481,6 +1481,36 @@ async fn nats_idempotency_retains_claimed_and_failed_records_until_explicit_clea
 }
 
 #[tokio::test]
+async fn nats_idempotency_clears_max_age_from_an_existing_bucket() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let bucket = format!("CATGA_IDEMP_LEGACY_MAX_AGE_{}", std::process::id());
+    let context = jetstream::new(async_nats::connect(server.url()).await.unwrap());
+    let legacy_store = context
+        .create_key_value(kv::Config {
+            bucket: bucket.clone(),
+            history: 1,
+            max_age: Duration::from_millis(100),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        legacy_store.status().await.unwrap().max_age(),
+        Duration::from_millis(100)
+    );
+
+    let _store =
+        NatsIdempotency::with_retention(&server, bucket.clone(), Duration::from_secs(1)).await?;
+
+    let updated_store = context.get_key_value(&bucket).await.unwrap();
+    assert_eq!(
+        updated_store.status().await.unwrap().max_age(),
+        Duration::ZERO
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn nats_inbox_claims_exclusively_retries_failures_and_caches_results() {
     let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(&server, format!("CATGA_INBOX_{}", std::process::id()))

@@ -36,6 +36,7 @@ impl NatsIdempotency {
     /// The duration controls explicit bounded cleanup through
     /// [`IdempotencyStore::cleanup_completed`]. The bucket has no maximum age:
     /// claimed and failed records must not expire before their state transition.
+    /// Existing buckets with a maximum age are reset during connection.
     pub async fn with_retention(
         server: &str,
         bucket: impl Into<Box<str>>,
@@ -61,6 +62,12 @@ impl NatsIdempotency {
                     .map_err(map_error)?,
             },
         };
+        let status = store.status().await.map_err(map_error)?;
+        if !status.max_age().is_zero() {
+            let mut config = status.info.config.clone();
+            config.max_age = Duration::ZERO;
+            context.update_stream(config).await.map_err(map_error)?;
+        }
         Ok(Self { store, retention })
     }
 
