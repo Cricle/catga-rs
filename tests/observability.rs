@@ -1301,7 +1301,13 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
             .await
             .is_err()
     );
-    assert!(events.append("order-73", Vec::new(), None).await.is_err());
+    assert_eq!(
+        events
+            .append("order-73", Vec::new(), None)
+            .await
+            .expect("empty event batch is a successful no-op"),
+        0
+    );
     events
         .read_page("order-73", 0, 8)
         .await
@@ -1448,13 +1454,13 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
         recorder.counter(
             "catga.persistence.operations|backend=memory,component=event_store,operation=append,outcome=success"
         ),
-        1
+        2
     );
     assert_eq!(
         recorder.counter(
             "catga.persistence.operations|backend=memory,component=event_store,operation=append,outcome=failure"
         ),
-        2
+        1
     );
     assert_eq!(
         recorder.counter(

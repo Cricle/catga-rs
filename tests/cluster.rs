@@ -12,29 +12,84 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
-async fn leadership_subscription_coalesces_changes_without_blocking_other_receivers() {
+async fn leadership_subscription_delivers_transitions_to_independent_receivers() {
     let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
     let node_a = cluster.node("node-a").expect("configured node-a");
     let node_b = cluster.node("node-b").expect("configured node-b");
     let mut first = node_a.subscribe_leadership();
     let mut second = node_b.subscribe_leadership();
 
-    assert_eq!(first.borrow().epoch, 0);
+    assert_eq!(first.snapshot().epoch, 0);
     cluster.elect("node-b").expect("configured node-b");
     cluster.elect("node-a").expect("configured node-a");
 
-    first.changed().await.expect("cluster remains alive");
-    second.changed().await.expect("cluster remains alive");
-    assert_eq!(first.borrow().epoch, 2);
-    assert_eq!(first.borrow().leader_node_id.as_deref(), Some("node-a"));
+    let first_snapshot = first.recv().await.expect("cluster remains alive");
+    let second_snapshot = second.recv().await.expect("cluster remains alive");
+    assert_eq!(first_snapshot.epoch, 1);
+    assert_eq!(first_snapshot.leader_node_id.as_deref(), Some("node-b"));
     assert_eq!(
-        second.borrow().leader_endpoint.as_deref(),
-        Some("http://node-a")
+        second_snapshot.leader_endpoint.as_deref(),
+        Some("http://node-b")
     );
 }
 
 #[tokio::test]
-async fn cluster_publishes_leadership_changes_without_polling_or_global_locks() {
+async fn leadership_subscription_snapshot_cannot_block_an_election() {
+    let cluster = Arc::new(MemoryCluster::new(
+        "node-a",
+        ["http://node-a", "http://node-b"],
+    ));
+    let node = cluster.node("node-a").expect("configured node-a");
+    let subscription = node.subscribe_leadership();
+    let retained_snapshot = subscription.snapshot();
+    let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+    let election_cluster = Arc::clone(&cluster);
+
+    std::thread::spawn(move || {
+        let result = election_cluster.elect("node-b");
+        let _ = completed_tx.send(result);
+    });
+
+    assert_eq!(
+        completed_rx
+            .await
+            .expect("election worker remains available"),
+        Some(())
+    );
+    assert_eq!(retained_snapshot.leader_node_id.as_deref(), Some("node-a"));
+}
+
+#[tokio::test]
+async fn lagged_leadership_subscription_resumes_only_with_newer_transitions() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let node = cluster.node("node-a").expect("configured node-a");
+    let mut subscription = node.subscribe_leadership();
+
+    for transition in 0..65 {
+        let leader = if transition % 2 == 0 {
+            "node-b"
+        } else {
+            "node-a"
+        };
+        cluster.elect(leader).expect("configured leader");
+    }
+
+    let current = subscription
+        .recv()
+        .await
+        .expect("lagged subscription resynchronizes to the latest snapshot");
+    assert_eq!(current.epoch, 65);
+
+    cluster.elect("node-a").expect("configured leader");
+    let next = subscription
+        .recv()
+        .await
+        .expect("subscription resumes after lag");
+    assert_eq!(next.epoch, 66);
+}
+
+#[tokio::test]
+async fn cluster_publishes_leadership_changes_without_polling() {
     let cluster = Arc::new(MemoryCluster::new(
         "node-a",
         ["http://node-a", "http://node-b"],

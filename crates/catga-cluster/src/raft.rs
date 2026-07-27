@@ -15,10 +15,11 @@ use raft::{
     eraftpb::{ConfState, Entry, EntryType, Message},
 };
 use slog::Logger;
-use tokio::sync::{Notify, watch};
+use tokio::sync::Notify;
 
 use crate::{
-    ClusterCoordinator, LeadershipSnapshot, RaftTiming, metrics::RaftMetrics, storage::RaftStorage,
+    ClusterCoordinator, LeadershipPublication, LeadershipSnapshot, RaftTiming,
+    metrics::RaftMetrics, storage::RaftStorage,
 };
 
 const DEFAULT_PENDING_COMMIT_CAPACITY: usize = 1_024;
@@ -176,7 +177,7 @@ struct RaftCoordinatorState {
 
 struct RaftCoordinatorInner {
     state: ArcSwap<RaftCoordinatorState>,
-    leadership: watch::Sender<LeadershipSnapshot>,
+    publication: Arc<LeadershipPublication>,
     changed: Notify,
 }
 
@@ -206,8 +207,12 @@ impl ClusterCoordinator for RaftClusterNode {
             .map(|member| Arc::clone(&member.endpoint))
     }
 
-    fn subscribe_leadership(&self) -> watch::Receiver<LeadershipSnapshot> {
-        self.inner.leadership.subscribe()
+    fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
+        self.inner.publication.snapshot()
+    }
+
+    fn subscribe_leadership(&self) -> crate::LeadershipSubscription {
+        self.inner.publication.subscribe()
     }
 
     fn member_endpoints(&self) -> Arc<[Arc<str>]> {
@@ -397,15 +402,16 @@ impl RaftNode {
         };
         let logger = Logger::root(slog::Discard, slog::o!());
         let raw = RawNode::new(&config, storage.clone(), &logger)?;
-        let (leadership, _) = watch::channel(LeadershipSnapshot {
+        let snapshot = Arc::new(LeadershipSnapshot {
             epoch: 0,
             leader_node_id: None,
             leader_endpoint: None,
         });
+        let publication = LeadershipPublication::new(snapshot);
         let coordinator = Arc::new(RaftClusterNode {
             inner: Arc::new(RaftCoordinatorInner {
                 state: ArcSwap::from_pointee(RaftCoordinatorState { leader_id: None }),
-                leadership,
+                publication,
                 changed: Notify::new(),
             }),
             member_id: id,
@@ -704,13 +710,10 @@ impl RaftNode {
     }
 
     fn publish_coordinator_state(&self) {
+        let _publication = self.coordinator.inner.publication.publication.lock();
         let leader_id = (self.raw.raft.leader_id != 0).then_some(self.raw.raft.leader_id);
-        if self.coordinator.inner.state.load().leader_id != leader_id {
-            self.coordinator
-                .inner
-                .state
-                .store(Arc::new(RaftCoordinatorState { leader_id }));
-            let previous = self.coordinator.inner.leadership.borrow().clone();
+        let current = self.coordinator.inner.state.load_full();
+        if current.leader_id != leader_id {
             let leader_node_id = leader_id.map(|id| Arc::<str>::from(id.to_string()));
             let leader_endpoint = leader_id.and_then(|id| {
                 self.coordinator
@@ -719,14 +722,22 @@ impl RaftNode {
                     .find(|member| member.id == id)
                     .map(|member| Arc::clone(&member.endpoint))
             });
+            let snapshot = Arc::new(LeadershipSnapshot {
+                epoch: self
+                    .coordinator
+                    .inner
+                    .publication
+                    .snapshot()
+                    .epoch
+                    .saturating_add(1),
+                leader_node_id,
+                leader_endpoint,
+            });
             self.coordinator
                 .inner
-                .leadership
-                .send_replace(LeadershipSnapshot {
-                    epoch: previous.epoch.saturating_add(1),
-                    leader_node_id,
-                    leader_endpoint,
-                });
+                .state
+                .store(Arc::new(RaftCoordinatorState { leader_id }));
+            self.coordinator.inner.publication.publish_locked(snapshot);
             self.coordinator.inner.changed.notify_waiters();
         }
     }

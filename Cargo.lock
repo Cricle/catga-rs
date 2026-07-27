@@ -570,6 +570,7 @@ dependencies = [
  "async-trait",
  "catga-core",
  "metrics",
+ "parking_lot",
  "raft",
  "raft-engine",
  "serde",

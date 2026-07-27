@@ -34,8 +34,8 @@ fn relay(nodes: &mut [RaftNode]) {
     panic!("Raft messages did not quiesce");
 }
 
-#[test]
-fn raft_leadership_subscription_publishes_the_campaign_winner() {
+#[tokio::test]
+async fn raft_leadership_subscription_publishes_the_campaign_winner() {
     let mut node = RaftNode::new(
         1,
         "http://node-1",
@@ -43,17 +43,18 @@ fn raft_leadership_subscription_publishes_the_campaign_winner() {
     )
     .expect("valid single-node Raft configuration");
     let coordinator = node.coordinator();
-    let receiver = coordinator.subscribe_leadership();
+    let mut receiver = coordinator.subscribe_leadership();
 
-    assert_eq!(receiver.borrow().leader_node_id, None);
+    assert_eq!(receiver.snapshot().leader_node_id, None);
     node.campaign().expect("single node can campaign");
 
-    assert_eq!(receiver.borrow().epoch, 1);
-    assert_eq!(receiver.borrow().leader_node_id.as_deref(), Some("1"));
-    assert_eq!(
-        receiver.borrow().leader_endpoint.as_deref(),
-        Some("http://node-1")
-    );
+    let snapshot = receiver
+        .recv()
+        .await
+        .expect("coordinator remains available");
+    assert_eq!(snapshot.epoch, 1);
+    assert_eq!(snapshot.leader_node_id.as_deref(), Some("1"));
+    assert_eq!(snapshot.leader_endpoint.as_deref(), Some("http://node-1"));
 }
 
 #[test]
