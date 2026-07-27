@@ -157,3 +157,37 @@ pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, Transp
 pub use typed_transport::{TypedDelivery, TypedProcessOutcome, TypedTransport};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use versioned_transport::VersionedMessageTransport;
+
+/// Builds a typed, bounded [`Pipeline`] during application startup.
+///
+/// The macro accepts already-constructed behavior expressions, preserving their explicit
+/// dependencies and shared state. It does not install global policy state or create a behavior
+/// per request, so stateful stages such as circuit breakers retain one caller-owned lifecycle.
+/// Every stage uses [`Pipeline::try_with`], returning a validation error instead of allowing a
+/// generated configuration to exceed [`MAX_PIPELINE_DEPTH`].
+///
+/// ```
+/// # use std::time::Duration;
+/// # use catga_core::{Pipeline, RetryBehavior, TimeoutBehavior};
+/// # struct Request;
+/// # impl catga_core::Message for Request {}
+/// # impl catga_core::Request for Request { type Response = (); }
+/// let pipeline: Pipeline<Request> = catga_core::catga_pipeline!(
+///     Request;
+///     RetryBehavior::new(2, Duration::from_millis(10)),
+///     TimeoutBehavior::new(Duration::from_secs(1)),
+/// )?;
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
+#[macro_export]
+macro_rules! catga_pipeline {
+    ($message:ty; $($behavior:expr),* $(,)?) => {{
+        (|| -> $crate::CatgaResult<$crate::Pipeline<$message>> {
+            let pipeline = $crate::Pipeline::<$message>::new();
+            $(
+                let pipeline = pipeline.try_with($behavior)?;
+            )*
+            Ok(pipeline)
+        })()
+    }};
+}

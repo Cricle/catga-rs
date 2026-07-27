@@ -5,11 +5,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use catga_core::{
     AuthorizedRequest, AutoBatchingBehavior, BatchKeyProvider, BatchOptionsProvider, CatgaResult,
-    Event, EventHandler, Handler, Mediator, Message, MessagePriority, Request,
+    Event, EventHandler, Handler, Mediator, Message, MessagePriority, Pipeline, Request,
+    RetryBehavior, TimeoutBehavior,
 };
 use catga_flow::{FlowDefinition, FlowStepOutcome};
 
-#[derive(catga_core::Message)]
+#[derive(Clone, catga_core::Message)]
 struct Ping;
 
 #[derive(catga_core::Message)]
@@ -192,6 +193,18 @@ fn message_derive_can_configure_automatic_batching_without_runtime_registration(
     assert_eq!(options.max_shards, 64);
     assert_eq!(options.flush_concurrency, 4);
     assert!(AutoBatchingBehavior::<ConfiguredBatchRequest>::from_message_options().is_ok());
+}
+
+#[test]
+fn pipeline_macro_builds_one_bounded_startup_pipeline_from_existing_behaviors() {
+    let pipeline: Pipeline<Ping> = catga_core::catga_pipeline!(
+        Ping;
+        RetryBehavior::new(2, Duration::ZERO),
+        TimeoutBehavior::new(Duration::from_secs(1)),
+    )
+    .expect("configured pipeline fits the supported depth");
+
+    assert_eq!(pipeline.len(), 2);
 }
 
 #[test]
