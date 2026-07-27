@@ -1,10 +1,17 @@
 //! Explicit, bounded resilience-executor contracts.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
+use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CircuitBreakerOptions, ErrorCode, ResilienceExecutor, ResilienceOptions,
-    RetryJitter,
+    CatgaError, CatgaResult, CircuitBreakerOptions, Delivery, Envelope, ErrorCode, MessageMetadata,
+    MessageTransport, ResilienceExecutor, ResilienceOptions, ResilientTransport, RetryJitter,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +35,71 @@ fn error_with_retryability(code: ErrorCode, retryable: bool) -> CatgaError {
         "retryable": retryable,
     }))
     .expect("a CatgaError wire override is valid")
+}
+
+#[derive(Default)]
+struct FlakyTransport {
+    publish_attempts: AtomicUsize,
+    receive_attempts: AtomicUsize,
+}
+
+#[async_trait]
+impl MessageTransport for FlakyTransport {
+    async fn publish(&self, _: Envelope) -> CatgaResult<()> {
+        self.publish_attempts.fetch_add(1, Ordering::Relaxed);
+        Err(CatgaError::new(
+            ErrorCode::Transient,
+            "test publish response lost",
+        ))
+    }
+
+    async fn receive(&self) -> CatgaResult<Delivery> {
+        if self.receive_attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "test broker is reconnecting",
+            ));
+        }
+        Ok(Delivery::new(Envelope::new(
+            1,
+            "resilience.test",
+            Vec::new(),
+            MessageMetadata::new(1, None),
+        )))
+    }
+}
+
+#[tokio::test]
+async fn resilient_transport_retries_reads_but_not_non_idempotent_writes() {
+    let inner = Arc::new(FlakyTransport::default());
+    let mut read_options = options();
+    read_options.max_retries = 1;
+    let mut write_options = options();
+    write_options.max_retries = 0;
+    let transport = ResilientTransport::new(
+        Arc::clone(&inner),
+        Arc::new(ResilienceExecutor::new(write_options).expect("valid write policy")),
+        Arc::new(ResilienceExecutor::new(read_options).expect("valid read policy")),
+    );
+
+    let delivery = transport
+        .receive()
+        .await
+        .expect("a transient read failure is retried");
+    assert_eq!(delivery.envelope().id(), 1);
+    assert_eq!(inner.receive_attempts.load(Ordering::Relaxed), 2);
+
+    let error = transport
+        .publish(Envelope::new(
+            2,
+            "resilience.test",
+            Vec::new(),
+            MessageMetadata::new(2, None),
+        ))
+        .await
+        .expect_err("a non-idempotent write policy does not retry");
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(inner.publish_attempts.load(Ordering::Relaxed), 1);
 }
 
 #[test]

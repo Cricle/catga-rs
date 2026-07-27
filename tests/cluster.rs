@@ -60,6 +60,38 @@ async fn leadership_subscription_snapshot_cannot_block_an_election() {
 }
 
 #[tokio::test]
+async fn leadership_subscription_closes_after_its_coordinator_drops() {
+    let mut subscription = {
+        let cluster = MemoryCluster::new("node-a", ["http://node-a"]);
+        let node = cluster.node("node-a").expect("configured node-a");
+        node.subscribe_leadership()
+    };
+
+    let result = tokio::time::timeout(Duration::from_millis(50), subscription.recv()).await;
+    assert!(matches!(
+        result,
+        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed))
+    ));
+}
+
+#[tokio::test]
+async fn leadership_snapshot_matches_each_serialized_election_state() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let node_a = cluster.node("node-a").expect("configured node-a");
+    let node_b = cluster.node("node-b").expect("configured node-b");
+
+    for (leader, endpoint) in [("node-b", "http://node-b"), ("node-a", "http://node-a")] {
+        cluster.elect(leader).expect("configured leader");
+        let snapshot = node_a.leadership_snapshot();
+
+        assert_eq!(snapshot.leader_node_id.as_deref(), Some(leader));
+        assert_eq!(snapshot.leader_endpoint.as_deref(), Some(endpoint));
+        assert_eq!(node_a.is_leader(), leader == "node-a");
+        assert_eq!(node_b.is_leader(), leader == "node-b");
+    }
+}
+
+#[tokio::test]
 async fn lagged_leadership_subscription_resumes_only_with_newer_transitions() {
     let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
     let node = cluster.node("node-a").expect("configured node-a");

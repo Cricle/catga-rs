@@ -57,6 +57,27 @@ async fn raft_leadership_subscription_publishes_the_campaign_winner() {
     assert_eq!(snapshot.leader_endpoint.as_deref(), Some("http://node-1"));
 }
 
+#[tokio::test]
+async fn raft_leadership_subscription_closes_after_its_coordinator_drops() {
+    let mut subscription = {
+        let node = RaftNode::new(
+            1,
+            "http://node-1",
+            vec![RaftMember::new(1, "http://node-1")],
+        )
+        .expect("valid single-node Raft configuration");
+        let coordinator = node.coordinator();
+        coordinator.subscribe_leadership()
+    };
+
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(50), subscription.recv()).await;
+    assert!(matches!(
+        result,
+        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed))
+    ));
+}
+
 #[test]
 fn raft_node_elects_and_commits_a_single_node_proposal() {
     let mut node = RaftNode::new(

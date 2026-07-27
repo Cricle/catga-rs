@@ -9,7 +9,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use arc_swap::ArcSwap;
 use raft::{
     Config, RawNode, Storage,
     eraftpb::{ConfState, Entry, EntryType, Message},
@@ -18,8 +17,9 @@ use slog::Logger;
 use tokio::sync::Notify;
 
 use crate::{
-    ClusterCoordinator, LeadershipPublication, LeadershipSnapshot, RaftTiming,
-    metrics::RaftMetrics, storage::RaftStorage,
+    ClusterCoordinator, CoordinatorStateStore, LeadershipPublication, LeadershipSnapshot,
+    LeadershipSnapshotSource, LeadershipSnapshotState, RaftTiming, metrics::RaftMetrics,
+    storage::RaftStorage,
 };
 
 const DEFAULT_PENDING_COMMIT_CAPACITY: usize = 1_024;
@@ -173,10 +173,17 @@ impl From<raft_engine::Error> for RaftNodeError {
 
 struct RaftCoordinatorState {
     leader_id: Option<u64>,
+    snapshot: Arc<LeadershipSnapshot>,
+}
+
+impl LeadershipSnapshotState for RaftCoordinatorState {
+    fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
+        Arc::clone(&self.snapshot)
+    }
 }
 
 struct RaftCoordinatorInner {
-    state: ArcSwap<RaftCoordinatorState>,
+    state: Arc<CoordinatorStateStore<RaftCoordinatorState>>,
     publication: Arc<LeadershipPublication>,
     changed: Notify,
 }
@@ -208,7 +215,7 @@ impl ClusterCoordinator for RaftClusterNode {
     }
 
     fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
-        self.inner.publication.snapshot()
+        self.inner.state.load().leadership_snapshot()
     }
 
     fn subscribe_leadership(&self) -> crate::LeadershipSubscription {
@@ -407,10 +414,15 @@ impl RaftNode {
             leader_node_id: None,
             leader_endpoint: None,
         });
-        let publication = LeadershipPublication::new(snapshot);
+        let state = Arc::new(CoordinatorStateStore::new(RaftCoordinatorState {
+            leader_id: None,
+            snapshot,
+        }));
+        let source: Arc<dyn LeadershipSnapshotSource> = state.clone();
+        let publication = LeadershipPublication::new(source);
         let coordinator = Arc::new(RaftClusterNode {
             inner: Arc::new(RaftCoordinatorInner {
-                state: ArcSwap::from_pointee(RaftCoordinatorState { leader_id: None }),
+                state,
                 publication,
                 changed: Notify::new(),
             }),
@@ -723,20 +735,17 @@ impl RaftNode {
                     .map(|member| Arc::clone(&member.endpoint))
             });
             let snapshot = Arc::new(LeadershipSnapshot {
-                epoch: self
-                    .coordinator
-                    .inner
-                    .publication
-                    .snapshot()
-                    .epoch
-                    .saturating_add(1),
+                epoch: current.snapshot.epoch.saturating_add(1),
                 leader_node_id,
                 leader_endpoint,
             });
             self.coordinator
                 .inner
                 .state
-                .store(Arc::new(RaftCoordinatorState { leader_id }));
+                .store(Arc::new(RaftCoordinatorState {
+                    leader_id,
+                    snapshot: Arc::clone(&snapshot),
+                }));
             self.coordinator.inner.publication.publish_locked(snapshot);
             self.coordinator.inner.changed.notify_waiters();
         }

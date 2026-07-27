@@ -60,7 +60,7 @@ pub struct LeadershipSnapshot {
 pub struct LeadershipSubscription {
     snapshot: Arc<LeadershipSnapshot>,
     receiver: broadcast::Receiver<Arc<LeadershipSnapshot>>,
-    publication: Arc<LeadershipPublication>,
+    publication: std::sync::Weak<LeadershipPublication>,
 }
 
 impl LeadershipSubscription {
@@ -78,9 +78,12 @@ impl LeadershipSubscription {
     pub async fn recv(&mut self) -> Result<Arc<LeadershipSnapshot>, broadcast::error::RecvError> {
         match self.receiver.recv().await {
             Err(broadcast::error::RecvError::Lagged(_)) => {
-                let _publication = self.publication.publication.lock();
-                self.receiver = self.publication.sender.subscribe();
-                let snapshot = self.publication.snapshot.load_full();
+                let Some(publication) = self.publication.upgrade() else {
+                    return Err(broadcast::error::RecvError::Closed);
+                };
+                let _publication = publication.publication.lock();
+                self.receiver = publication.sender.subscribe();
+                let snapshot = publication.snapshot();
                 self.snapshot = Arc::clone(&snapshot);
                 Ok(snapshot)
             }
@@ -89,39 +92,82 @@ impl LeadershipSubscription {
     }
 }
 
-/// Shared publication state for lock-free leader reads and bounded subscriptions.
+/// Supplies the immutable leadership snapshot carried by a coordinator state.
+pub(crate) trait LeadershipSnapshotSource: Send + Sync {
+    fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot>;
+}
+
+/// Wraps one backend's immutable coordinator state for lock-free reads.
+pub(crate) struct CoordinatorStateStore<S> {
+    state: ArcSwap<S>,
+}
+
+impl<S> CoordinatorStateStore<S> {
+    pub(crate) fn new(state: S) -> Self {
+        Self {
+            state: ArcSwap::from_pointee(state),
+        }
+    }
+
+    pub(crate) fn load(&self) -> arc_swap::Guard<Arc<S>> {
+        self.state.load()
+    }
+
+    pub(crate) fn load_full(&self) -> Arc<S> {
+        self.state.load_full()
+    }
+
+    pub(crate) fn store(&self, state: Arc<S>) {
+        self.state.store(state);
+    }
+}
+
+/// Defines how one immutable coordinator state exposes its leadership snapshot.
+pub(crate) trait LeadershipSnapshotState {
+    fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot>;
+}
+
+impl<S> LeadershipSnapshotSource for CoordinatorStateStore<S>
+where
+    S: LeadershipSnapshotState + Send + Sync,
+{
+    fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
+        self.load_full().leadership_snapshot()
+    }
+}
+
+/// Shared bounded publication state for a coordinator's immutable read model.
 pub(crate) struct LeadershipPublication {
-    snapshot: ArcSwap<LeadershipSnapshot>,
+    source: Arc<dyn LeadershipSnapshotSource>,
     sender: broadcast::Sender<Arc<LeadershipSnapshot>>,
     publication: Mutex<()>,
 }
 
 impl LeadershipPublication {
-    pub(crate) fn new(snapshot: Arc<LeadershipSnapshot>) -> Arc<Self> {
+    pub(crate) fn new(source: Arc<dyn LeadershipSnapshotSource>) -> Arc<Self> {
         let (sender, _) = broadcast::channel(64);
         Arc::new(Self {
-            snapshot: ArcSwap::from(snapshot),
+            source,
             sender,
             publication: Mutex::new(()),
         })
     }
 
     pub(crate) fn snapshot(&self) -> Arc<LeadershipSnapshot> {
-        self.snapshot.load_full()
+        self.source.leadership_snapshot()
     }
 
     pub(crate) fn subscribe(self: &Arc<Self>) -> LeadershipSubscription {
         let _publication = self.publication.lock();
         let receiver = self.sender.subscribe();
         LeadershipSubscription {
-            snapshot: self.snapshot.load_full(),
+            snapshot: self.snapshot(),
             receiver,
-            publication: Arc::clone(self),
+            publication: Arc::downgrade(self),
         }
     }
 
     pub(crate) fn publish_locked(&self, snapshot: Arc<LeadershipSnapshot>) {
-        self.snapshot.store(Arc::clone(&snapshot));
         let _ = self.sender.send(snapshot);
     }
 }
@@ -167,7 +213,7 @@ pub struct MemoryCluster {
 }
 
 struct MemoryClusterInner {
-    state: ArcSwap<MemoryClusterState>,
+    state: Arc<CoordinatorStateStore<MemoryClusterState>>,
     publication: Arc<LeadershipPublication>,
     changed: Notify,
 }
@@ -179,6 +225,13 @@ struct Topology {
 
 struct MemoryClusterState {
     topology: Topology,
+    snapshot: Arc<LeadershipSnapshot>,
+}
+
+impl LeadershipSnapshotState for MemoryClusterState {
+    fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
+        Arc::clone(&self.snapshot)
+    }
 }
 
 /// A node view over a [`MemoryCluster`] topology.
@@ -208,12 +261,15 @@ impl MemoryCluster {
             leader_node_id: Some(Arc::clone(&leader)),
             leader_endpoint,
         });
-        let publication = LeadershipPublication::new(snapshot);
+        let state = Arc::new(CoordinatorStateStore::new(MemoryClusterState {
+            topology: Topology { leader, endpoints },
+            snapshot,
+        }));
+        let source: Arc<dyn LeadershipSnapshotSource> = state.clone();
+        let publication = LeadershipPublication::new(source);
         Self {
             inner: Arc::new(MemoryClusterInner {
-                state: ArcSwap::from_pointee(MemoryClusterState {
-                    topology: Topology { leader, endpoints },
-                }),
+                state,
                 publication,
                 changed: Notify::new(),
             }),
@@ -251,7 +307,7 @@ impl MemoryCluster {
         }
         let leader: Arc<str> = Arc::from(leader);
         let snapshot = Arc::new(LeadershipSnapshot {
-            epoch: self.inner.publication.snapshot().epoch.saturating_add(1),
+            epoch: current.snapshot.epoch.saturating_add(1),
             leader_node_id: Some(Arc::clone(&leader)),
             leader_endpoint: Some(leader_endpoint),
         });
@@ -260,6 +316,7 @@ impl MemoryCluster {
                 leader,
                 endpoints: Arc::clone(&current.topology.endpoints),
             },
+            snapshot: Arc::clone(&snapshot),
         }));
         self.inner.publication.publish_locked(snapshot);
         self.inner.changed.notify_waiters();
@@ -302,7 +359,7 @@ impl ClusterCoordinator for MemoryClusterNode {
     }
 
     fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
-        self.inner.publication.snapshot()
+        self.inner.state.load().leadership_snapshot()
     }
 
     fn subscribe_leadership(&self) -> LeadershipSubscription {
