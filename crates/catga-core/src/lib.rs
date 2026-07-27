@@ -31,6 +31,7 @@ mod registry;
 mod reliability;
 mod request_client;
 mod resilience;
+mod resilient_transport;
 mod retry_jitter;
 mod routing;
 mod security;
@@ -121,6 +122,7 @@ pub use reliability::{
 };
 pub use request_client::{EnvelopeRequestClient, RemoteRequest, RequestClient, RequestTransport};
 pub use resilience::{ResilienceExecutor, ResilienceOptions};
+pub use resilient_transport::ResilientTransport;
 pub use retry_jitter::RetryJitter;
 pub use routing::{MessageDestinationRouter, MessageRouter};
 pub use security::{
