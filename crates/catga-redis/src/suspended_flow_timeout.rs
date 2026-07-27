@@ -3,6 +3,7 @@ if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
 redis.call('SET', KEYS[1], ARGV[1])
 if ARGV[3] == '' then redis.call('ZREM', KEYS[2], ARGV[2])
 else redis.call('ZADD', KEYS[2], ARGV[3], ARGV[2]) end
+if ARGV[4] == '1' then redis.call('ZADD', KEYS[3], 0, ARGV[2]) end
 return 1
 "#;
 
@@ -13,6 +14,11 @@ redis.call('ZREM', KEYS[3], ARGV[3])
 redis.call('HDEL', KEYS[4], ARGV[3])
 if ARGV[4] == '' then redis.call('ZREM', KEYS[2], ARGV[3])
 else redis.call('ZADD', KEYS[2], ARGV[4], ARGV[3]) end
+if ARGV[5] == '1' then
+  redis.call('ZREM', KEYS[5], ARGV[3])
+  if redis.call('ZCARD', KEYS[5]) == 0 then redis.call('DEL', KEYS[5]) end
+end
+if ARGV[6] == '1' then redis.call('ZADD', KEYS[6], 0, ARGV[3]) end
 return 1
 "#;
 
@@ -22,6 +28,10 @@ redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[2], ARGV[2])
 redis.call('ZREM', KEYS[3], ARGV[2])
 redis.call('HDEL', KEYS[4], ARGV[2])
+if ARGV[3] == '1' then
+  redis.call('ZREM', KEYS[5], ARGV[2])
+  if redis.call('ZCARD', KEYS[5]) == 0 then redis.call('DEL', KEYS[5]) end
+end
 return 1
 "#;
 

@@ -734,6 +734,89 @@ async fn nats_suspended_flows_preserve_wait_results_and_claims() {
 }
 
 #[tokio::test]
+async fn nats_suspended_flows_lookup_wait_correlations_without_selecting_ambiguity() {
+    let server = nats_e2e::server_url().await;
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let store = NatsSuspendedFlows::connect(
+        &server,
+        format!("CATGA_FLOW_CORRELATIONS_{}_{}", std::process::id(), suffix),
+    )
+    .await
+    .unwrap();
+
+    let unique = FlowContinuation::waiting(
+        FlowState::new("nats-correlation-one", "payment", [], "node-a").suspended(),
+        "charge",
+        WaitCondition::new(
+            "nats-correlation/one",
+            WaitPolicy::All,
+            1,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        ),
+    );
+    assert!(store.create(unique.clone()).await.unwrap());
+    assert_eq!(
+        store
+            .get_by_wait_correlation("nats-correlation/one")
+            .await
+            .unwrap()
+            .as_ref()
+            .map(|continuation| continuation.state().id()),
+        Some(unique.state().id())
+    );
+    assert!(
+        store
+            .get_by_wait_correlation("nats-correlation/missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let ready = unique
+        .clone()
+        .ready()
+        .with_state(unique.state().clone().next_version());
+    assert!(store.update(0, ready).await.unwrap());
+    assert!(
+        store
+            .get_by_wait_correlation("nats-correlation/one")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    for id in ["nats-correlation-two", "nats-correlation-three"] {
+        assert!(
+            store
+                .create(FlowContinuation::waiting(
+                    FlowState::new(id, "payment", [], "node-a").suspended(),
+                    "charge",
+                    WaitCondition::new(
+                        "nats-correlation/shared",
+                        WaitPolicy::All,
+                        1,
+                        SystemTime::now(),
+                        Duration::from_secs(30),
+                    ),
+                ))
+                .await
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        store
+            .get_by_wait_correlation("nats-correlation/shared")
+            .await
+            .expect_err("ambiguous NATS correlation must not select a continuation")
+            .code(),
+        ErrorCode::Conflict
+    );
+}
+
+#[tokio::test]
 async fn nats_suspended_flows_retry_only_real_revision_conflicts() {
     let server = nats_e2e::server_url().await;
     let store = Arc::new(

@@ -20,6 +20,11 @@ use crate::{suspended_flow_timeout, transport::map_error};
 const MAX_CAS_RETRIES: usize = 8;
 const RECEIPT_LEASE_MILLIS: u64 = 30_000;
 
+struct WaitCorrelationUpdate<'a> {
+    previous: Option<&'a str>,
+    next: Option<&'a str>,
+}
+
 /// Redis-backed suspended flow store using atomic exact-value compare-and-set.
 pub struct RedisSuspendedFlows {
     connection: ConnectionManager,
@@ -53,6 +58,10 @@ impl RedisSuspendedFlows {
         format!("{}.__timeout_{suffix}", self.prefix)
     }
 
+    fn wait_correlation_key(&self, correlation_id: &str) -> String {
+        format!("{}.__wait_correlation:{correlation_id}", self.prefix)
+    }
+
     async fn load_raw(&self, key: &str) -> CatgaResult<Option<Vec<u8>>> {
         let mut connection = self.connection.clone();
         connection.get(key).await.map_err(map_error)
@@ -65,6 +74,7 @@ impl RedisSuspendedFlows {
         next: Vec<u8>,
         flow_id: &str,
         deadline: Option<u64>,
+        correlations: WaitCorrelationUpdate<'_>,
     ) -> CatgaResult<bool> {
         let mut connection = self.connection.clone();
         let updated = Script::new(suspended_flow_timeout::COMPARE_AND_SET)
@@ -72,10 +82,14 @@ impl RedisSuspendedFlows {
             .key(self.timeout_key("due"))
             .key(self.timeout_key("inflight"))
             .key(self.timeout_key("receipts"))
+            .key(self.wait_correlation_key(correlations.previous.unwrap_or_default()))
+            .key(self.wait_correlation_key(correlations.next.unwrap_or_default()))
             .arg(expected)
             .arg(next)
             .arg(flow_id)
             .arg(deadline.map_or_else(String::new, |value| value.to_string()))
+            .arg(i64::from(correlations.previous.is_some()))
+            .arg(i64::from(correlations.next.is_some()))
             .invoke_async::<i64>(&mut connection)
             .await
             .map_err(map_error)?;
@@ -87,6 +101,7 @@ impl RedisSuspendedFlows {
         key: &str,
         flow_id: &str,
         expected: Vec<u8>,
+        correlation: Option<&str>,
     ) -> CatgaResult<bool> {
         let mut connection = self.connection.clone();
         let deleted = Script::new(suspended_flow_timeout::DELETE_IF_EQUAL)
@@ -94,8 +109,10 @@ impl RedisSuspendedFlows {
             .key(self.timeout_key("due"))
             .key(self.timeout_key("inflight"))
             .key(self.timeout_key("receipts"))
+            .key(self.wait_correlation_key(correlation.unwrap_or_default()))
             .arg(expected)
             .arg(flow_id)
+            .arg(i64::from(correlation.is_some()))
             .invoke_async::<i64>(&mut connection)
             .await
             .map_err(map_error)?;
@@ -128,6 +145,10 @@ impl RedisSuspendedFlows {
                     encode_continuation(&next)?,
                     flow_id,
                     flow_timeout_deadline_unix_ms(&next)?,
+                    WaitCorrelationUpdate {
+                        previous: current.wait().map(|wait| wait.correlation_id()),
+                        next: next.wait().map(|wait| wait.correlation_id()),
+                    },
                 )
                 .await?
             {
@@ -146,18 +167,23 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
     async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
         let key = self.key(continuation.state().id());
         let mut connection = self.connection.clone();
-        let inserted = Script::new(suspended_flow_timeout::CREATE)
-            .key(key)
-            .key(self.timeout_key("due"))
-            .arg(encode_continuation(&continuation)?)
-            .arg(continuation.state().id())
-            .arg(
-                flow_timeout_deadline_unix_ms(&continuation)?
-                    .map_or_else(String::new, |value| value.to_string()),
-            )
-            .invoke_async::<i64>(&mut connection)
-            .await
-            .map_err(map_error)?;
+        let inserted =
+            Script::new(suspended_flow_timeout::CREATE)
+                .key(key)
+                .key(self.timeout_key("due"))
+                .key(self.wait_correlation_key(
+                    continuation.wait().map_or("", |wait| wait.correlation_id()),
+                ))
+                .arg(encode_continuation(&continuation)?)
+                .arg(continuation.state().id())
+                .arg(
+                    flow_timeout_deadline_unix_ms(&continuation)?
+                        .map_or_else(String::new, |value| value.to_string()),
+                )
+                .arg(i64::from(continuation.wait().is_some()))
+                .invoke_async::<i64>(&mut connection)
+                .await
+                .map_err(map_error)?;
         Ok(inserted == 1)
     }
 
@@ -166,6 +192,31 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
             .await?
             .map(|bytes| decode_continuation(&bytes))
             .transpose()
+    }
+
+    async fn get_by_wait_correlation(
+        &self,
+        correlation_id: &str,
+    ) -> CatgaResult<Option<FlowContinuation>> {
+        let mut connection = self.connection.clone();
+        let flow_ids: Vec<String> = connection
+            .zrange(self.wait_correlation_key(correlation_id), 0, 1)
+            .await
+            .map_err(map_error)?;
+        if flow_ids.len() > 1 {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "flow wait correlation identifies multiple active flows",
+            ));
+        }
+        let Some(flow_id) = flow_ids.into_iter().next() else {
+            return Ok(None);
+        };
+        Ok(self.get(&flow_id).await?.filter(|continuation| {
+            continuation
+                .wait()
+                .is_some_and(|wait| wait.correlation_id() == correlation_id)
+        }))
     }
 
     async fn query(&self, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
@@ -200,10 +251,19 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
             let Some(current_raw) = self.load_raw(&key).await? else {
                 return Ok(false);
             };
-            if decode_continuation(&current_raw)?.state().version() != expected_version {
+            let current = decode_continuation(&current_raw)?;
+            if current.state().version() != expected_version {
                 return Ok(false);
             }
-            if self.delete_if_equal(&key, flow_id, current_raw).await? {
+            if self
+                .delete_if_equal(
+                    &key,
+                    flow_id,
+                    current_raw,
+                    current.wait().map(|wait| wait.correlation_id()),
+                )
+                .await?
+            {
                 return Ok(true);
             }
         }
@@ -248,6 +308,10 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
                     next_raw.clone(),
                     next.state().id(),
                     flow_timeout_deadline_unix_ms(&next)?,
+                    WaitCorrelationUpdate {
+                        previous: expected.wait().map(|wait| wait.correlation_id()),
+                        next: next.wait().map(|wait| wait.correlation_id()),
+                    },
                 )
                 .await?
             {

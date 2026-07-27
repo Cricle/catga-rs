@@ -409,7 +409,11 @@ impl FlowStore for NatsFlows {
     }
 }
 
-async fn open_bucket(context: &jetstream::Context, bucket: &str) -> CatgaResult<kv::Store> {
+/// Opens a one-history KV bucket, tolerating a concurrent provisioner.
+pub(crate) async fn open_bucket(
+    context: &jetstream::Context,
+    bucket: &str,
+) -> CatgaResult<kv::Store> {
     match context.get_key_value(bucket).await {
         Ok(store) => Ok(store),
         Err(_) => match context

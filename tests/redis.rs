@@ -554,6 +554,58 @@ async fn redis_suspended_flows_preserve_wait_results_and_claims() {
 
 #[tokio::test]
 #[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_suspended_flows_look_up_indexed_wait_correlations() -> CatgaResult<()> {
+    let config = redis_config();
+    let prefix = format!(
+        "{}:wait-correlation:{}",
+        config.stream,
+        TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let store = RedisSuspendedFlows::connect(&config.server, prefix).await?;
+    let correlation = "redis-wait-correlation";
+    let waiting = waiting_continuation_with_correlation("redis-correlation-one", correlation);
+    assert!(store.create(waiting.clone()).await?);
+
+    let found = store
+        .get_by_wait_correlation(correlation)
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "Redis indexed wait was not found"))?;
+    assert_eq!(found.state().id(), waiting.state().id());
+    assert!(
+        store
+            .get_by_wait_correlation("redis-wait-correlation-missing")
+            .await?
+            .is_none()
+    );
+
+    let ready = waiting
+        .clone()
+        .ready()
+        .with_state(waiting.state().clone().next_version());
+    assert!(store.update(0, ready).await?);
+    assert!(store.get_by_wait_correlation(correlation).await?.is_none());
+
+    let shared = "redis-wait-correlation-shared";
+    for flow_id in ["redis-correlation-two", "redis-correlation-three"] {
+        assert!(
+            store
+                .create(waiting_continuation_with_correlation(flow_id, shared))
+                .await?
+        );
+    }
+    assert_eq!(
+        store
+            .get_by_wait_correlation(shared)
+            .await
+            .expect_err("ambiguous Redis correlation must not select a continuation")
+            .code(),
+        ErrorCode::Conflict
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
 async fn redis_suspended_flows_page_bounded_timeout_queries() -> CatgaResult<()> {
     let config = redis_config();
     let store = RedisSuspendedFlows::connect(
@@ -623,11 +675,15 @@ async fn redis_flow_scheduler_claims_recovers_and_releases_target_indexes() {
 }
 
 fn waiting_continuation(id: &str) -> FlowContinuation {
+    waiting_continuation_with_correlation(id, format!("{id}-wait").as_str())
+}
+
+fn waiting_continuation_with_correlation(id: &str, correlation_id: &str) -> FlowContinuation {
     FlowContinuation::waiting(
         FlowState::new(id, "payment", b"input".to_vec(), "node-a"),
         "charge",
         WaitCondition::new(
-            format!("{id}-wait"),
+            correlation_id,
             WaitPolicy::All,
             2,
             SystemTime::now(),
