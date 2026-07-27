@@ -9,7 +9,7 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowQuery, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
+    FlowContinuation, FlowQuery, FlowState, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
     TimedOutFlowReceipt, TimedOutFlowStore,
 };
 use dashmap::{DashMap, mapref::entry::Entry};
@@ -99,6 +99,7 @@ impl MemorySuspendedFlows {
 #[async_trait]
 impl SuspendedFlowStore for MemorySuspendedFlows {
     async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
+        continuation.validate()?;
         let mut due = self.due.lock().map_err(lock_error)?;
         Ok(
             match self.continuations.entry(continuation.state().id().into()) {
@@ -114,10 +115,14 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
     }
 
     async fn get(&self, flow_id: &str) -> CatgaResult<Option<FlowContinuation>> {
-        Ok(self
+        let continuation = self
             .continuations
             .get(flow_id)
-            .map(|slot| (*slot.continuation.load_full()).clone()))
+            .map(|slot| (*slot.continuation.load_full()).clone());
+        if let Some(continuation) = &continuation {
+            continuation.validate()?;
+        }
+        Ok(continuation)
     }
 
     async fn get_by_wait_correlation(
@@ -146,6 +151,9 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
             .continuations
             .get(flow_id.as_ref())
             .map(|slot| (*slot.continuation.load_full()).clone());
+        if let Some(continuation) = &continuation {
+            continuation.validate()?;
+        }
         Ok(continuation.filter(|continuation| {
             continuation
                 .wait()
@@ -200,9 +208,10 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
     }
 
     async fn update(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool> {
-        if next.state().version() != expected_version.saturating_add(1) {
+        if !FlowState::is_next_version(expected_version, next.state().version()) {
             return Ok(false);
         }
+        next.validate()?;
         let mut due = self.due.lock().map_err(lock_error)?;
         let Some(slot) = self
             .continuations
@@ -230,10 +239,11 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
         next: FlowContinuation,
     ) -> CatgaResult<bool> {
         if next.state().id() != expected.state().id()
-            || next.state().version() != expected.state().version().saturating_add(1)
+            || !FlowState::is_next_version(expected.state().version(), next.state().version())
         {
             return Ok(false);
         }
+        next.validate()?;
         let mut due = self.due.lock().map_err(lock_error)?;
         let Some(slot) = self
             .continuations

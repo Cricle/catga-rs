@@ -452,9 +452,13 @@ async fn sqlite_suspended_store_uses_full_snapshot_claims_and_versioned_updates(
     );
     assert!(store.create(running.clone()).await?);
     assert!(store.heartbeat("sql-suspended-cas", "node-a", 0).await?);
-    let claimed = running
-        .clone()
-        .with_state(running.state().clone().claimed_by("node-b").next_version());
+    let claimed = running.clone().with_state(
+        running
+            .state()
+            .clone()
+            .claimed_by("node-b")
+            .next_version()?,
+    );
     assert!(!store.claim(&running, claimed).await?);
 
     let current = required(
@@ -464,7 +468,7 @@ async fn sqlite_suspended_store_uses_full_snapshot_claims_and_versioned_updates(
     let next = current
         .clone()
         .ready()
-        .with_state(current.state().clone().suspended().next_version());
+        .with_state(current.state().clone().suspended().next_version()?);
     assert!(store.update(current.state().version(), next).await?);
     assert!(store.delete("sql-suspended-cas", 1).await?);
     assert!(store.get("sql-suspended-cas").await?.is_none());
@@ -481,7 +485,7 @@ async fn sqlite_flow_store_uses_version_cas_stale_claims_and_owner_heartbeats() 
 
     let initial = FlowState::new("sql-flow-cas", "payment", [], "node-a");
     assert!(store.create(initial.clone()).await?);
-    let next = initial.clone().next_version();
+    let next = initial.clone().next_version()?;
     assert!(store.update(initial.version(), next.clone()).await?);
     assert!(!store.update(initial.version(), initial).await?);
 

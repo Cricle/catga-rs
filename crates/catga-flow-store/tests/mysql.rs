@@ -3,8 +3,8 @@
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowState, FlowStore, SuspendedFlowStore, TimedOutFlowPoll,
-    TimedOutFlowStore, WaitCondition, WaitPolicy,
+    FlowContinuation, FlowQuery, FlowState, FlowStatus, FlowStore, SuspendedFlowStore,
+    TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
 use std::{
@@ -22,7 +22,7 @@ async fn mysql_flow_and_continuation_contracts() -> CatgaResult<()> {
     let id = format!("mysql-flow-{}", uuid::Uuid::new_v4());
     let initial = FlowState::new(id.as_str(), "mysql-contract", [], "node-a");
     assert!(flow.create(initial.clone()).await?);
-    assert!(flow.update(0, initial.clone().next_version()).await?);
+    assert!(flow.update(0, initial.clone().next_version()?).await?);
     let stale = FlowState::new(format!("{id}-stale"), "mysql-contract", [], "node-a")
         .heartbeated_at(SystemTime::UNIX_EPOCH);
     assert!(flow.create(stale).await?);
@@ -57,6 +57,47 @@ async fn mysql_flow_and_continuation_contracts() -> CatgaResult<()> {
         )
     })?;
     store.release_timed_out(receipt).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()> {
+    let Ok(url) = env::var("CATGA_MYSQL_URL") else {
+        return Ok(());
+    };
+    let store = SqlSuspendedFlowStore::connect_mysql(&url).await?;
+    store.migrate().await?;
+    let id = format!("mysql-filtered-suspended-{}", uuid::Uuid::new_v4());
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new(format!("{id}-old"), "unrelated", [], "node-a"),
+                "finish",
+            ))
+            .await?
+    );
+
+    let range_start = SystemTime::now();
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new(format!("{id}-matching"), "payment", [], "node-a").suspended(),
+                "finish",
+            ))
+            .await?
+    );
+    let range_end = SystemTime::now() + Duration::from_secs(1);
+    let summaries = store
+        .query(
+            &FlowQuery::new(1, 1)?
+                .with_status(FlowStatus::Suspended)
+                .with_flow_type("payment")
+                .created_between(range_start, range_end)?,
+        )
+        .await?;
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id(), format!("{id}-matching"));
     Ok(())
 }
 
@@ -96,7 +137,7 @@ async fn mysql_suspended_store_looks_up_indexed_wait_correlations() -> CatgaResu
     let ready = waiting
         .clone()
         .ready()
-        .with_state(waiting.state().clone().next_version());
+        .with_state(waiting.state().clone().next_version()?);
     assert!(store.update(0, ready).await?);
     assert!(
         store

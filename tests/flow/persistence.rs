@@ -4,9 +4,10 @@ use std::time::{Duration, SystemTime};
 
 use catga_core::{CatgaError, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowState, WaitCondition, WaitPolicy, decode_continuation,
-    encode_continuation,
+    FlowContinuation, FlowState, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    decode_continuation, encode_continuation,
 };
+use catga_memory::MemorySuspendedFlows;
 
 #[test]
 fn continuation_codec_preserves_terminal_error_and_wait_results() {
@@ -60,4 +61,51 @@ fn continuation_codec_requires_an_exact_memorypack_frame() {
         .expect_err("trailing bytes must not be accepted as a second frame");
 
     assert_eq!(error.code(), ErrorCode::Internal);
+}
+
+#[test]
+fn continuation_codec_rejects_waits_without_a_correlation_or_expected_children() {
+    for (correlation_id, expected_count) in [("", 1), ("payment-44-children", 0)] {
+        let continuation = FlowContinuation::waiting(
+            FlowState::new("payment-44", "payment", [], "node-a"),
+            "charge",
+            WaitCondition::new(
+                correlation_id,
+                WaitPolicy::All,
+                expected_count,
+                SystemTime::now(),
+                Duration::from_secs(30),
+            ),
+        );
+
+        let error = encode_continuation(&continuation)
+            .expect_err("durable encodings must reject invalid wait boundaries");
+
+        assert_eq!(error.code(), ErrorCode::Validation);
+    }
+}
+
+#[tokio::test]
+async fn memory_continuation_store_rejects_invalid_wait_boundaries_before_indexing() {
+    for (correlation_id, expected_count) in [("", 1), ("payment-45-children", 0)] {
+        let store = MemorySuspendedFlows::default();
+        let continuation = FlowContinuation::waiting(
+            FlowState::new("payment-45", "payment", [], "node-a"),
+            "charge",
+            WaitCondition::new(
+                correlation_id,
+                WaitPolicy::All,
+                expected_count,
+                SystemTime::now(),
+                Duration::from_secs(30),
+            ),
+        );
+
+        let error = store
+            .create(continuation)
+            .await
+            .expect_err("invalid waits must not enter the in-memory persistence indexes");
+
+        assert_eq!(error.code(), ErrorCode::Validation);
+    }
 }

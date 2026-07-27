@@ -35,14 +35,16 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
             "IF OBJECT_ID(N'dbo.catga_flow_continuations', N'U') IS NULL BEGIN \
              CREATE TABLE dbo.catga_flow_continuations (\
                flow_key BINARY(32) NOT NULL PRIMARY KEY, flow_id NVARCHAR(MAX) NOT NULL, \
-               flow_type NVARCHAR(MAX) NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, \
+               flow_type NVARCHAR(MAX) NOT NULL, flow_type_key BINARY(32) NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, \
                created_at_ms BIGINT NOT NULL, created_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
                updated_at_ms BIGINT NOT NULL DEFAULT 0, updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
                deadline_ms BIGINT NULL, wait_correlation NVARCHAR(MAX) NULL, \
                wait_correlation_key BINARY(32) NULL, revision BIGINT NOT NULL, \
                due_token BINARY(16) NULL, lease_until_ms BIGINT NULL, payload VARBINARY(MAX) NOT NULL); \
              CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
-               (status, created_at_ms, flow_key); \
+               (status, created_at_ms, created_at_subsec_ns, flow_key); \
+             CREATE INDEX catga_flow_continuations_type_query_idx ON dbo.catga_flow_continuations \
+               (flow_type_key, status, created_at_ms, created_at_subsec_ns, flow_key); \
              CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
                (created_at_ms, created_at_subsec_ns, flow_key); \
              CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
@@ -73,18 +75,19 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
              IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
                AND name = N'catga_flow_continuations_query_idx') \
                DROP INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations; \
+             IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+               AND name = N'catga_flow_continuations_type_query_idx') \
+               DROP INDEX catga_flow_continuations_type_query_idx ON dbo.catga_flow_continuations; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_id') <> -1 \
                ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_id NVARCHAR(MAX) NOT NULL; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_type') <> -1 \
                ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_type NVARCHAR(MAX) NOT NULL; \
+             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_type_key') IS NULL \
+               ALTER TABLE dbo.catga_flow_continuations ADD flow_type_key BINARY(32) NULL; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'wait_correlation') IS NULL \
                ALTER TABLE dbo.catga_flow_continuations ADD wait_correlation NVARCHAR(MAX) NULL; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'wait_correlation_key') IS NULL \
                ALTER TABLE dbo.catga_flow_continuations ADD wait_correlation_key BINARY(32) NULL; \
-             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
-               AND name = N'catga_flow_continuations_query_idx') \
-               CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
-                 (status, created_at_ms, flow_key); \
              IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
                AND name = N'catga_flow_continuations_due_idx') \
                CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
@@ -97,12 +100,27 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
         )
         .await
         .map(|_| ())
-        .map_err(|error| database_error("create SQL Server continuation schema", error))
+        .map_err(|error| database_error("create SQL Server continuation schema", error))?;
+    backfill_flow_type_keys(&mut connection).await?;
+    connection
+        .execute(
+            "ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_type_key BINARY(32) NOT NULL; \
+             CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
+               (status, created_at_ms, created_at_subsec_ns, flow_key); \
+             CREATE INDEX catga_flow_continuations_type_query_idx ON dbo.catga_flow_continuations \
+               (flow_type_key, status, created_at_ms, created_at_subsec_ns, flow_key);",
+            &[],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| database_error("finalize SQL Server continuation migration", error))
 }
 
 /// Inserts a continuation without replacing an existing identity.
 pub(crate) async fn create(pool: &MssqlPool, continuation: FlowContinuation) -> CatgaResult<bool> {
+    continuation.validate()?;
     let key = flow_key(continuation.state().id());
+    let flow_type_key = flow_key(continuation.state().flow_type());
     let frame = encode_continuation(&continuation)?;
     let deadline = deadline_millis(&continuation)?;
     let (created_at_ms, created_at_subsec_ns) =
@@ -113,15 +131,16 @@ pub(crate) async fn create(pool: &MssqlPool, continuation: FlowContinuation) -> 
         "IF NOT EXISTS (SELECT 1 FROM dbo.catga_flow_continuations WITH (UPDLOCK, HOLDLOCK) \
            WHERE flow_key = @P1) BEGIN \
            INSERT INTO dbo.catga_flow_continuations \
-             (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, \
+             (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, \
               wait_correlation, wait_correlation_key, revision, payload) \
-           VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, @P9, @P10, @P11, @P12, 0, @P13); \
+           VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, @P9, @P10, @P11, @P12, @P13, 0, @P14); \
            SELECT CAST(1 AS BIGINT) AS inserted; END \
          ELSE SELECT CAST(0 AS BIGINT) AS inserted;",
     );
     query.bind(key.as_slice());
     query.bind(continuation.state().id());
     query.bind(continuation.state().flow_type());
+    query.bind(flow_type_key.as_slice());
     query.bind(status_code(continuation.state().status()));
     query.bind(continuation.state().version());
     query.bind(created_at_ms);
@@ -254,9 +273,13 @@ pub(crate) async fn query(pool: &MssqlPool, query: &FlowQuery) -> CatgaResult<Ve
         template.push_str(&format!(" AND status = @P{next_parameter}"));
         next_parameter = next_parameter.saturating_add(1);
     }
-    if query.flow_type().is_some() {
-        template.push_str(&format!(" AND flow_type = @P{next_parameter}"));
-        next_parameter = next_parameter.saturating_add(1);
+    let flow_type_key = query.flow_type().map(flow_key);
+    if flow_type_key.is_some() {
+        template.push_str(&format!(
+            " AND flow_type_key = @P{next_parameter} AND flow_type = @P{}",
+            next_parameter.saturating_add(1)
+        ));
+        next_parameter = next_parameter.saturating_add(2);
     }
     let created_range = query
         .created_at_range()
@@ -284,6 +307,13 @@ pub(crate) async fn query(pool: &MssqlPool, query: &FlowQuery) -> CatgaResult<Ve
         statement.bind(status_code(status));
     }
     if let Some(flow_type) = query.flow_type() {
+        let flow_type_key = flow_type_key.as_ref().ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "SQL Server continuation flow-type key was not derived",
+            )
+        })?;
+        statement.bind(flow_type_key.as_slice());
         statement.bind(flow_type);
     }
     if let Some(((start_ms, start_subsec_ns), (end_ms, end_subsec_ns))) = created_range {
@@ -385,9 +415,10 @@ pub(crate) async fn update(
     expected_version: i64,
     next: FlowContinuation,
 ) -> CatgaResult<bool> {
-    if next.state().version() != expected_version.saturating_add(1) {
+    if !catga_flow::FlowState::is_next_version(expected_version, next.state().version()) {
         return Ok(false);
     }
+    next.validate()?;
     for _ in 0..MAX_CAS_RETRIES {
         let Some(current) = load(pool, next.state().id()).await? else {
             return Ok(false);
@@ -409,10 +440,14 @@ pub(crate) async fn claim(
     next: FlowContinuation,
 ) -> CatgaResult<bool> {
     if next.state().id() != expected.state().id()
-        || next.state().version() != expected.state().version().saturating_add(1)
+        || !catga_flow::FlowState::is_next_version(
+            expected.state().version(),
+            next.state().version(),
+        )
     {
         return Ok(false);
     }
+    next.validate()?;
     let Some(current) = load(pool, expected.state().id()).await? else {
         return Ok(false);
     };
@@ -555,18 +590,20 @@ async fn replace(
     next: &FlowContinuation,
 ) -> CatgaResult<bool> {
     let key = flow_key(next.state().id());
+    let flow_type_key = flow_key(next.state().flow_type());
     let frame = encode_continuation(next)?;
     let deadline = deadline_millis(next)?;
     let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?;
     let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?;
     let mut query = Query::new(
-        "UPDATE dbo.catga_flow_continuations SET flow_type = @P1, status = @P2, \
-           version = @P3, created_at_ms = @P4, created_at_subsec_ns = @P5, updated_at_ms = @P6, updated_at_subsec_ns = @P7, deadline_ms = @P8, \
-           wait_correlation = @P9, wait_correlation_key = @P10, payload = @P11, \
+        "UPDATE dbo.catga_flow_continuations SET flow_type = @P1, flow_type_key = @P2, status = @P3, \
+           version = @P4, created_at_ms = @P5, created_at_subsec_ns = @P6, updated_at_ms = @P7, updated_at_subsec_ns = @P8, deadline_ms = @P9, \
+           wait_correlation = @P10, wait_correlation_key = @P11, payload = @P12, \
            revision = revision + 1, due_token = NULL, lease_until_ms = NULL \
-         WHERE flow_key = @P12 AND flow_id = @P13 AND revision = @P14",
+         WHERE flow_key = @P13 AND flow_id = @P14 AND revision = @P15",
     );
     query.bind(next.state().flow_type());
+    query.bind(flow_type_key.as_slice());
     query.bind(status_code(next.state().status()));
     query.bind(next.state().version());
     query.bind(created_at_ms);
@@ -589,6 +626,42 @@ async fn replace(
         .await
         .map(|result| result.total() == 1)
         .map_err(|error| database_error("replace SQL Server continuation", error))
+}
+
+async fn backfill_flow_type_keys(
+    connection: &mut bb8::PooledConnection<'_, bb8_tiberius::ConnectionManager>,
+) -> CatgaResult<()> {
+    let rows = connection
+        .query(
+            "SELECT flow_key, flow_type FROM dbo.catga_flow_continuations \
+             WHERE flow_type_key IS NULL",
+            &[],
+        )
+        .await
+        .map_err(|error| database_error("read SQL Server continuation type-key backfill", error))?
+        .into_first_result()
+        .await
+        .map_err(|error| database_error("read SQL Server continuation type-key backfill", error))?;
+    for row in rows {
+        let row_key = required_bytes(&row, "flow_key", "SQL Server continuation type-key row")?;
+        let flow_type = required_str(
+            &row,
+            "flow_type",
+            "SQL Server continuation type-key flow type",
+        )?;
+        let flow_type_key = flow_key(flow_type);
+        let mut update = Query::new(
+            "UPDATE dbo.catga_flow_continuations SET flow_type_key = @P1 \
+             WHERE flow_key = @P2 AND flow_type_key IS NULL",
+        );
+        update.bind(flow_type_key.as_slice());
+        update.bind(row_key);
+        update
+            .execute(&mut *connection)
+            .await
+            .map_err(|error| database_error("backfill SQL Server continuation type key", error))?;
+    }
+    Ok(())
 }
 
 fn wait_correlation(continuation: &FlowContinuation) -> Option<&str> {

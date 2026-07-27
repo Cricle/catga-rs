@@ -90,6 +90,41 @@ async fn axum_error_response_uses_stable_status_codes_and_compact_json() {
     );
 }
 
+#[tokio::test]
+async fn axum_error_response_preserves_csharp_category_statuses_and_typed_bodies() {
+    let cases = [
+        (ErrorCode::HandlerFailed, StatusCode::BAD_REQUEST),
+        (ErrorCode::HandlerNotFound, StatusCode::NOT_FOUND),
+        (ErrorCode::PipelineFailed, StatusCode::BAD_REQUEST),
+        (
+            ErrorCode::PersistenceFailed,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (ErrorCode::LockFailed, StatusCode::SERVICE_UNAVAILABLE),
+        (ErrorCode::TransportFailed, StatusCode::SERVICE_UNAVAILABLE),
+        (ErrorCode::SerializationFailed, StatusCode::BAD_REQUEST),
+        (ErrorCode::FlowFailed, StatusCode::BAD_REQUEST),
+        (ErrorCode::FlowCancelled, StatusCode::REQUEST_TIMEOUT),
+        (ErrorCode::FlowTimeout, StatusCode::REQUEST_TIMEOUT),
+        (ErrorCode::FlowCompensating, StatusCode::BAD_REQUEST),
+    ];
+
+    for (code, status) in cases {
+        let response =
+            CatgaHttpError::from(CatgaError::new(code, "source contract")).into_response();
+        assert_eq!(response.status(), status, "{code:?}");
+        let expected_body = format!(
+            r#"{{"code":"{}","message":"source contract"}}"#,
+            code.as_stable_str()
+        );
+        assert_eq!(
+            to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
+            expected_body.as_bytes(),
+            "{code:?}"
+        );
+    }
+}
+
 #[test]
 fn endpoint_validation_aggregates_ordered_errors_into_a_catga_validation_failure() {
     let mut validation = EndpointValidation::new();

@@ -127,7 +127,7 @@ pub(crate) async fn update(
     expected_version: i64,
     next: FlowState,
 ) -> CatgaResult<bool> {
-    if next.version() != expected_version.saturating_add(1) {
+    if !FlowState::is_next_version(expected_version, next.version()) {
         return Ok(false);
     }
     for _ in 0..MAX_CAS_RETRIES {
@@ -195,7 +195,7 @@ pub(crate) async fn try_claim(
         {
             continue;
         }
-        let claimed = state.clone().claimed_by(owner).next_version();
+        let claimed = state.clone().claimed_by(owner).next_version()?;
         let result = sqlx::query(statement(
             "UPDATE catga_flow_states SET flow_type = ?, flow_type_key = ?, status = ?, version = ?, heartbeat_ms = ?, payload = ?, revision = revision + 1 \
              WHERE flow_key = ? AND flow_id = ? AND revision = ?", false))

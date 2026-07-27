@@ -393,8 +393,11 @@ impl WaitCondition {
         })
     }
 
-    pub(crate) fn validate(&self) -> CatgaResult<()> {
-        if self.expected_count as usize > MAX_WAIT_CHILDREN
+    /// Validates the durable wait identity, expected child count, and bounded payload shape.
+    pub fn validate(&self) -> CatgaResult<()> {
+        if self.correlation_id.is_empty()
+            || self.expected_count == 0
+            || self.expected_count as usize > MAX_WAIT_CHILDREN
             || self.results.len() > MAX_WAIT_CHILDREN
             || self.results.len() > self.expected_count as usize
             || self.results.iter().any(|result| {
@@ -405,7 +408,7 @@ impl WaitCondition {
         {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
-                "flow wait condition exceeds supported bounds",
+                "flow wait condition requires a correlation, at least one expected child, and supported bounds",
             ));
         }
         if !self.child_launches.is_empty()
@@ -685,7 +688,7 @@ impl TryFrom<FlowContinuationWire> for FlowContinuation {
     type Error = MemoryPackError;
 
     fn try_from(value: FlowContinuationWire) -> Result<Self, Self::Error> {
-        Ok(Self {
+        let continuation = Self {
             state: value.state,
             step_name: value.step_name.into_boxed_str(),
             wait: value.wait.map(WaitConditionWire::try_into).transpose()?,
@@ -700,7 +703,11 @@ impl TryFrom<FlowContinuationWire> for FlowContinuation {
             ),
             created_at: decode_time(value.created_at)?,
             updated_at: decode_time(value.updated_at)?,
-        })
+        };
+        continuation.validate().map_err(|error| {
+            MemoryPackError::DeserializationError(format!("invalid flow continuation: {error:?}"))
+        })?;
+        Ok(continuation)
     }
 }
 
@@ -750,6 +757,15 @@ impl FlowContinuation {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// Validates the durable continuation shape before it crosses a persistence boundary.
+    pub fn validate(&self) -> CatgaResult<()> {
+        self.state.validate()?;
+        if let Some(wait) = &self.wait {
+            wait.validate()?;
+        }
+        Ok(())
     }
 
     /// Returns the immutable durable flow state.

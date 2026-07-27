@@ -133,6 +133,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> CatgaResult<()> {
 
 /// Inserts an encoded continuation without replacing an existing identity.
 pub(crate) async fn create(pool: &SqlitePool, continuation: FlowContinuation) -> CatgaResult<bool> {
+    continuation.validate()?;
     let key = flow_key(continuation.state().id());
     let (created_at_ms, created_at_subsec_ns) =
         unix_millis_and_subsec_nanos(continuation.created_at())?;
@@ -393,9 +394,10 @@ pub(crate) async fn update(
     expected_version: i64,
     next: FlowContinuation,
 ) -> CatgaResult<bool> {
-    if next.state().version() != expected_version.saturating_add(1) {
+    if !catga_flow::FlowState::is_next_version(expected_version, next.state().version()) {
         return Ok(false);
     }
+    next.validate()?;
     for _ in 0..MAX_CAS_RETRIES {
         let Some(current) = load(pool, next.state().id()).await? else {
             return Ok(false);
@@ -417,10 +419,14 @@ pub(crate) async fn claim(
     next: FlowContinuation,
 ) -> CatgaResult<bool> {
     if next.state().id() != expected.state().id()
-        || next.state().version() != expected.state().version().saturating_add(1)
+        || !catga_flow::FlowState::is_next_version(
+            expected.state().version(),
+            next.state().version(),
+        )
     {
         return Ok(false);
     }
+    next.validate()?;
     let Some(current) = load(pool, expected.state().id()).await? else {
         return Ok(false);
     };

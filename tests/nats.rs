@@ -286,7 +286,7 @@ async fn nats_flows_use_hashed_states_and_type_indexes_for_stale_claims() {
     assert!(!flows.create(initial.clone()).await.unwrap());
     assert!(
         flows
-            .update(initial.version(), initial.clone().next_version())
+            .update(initial.version(), initial.clone().next_version().unwrap())
             .await
             .unwrap()
     );
@@ -586,7 +586,10 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
     let terminal = flows.get("payment/0").await.unwrap().unwrap();
     assert!(
         flows
-            .update(terminal.version(), terminal.clone().done(1).next_version(),)
+            .update(
+                terminal.version(),
+                terminal.clone().done(1).next_version().unwrap(),
+            )
             .await
             .unwrap()
     );
@@ -715,15 +718,25 @@ async fn nats_suspended_flows_preserve_wait_results_and_claims() {
     let current = store.get("nats-flow").await.unwrap().unwrap();
     assert_eq!(current.wait().unwrap().completed_count(), 2);
     assert!(store.heartbeat("nats-flow", "node-a", 0).await.unwrap());
-    let stale_claim = current
-        .clone()
-        .with_state(current.state().clone().claimed_by("node-b").next_version());
+    let stale_claim = current.clone().with_state(
+        current
+            .state()
+            .clone()
+            .claimed_by("node-b")
+            .next_version()
+            .unwrap(),
+    );
     assert!(!store.claim(&current, stale_claim).await.unwrap());
 
     let current = store.get("nats-flow").await.unwrap().unwrap();
-    let next = current
-        .clone()
-        .with_state(current.state().clone().claimed_by("node-b").next_version());
+    let next = current.clone().with_state(
+        current
+            .state()
+            .clone()
+            .claimed_by("node-b")
+            .next_version()
+            .unwrap(),
+    );
     assert!(store.claim(&current, next.clone()).await.unwrap());
     assert!(
         store
@@ -778,7 +791,7 @@ async fn nats_suspended_flows_lookup_wait_correlations_without_selecting_ambigui
     let ready = unique
         .clone()
         .ready()
-        .with_state(unique.state().clone().next_version());
+        .with_state(unique.state().clone().next_version().unwrap());
     assert!(store.update(0, ready).await.unwrap());
     assert!(
         store

@@ -39,7 +39,7 @@ pub use local::{Flow, FlowResult};
 pub use persistence::{decode_continuation, encode_continuation};
 pub use runtime::{FlowRuntime, FlowRuntimeResult};
 pub use scheduler::{DueFlowScheduler, FlowScheduler, MemoryFlowScheduler, ScheduledResume};
-pub use state::{FlowState, FlowStatus};
+pub use state::{FlowState, FlowStatus, MAX_FLOW_DATA_BYTES};
 pub use state_machine::{StateMachine, StateMachineResult};
 pub use state_machine::{
     StateMachineBuilder, StateMachineEventRouter, StateMachineExecutor, StateMachineSnapshot,

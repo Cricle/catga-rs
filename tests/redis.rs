@@ -534,15 +534,25 @@ async fn redis_suspended_flows_preserve_wait_results_and_claims() {
     let current = store.get("redis-flow").await.unwrap().unwrap();
     assert_eq!(current.wait().unwrap().completed_count(), 2);
     assert!(store.heartbeat("redis-flow", "node-a", 0).await.unwrap());
-    let stale_claim = current
-        .clone()
-        .with_state(current.state().clone().claimed_by("node-b").next_version());
+    let stale_claim = current.clone().with_state(
+        current
+            .state()
+            .clone()
+            .claimed_by("node-b")
+            .next_version()
+            .unwrap(),
+    );
     assert!(!store.claim(&current, stale_claim).await.unwrap());
 
     let current = store.get("redis-flow").await.unwrap().unwrap();
-    let next = current
-        .clone()
-        .with_state(current.state().clone().claimed_by("node-b").next_version());
+    let next = current.clone().with_state(
+        current
+            .state()
+            .clone()
+            .claimed_by("node-b")
+            .next_version()
+            .unwrap(),
+    );
     assert!(store.claim(&current, next.clone()).await.unwrap());
     assert!(
         store
@@ -581,7 +591,7 @@ async fn redis_suspended_flows_look_up_indexed_wait_correlations() -> CatgaResul
     let ready = waiting
         .clone()
         .ready()
-        .with_state(waiting.state().clone().next_version());
+        .with_state(waiting.state().clone().next_version()?);
     assert!(store.update(0, ready).await?);
     assert!(store.get_by_wait_correlation(correlation).await?.is_none());
 
@@ -1052,9 +1062,9 @@ async fn redis_flows_use_atomic_versions_and_claim_only_stale_matching_type() ->
 
     assert!(store.create(initial.clone()).await?);
     assert!(!store.create(initial.clone()).await?);
-    assert!(!store.update(1, initial.clone().next_version()).await?);
+    assert!(!store.update(1, initial.clone().next_version()?).await?);
 
-    let next = initial.clone().next_version();
+    let next = initial.clone().next_version()?;
     assert!(store.update(0, next.clone()).await?);
     assert!(
         store
@@ -1073,7 +1083,7 @@ async fn redis_flows_use_atomic_versions_and_claim_only_stale_matching_type() ->
     assert!(store.create(terminal.clone()).await?);
     assert!(
         store
-            .update(terminal.version(), terminal.done(1).next_version())
+            .update(terminal.version(), terminal.done(1).next_version()?)
             .await?
     );
 

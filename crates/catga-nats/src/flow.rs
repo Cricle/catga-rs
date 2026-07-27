@@ -68,7 +68,7 @@ impl NatsFlows {
         ) {
             return Ok(None);
         }
-        let state = decode::<FlowState>(decode_record(&entry.value)?.payload())?;
+        let state = decode_flow_state(decode_record(&entry.value)?.payload())?;
         Ok(Some((entry, state)))
     }
 
@@ -339,7 +339,7 @@ impl FlowStore for NatsFlows {
     }
 
     async fn update(&self, expected_version: i64, next: FlowState) -> CatgaResult<bool> {
-        if next.version() != expected_version.saturating_add(1) {
+        if !FlowState::is_next_version(expected_version, next.version()) {
             return Ok(false);
         }
         let Some((entry, current)) = self.get_state(next.id()).await? else {
@@ -385,7 +385,7 @@ impl FlowStore for NatsFlows {
             {
                 continue;
             }
-            let next = current.claimed_by(owner).next_version();
+            let next = current.claimed_by(owner).next_version()?;
             if self.replace(&id, entry.revision, &next).await? {
                 return Ok(Some(next));
             }
@@ -522,6 +522,11 @@ fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
 }
 fn decode<T: MemoryPackDeserialize>(value: &[u8]) -> CatgaResult<T> {
     MemoryPackSerializer::deserialize(value)
+        .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
+}
+
+fn decode_flow_state(value: &[u8]) -> CatgaResult<FlowState> {
+    MemoryPackSerializer::deserialize_bounded(value, FlowState::memorypack_decode_limits()?)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 fn is_revision_conflict(error: &kv::UpdateError) -> bool {

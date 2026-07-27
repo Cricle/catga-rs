@@ -133,7 +133,7 @@ pub(crate) async fn update(
     expected_version: i64,
     next: FlowState,
 ) -> CatgaResult<bool> {
-    if next.version() != expected_version.saturating_add(1) {
+    if !FlowState::is_next_version(expected_version, next.version()) {
         return Ok(false);
     }
     for _ in 0..MAX_CAS_RETRIES {
@@ -214,7 +214,7 @@ pub(crate) async fn try_claim(
             {
                 continue;
             }
-            let claimed = state.claimed_by(owner).next_version();
+            let claimed = state.claimed_by(owner).next_version()?;
             if replace_revision_on_connection(&mut connection, &claimed, revision).await? {
                 return Ok(Some(claimed));
             }

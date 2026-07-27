@@ -130,7 +130,7 @@ where
     let ready = stale
         .clone()
         .ready()
-        .with_state(stale.state().clone().running().next_version());
+        .with_state(stale.state().clone().running().next_version()?);
     assert!(store.update(0, ready).await?);
     assert!(
         store

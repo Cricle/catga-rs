@@ -8,8 +8,8 @@ use std::{
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    DueFlowScheduler, FlowContinuation, FlowScheduler, FlowState, FlowStore, SuspendedFlowStore,
-    TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
+    DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
+    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_flow_store::{SqlFlowScheduler, SqlFlowStore, SqlSuspendedFlowStore};
 
@@ -65,7 +65,7 @@ async fn mssql_flow_and_continuation_contracts() -> CatgaResult<()> {
     let id = format!("mssql-flow-{}", uuid::Uuid::new_v4());
     let initial = FlowState::new(id.as_str(), "mssql-contract", [], "node-a");
     assert!(flow.create(initial.clone()).await?);
-    assert!(flow.update(0, initial.clone().next_version()).await?);
+    assert!(flow.update(0, initial.clone().next_version()?).await?);
     let stale = FlowState::new(format!("{id}-stale"), "mssql-contract", [], "node-a")
         .heartbeated_at(SystemTime::UNIX_EPOCH);
     assert!(flow.create(stale).await?);
@@ -111,5 +111,46 @@ async fn mssql_flow_and_continuation_contracts() -> CatgaResult<()> {
         )
     })?;
     store.release_timed_out(receipt).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mssql_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()> {
+    let Ok(url) = env::var("CATGA_MSSQL_URL") else {
+        return Ok(());
+    };
+    let store = SqlSuspendedFlowStore::connect_mssql(&url).await?;
+    store.migrate().await?;
+    let id = format!("mssql-filtered-suspended-{}", uuid::Uuid::new_v4());
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new(format!("{id}-old"), "unrelated", [], "node-a"),
+                "finish",
+            ))
+            .await?
+    );
+
+    let range_start = SystemTime::now();
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new(format!("{id}-matching"), "payment", [], "node-a").suspended(),
+                "finish",
+            ))
+            .await?
+    );
+    let range_end = SystemTime::now() + Duration::from_secs(1);
+    let summaries = store
+        .query(
+            &FlowQuery::new(1, 1)?
+                .with_status(FlowStatus::Suspended)
+                .with_flow_type("payment")
+                .created_between(range_start, range_end)?,
+        )
+        .await?;
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id(), format!("{id}-matching"));
     Ok(())
 }

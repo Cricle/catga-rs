@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use catga_codec_memorypack::{MemoryPackSerializer, MemoryPackable};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowQuery, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
+    FlowContinuation, FlowQuery, FlowState, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
     TimedOutFlowReceipt, TimedOutFlowStore, decode_continuation, encode_continuation,
 };
 use futures::TryStreamExt;
@@ -267,6 +267,7 @@ impl NatsSuspendedFlows {
 #[async_trait]
 impl SuspendedFlowStore for NatsSuspendedFlows {
     async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
+        continuation.validate()?;
         let key = kv_key(continuation.state().id());
         self.register_wait_correlation(&continuation).await?;
         let record = create_record(&encode_continuation(&continuation)?);
@@ -405,9 +406,10 @@ impl SuspendedFlowStore for NatsSuspendedFlows {
     }
 
     async fn update(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool> {
-        if next.state().version() != expected_version.saturating_add(1) {
+        if !FlowState::is_next_version(expected_version, next.state().version()) {
             return Ok(false);
         }
+        next.validate()?;
         self.mutate(next.state().id(), expected_version, |_| Some(next.clone()))
             .await
     }
@@ -418,10 +420,11 @@ impl SuspendedFlowStore for NatsSuspendedFlows {
         next: FlowContinuation,
     ) -> CatgaResult<bool> {
         if next.state().id() != expected.state().id()
-            || next.state().version() != expected.state().version().saturating_add(1)
+            || !FlowState::is_next_version(expected.state().version(), next.state().version())
         {
             return Ok(false);
         }
+        next.validate()?;
         self.register_wait_correlation(&next).await?;
         let previous_correlation = expected
             .wait()

@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowQuery, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
+    FlowContinuation, FlowQuery, FlowState, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
     TimedOutFlowReceipt, TimedOutFlowStore, decode_continuation, encode_continuation,
     flow_timeout_deadline_unix_ms,
 };
@@ -170,6 +170,7 @@ impl RedisSuspendedFlows {
 #[async_trait]
 impl SuspendedFlowStore for RedisSuspendedFlows {
     async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
+        continuation.validate()?;
         let key = self.key(continuation.state().id());
         let mut connection = self.connection.clone();
         let inserted =
@@ -294,9 +295,10 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
     }
 
     async fn update(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool> {
-        if next.state().version() != expected_version.saturating_add(1) {
+        if !FlowState::is_next_version(expected_version, next.state().version()) {
             return Ok(false);
         }
+        next.validate()?;
         self.mutate(next.state().id(), expected_version, |_| Some(next.clone()))
             .await
     }
@@ -307,10 +309,11 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
         next: FlowContinuation,
     ) -> CatgaResult<bool> {
         if next.state().id() != expected.state().id()
-            || next.state().version() != expected.state().version().saturating_add(1)
+            || !FlowState::is_next_version(expected.state().version(), next.state().version())
         {
             return Ok(false);
         }
+        next.validate()?;
         let key = self.key(expected.state().id());
         let expected_raw = encode_continuation(expected)?;
         let next_raw = encode_continuation(&next)?;

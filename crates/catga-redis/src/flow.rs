@@ -86,7 +86,7 @@ impl RedisFlows {
         Ok(Self {
             connection,
             prefix: prefix.into(),
-            codec: MemoryPackCodec::default(),
+            codec: MemoryPackCodec::new(FlowState::memorypack_decode_limits()?),
         })
     }
 
@@ -134,7 +134,7 @@ impl FlowStore for RedisFlows {
     }
 
     async fn update(&self, expected_version: i64, next: FlowState) -> CatgaResult<bool> {
-        if next.version() != expected_version.saturating_add(1) {
+        if !FlowState::is_next_version(expected_version, next.version()) {
             return Ok(false);
         }
         let (value, heartbeat, status, owner, indexed) = self.fields(&next)?;
@@ -193,7 +193,7 @@ impl FlowStore for RedisFlows {
             if current.flow_type() != flow_type || current.status() != FlowStatus::Running {
                 continue;
             }
-            let next = current.clone().claimed_by(owner).next_version();
+            let next = current.clone().claimed_by(owner).next_version()?;
             let (next_value, heartbeat, status, next_owner, _) = self.fields(&next)?;
             let claimed: i64 = Script::new(CLAIM)
                 .key(&key)

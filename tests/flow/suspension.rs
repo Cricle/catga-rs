@@ -99,6 +99,49 @@ async fn durable_runtime_completes_when_the_final_sequential_step_advances() {
 }
 
 #[tokio::test]
+async fn durable_runtime_rejects_waits_without_a_correlation_or_expected_children() {
+    for (suffix, correlation_id, expected_count) in
+        [("empty-correlation", "", 1), ("zero-count", "wait", 0)]
+    {
+        let store = Arc::new(MemorySuspendedFlows::default());
+        let runtime = FlowRuntime::new(
+            Arc::clone(&store),
+            Arc::new(MemoryFlowScheduler::default()),
+            FlowDefinition::new(format!("invalid-wait-{suffix}"))
+                .step("wait", move |_| async move {
+                    Ok(FlowStepOutcome::wait(WaitCondition::new(
+                        correlation_id,
+                        WaitPolicy::All,
+                        expected_count,
+                        SystemTime::now(),
+                        Duration::from_secs(30),
+                    )))
+                })
+                .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+            "node-a",
+        );
+
+        let result = runtime
+            .start(format!("invalid-wait-{suffix}/1"), [])
+            .await
+            .expect("invalid wait must become a terminal flow failure");
+
+        assert!(result.is_failure());
+        assert_eq!(
+            result.state().error().map(CatgaError::code),
+            Some(ErrorCode::Validation)
+        );
+        assert!(
+            store
+                .get(result.state().id())
+                .await
+                .expect("memory store remains available")
+                .is_some_and(|continuation| continuation.wait().is_none())
+        );
+    }
+}
+
+#[tokio::test]
 async fn tagged_durable_step_retries_only_transient_failures_within_its_bound() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let runtime = FlowRuntime::new(

@@ -1073,11 +1073,26 @@ struct ErrorBody<'a> {
 fn status_code(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::Validation => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::HandlerFailed
+        | ErrorCode::PipelineFailed
+        | ErrorCode::SerializationFailed
+        | ErrorCode::FlowFailed
+        | ErrorCode::FlowCompensating => StatusCode::BAD_REQUEST,
+        ErrorCode::HandlerNotFound => StatusCode::NOT_FOUND,
+        ErrorCode::PersistenceFailed | ErrorCode::LockFailed | ErrorCode::TransportFailed => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::Conflict => StatusCode::CONFLICT,
         ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
         ErrorCode::Forbidden => StatusCode::FORBIDDEN,
-        ErrorCode::Cancelled | ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
+        // Flow cancellation and timeout retain Rust's explicit deadline semantics. The upstream
+        // HTTP adapter leaves flow categories at its generic 400 fallback, which is ambiguous for
+        // clients deciding whether a deadline can be retried.
+        ErrorCode::Cancelled
+        | ErrorCode::Timeout
+        | ErrorCode::FlowCancelled
+        | ErrorCode::FlowTimeout => StatusCode::REQUEST_TIMEOUT,
         ErrorCode::Unsupported => StatusCode::NOT_IMPLEMENTED,
         ErrorCode::Transient | ErrorCode::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1085,17 +1100,5 @@ fn status_code(code: ErrorCode) -> StatusCode {
 }
 
 fn error_code_name(code: ErrorCode) -> &'static str {
-    match code {
-        ErrorCode::Validation => "validation",
-        ErrorCode::NotFound => "not_found",
-        ErrorCode::Conflict => "conflict",
-        ErrorCode::Unauthorized => "unauthorized",
-        ErrorCode::Forbidden => "forbidden",
-        ErrorCode::Cancelled => "cancelled",
-        ErrorCode::Timeout => "timeout",
-        ErrorCode::Unsupported => "unsupported",
-        ErrorCode::Transient => "transient",
-        ErrorCode::Unavailable => "unavailable",
-        ErrorCode::Internal => "internal",
-    }
+    code.as_stable_str()
 }

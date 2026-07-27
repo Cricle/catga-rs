@@ -1,15 +1,20 @@
 use std::{sync::Arc, time::SystemTime};
 
 use catga_codec_memorypack::{
-    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
-    MemoryPackWriter, MemoryPackable,
+    MemoryPackDecodeLimits, MemoryPackDeserialize, MemoryPackError, MemoryPackReader,
+    MemoryPackSerialize, MemoryPackWriter, MemoryPackable,
 };
-use catga_core::CatgaError;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use serde::{Deserialize, Serialize};
 
 use crate::memorypack::{
     ErrorWire, TimeWire, decode_error, decode_time, encode_error, encode_time,
 };
+
+/// Maximum accepted durable flow input payload size in bytes.
+pub const MAX_FLOW_DATA_BYTES: usize = 1024 * 1024;
+
+const MAX_FLOW_CODEC_METADATA_BYTES: usize = 1024 * 1024;
 
 /// The lifecycle phase of a durable flow.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -64,6 +69,8 @@ struct FlowStateWire {
 
 impl MemoryPackSerialize for FlowState {
     fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
+        self.validate()
+            .map_err(|error| MemoryPackError::SerializationError(error.message().to_owned()))?;
         FlowStateWire {
             id: self.id.to_string(),
             flow_type: self.flow_type.to_string(),
@@ -82,7 +89,7 @@ impl MemoryPackSerialize for FlowState {
 impl MemoryPackDeserialize for FlowState {
     fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
         let wire = FlowStateWire::deserialize(reader)?;
-        Ok(Self {
+        let state = Self {
             id: wire.id.into_boxed_str(),
             flow_type: wire.flow_type.into_boxed_str(),
             status: decode_flow_status(wire.status)?,
@@ -92,7 +99,14 @@ impl MemoryPackDeserialize for FlowState {
             heartbeat: decode_time(wire.heartbeat)?,
             data: Arc::from(wire.data),
             error: wire.error.map(decode_error).transpose()?,
-        })
+        };
+        state.validate().map_err(|error| {
+            MemoryPackError::DeserializationError(format!(
+                "invalid flow state: {}",
+                error.message()
+            ))
+        })?;
+        Ok(state)
     }
 }
 
@@ -140,6 +154,28 @@ impl FlowState {
             data: data.into(),
             error: None,
         }
+    }
+
+    /// Validates the durable flow state before it crosses a persistence boundary.
+    pub fn validate(&self) -> CatgaResult<()> {
+        if self.data.len() > MAX_FLOW_DATA_BYTES {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                format!("flow input payload exceeds {MAX_FLOW_DATA_BYTES} bytes"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns the bounded MemoryPack decode policy for durable flow records.
+    pub fn memorypack_decode_limits() -> CatgaResult<MemoryPackDecodeLimits> {
+        let maximum = MAX_FLOW_DATA_BYTES.saturating_add(MAX_FLOW_CODEC_METADATA_BYTES);
+        MemoryPackDecodeLimits::new(maximum, maximum, 256 * 1024, 65_536, 32).map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                format!("cannot configure flow state decode limits: {error}"),
+            )
+        })
     }
 
     /// Returns the stable flow identity.
@@ -276,10 +312,21 @@ impl FlowState {
     }
 
     /// Returns a new state for the next optimistic-concurrency version.
-    pub fn next_version(self) -> Self {
-        Self {
-            version: self.version.saturating_add(1),
-            ..self
-        }
+    ///
+    /// Version saturation is rejected rather than allowing another durable transition to reuse
+    /// `i64::MAX` and weaken compare-and-swap fencing.
+    pub fn next_version(self) -> CatgaResult<Self> {
+        let version = self.version.checked_add(1).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Conflict,
+                "flow state version cannot advance beyond i64::MAX",
+            )
+        })?;
+        Ok(Self { version, ..self })
+    }
+
+    /// Returns whether `next` is the exact representable successor of `expected`.
+    pub const fn is_next_version(expected: i64, next: i64) -> bool {
+        matches!(expected.checked_add(1), Some(candidate) if candidate == next)
     }
 }

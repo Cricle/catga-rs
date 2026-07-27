@@ -133,6 +133,7 @@ where
         };
         let state =
             FlowState::new(flow_id, self.definition.name(), data, self.owner.clone()).suspended();
+        state.validate()?;
         let continuation = FlowContinuation::new(state, first_step);
         if !self.store.create(continuation.clone()).await? {
             return Err(CatgaError::new(
@@ -196,7 +197,7 @@ where
         let cancelled = continuation
             .clone()
             .ready()
-            .with_state(continuation.state().clone().cancelled().next_version());
+            .with_state(continuation.state().clone().cancelled().next_version()?);
         if self
             .store
             .update(continuation.state().version(), cancelled.clone())
@@ -474,6 +475,7 @@ where
             let Some(continuation) = self.store.get(summary.id()).await? else {
                 continue;
             };
+            continuation.validate()?;
             if continuation.state().status() != FlowStatus::Suspended
                 || continuation.state().flow_type() != self.definition.name()
                 || continuation.schedule_id().is_some()
@@ -570,7 +572,7 @@ where
                     let pending = compensated
                         .clone()
                         .at_step(next_step)
-                        .with_state(state.at_step(completed_steps).suspended().next_version())
+                        .with_state(state.at_step(completed_steps).suspended().next_version()?)
                         .delayed_until(resume_at);
                     self.persist(expected_version, pending.clone()).await?;
                     let suspended = match self
@@ -614,7 +616,7 @@ where
                     }
                     let suspended = compensated
                         .at_step(next_step)
-                        .with_state(state.at_step(completed_steps).suspended().next_version())
+                        .with_state(state.at_step(completed_steps).suspended().next_version()?)
                         .with_wait(wait);
                     self.persist(expected_version, suspended.clone()).await?;
                     execution.complete("suspended");
@@ -739,7 +741,7 @@ where
         let completed_steps = state.step().saturating_add(1);
         let done = continuation
             .clone()
-            .with_state(state.done(completed_steps).next_version());
+            .with_state(state.done(completed_steps).next_version()?);
         self.persist(continuation.state().version(), done.clone())
             .await?;
         self.metrics.record_completed(continuation.created_at());
@@ -760,7 +762,7 @@ where
                     .clone()
                     .with_error(error)
                     .compensating()
-                    .next_version(),
+                    .next_version()?,
             );
             self.persist(continuation.state().version(), compensating.clone())
                 .await?;
@@ -769,7 +771,7 @@ where
         let failed = continuation
             .clone()
             .ready()
-            .with_state(continuation.state().clone().failed(error).next_version());
+            .with_state(continuation.state().clone().failed(error).next_version()?);
         self.persist(continuation.state().version(), failed.clone())
             .await?;
         self.metrics.record_failed(continuation.created_at());
@@ -794,7 +796,7 @@ where
             let next = continuation
                 .clone()
                 .complete_compensation()
-                .with_state(continuation.state().clone().compensating().next_version());
+                .with_state(continuation.state().clone().compensating().next_version()?);
             self.persist(continuation.state().version(), next.clone())
                 .await?;
             continuation = next;
@@ -808,7 +810,7 @@ where
         let failed = continuation
             .clone()
             .ready()
-            .with_state(continuation.state().clone().failed(error).next_version());
+            .with_state(continuation.state().clone().failed(error).next_version()?);
         self.persist(continuation.state().version(), failed.clone())
             .await?;
         self.metrics.record_failed(continuation.created_at());
@@ -859,7 +861,7 @@ where
         let next = continuation
             .clone()
             .at_step(next_step)
-            .with_state(state.at_step(completed_steps).suspended().next_version());
+            .with_state(state.at_step(completed_steps).suspended().next_version()?);
         self.persist(continuation.state().version(), next.clone())
             .await?;
         self.claim(next).await
@@ -905,7 +907,7 @@ where
             .await?;
         let scheduled = continuation
             .clone()
-            .with_state(continuation.state().clone().next_version())
+            .with_state(continuation.state().clone().next_version()?)
             .with_schedule_id(schedule_id);
         Ok(self
             .store
@@ -924,7 +926,7 @@ where
         let running = continuation
             .clone()
             .ready()
-            .with_state(claimed_state.next_version());
+            .with_state(claimed_state.next_version()?);
         Ok(self
             .store
             .claim(&continuation, running.clone())
@@ -959,7 +961,7 @@ where
             let next = continuation
                 .clone()
                 .with_wait(claimed_wait)
-                .with_state(continuation.state().clone().suspended().next_version());
+                .with_state(continuation.state().clone().suspended().next_version()?);
             if self.store.claim(&continuation, next).await? {
                 return Ok(Some((child_id, correlation_id)));
             }
@@ -998,7 +1000,7 @@ where
             let next = continuation
                 .clone()
                 .with_wait(next_wait)
-                .with_state(continuation.state().clone().suspended().next_version());
+                .with_state(continuation.state().clone().suspended().next_version()?);
             if self.store.claim(&continuation, next).await? {
                 return Ok(());
             }
@@ -1010,14 +1012,17 @@ where
     }
 
     async fn current_result(&self, flow_id: &str) -> CatgaResult<FlowRuntimeResult> {
-        self.store
+        let continuation = self
+            .store
             .get(flow_id)
             .await?
-            .map(|continuation| FlowRuntimeResult::new(continuation.state().clone()))
-            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "flow does not exist"))
+            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "flow does not exist"))?;
+        continuation.validate()?;
+        Ok(FlowRuntimeResult::new(continuation.state().clone()))
     }
 
     fn ensure_definition(&self, continuation: &FlowContinuation) -> CatgaResult<()> {
+        continuation.validate()?;
         self.definition.validate()?;
         if continuation.state().flow_type() == self.definition.name() {
             Ok(())

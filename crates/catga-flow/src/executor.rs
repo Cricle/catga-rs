@@ -102,6 +102,7 @@ where
         RunFuture: Future<Output = CatgaResult<FlowResult>>,
     {
         let initial = FlowState::new(id, flow_type, data, self.owner.clone());
+        initial.validate()?;
         let state = if self.store.create(initial.clone()).await? {
             initial
         } else {
@@ -134,6 +135,7 @@ where
         RunFuture: Future<Output = CatgaResult<FlowResult>>,
     {
         let initial = FlowState::new(id, flow_type, data, self.owner.clone());
+        initial.validate()?;
         let state = if self.store.create(initial.clone()).await? {
             initial
         } else {
@@ -189,6 +191,7 @@ where
             else {
                 break;
             };
+            state.validate()?;
             let result = self.run_work(state.clone(), &mut run).await;
             self.persist_result(state, result).await?;
             recovered = recovered.saturating_add(1);
@@ -242,7 +245,7 @@ where
         let version = state.version();
         let mut current = state;
         loop {
-            let next = terminal_state(&current, &result);
+            let next = terminal_state(&current, &result)?;
             if self.store.update(version, next).await? {
                 return Ok(result);
             }
@@ -253,6 +256,7 @@ where
                     "flow disappeared while saving its result",
                 ));
             };
+            observed.validate()?;
             if observed.status().is_terminal() {
                 if let Some(terminal) = terminal_result(&observed) {
                     return terminal;
@@ -291,6 +295,7 @@ where
                 "flow disappeared before it could be loaded",
             ));
         };
+        current.validate()?;
         if current.flow_type() != expected.flow_type() {
             return Err(CatgaError::new(
                 ErrorCode::Conflict,
@@ -311,7 +316,7 @@ where
         let claimed = current
             .clone()
             .claimed_by(self.owner.clone())
-            .next_version();
+            .next_version()?;
         if self
             .store
             .update(current.version(), claimed.clone())
@@ -330,6 +335,7 @@ where
                 "flow disappeared while ownership was changing",
             ));
         };
+        current.validate()?;
         if current.status().is_terminal()
             && let Some(result) = terminal_result(&current)
         {
@@ -348,7 +354,7 @@ fn is_stale(heartbeat: SystemTime, stale_after: Duration) -> bool {
         .is_ok_and(|elapsed| elapsed >= stale_after)
 }
 
-fn terminal_state(state: &FlowState, result: &FlowResult) -> FlowState {
+fn terminal_state(state: &FlowState, result: &FlowResult) -> CatgaResult<FlowState> {
     match result.error() {
         Some(error) => state
             .clone()

@@ -10,6 +10,20 @@ pub const MAX_ERROR_DETAILS_BYTES: usize = 1024;
 pub enum ErrorCode {
     /// Input does not meet the handler's validation rules.
     Validation,
+    /// A request handler reported a framework-classified failure.
+    HandlerFailed,
+    /// No request or command handler is registered for the message type.
+    HandlerNotFound,
+    /// A mediator pipeline behavior reported a framework-classified failure.
+    PipelineFailed,
+    /// A persistence operation failed without a safe generic retry guarantee.
+    PersistenceFailed,
+    /// A distributed lock operation failed without a safe generic retry guarantee.
+    LockFailed,
+    /// Transport communication failed and is normally safe to retry.
+    TransportFailed,
+    /// Serialization or deserialization failed for a message contract.
+    SerializationFailed,
     /// A requested resource does not exist.
     NotFound,
     /// An operation conflicts with persisted state.
@@ -22,6 +36,14 @@ pub enum ErrorCode {
     Cancelled,
     /// Work exceeded its configured deadline.
     Timeout,
+    /// A durable flow failed its business or orchestration operation.
+    FlowFailed,
+    /// A durable flow was cancelled; unlike transport cancellation this is a terminal flow state.
+    FlowCancelled,
+    /// A durable flow exceeded its configured deadline and may be retried by its owner.
+    FlowTimeout,
+    /// A durable flow is compensating after a failed operation.
+    FlowCompensating,
     /// No configured component supports the requested operation.
     Unsupported,
     /// The operation may succeed when retried.
@@ -37,12 +59,23 @@ impl ErrorCode {
     pub const fn as_stable_str(self) -> &'static str {
         match self {
             Self::Validation => "validation",
+            Self::HandlerFailed => "handler_failed",
+            Self::HandlerNotFound => "handler_not_found",
+            Self::PipelineFailed => "pipeline_failed",
+            Self::PersistenceFailed => "persistence_failed",
+            Self::LockFailed => "lock_failed",
+            Self::TransportFailed => "transport_failed",
+            Self::SerializationFailed => "serialization_failed",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
             Self::Cancelled => "cancelled",
             Self::Timeout => "timeout",
+            Self::FlowFailed => "flow_failed",
+            Self::FlowCancelled => "flow_cancelled",
+            Self::FlowTimeout => "flow_timeout",
+            Self::FlowCompensating => "flow_compensating",
             Self::Unsupported => "unsupported",
             Self::Transient => "transient",
             Self::Unavailable => "unavailable",
@@ -52,32 +85,69 @@ impl ErrorCode {
 
     /// Parses an error category emitted by [`Self::as_stable_str`].
     ///
-    /// This also accepts source-style compatibility aliases without introducing new untyped
-    /// categories: `TRANSPORT_FAILED` maps to [`Self::Unavailable`] and
-    /// `SERIALIZATION_FAILED` maps to [`Self::Internal`]. These aliases are accepted only on
-    /// input; [`Self::as_stable_str`] always emits the stable typed names.
+    /// This accepts Catga's stable Rust names and all upstream C# names. Upstream names are
+    /// accepted only at the boundary; [`Self::as_stable_str`] always emits the typed, stable
+    /// Rust name.
     pub fn from_stable_str(value: &str) -> Option<Self> {
         match value {
             "validation" => Some(Self::Validation),
+            "handler_failed" => Some(Self::HandlerFailed),
+            "handler_not_found" => Some(Self::HandlerNotFound),
+            "pipeline_failed" => Some(Self::PipelineFailed),
+            "persistence_failed" => Some(Self::PersistenceFailed),
+            "lock_failed" => Some(Self::LockFailed),
+            "transport_failed" => Some(Self::TransportFailed),
+            "serialization_failed" => Some(Self::SerializationFailed),
             "not_found" => Some(Self::NotFound),
             "conflict" => Some(Self::Conflict),
             "unauthorized" => Some(Self::Unauthorized),
             "forbidden" => Some(Self::Forbidden),
             "cancelled" => Some(Self::Cancelled),
             "timeout" => Some(Self::Timeout),
+            "flow_failed" => Some(Self::FlowFailed),
+            "flow_cancelled" => Some(Self::FlowCancelled),
+            "flow_timeout" => Some(Self::FlowTimeout),
+            "flow_compensating" => Some(Self::FlowCompensating),
             "unsupported" => Some(Self::Unsupported),
             "transient" => Some(Self::Transient),
             "unavailable" => Some(Self::Unavailable),
             "internal" => Some(Self::Internal),
-            "TRANSPORT_FAILED" => Some(Self::Unavailable),
-            "SERIALIZATION_FAILED" => Some(Self::Internal),
+            "VALIDATION_FAILED" => Some(Self::Validation),
+            "HANDLER_FAILED" => Some(Self::HandlerFailed),
+            "HANDLER_NOT_FOUND" => Some(Self::HandlerNotFound),
+            "PIPELINE_FAILED" => Some(Self::PipelineFailed),
+            "PERSISTENCE_FAILED" => Some(Self::PersistenceFailed),
+            "LOCK_FAILED" => Some(Self::LockFailed),
+            "TRANSPORT_FAILED" => Some(Self::TransportFailed),
+            "SERIALIZATION_FAILED" => Some(Self::SerializationFailed),
+            "TIMEOUT" => Some(Self::Timeout),
+            "CANCELLED" => Some(Self::Cancelled),
+            "INTERNAL_ERROR" => Some(Self::Internal),
+            "NOT_FOUND" => Some(Self::NotFound),
+            "CONFLICT" => Some(Self::Conflict),
+            "UNAUTHORIZED" => Some(Self::Unauthorized),
+            "FORBIDDEN" => Some(Self::Forbidden),
+            "FLOW_FAILED" => Some(Self::FlowFailed),
+            "FLOW_CANCELLED" => Some(Self::FlowCancelled),
+            "FLOW_TIMEOUT" => Some(Self::FlowTimeout),
+            "FLOW_COMPENSATING" => Some(Self::FlowCompensating),
             _ => None,
         }
     }
 
     /// Returns whether this category is normally safe to retry.
+    ///
+    /// Only failures that are transient by contract are retryable automatically. Persistence and
+    /// lock failures remain non-retryable because callers cannot infer idempotency or ownership.
     pub const fn is_retryable(self) -> bool {
-        matches!(self, Self::Transient | Self::Timeout | Self::Unavailable)
+        matches!(
+            self,
+            Self::TransportFailed
+                | Self::Timeout
+                | Self::FlowTimeout
+                | Self::Transient
+                | Self::Unavailable
+        )
     }
 }
 

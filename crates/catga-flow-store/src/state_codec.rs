@@ -34,10 +34,11 @@ pub(crate) fn decode_state(frame: &[u8]) -> CatgaResult<FlowState> {
             format!("unsupported SQL flow state format version {version}"),
         ));
     }
-    MemoryPackSerializer::deserialize(payload).map_err(|error| {
-        CatgaError::new(
-            ErrorCode::Internal,
-            format!("cannot decode MemoryPack SQL flow state: {error}"),
-        )
-    })
+    MemoryPackSerializer::deserialize_bounded(payload, FlowState::memorypack_decode_limits()?)
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                format!("cannot decode MemoryPack SQL flow state: {error}"),
+            )
+        })
 }

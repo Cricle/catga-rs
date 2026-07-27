@@ -140,6 +140,17 @@ pub(crate) fn encode_error_code(value: ErrorCode) -> u8 {
         ErrorCode::Transient => 8,
         ErrorCode::Unavailable => 9,
         ErrorCode::Internal => 10,
+        ErrorCode::HandlerFailed => 11,
+        ErrorCode::HandlerNotFound => 12,
+        ErrorCode::PipelineFailed => 13,
+        ErrorCode::PersistenceFailed => 14,
+        ErrorCode::LockFailed => 15,
+        ErrorCode::TransportFailed => 16,
+        ErrorCode::SerializationFailed => 17,
+        ErrorCode::FlowFailed => 18,
+        ErrorCode::FlowCancelled => 19,
+        ErrorCode::FlowTimeout => 20,
+        ErrorCode::FlowCompensating => 21,
     }
 }
 
@@ -156,6 +167,17 @@ pub(crate) fn decode_error_code(value: u8) -> Result<ErrorCode, MemoryPackError>
         8 => Ok(ErrorCode::Transient),
         9 => Ok(ErrorCode::Unavailable),
         10 => Ok(ErrorCode::Internal),
+        11 => Ok(ErrorCode::HandlerFailed),
+        12 => Ok(ErrorCode::HandlerNotFound),
+        13 => Ok(ErrorCode::PipelineFailed),
+        14 => Ok(ErrorCode::PersistenceFailed),
+        15 => Ok(ErrorCode::LockFailed),
+        16 => Ok(ErrorCode::TransportFailed),
+        17 => Ok(ErrorCode::SerializationFailed),
+        18 => Ok(ErrorCode::FlowFailed),
+        19 => Ok(ErrorCode::FlowCancelled),
+        20 => Ok(ErrorCode::FlowTimeout),
+        21 => Ok(ErrorCode::FlowCompensating),
         value => Err(MemoryPackError::DeserializationError(format!(
             "invalid flow error code: {value}"
         ))),

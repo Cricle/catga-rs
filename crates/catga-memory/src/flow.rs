@@ -38,6 +38,7 @@ impl FlowSlot {
 #[async_trait]
 impl FlowStore for MemoryFlows {
     async fn create(&self, state: FlowState) -> CatgaResult<bool> {
+        state.validate()?;
         Ok(match self.flows.entry(state.id().into()) {
             Entry::Vacant(entry) => {
                 entry.insert(Arc::new(FlowSlot::new(state)));
@@ -48,7 +49,8 @@ impl FlowStore for MemoryFlows {
     }
 
     async fn update(&self, expected_version: i64, next: FlowState) -> CatgaResult<bool> {
-        if next.version() != expected_version.saturating_add(1) {
+        next.validate()?;
+        if !FlowState::is_next_version(expected_version, next.version()) {
             return Ok(false);
         }
         let Some(slot) = self.flows.get(next.id()).map(|entry| Arc::clone(&entry)) else {
@@ -66,10 +68,14 @@ impl FlowStore for MemoryFlows {
     }
 
     async fn get(&self, id: &str) -> CatgaResult<Option<FlowState>> {
-        Ok(self
+        let state = self
             .flows
             .get(id)
-            .map(|slot| (*slot.state.load_full()).clone()))
+            .map(|slot| (*slot.state.load_full()).clone());
+        if let Some(state) = &state {
+            state.validate()?;
+        }
+        Ok(state)
     }
 
     async fn try_claim(
@@ -81,13 +87,14 @@ impl FlowStore for MemoryFlows {
         let now = SystemTime::now();
         for slot in self.flows.iter().map(|entry| Arc::clone(&entry)) {
             let current = slot.state.load_full();
+            current.validate()?;
             if current.flow_type() != flow_type
                 || current.status() != FlowStatus::Running
                 || !is_stale(current.heartbeat(), now, stale_after)
             {
                 continue;
             }
-            let next = (*current).clone().claimed_by(owner).next_version();
+            let next = (*current).clone().claimed_by(owner).next_version()?;
             if let Some(claimed) = slot.replace(&current, next) {
                 return Ok(Some(claimed));
             }

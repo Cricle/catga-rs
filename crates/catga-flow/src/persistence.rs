@@ -3,7 +3,7 @@
 use catga_codec_memorypack::MemoryPackSerializer;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
-use crate::FlowContinuation;
+use crate::{FlowContinuation, FlowState};
 
 const FORMAT_VERSION: u8 = 7;
 
@@ -12,6 +12,7 @@ const FORMAT_VERSION: u8 = 7;
 /// The emitted frame starts with the current MemoryPack format version (v7). Providers must store the
 /// complete frame unchanged.
 pub fn encode_continuation(value: &FlowContinuation) -> CatgaResult<Vec<u8>> {
+    value.validate()?;
     let payload = MemoryPackSerializer::serialize(value).map_err(|error| {
         CatgaError::new(
             ErrorCode::Internal,
@@ -42,10 +43,11 @@ pub fn decode_continuation(bytes: &[u8]) -> CatgaResult<FlowContinuation> {
             format!("unsupported flow continuation format version {version}"),
         ));
     }
-    MemoryPackSerializer::deserialize(payload).map_err(|error| {
-        CatgaError::new(
-            ErrorCode::Internal,
-            format!("cannot decode MemoryPack flow continuation: {error}"),
-        )
-    })
+    MemoryPackSerializer::deserialize_bounded(payload, FlowState::memorypack_decode_limits()?)
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                format!("cannot decode MemoryPack flow continuation: {error}"),
+            )
+        })
 }
