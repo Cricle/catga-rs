@@ -6,13 +6,16 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, DEFAULT_OUTBOX_CLAIM_LEASE, ErrorCode, OutboxMessage, OutboxState,
-    OutboxStore, outbox_claim_expires_at, telemetry, validate_outbox_claim_limit,
-    validate_outbox_message_id,
+    CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_OUTBOX_CLAIM_LEASE, ErrorCode,
+    OutboxMessage, OutboxState, OutboxStore, outbox_claim_expires_at, telemetry,
+    validate_completed_retention, validate_outbox_claim_limit, validate_outbox_message_id,
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 
-use crate::{DEFAULT_MEMORY_RECORD_CAPACITY, capacity::RecordCapacity};
+use crate::{
+    DEFAULT_MEMORY_RECORD_CAPACITY,
+    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity},
+};
 
 /// A shard-locked, process-local outbox for development and deterministic tests.
 pub struct MemoryOutbox {
@@ -20,6 +23,7 @@ pub struct MemoryOutbox {
     published: DashMap<u64, u64>,
     claim_sequence: AtomicU64,
     capacity: RecordCapacity,
+    published_retention: Duration,
 }
 
 impl Default for MemoryOutbox {
@@ -29,6 +33,7 @@ impl Default for MemoryOutbox {
             published: DashMap::new(),
             claim_sequence: AtomicU64::new(0),
             capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
+            published_retention: DEFAULT_IDEMPOTENCY_RETENTION,
         }
     }
 }
@@ -36,11 +41,21 @@ impl Default for MemoryOutbox {
 impl MemoryOutbox {
     /// Creates an outbox with a fixed maximum number of retained records.
     pub fn new(capacity: usize) -> CatgaResult<Self> {
+        Self::with_published_retention_and_capacity(DEFAULT_IDEMPOTENCY_RETENTION, capacity)
+    }
+
+    /// Creates an outbox retaining published records for `retention` within `capacity` records.
+    pub fn with_published_retention_and_capacity(
+        retention: Duration,
+        capacity: usize,
+    ) -> CatgaResult<Self> {
+        validate_completed_retention(retention)?;
         Ok(Self {
             messages: DashMap::with_capacity(capacity),
             published: DashMap::with_capacity(capacity),
             claim_sequence: AtomicU64::new(0),
             capacity: RecordCapacity::new(capacity)?,
+            published_retention: retention,
         })
     }
 
@@ -58,23 +73,42 @@ impl OutboxStore for MemoryOutbox {
     async fn enqueue(&self, message: OutboxMessage) -> CatgaResult<()> {
         let mut operation = telemetry::persistence_operation("memory", "outbox", "enqueue");
         let id = message.id();
-        let result = validate_outbox_message_id(id).and_then(|()| match self.messages.entry(id) {
-            Entry::Vacant(entry) => {
-                if !self.capacity.reserve() {
-                    Err(CatgaError::new(
-                        ErrorCode::Unavailable,
-                        "memory outbox record capacity is exhausted",
-                    ))
-                } else {
-                    entry.insert(message);
-                    Ok(())
-                }
+        if let Err(error) = validate_outbox_message_id(id) {
+            let result = Err(error);
+            operation.complete(&result);
+            return result;
+        }
+        if !self.capacity.reserve() {
+            if let Err(error) = self
+                .cleanup_published(self.published_retention, OPPORTUNISTIC_CLEANUP_LIMIT)
+                .await
+            {
+                let result = Err(error);
+                operation.complete(&result);
+                return result;
             }
-            Entry::Occupied(_) => Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "an outbox message with this identifier already exists",
-            )),
-        });
+            if !self.capacity.reserve() {
+                let result = Err(CatgaError::new(
+                    ErrorCode::Unavailable,
+                    "memory outbox record capacity is exhausted",
+                ));
+                operation.complete(&result);
+                return result;
+            }
+        }
+        let result = match self.messages.entry(id) {
+            Entry::Vacant(entry) => {
+                entry.insert(message);
+                Ok(())
+            }
+            Entry::Occupied(_) => {
+                self.capacity.release();
+                Err(CatgaError::new(
+                    ErrorCode::Conflict,
+                    "an outbox message with this identifier already exists",
+                ))
+            }
+        };
         operation.complete(&result);
         result
     }

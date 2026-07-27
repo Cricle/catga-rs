@@ -100,3 +100,29 @@ async fn capacity_exhaustion_reclaims_expired_inbox_records_without_a_worker() {
             .is_some()
     );
 }
+
+#[tokio::test]
+async fn capacity_exhaustion_reclaims_expired_published_outbox_records_without_a_worker() {
+    let store = MemoryOutbox::with_published_retention_and_capacity(Duration::from_millis(1), 1)
+        .expect("valid bounded outbox");
+    store
+        .enqueue(message(1))
+        .await
+        .expect("first message enqueues");
+    let first = store
+        .claim("worker", 1)
+        .await
+        .expect("first message claims")
+        .pop()
+        .expect("one message is claimed");
+    store
+        .ack("worker", 1, first.claim_token().expect("claim has token"))
+        .await
+        .expect("first message publishes");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    store
+        .enqueue(message(2))
+        .await
+        .expect("expired published message is reclaimed on capacity pressure");
+}
