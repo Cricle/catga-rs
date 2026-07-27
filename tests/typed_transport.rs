@@ -8,9 +8,9 @@ use std::sync::{
 use async_trait::async_trait;
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, Delivery, Destination, DestinationTransport,
-    DistributedIdGenerator, Envelope, ErrorCode, Message, MessageMetadata, MessageTransport,
-    PayloadDecoder, PayloadEncoder, SnowflakeIdGenerator, SnowflakeLayout, TypedProcessOutcome,
-    TypedTransport,
+    DistributedIdGenerator, Envelope, ErrorCode, Message, MessageDestinationRouter,
+    MessageMetadata, MessageTransport, PayloadDecoder, PayloadEncoder, SnowflakeIdGenerator,
+    SnowflakeLayout, TypedProcessOutcome, TypedTransport,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -131,12 +131,14 @@ impl MessageTransport for DeliveryTransport {
 
 struct DestinationDeliveryTransport {
     delivery: Mutex<Option<Delivery>>,
+    sent: Mutex<Vec<Destination>>,
 }
 
 impl DestinationDeliveryTransport {
     fn new(delivery: Delivery) -> Self {
         Self {
             delivery: Mutex::new(Some(delivery)),
+            sent: Mutex::new(Vec::new()),
         }
     }
 
@@ -153,6 +155,18 @@ impl DestinationDeliveryTransport {
                 "typed destination transport test has no remaining delivery",
             )
         })
+    }
+
+    fn sent_destinations(&self) -> CatgaResult<Vec<Destination>> {
+        self.sent
+            .lock()
+            .map(|destinations| destinations.clone())
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "typed destination send lock is poisoned",
+                )
+            })
     }
 }
 
@@ -172,7 +186,16 @@ impl MessageTransport for DestinationDeliveryTransport {
 
 #[async_trait]
 impl DestinationTransport for DestinationDeliveryTransport {
-    async fn send_to(&self, _: &Destination, _: Envelope) -> CatgaResult<()> {
+    async fn send_to(&self, destination: &Destination, _: Envelope) -> CatgaResult<()> {
+        self.sent
+            .lock()
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "typed destination send lock is poisoned",
+                )
+            })?
+            .push(destination.clone());
         Ok(())
     }
 
@@ -240,6 +263,37 @@ fn delivery(payload: Vec<u8>, counts: Arc<AcknowledgementCounts>) -> Delivery {
         ),
         Box::new(RecordingAcknowledger { counts }),
     )
+}
+
+#[tokio::test]
+async fn send_routed_uses_the_message_type_destination_without_encoding_unknown_types()
+-> CatgaResult<()> {
+    let counts = Arc::new(AcknowledgementCounts::default());
+    let backend = Arc::new(DestinationDeliveryTransport::new(delivery(vec![0], counts)));
+    let codec = Arc::new(EncoderOnlyCodec {
+        encoded: AtomicUsize::new(0),
+    });
+    let transport =
+        TypedTransport::new_with_shared_codec(Arc::clone(&backend), ids()?, Arc::clone(&codec));
+    let mut router = MessageDestinationRouter::new();
+    router.add_route(
+        std::any::type_name::<TestMessage>(),
+        Destination::parse("orders")?,
+    )?;
+
+    transport.send_routed(&router, &TestMessage(9)).await?;
+    assert_eq!(
+        backend.sent_destinations()?,
+        [Destination::parse("orders")?]
+    );
+    assert_eq!(codec.encoded.load(Ordering::Relaxed), 1);
+
+    let missing = transport
+        .send_routed(&MessageDestinationRouter::new(), &TestMessage(10))
+        .await;
+    assert!(matches!(missing, Err(error) if error.code() == ErrorCode::NotFound));
+    assert_eq!(codec.encoded.load(Ordering::Relaxed), 1);
+    Ok(())
 }
 
 #[tokio::test]

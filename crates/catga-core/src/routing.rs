@@ -14,6 +14,85 @@ pub struct MessageRouter {
     routes: Vec<HeaderRoute>,
 }
 
+/// Routes a stable message type name to one durable transport destination.
+///
+/// Configure this table during startup, then share it immutably with typed publishers and
+/// consumers. Resolution performs no allocation or locking and returns a borrow of the stored
+/// destination. The expected number of application message types is small, making an ordered
+/// vector more compact and predictable than a per-message hash lookup.
+#[derive(Clone, Debug, Default)]
+pub struct MessageDestinationRouter {
+    routes: Vec<MessageTypeRoute>,
+}
+
+#[derive(Clone, Debug)]
+struct MessageTypeRoute {
+    message_type: Box<str>,
+    destination: Destination,
+}
+
+impl MessageDestinationRouter {
+    /// Creates an empty message-type destination router.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { routes: Vec::new() }
+    }
+
+    /// Adds an exact route for one stable message type name.
+    ///
+    /// Empty names and duplicate registrations return [`ErrorCode::Validation`], preventing an
+    /// ambiguous publish path at runtime.
+    pub fn add_route(
+        &mut self,
+        message_type: impl Into<Box<str>>,
+        destination: Destination,
+    ) -> CatgaResult<()> {
+        let message_type = message_type.into();
+        if message_type.trim().is_empty() {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "message type route must not be empty or whitespace-only",
+            ));
+        }
+        if self
+            .routes
+            .iter()
+            .any(|route| route.message_type.as_ref() == message_type.as_ref())
+        {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "message type route is already configured",
+            ));
+        }
+        self.routes.push(MessageTypeRoute {
+            message_type,
+            destination,
+        });
+        Ok(())
+    }
+
+    /// Resolves `message_type` to its configured durable destination.
+    #[must_use]
+    pub fn resolve(&self, message_type: &str) -> Option<&Destination> {
+        self.routes
+            .iter()
+            .find(|route| route.message_type.as_ref() == message_type)
+            .map(|route| &route.destination)
+    }
+
+    /// Returns the number of configured message type routes.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.routes.len()
+    }
+
+    /// Returns whether no message type routes are configured.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+}
+
 /// One owned header-match rule in a [`MessageRouter`].
 #[derive(Clone, Debug)]
 struct HeaderRoute {

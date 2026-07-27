@@ -1,6 +1,23 @@
 //! Header-driven destination routing tests.
 
-use catga_core::{CatgaResult, Destination, EnvelopeHeaders, ErrorCode, MessageRouter};
+use catga_core::{
+    CatgaResult, Destination, EnvelopeHeaders, ErrorCode, MessageDestinationRouter, MessageRouter,
+};
+
+#[test]
+fn message_destination_router_resolves_exact_configured_message_types() -> CatgaResult<()> {
+    let mut router = MessageDestinationRouter::new();
+    router.add_route("orders.created", Destination::parse("orders.events")?)?;
+    router.add_route("invoices.created", Destination::parse("invoices.events")?)?;
+
+    assert_eq!(
+        router.resolve("orders.created").map(Destination::as_str),
+        Some("orders.events")
+    );
+    assert_eq!(router.resolve("unknown"), None);
+    assert_eq!(router.len(), 2);
+    Ok(())
+}
 
 #[test]
 fn message_router_validates_route_headers_and_retains_the_first_matching_rule() -> CatgaResult<()> {

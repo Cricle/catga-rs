@@ -12,9 +12,9 @@ use futures::{StreamExt, future::BoxFuture, stream};
 use crate::{
     CatgaError, CatgaResult, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination,
     DestinationTransport, DistributedIdGenerator, Envelope, EnvelopeHeaders, ErrorCode, Event,
-    Message, MessageMetadata, MessagePriority, MessageTransport, PayloadDecoder, PayloadEncoder,
-    QualityOfService, TransportContext, current_correlation_id, current_transport_context,
-    scope_transport_context,
+    Message, MessageDestinationRouter, MessageMetadata, MessagePriority, MessageTransport,
+    PayloadDecoder, PayloadEncoder, QualityOfService, TransportContext, current_correlation_id,
+    current_transport_context, scope_transport_context,
 };
 
 /// Serializes statically typed values and delegates their delivery to an envelope transport.
@@ -470,6 +470,30 @@ impl<T, C> TypedTransport<T, C>
 where
     T: DestinationTransport + ?Sized,
 {
+    /// Sends one ordinary typed message to the destination configured for its stable type name.
+    ///
+    /// The router is startup-owned and borrowed for this call; resolving it does not allocate or
+    /// lock. A missing route returns [`ErrorCode::NotFound`] before the envelope is encoded, so a
+    /// misconfigured deployment cannot publish an undeliverable message.
+    pub async fn send_routed<M>(
+        &self,
+        router: &MessageDestinationRouter,
+        message: &M,
+    ) -> CatgaResult<()>
+    where
+        M: Message,
+        C: PayloadEncoder<M>,
+    {
+        let destination = router.resolve(message.message_type()).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::NotFound,
+                "no durable destination is configured for this message type",
+            )
+        })?;
+        let envelope = self.encode_envelope(message, QualityOfService::AtLeastOnce)?;
+        self.transport.send_to(destination, envelope).await
+    }
+
     /// Sends one ordinary typed message to a validated durable destination.
     pub async fn send_to<M>(&self, destination: impl Into<Box<str>>, message: &M) -> CatgaResult<()>
     where

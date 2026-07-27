@@ -122,7 +122,7 @@ pub use reliability::{
 pub use request_client::{EnvelopeRequestClient, RemoteRequest, RequestClient, RequestTransport};
 pub use resilience::{ResilienceExecutor, ResilienceOptions};
 pub use retry_jitter::RetryJitter;
-pub use routing::MessageRouter;
+pub use routing::{MessageDestinationRouter, MessageRouter};
 pub use security::{
     AuthorizationRequirements, AuthorizedRequest, MAX_SECURITY_CLAIM_KEY_BYTES,
     MAX_SECURITY_CLAIM_VALUE_BYTES, MAX_SECURITY_CLAIMS, SecurityClaim, SecurityClaims,
