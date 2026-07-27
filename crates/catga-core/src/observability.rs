@@ -126,18 +126,26 @@ pub(crate) fn record_event(
 
 pub(crate) fn record_pipeline<T>(
     span: &tracing::Span,
-    request_type: &'static str,
+    kind: &'static str,
+    behavior_count: usize,
     elapsed: Duration,
     result: &CatgaResult<T>,
 ) {
-    record_result(
-        "catga.pipeline.executed",
-        "catga.pipeline.duration",
-        span,
-        request_type,
-        elapsed,
-        result,
-    );
+    let duration_ms = elapsed.as_secs_f64() * 1_000.0;
+    metrics::histogram!("catga.pipeline.behavior_count", "kind" => kind)
+        .record(behavior_count as f64);
+    metrics::histogram!("catga.pipeline.duration", "kind" => kind).record(duration_ms);
+    match result {
+        Ok(_) => {
+            metrics::counter!("catga.pipeline.executed", "kind" => kind, "outcome" => "success")
+                .increment(1);
+        }
+        Err(_) => {
+            metrics::counter!("catga.pipeline.executed", "kind" => kind, "outcome" => "failure")
+                .increment(1);
+        }
+    }
+    span.record("duration_ms", duration_ms);
 }
 
 /// Adds a message's opted-in trace tags as structured events below `span`.

@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use async_trait::async_trait;
 use tracing::Instrument;
 
@@ -17,9 +15,6 @@ where
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         let request_type = std::any::type_name::<M>();
         let span = observability::pipeline_span(request_type);
-        let started = Instant::now();
-        let result = next.run(message).instrument(span.clone()).await;
-        observability::record_pipeline(&span, request_type, started.elapsed(), &result);
-        result
+        next.run(message).instrument(span).await
     }
 }

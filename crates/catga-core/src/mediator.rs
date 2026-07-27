@@ -219,6 +219,13 @@ impl Mediator {
         )
         .await;
         observability::record_command(&span, command_type, started.elapsed(), &result);
+        observability::record_pipeline(
+            &span,
+            "command",
+            pipeline.len(),
+            started.elapsed(),
+            &result,
+        );
         result
     }
 
@@ -270,6 +277,13 @@ impl Mediator {
         )
         .await;
         observability::record_request(&span, request_type, started.elapsed(), &result);
+        observability::record_pipeline(
+            &span,
+            "request",
+            pipeline.len(),
+            started.elapsed(),
+            &result,
+        );
         result
     }
 
