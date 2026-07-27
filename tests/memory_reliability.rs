@@ -84,7 +84,7 @@ async fn expired_inbox_claim_can_be_reclaimed_without_a_background_worker() {
     let inbox = MemoryInbox::default();
     assert!(
         inbox
-            .try_claim_for(91, Duration::from_millis(1))
+            .try_claim_for(91, Duration::from_millis(100))
             .await
             .unwrap()
     );
@@ -95,7 +95,7 @@ async fn expired_inbox_claim_can_be_reclaimed_without_a_background_worker() {
             .unwrap()
     );
 
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(
         inbox
             .try_claim_for(91, Duration::from_secs(1))
