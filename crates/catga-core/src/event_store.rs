@@ -211,6 +211,9 @@ impl StreamIdsPage {
 #[async_trait]
 pub trait EventStore: Send + Sync {
     /// Appends events and returns the resulting stream version.
+    ///
+    /// An empty batch is a no-op: it does not create a stream or check `expected_version`, and
+    /// returns the current version (or `-1` when the stream does not exist).
     async fn append(
         &self,
         stream_id: &str,

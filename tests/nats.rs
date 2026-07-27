@@ -1232,6 +1232,10 @@ async fn nats_event_store_persists_versioned_history_with_subject_cas() {
         .unwrap(),
     );
     assert_eq!(
+        store.append("empty", Vec::new(), Some(999)).await.unwrap(),
+        -1
+    );
+    assert_eq!(
         store
             .append(
                 "orders-7",

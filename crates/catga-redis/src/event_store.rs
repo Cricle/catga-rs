@@ -161,10 +161,12 @@ impl EventStore for RedisEventStore {
                 ));
             }
             if events.is_empty() {
-                return Err(CatgaError::new(
-                    ErrorCode::Validation,
-                    "event batch must not be empty",
-                ));
+                let mut connection = self.connection.clone();
+                let version: Option<i64> = connection
+                    .get(self.version_key(stream_id))
+                    .await
+                    .map_err(map_error)?;
+                return Ok(version.unwrap_or(-1));
             }
             let payloads: CatgaResult<Vec<_>> = events
                 .iter()

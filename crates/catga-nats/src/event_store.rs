@@ -245,14 +245,11 @@ impl EventStore for NatsEventStore {
         expected_version: Option<i64>,
     ) -> CatgaResult<i64> {
         telemetry::record_persistence("nats", "event_store", "append", async {
-            if events.is_empty() {
-                return Err(CatgaError::new(
-                    ErrorCode::Validation,
-                    "event batch must not be empty",
-                ));
-            }
             let subject = self.subject(stream_id)?;
             let current = self.current(stream_id).await?;
+            if events.is_empty() {
+                return Ok(current.map_or(-1, |value| value.0));
+            }
             if expected_version
                 .is_some_and(|expected| current.map_or(-1, |value| value.0) != expected)
             {

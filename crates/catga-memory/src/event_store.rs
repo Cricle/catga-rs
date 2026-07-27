@@ -64,10 +64,10 @@ impl EventStore for MemoryEventStore {
     ) -> CatgaResult<i64> {
         Self::record("append", || {
             if events.is_empty() {
-                return Err(CatgaError::new(
-                    ErrorCode::Validation,
-                    "event batch must not be empty",
-                ));
+                return Ok(self
+                    .streams
+                    .get(stream_id)
+                    .map_or(-1, |stream| stream.events.load().len() as i64 - 1));
             }
             let stream = self.streams.entry(stream_id.into()).or_default().clone();
             stream.append(events, expected_version)

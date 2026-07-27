@@ -124,6 +124,34 @@ async fn event_store_appends_with_optimistic_concurrency_and_reads_immutable_sna
     );
 }
 
+#[tokio::test]
+async fn empty_event_append_is_a_no_op_and_ignores_the_expected_version() {
+    let store = MemoryEventStore::default();
+
+    assert_eq!(
+        store.append("empty", Vec::new(), Some(999)).await.unwrap(),
+        -1
+    );
+    assert!(
+        store
+            .stream_ids_page(None, 1)
+            .await
+            .unwrap()
+            .ids()
+            .is_empty()
+    );
+
+    assert_eq!(
+        store.append("order-2", vec![event(4)], None).await.unwrap(),
+        0
+    );
+    assert_eq!(
+        store.append("order-2", Vec::new(), Some(-1)).await.unwrap(),
+        0
+    );
+    assert_eq!(store.version("order-2").await.unwrap(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_appends_publish_every_immutable_event_snapshot() {
     let store = Arc::new(MemoryEventStore::default());
