@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    Ident, Path, Result, Token, bracketed,
+    Expr, Ident, Path, Result, Token, bracketed,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
@@ -11,11 +11,11 @@ use syn::{
 enum Registration {
     Request {
         message: Path,
-        handler: Path,
+        handler: Expr,
     },
     Event {
         message: Path,
-        handlers: Punctuated<Path, Token![,]>,
+        handlers: Punctuated<Expr, Token![,]>,
     },
 }
 
@@ -34,7 +34,7 @@ impl Parse for Registration {
                 bracketed!(content in input);
                 Ok(Self::Event {
                     message,
-                    handlers: content.parse_terminated(Path::parse, Token![,])?,
+                    handlers: content.parse_terminated(Expr::parse, Token![,])?,
                 })
             }
             _ => Err(syn::Error::new(

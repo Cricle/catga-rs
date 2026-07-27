@@ -96,6 +96,17 @@ impl Handler<Ping> for PingHandler {
     }
 }
 
+struct ConfiguredPingHandler {
+    response: &'static str,
+}
+
+#[async_trait]
+impl Handler<Ping> for ConfiguredPingHandler {
+    async fn handle(&self, _: Ping) -> CatgaResult<&'static str> {
+        Ok(self.response)
+    }
+}
+
 #[derive(Clone, catga_core::Message)]
 struct Notified;
 
@@ -122,6 +133,19 @@ async fn derive_and_registration_macros_keep_setup_explicit_and_short() {
     assert_eq!(Ping.message_type(), "Ping");
     assert_eq!(mediator.send(Ping).await.unwrap(), "pong");
     mediator.publish(Notified).await.unwrap();
+}
+
+#[tokio::test]
+async fn registration_macro_accepts_a_configured_handler_expression() {
+    let registry = catga_core::catga_handlers! {
+        request Ping => ConfiguredPingHandler { response: "configured" };
+    }
+    .expect("configured handler registration must build a registry");
+
+    assert_eq!(
+        Mediator::new(registry).send(Ping).await.unwrap(),
+        "configured"
+    );
 }
 
 #[test]

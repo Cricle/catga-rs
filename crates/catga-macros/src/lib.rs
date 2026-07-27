@@ -678,12 +678,15 @@ fn batch_key_impl(input: &DeriveInput, generics: &Generics) -> Result<Option<Tok
 }
 
 /// Builds an explicit `catga_core::CatgaResult<Registry>` from typed request and
-/// event handlers.
+/// event handler expressions.
 ///
 /// Each request message may be registered exactly once. Repeating a request
 /// message is reported during macro expansion when it is syntactically visible;
 /// equivalent type aliases return a startup `catga_core::ErrorCode::Conflict`
 /// instead of panicking. Event messages may intentionally register multiple handlers.
+/// Handler entries are expressions, so applications can register a unit-like handler path or
+/// construct a handler with explicit Rust dependencies, for example
+/// `request CreateOrder => CreateOrderHandler::new(repository)`.
 #[proc_macro]
 pub fn catga_handlers(input: TokenStream) -> TokenStream {
     handlers::expand(input.into())
