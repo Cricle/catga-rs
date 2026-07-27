@@ -10,13 +10,14 @@ use catga_core::{
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 
-use crate::claim::ClaimRecord;
+use crate::{DEFAULT_MEMORY_RECORD_CAPACITY, capacity::RecordCapacity, claim::ClaimRecord};
 
 /// A process-local idempotency store using atomic per-key claim transitions.
 pub struct MemoryIdempotency {
     records: DashMap<Box<str>, ClaimRecord>,
     completed: DashMap<Box<str>, u64>,
     retention: Duration,
+    capacity: RecordCapacity,
 }
 
 impl Default for MemoryIdempotency {
@@ -25,18 +26,30 @@ impl Default for MemoryIdempotency {
             records: DashMap::new(),
             completed: DashMap::new(),
             retention: DEFAULT_IDEMPOTENCY_RETENTION,
+            capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
         }
     }
 }
 
 impl MemoryIdempotency {
+    /// Creates a store with default completed-record retention and a fixed record capacity.
+    pub fn new(capacity: usize) -> CatgaResult<Self> {
+        Self::with_retention_and_capacity(DEFAULT_IDEMPOTENCY_RETENTION, capacity)
+    }
+
     /// Creates a store retaining completed idempotency records for `retention`.
     pub fn with_retention(retention: Duration) -> CatgaResult<Self> {
+        Self::with_retention_and_capacity(retention, DEFAULT_MEMORY_RECORD_CAPACITY)
+    }
+
+    /// Creates a store retaining completed records for `retention` within `capacity` records.
+    pub fn with_retention_and_capacity(retention: Duration, capacity: usize) -> CatgaResult<Self> {
         validate_completed_retention(retention)?;
         Ok(Self {
             records: DashMap::new(),
             completed: DashMap::new(),
             retention,
+            capacity: RecordCapacity::new(capacity)?,
         })
     }
 }
@@ -48,8 +61,15 @@ impl IdempotencyStore for MemoryIdempotency {
         let result = match self.records.entry(key.into()) {
             Entry::Occupied(record) => Ok(record.get().try_claim()),
             Entry::Vacant(entry) => {
-                entry.insert(ClaimRecord::claimed());
-                Ok(true)
+                if !self.capacity.reserve() {
+                    Err(CatgaError::new(
+                        ErrorCode::Unavailable,
+                        "memory idempotency record capacity is exhausted",
+                    ))
+                } else {
+                    entry.insert(ClaimRecord::claimed());
+                    Ok(true)
+                }
             }
         };
         operation.complete_claim(&result);
@@ -137,8 +157,9 @@ impl IdempotencyStore for MemoryIdempotency {
                     .records
                     .get(&key)
                     .is_some_and(|record| record.state() == ProcessingState::Completed)
+                    && self.records.remove(&key).is_some()
                 {
-                    self.records.remove(&key);
+                    self.capacity.release();
                     removed += 1;
                 }
                 self.completed.remove(&key);

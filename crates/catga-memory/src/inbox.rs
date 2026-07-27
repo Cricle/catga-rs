@@ -10,13 +10,34 @@ use catga_core::{
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 
-use crate::claim::ClaimRecord;
+use crate::{DEFAULT_MEMORY_RECORD_CAPACITY, capacity::RecordCapacity, claim::ClaimRecord};
 
 /// A process-local inbox using atomic per-message claim transitions.
-#[derive(Default)]
 pub struct MemoryInbox {
     records: DashMap<u64, ClaimRecord>,
     completed: DashMap<u64, u64>,
+    capacity: RecordCapacity,
+}
+
+impl Default for MemoryInbox {
+    fn default() -> Self {
+        Self {
+            records: DashMap::new(),
+            completed: DashMap::new(),
+            capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
+        }
+    }
+}
+
+impl MemoryInbox {
+    /// Creates an inbox with a fixed maximum number of retained records.
+    pub fn new(capacity: usize) -> CatgaResult<Self> {
+        Ok(Self {
+            records: DashMap::with_capacity(capacity),
+            completed: DashMap::with_capacity(capacity),
+            capacity: RecordCapacity::new(capacity)?,
+        })
+    }
 }
 
 #[async_trait]
@@ -40,12 +61,19 @@ impl InboxStore for MemoryInbox {
                 .try_claim_generation_until(expires_at, now)
                 .and_then(|generation| InboxClaim::new(message_id, generation))),
             Entry::Vacant(entry) => {
-                let record = ClaimRecord::claimed();
-                let claimed = record
-                    .try_claim_generation_until(expires_at, now)
-                    .and_then(|generation| InboxClaim::new(message_id, generation));
-                entry.insert(record);
-                Ok(claimed)
+                if !self.capacity.reserve() {
+                    Err(CatgaError::new(
+                        ErrorCode::Unavailable,
+                        "memory inbox record capacity is exhausted",
+                    ))
+                } else {
+                    let record = ClaimRecord::claimed();
+                    let claimed = record
+                        .try_claim_generation_until(expires_at, now)
+                        .and_then(|generation| InboxClaim::new(message_id, generation));
+                    entry.insert(record);
+                    Ok(claimed)
+                }
             }
         };
         operation.complete_optional_claim(&result);
@@ -138,8 +166,9 @@ impl InboxStore for MemoryInbox {
                     .records
                     .get(&id)
                     .is_some_and(|record| record.state() == ProcessingState::Completed)
+                    && self.records.remove(&id).is_some()
                 {
-                    self.records.remove(&id);
+                    self.capacity.release();
                     removed += 1;
                 }
                 self.completed.remove(&id);

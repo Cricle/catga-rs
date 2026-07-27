@@ -1,0 +1,57 @@
+//! In-memory durable-store capacity tests.
+
+use catga_core::{
+    Envelope, ErrorCode, IdempotencyStore, InboxStore, MessageMetadata, OutboxMessage, OutboxStore,
+};
+use catga_memory::{MemoryIdempotency, MemoryInbox, MemoryOutbox};
+
+fn message(id: u64) -> OutboxMessage {
+    OutboxMessage::new(Envelope::new(
+        id,
+        "orders.created",
+        Vec::new(),
+        MessageMetadata::new(id, None),
+    ))
+}
+
+#[tokio::test]
+async fn memory_inbox_rejects_new_claims_when_its_record_capacity_is_exhausted() {
+    let inbox = MemoryInbox::new(1).expect("positive capacity is valid");
+    assert!(
+        inbox
+            .try_claim(1)
+            .await
+            .expect("first inbox claim succeeds")
+            .is_some()
+    );
+
+    assert!(matches!(
+        inbox.try_claim(2).await,
+        Err(error) if error.code() == ErrorCode::Unavailable
+    ));
+}
+
+#[tokio::test]
+async fn memory_idempotency_rejects_new_keys_when_its_record_capacity_is_exhausted() {
+    let store = MemoryIdempotency::new(1).expect("positive capacity is valid");
+    assert!(store.try_claim("first").await.expect("first key claims"));
+
+    assert!(matches!(
+        store.try_claim("second").await,
+        Err(error) if error.code() == ErrorCode::Unavailable
+    ));
+}
+
+#[tokio::test]
+async fn memory_outbox_rejects_new_messages_when_its_record_capacity_is_exhausted() {
+    let store = MemoryOutbox::new(1).expect("positive capacity is valid");
+    store
+        .enqueue(message(1))
+        .await
+        .expect("first message enqueues");
+
+    assert!(matches!(
+        store.enqueue(message(2)).await,
+        Err(error) if error.code() == ErrorCode::Unavailable
+    ));
+}

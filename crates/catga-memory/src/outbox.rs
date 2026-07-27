@@ -12,15 +12,38 @@ use catga_core::{
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 
+use crate::{DEFAULT_MEMORY_RECORD_CAPACITY, capacity::RecordCapacity};
+
 /// A shard-locked, process-local outbox for development and deterministic tests.
-#[derive(Default)]
 pub struct MemoryOutbox {
     messages: DashMap<u64, OutboxMessage>,
     published: DashMap<u64, u64>,
     claim_sequence: AtomicU64,
+    capacity: RecordCapacity,
+}
+
+impl Default for MemoryOutbox {
+    fn default() -> Self {
+        Self {
+            messages: DashMap::new(),
+            published: DashMap::new(),
+            claim_sequence: AtomicU64::new(0),
+            capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
+        }
+    }
 }
 
 impl MemoryOutbox {
+    /// Creates an outbox with a fixed maximum number of retained records.
+    pub fn new(capacity: usize) -> CatgaResult<Self> {
+        Ok(Self {
+            messages: DashMap::with_capacity(capacity),
+            published: DashMap::with_capacity(capacity),
+            claim_sequence: AtomicU64::new(0),
+            capacity: RecordCapacity::new(capacity)?,
+        })
+    }
+
     fn next_claim_token(&self) -> Box<str> {
         format!(
             "memory-{}",
@@ -37,8 +60,15 @@ impl OutboxStore for MemoryOutbox {
         let id = message.id();
         let result = validate_outbox_message_id(id).and_then(|()| match self.messages.entry(id) {
             Entry::Vacant(entry) => {
-                entry.insert(message);
-                Ok(())
+                if !self.capacity.reserve() {
+                    Err(CatgaError::new(
+                        ErrorCode::Unavailable,
+                        "memory outbox record capacity is exhausted",
+                    ))
+                } else {
+                    entry.insert(message);
+                    Ok(())
+                }
             }
             Entry::Occupied(_) => Err(CatgaError::new(
                 ErrorCode::Conflict,
@@ -166,6 +196,7 @@ impl OutboxStore for MemoryOutbox {
                 return Ok(false);
             }
             entry.remove();
+            self.capacity.release();
             Ok(true)
         })();
         operation.complete(&result);
@@ -218,8 +249,9 @@ impl OutboxStore for MemoryOutbox {
                     .messages
                     .get(&id)
                     .is_some_and(|message| message.state() == OutboxState::Published)
+                    && self.messages.remove(&id).is_some()
                 {
-                    self.messages.remove(&id);
+                    self.capacity.release();
                     removed += 1;
                 }
                 self.published.remove(&id);

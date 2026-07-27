@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! In-memory implementations of Catga contracts.
 
+mod capacity;
 mod claim;
 mod dead_letter;
 mod dsl_progress;
@@ -21,6 +22,7 @@ mod suspended_flow;
 mod suspended_flow_timeout;
 mod transport;
 
+pub use capacity::DEFAULT_MEMORY_RECORD_CAPACITY;
 pub use dead_letter::MemoryDeadLetters;
 pub use dsl_progress::MemoryDslStepProgress;
 pub use enhanced_snapshot::MemoryEnhancedSnapshots;

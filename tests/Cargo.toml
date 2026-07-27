@@ -46,6 +46,10 @@ name = "message"
 path = "message.rs"
 
 [[test]]
+name = "memory_capacity"
+path = "memory_capacity.rs"
+
+[[test]]
 name = "typed_transport"
 path = "typed_transport.rs"
 

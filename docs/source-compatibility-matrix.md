@@ -229,6 +229,12 @@ no machine-dependent timing threshold.
   bounded FIFO queue for acknowledgement and drain tests. Both broadcast
   adapters reject durable QoS values rather than implying recovery that an
   ephemeral channel cannot provide.
+* In-memory inbox, idempotency, and outbox records use lock-free fixed-capacity
+  admission (65,536 records by default, or an explicit constructor capacity).
+  Capacity is reserved before a new record is inserted and released only when
+  a completed or cancelled record is removed, so concurrent callers cannot
+  overshoot the configured memory budget. Exhaustion returns `Unavailable`
+  rather than evicting a pending, claimed, or retained durable record.
 * The source diagnostics counters and activities map to `catga_core::telemetry`.
   It records bounded `backend`, `component`, `operation`, and `outcome` labels
   through the configured Rust `metrics` recorder and creates child `tracing`
