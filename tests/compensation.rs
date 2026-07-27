@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, CompensationBehavior, CompensationPublisher, Event,
-    EventCompensationPublisher, EventHandler, Handler, Mediator, Pipeline, Registry, Request,
+    CatgaError, CatgaResult, Command, CommandHandler, CommandPipeline, CompensationBehavior,
+    CompensationPublisher, Event, EventCompensationPublisher, EventHandler, Handler, Mediator,
+    Pipeline, Registry, Request,
 };
 use tokio::sync::mpsc;
 
@@ -37,6 +38,40 @@ impl Handler<ChargeCard> for RejectCharge {
             catga_core::ErrorCode::Transient,
             "payment provider is unavailable",
         ))
+    }
+}
+
+#[derive(Clone)]
+struct CancelCharge {
+    order_id: u64,
+}
+
+impl catga_core::Message for CancelCharge {}
+impl Command for CancelCharge {}
+
+struct RejectCancelCharge;
+
+#[async_trait]
+impl CommandHandler<CancelCharge> for RejectCancelCharge {
+    async fn handle(&self, _: CancelCharge) -> CatgaResult<()> {
+        Err(CatgaError::new(
+            catga_core::ErrorCode::Validation,
+            "cancellation cannot be completed",
+        ))
+    }
+}
+
+struct CommandCompensationPublisher {
+    sender: mpsc::Sender<(CancelCharge, CatgaError)>,
+}
+
+#[async_trait]
+impl CompensationPublisher<CancelCharge> for CommandCompensationPublisher {
+    async fn publish(&self, command: &CancelCharge, error: &CatgaError) -> CatgaResult<()> {
+        self.sender
+            .send((command.clone(), error.clone()))
+            .await
+            .map_err(|_| CatgaError::new(catga_core::ErrorCode::Internal, "closed"))
     }
 }
 
@@ -120,6 +155,29 @@ async fn compensation_failure_never_overrides_the_handler_failure() {
         .expect_err("handler error must be returned");
 
     assert_eq!(error.message(), "payment provider is unavailable");
+}
+
+#[tokio::test]
+async fn compensation_publishes_the_original_command_and_error_after_a_handler_failure() {
+    let (sender, mut receiver) = mpsc::channel(1);
+    let mut registry = Registry::new();
+    registry
+        .register_command::<CancelCharge, _>(RejectCancelCharge)
+        .expect("command handler registers");
+    let mediator = Mediator::new(registry);
+    let pipeline = CommandPipeline::new().with(CompensationBehavior::new(Arc::new(
+        CommandCompensationPublisher { sender },
+    )));
+
+    let error = mediator
+        .send_command_with(CancelCharge { order_id: 10 }, &pipeline)
+        .await
+        .expect_err("handler error must be returned");
+    let (command, compensation_error) = receiver.recv().await.expect("compensation is published");
+
+    assert_eq!(error.message(), "cancellation cannot be completed");
+    assert_eq!(command.order_id, 10);
+    assert_eq!(compensation_error, error);
 }
 
 #[tokio::test]

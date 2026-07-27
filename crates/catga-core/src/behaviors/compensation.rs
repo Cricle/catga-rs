@@ -2,13 +2,16 @@ use std::{marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::{Behavior, CatgaError, CatgaResult, Event, Mediator, Next, Request};
+use crate::{
+    Behavior, CatgaError, CatgaResult, Command, CommandBehavior, CommandNext, Event, Mediator,
+    Message, Next, Request,
+};
 
 /// Publishes compensating work after a typed request fails.
 #[async_trait]
 pub trait CompensationPublisher<M>: Send + Sync
 where
-    M: Request,
+    M: Message,
 {
     /// Publishes compensating work for `request` and its original handler error.
     async fn publish(&self, request: &M, error: &CatgaError) -> CatgaResult<()>;
@@ -17,7 +20,7 @@ where
 /// Adapts a synchronous compensation-event factory to the existing mediator event fan-out.
 pub struct EventCompensationPublisher<M, E, F>
 where
-    M: Request,
+    M: Message,
     E: Event,
 {
     mediator: Arc<Mediator>,
@@ -27,7 +30,7 @@ where
 
 impl<M, E, F> EventCompensationPublisher<M, E, F>
 where
-    M: Request,
+    M: Message,
     E: Event,
     F: Fn(&M, &CatgaError) -> Option<E>,
 {
@@ -77,6 +80,24 @@ where
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         let original = message.clone();
         match next.run(message).await {
+            Err(error) => {
+                let _ = self.publisher.publish(&original, &error).await;
+                Err(error)
+            }
+            result => result,
+        }
+    }
+}
+
+#[async_trait]
+impl<C, P> CommandBehavior<C> for CompensationBehavior<P>
+where
+    C: Command + Clone,
+    P: CompensationPublisher<C> + ?Sized,
+{
+    async fn handle(&self, command: C, next: CommandNext<C>) -> CatgaResult<()> {
+        let original = command.clone();
+        match next.run(command).await {
             Err(error) => {
                 let _ = self.publisher.publish(&original, &error).await;
                 Err(error)
