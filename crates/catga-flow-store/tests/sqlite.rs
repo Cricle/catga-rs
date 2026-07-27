@@ -182,6 +182,78 @@ async fn sqlite_suspended_store_preserves_wait_results_and_summary_bounds() -> C
 }
 
 #[tokio::test]
+async fn sqlite_suspended_store_looks_up_one_active_wait_by_correlation() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("suspended-correlation.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let waiting = FlowContinuation::waiting(
+        FlowState::new("sql-correlation-1", "payment", [], "node-a").suspended(),
+        "finish",
+        WaitCondition::new(
+            "sql-correlation/one",
+            WaitPolicy::All,
+            1,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        ),
+    );
+    assert!(store.create(waiting).await?);
+
+    let found = required(
+        store.get_by_wait_correlation("sql-correlation/one").await?,
+        "indexed wait correlation",
+    )?;
+    assert_eq!(found.state().id(), "sql-correlation-1");
+    assert!(
+        store
+            .get_by_wait_correlation("sql-correlation/missing")
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_suspended_store_rejects_an_ambiguous_wait_correlation() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("ambiguous-suspended-correlation.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    for flow_id in ["sql-ambiguous-correlation-1", "sql-ambiguous-correlation-2"] {
+        assert!(
+            store
+                .create(FlowContinuation::waiting(
+                    FlowState::new(flow_id, "payment", [], "node-a").suspended(),
+                    "finish",
+                    WaitCondition::new(
+                        "sql-correlation/shared",
+                        WaitPolicy::All,
+                        1,
+                        SystemTime::now(),
+                        Duration::from_secs(30),
+                    ),
+                ))
+                .await?
+        );
+    }
+
+    assert_eq!(
+        store
+            .get_by_wait_correlation("sql-correlation/shared")
+            .await
+            .expect_err("ambiguous correlation must not select a continuation")
+            .code(),
+        ErrorCode::Conflict
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_suspended_store_summary_preserves_submillisecond_creation_time() -> CatgaResult<()>
 {
     let directory = temporary_directory()?;

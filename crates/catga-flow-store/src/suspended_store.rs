@@ -200,6 +200,33 @@ impl SuspendedFlowStore for SqlSuspendedFlowStore {
         }
     }
 
+    async fn get_by_wait_correlation(
+        &self,
+        correlation_id: &str,
+    ) -> CatgaResult<Option<FlowContinuation>> {
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite(pool) => {
+                crate::sqlite_suspended::get_by_wait_correlation(pool, correlation_id).await
+            }
+            #[cfg(feature = "mysql")]
+            Backend::MySql(_) => Err(CatgaError::new(
+                catga_core::ErrorCode::Unsupported,
+                "wait-correlation lookup is not enabled for this SQL backend",
+            )),
+            #[cfg(feature = "postgres")]
+            Backend::Postgres(_) => Err(CatgaError::new(
+                catga_core::ErrorCode::Unsupported,
+                "wait-correlation lookup is not enabled for this SQL backend",
+            )),
+            #[cfg(feature = "mssql")]
+            Backend::Mssql(_) => Err(CatgaError::new(
+                catga_core::ErrorCode::Unsupported,
+                "wait-correlation lookup is not enabled for this SQL backend",
+            )),
+        }
+    }
+
     async fn query(&self, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
         match &self.backend {
             #[cfg(feature = "sqlite")]

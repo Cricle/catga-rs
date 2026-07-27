@@ -33,7 +33,7 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> CatgaResult<()> {
              flow_type TEXT NOT NULL, status INTEGER NOT NULL, version INTEGER NOT NULL, \
              created_at_ms INTEGER NOT NULL, created_at_subsec_ns INTEGER NOT NULL DEFAULT 0, \
              updated_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_subsec_ns INTEGER NOT NULL DEFAULT 0, \
-             deadline_ms INTEGER NULL, revision INTEGER NOT NULL, \
+             deadline_ms INTEGER NULL, wait_correlation TEXT NULL, revision INTEGER NOT NULL, \
              due_token BLOB NULL, lease_until_ms INTEGER NULL, payload BLOB NOT NULL)",
     )
     .execute(&mut *transaction)
@@ -84,6 +84,19 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> CatgaResult<()> {
         .await
         .map_err(|error| database_error("backfill SQLite continuation update time", error))?;
     }
+    let has_wait_correlation_column: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('catga_flow_continuations') WHERE name = ?",
+    )
+    .bind("wait_correlation")
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| database_error("inspect SQLite wait correlation column", error))?;
+    if has_wait_correlation_column == 0 {
+        sqlx::query("ALTER TABLE catga_flow_continuations ADD COLUMN wait_correlation TEXT NULL")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| database_error("add SQLite wait correlation column", error))?;
+    }
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS catga_flow_continuations_query_idx \
          ON catga_flow_continuations(status, flow_type, created_at_ms, flow_key)",
@@ -105,6 +118,13 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> CatgaResult<()> {
     .execute(&mut *transaction)
     .await
     .map_err(|error| database_error("create SQLite continuation due index", error))?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS catga_flow_continuations_wait_correlation_idx \
+         ON catga_flow_continuations(wait_correlation, flow_key)",
+    )
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| database_error("create SQLite wait correlation index", error))?;
     transaction
         .commit()
         .await
@@ -120,8 +140,8 @@ pub(crate) async fn create(pool: &SqlitePool, continuation: FlowContinuation) ->
         unix_millis_and_subsec_nanos(continuation.updated_at())?;
     let result = sqlx::query(
         "INSERT INTO catga_flow_continuations \
-         (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, revision, payload) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING",
+         (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, revision, payload) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING",
     )
     .bind(key.as_slice())
     .bind(continuation.state().id())
@@ -133,6 +153,7 @@ pub(crate) async fn create(pool: &SqlitePool, continuation: FlowContinuation) ->
     .bind(updated_at_ms)
     .bind(updated_at_subsec_ns)
     .bind(deadline_millis(&continuation)?)
+    .bind(wait_correlation(&continuation))
     .bind(encode_continuation(&continuation)?)
     .execute(pool)
     .await
@@ -169,6 +190,47 @@ pub(crate) async fn get(pool: &SqlitePool, flow_id: &str) -> CatgaResult<Option<
     load(pool, flow_id)
         .await
         .map(|value| value.map(|value| value.continuation))
+}
+
+/// Loads exactly one continuation by its indexed active wait correlation.
+pub(crate) async fn get_by_wait_correlation(
+    pool: &SqlitePool,
+    correlation_id: &str,
+) -> CatgaResult<Option<FlowContinuation>> {
+    let rows = sqlx::query(
+        "SELECT payload FROM catga_flow_continuations \
+         WHERE wait_correlation = ? ORDER BY flow_key ASC LIMIT 2",
+    )
+    .bind(correlation_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| database_error("read SQLite wait correlation", error))?;
+    if rows.len() > 1 {
+        return Err(CatgaError::new(
+            ErrorCode::Conflict,
+            "flow wait correlation identifies multiple active flows",
+        ));
+    }
+    rows.into_iter()
+        .next()
+        .map(|row| {
+            let frame: Vec<u8> = row
+                .try_get("payload")
+                .map_err(|error| database_error("decode SQLite wait correlation frame", error))?;
+            let continuation = decode_continuation(&frame)?;
+            if continuation
+                .wait()
+                .is_some_and(|wait| wait.correlation_id() == correlation_id)
+            {
+                Ok(continuation)
+            } else {
+                Err(CatgaError::new(
+                    ErrorCode::Internal,
+                    "SQLite wait correlation index does not match its continuation frame",
+                ))
+            }
+        })
+        .transpose()
 }
 
 /// Returns summaries after inspecting at most the caller's scan bound.
@@ -441,7 +503,7 @@ async fn replace(
     let result = sqlx::query(
         "UPDATE catga_flow_continuations SET \
              flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, \
-             payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL \
+             wait_correlation = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL \
          WHERE flow_key = ? AND flow_id = ? AND revision = ?",
     )
     .bind(next.state().flow_type())
@@ -452,6 +514,7 @@ async fn replace(
     .bind(updated_at_ms)
     .bind(updated_at_subsec_ns)
     .bind(deadline_millis(next)?)
+    .bind(wait_correlation(next))
     .bind(encode_continuation(next)?)
     .bind(key.as_slice())
     .bind(next.state().id())
@@ -460,6 +523,10 @@ async fn replace(
     .await
     .map_err(|error| database_error("replace SQLite continuation", error))?;
     Ok(result.rows_affected() == 1)
+}
+
+fn wait_correlation(continuation: &FlowContinuation) -> Option<&str> {
+    continuation.wait().map(|wait| wait.correlation_id())
 }
 
 fn deadline_millis(continuation: &FlowContinuation) -> CatgaResult<Option<i64>> {
