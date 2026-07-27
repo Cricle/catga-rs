@@ -41,6 +41,15 @@ impl Handler<ChargeCard> for RejectCharge {
     }
 }
 
+struct PanickingCharge;
+
+#[async_trait]
+impl Handler<ChargeCard> for PanickingCharge {
+    async fn handle(&self, _: ChargeCard) -> CatgaResult<()> {
+        panic!("charge handler panic");
+    }
+}
+
 #[derive(Clone)]
 struct CancelCharge {
     order_id: u64,
@@ -139,6 +148,30 @@ async fn compensation_publishes_the_original_request_and_error_after_a_handler_f
 
     assert_eq!(error.message(), "payment provider is unavailable");
     assert_eq!(request.order_id, 7);
+    assert_eq!(compensation_error, error);
+}
+
+#[cfg(panic = "unwind")]
+#[tokio::test]
+async fn compensation_publishes_after_a_handler_panic_and_returns_internal() {
+    let (sender, mut receiver) = mpsc::channel(1);
+    let mut registry = Registry::new();
+    registry
+        .register_request::<ChargeCard, _>(PanickingCharge)
+        .expect("request handler registers");
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(CompensationBehavior::new(Arc::new(
+        ChannelCompensationPublisher { sender },
+    )));
+
+    let error = mediator
+        .send_with(ChargeCard { order_id: 11 }, &pipeline)
+        .await
+        .expect_err("panic becomes a structured error");
+    let (request, compensation_error) = receiver.recv().await.expect("compensation is published");
+
+    assert_eq!(error.code(), catga_core::ErrorCode::Internal);
+    assert_eq!(request.order_id, 11);
     assert_eq!(compensation_error, error);
 }
 
