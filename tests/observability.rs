@@ -1334,21 +1334,24 @@ async fn memory_store_operations_emit_bounded_backend_component_and_outcome_labe
         .expect("stream enumeration succeeds");
 
     let inbox = MemoryInbox::default();
-    assert!(inbox.try_claim(81).await.expect("inbox claim succeeds"));
+    let claim = inbox
+        .try_claim(81)
+        .await
+        .expect("inbox claim succeeds")
+        .expect("inbox claim is acquired");
     inbox
-        .complete(81, None)
+        .complete(claim, None)
         .await
         .expect("inbox completion succeeds");
     inbox.state(81).await.expect("inbox state succeeds");
     inbox.result(81).await.expect("inbox result succeeds");
-    assert!(
-        inbox
-            .try_claim(82)
-            .await
-            .expect("second inbox claim succeeds")
-    );
+    let claim = inbox
+        .try_claim(82)
+        .await
+        .expect("second inbox claim succeeds")
+        .expect("second inbox claim is acquired");
     inbox
-        .fail(82)
+        .fail(claim)
         .await
         .expect("inbox failure transition succeeds");
 

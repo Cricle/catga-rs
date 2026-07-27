@@ -34,6 +34,7 @@ mod resilience;
 mod resilient_transport;
 mod retry_jitter;
 mod routing;
+mod scheduler;
 mod security;
 mod snapshot;
 mod snapshot_codec;
@@ -115,7 +116,7 @@ pub use read_model::{
 pub use registry::Registry;
 pub use reliability::{
     DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_INBOX_CLAIM_LEASE, DeadLetter, DeadLetterDiagnostics,
-    DeadLetterStore, IdempotencyStore, InboxStore, MAX_DEAD_LETTER_DESCRIPTION_BYTES,
+    DeadLetterStore, IdempotencyStore, InboxClaim, InboxStore, MAX_DEAD_LETTER_DESCRIPTION_BYTES,
     MAX_DEAD_LETTER_STAGE_BYTES, MAX_RETENTION_CLEANUP_LIMIT, ProcessingState,
     inbox_claim_expires_at, validate_completed_retention, validate_inbox_claim_lease,
     validate_retention_cleanup_limit,
@@ -125,6 +126,10 @@ pub use resilience::{ResilienceExecutor, ResilienceOptions};
 pub use resilient_transport::ResilientTransport;
 pub use retry_jitter::RetryJitter;
 pub use routing::{MessageDestinationRouter, MessageRouter};
+pub use scheduler::{
+    MAX_CRON_SCHEDULE_BYTES, MAX_SCHEDULED_TASK_ID_BYTES, ScheduledTask, ScheduledTaskId,
+    TaskSchedule, TaskScheduler,
+};
 pub use security::{
     AuthorizationRequirements, AuthorizedRequest, MAX_SECURITY_CLAIM_KEY_BYTES,
     MAX_SECURITY_CLAIM_VALUE_BYTES, MAX_SECURITY_CLAIMS, SecurityClaim, SecurityClaims,

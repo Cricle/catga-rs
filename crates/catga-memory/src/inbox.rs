@@ -5,8 +5,8 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode, InboxStore, ProcessingState,
-    inbox_claim_expires_at, telemetry,
+    CatgaError, CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode, InboxClaim, InboxStore,
+    ProcessingState, inbox_claim_expires_at, telemetry,
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 
@@ -21,36 +21,46 @@ pub struct MemoryInbox {
 
 #[async_trait]
 impl InboxStore for MemoryInbox {
-    async fn try_claim(&self, message_id: u64) -> CatgaResult<bool> {
+    async fn try_claim(&self, message_id: u64) -> CatgaResult<Option<InboxClaim>> {
         self.try_claim_for(message_id, DEFAULT_INBOX_CLAIM_LEASE)
             .await
     }
 
-    async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
+    async fn try_claim_for(
+        &self,
+        message_id: u64,
+        lease: Duration,
+    ) -> CatgaResult<Option<InboxClaim>> {
         let mut operation = telemetry::persistence_operation("memory", "inbox", "try_claim");
         let expires_at = inbox_claim_expires_at(lease)?;
         let now = now_millis();
         let result = match self.records.entry(message_id) {
-            Entry::Occupied(record) => Ok(record.get().try_claim_until(expires_at, now)),
+            Entry::Occupied(record) => Ok(record
+                .get()
+                .try_claim_generation_until(expires_at, now)
+                .and_then(|generation| InboxClaim::new(message_id, generation))),
             Entry::Vacant(entry) => {
                 let record = ClaimRecord::claimed();
-                let claimed = record.try_claim_until(expires_at, now);
+                let claimed = record
+                    .try_claim_generation_until(expires_at, now)
+                    .and_then(|generation| InboxClaim::new(message_id, generation));
                 entry.insert(record);
                 Ok(claimed)
             }
         };
-        operation.complete_claim(&result);
+        operation.complete_optional_claim(&result);
         result
     }
 
-    async fn complete(&self, message_id: u64, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
+    async fn complete(&self, claim: InboxClaim, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
+        let message_id = claim.message_id();
         let mut operation = telemetry::persistence_operation("memory", "inbox", "complete");
         let outcome = self
             .records
             .get(&message_id)
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "inbox message is not claimed"))
             .and_then(|record| {
-                if record.complete(result) {
+                if record.complete_for(claim.generation(), result) {
                     Ok(())
                 } else {
                     Err(CatgaError::new(
@@ -66,14 +76,15 @@ impl InboxStore for MemoryInbox {
         outcome
     }
 
-    async fn fail(&self, message_id: u64) -> CatgaResult<()> {
+    async fn fail(&self, claim: InboxClaim) -> CatgaResult<()> {
+        let message_id = claim.message_id();
         let mut operation = telemetry::persistence_operation("memory", "inbox", "fail");
         let outcome = self
             .records
             .get(&message_id)
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "inbox message is not claimed"))
             .and_then(|record| {
-                if record.fail() {
+                if record.fail_for(claim.generation()) {
                     Ok(())
                 } else {
                     Err(CatgaError::new(

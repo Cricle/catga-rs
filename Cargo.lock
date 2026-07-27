@@ -740,6 +740,7 @@ dependencies = [
 name = "catga-scheduler-tokio-cron"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "catga-core",
  "catga-flow",
  "catga-memory",

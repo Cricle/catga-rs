@@ -5,7 +5,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_core::ErrorCode;
+use catga_core::{CatgaResult, ErrorCode, ScheduledTask, TaskSchedule, TaskScheduler};
 use catga_flow::{
     FlowDefinition, FlowDueService, FlowRuntime, FlowState, FlowStepOutcome, MemoryFlowScheduler,
     SuspendedFlowStore,
@@ -13,6 +13,48 @@ use catga_flow::{
 use catga_memory::MemorySuspendedFlows;
 use catga_scheduler_tokio_cron::{CronRuntime, flow_due_job};
 use tokio::sync::Notify;
+
+struct NotifyTask(Arc<Notify>);
+
+#[async_trait::async_trait]
+impl ScheduledTask for NotifyTask {
+    async fn execute(&self) -> CatgaResult<()> {
+        self.0.notify_one();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cron_runtime_implements_the_core_task_scheduler_contract() {
+    let mut runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let ran = Arc::new(Notify::new());
+    let task = Arc::new(NotifyTask(Arc::clone(&ran)));
+
+    let task_id = TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression"),
+        task,
+    )
+    .await
+    .expect("core scheduled task registers");
+    let ran_once = ran.notified();
+    runtime
+        .start()
+        .await
+        .expect("explicit scheduler start succeeds");
+    tokio::time::timeout(Duration::from_secs(4), ran_once)
+        .await
+        .expect("scheduled core task runs");
+    TaskScheduler::cancel(&runtime, &task_id)
+        .await
+        .expect("core scheduled task cancels");
+    runtime
+        .shutdown()
+        .await
+        .expect("explicit scheduler shutdown succeeds");
+}
 
 #[tokio::test]
 async fn invalid_cron_job_is_a_catga_validation_error_before_registration() {

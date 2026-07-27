@@ -4,8 +4,8 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, IdempotencyStore, InboxStore, ProcessingState,
-    inbox_claim_expires_at, telemetry,
+    CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, IdempotencyStore, InboxClaim, InboxStore,
+    ProcessingState, inbox_claim_expires_at, telemetry,
 };
 
 use crate::NatsIdempotency;
@@ -26,30 +26,49 @@ impl NatsInbox {
 
 #[async_trait]
 impl InboxStore for NatsInbox {
-    async fn try_claim(&self, message_id: u64) -> CatgaResult<bool> {
+    async fn try_claim(&self, message_id: u64) -> CatgaResult<Option<InboxClaim>> {
         self.try_claim_for(message_id, DEFAULT_INBOX_CLAIM_LEASE)
             .await
     }
 
-    async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
-        telemetry::record_persistence_claim("nats", "inbox", "try_claim", async {
+    async fn try_claim_for(
+        &self,
+        message_id: u64,
+        lease: Duration,
+    ) -> CatgaResult<Option<InboxClaim>> {
+        telemetry::record_persistence_optional_claim("nats", "inbox", "try_claim", async {
             self.records
                 .try_claim_until(&message_id.to_string(), inbox_claim_expires_at(lease)?)
+                .await
+                .and_then(|generation| match generation {
+                    Some(generation) => InboxClaim::new(message_id, generation)
+                        .map(Some)
+                        .ok_or_else(|| {
+                            catga_core::CatgaError::new(
+                                catga_core::ErrorCode::Internal,
+                                "NATS inbox generation is zero",
+                            )
+                        }),
+                    None => Ok(None),
+                })
+        })
+        .await
+    }
+
+    async fn complete(&self, claim: InboxClaim, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
+        telemetry::record_persistence("nats", "inbox", "complete", async {
+            self.records
+                .complete_claim(&claim.message_id().to_string(), claim.generation(), result)
                 .await
         })
         .await
     }
 
-    async fn complete(&self, message_id: u64, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
-        telemetry::record_persistence("nats", "inbox", "complete", async {
-            self.records.complete(&message_id.to_string(), result).await
-        })
-        .await
-    }
-
-    async fn fail(&self, message_id: u64) -> CatgaResult<()> {
+    async fn fail(&self, claim: InboxClaim) -> CatgaResult<()> {
         telemetry::record_persistence("nats", "inbox", "fail", async {
-            self.records.fail(&message_id.to_string()).await
+            self.records
+                .fail_claim(&claim.message_id().to_string(), claim.generation())
+                .await
         })
         .await
     }

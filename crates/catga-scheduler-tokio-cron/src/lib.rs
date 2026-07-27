@@ -25,7 +25,10 @@
 
 use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use async_trait::async_trait;
+use catga_core::{
+    CatgaError, CatgaResult, ErrorCode, ScheduledTask, ScheduledTaskId, TaskSchedule, TaskScheduler,
+};
 use catga_flow::{DueFlowScheduler, FlowDueService, SuspendedFlowStore};
 use tokio_cron_scheduler::JobSchedulerError;
 
@@ -104,6 +107,36 @@ impl CronRuntime {
     /// shutdown visible to the application.
     pub async fn shutdown(&mut self) -> CatgaResult<()> {
         self.scheduler.shutdown().await.map_err(map_scheduler_error)
+    }
+}
+
+#[async_trait]
+impl TaskScheduler for CronRuntime {
+    async fn schedule(
+        &self,
+        schedule: TaskSchedule,
+        task: Arc<dyn ScheduledTask>,
+    ) -> CatgaResult<ScheduledTaskId> {
+        let job = Self::new_async_job(schedule.as_cron(), move |_job_id, _scheduler| {
+            let task = Arc::clone(&task);
+            Box::pin(async move {
+                if let Err(error) = task.execute().await {
+                    tracing::warn!(error = ?error, "scheduled task failed");
+                }
+            })
+        })?;
+        let job_id = self.add(job).await?;
+        ScheduledTaskId::new(job_id.to_string())
+    }
+
+    async fn cancel(&self, task_id: &ScheduledTaskId) -> CatgaResult<()> {
+        let job_id = uuid::Uuid::parse_str(task_id.as_str()).map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                format!("invalid tokio cron scheduled task identifier: {error}"),
+            )
+        })?;
+        self.remove(&job_id).await
     }
 }
 

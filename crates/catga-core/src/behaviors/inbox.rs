@@ -68,15 +68,15 @@ where
                 "failure"
             });
             return result;
-        }
-        let claimed = match self.store.try_claim_for(message_id, self.claim_lease).await {
+        };
+        let claim = match self.store.try_claim_for(message_id, self.claim_lease).await {
             Ok(claimed) => claimed,
             Err(error) => {
                 crate::telemetry::record_inbox_outcome("failure");
                 return Err(error);
             }
         };
-        if !claimed {
+        let Some(claim) = claim else {
             let cached = match self.store.result(message_id).await {
                 Ok(cached) => cached,
                 Err(error) => {
@@ -94,7 +94,7 @@ where
             let result = self.codec.decode(&cached);
             crate::telemetry::record_inbox_outcome(if result.is_ok() { "hit" } else { "failure" });
             return result;
-        }
+        };
 
         match next.run(message).await {
             Ok(response) => {
@@ -105,7 +105,7 @@ where
                         return Err(error);
                     }
                 };
-                if let Err(error) = self.store.complete(message_id, Some(cached)).await {
+                if let Err(error) = self.store.complete(claim, Some(cached)).await {
                     crate::telemetry::record_inbox_outcome("failure");
                     return Err(error);
                 }
@@ -113,7 +113,7 @@ where
                 Ok(response)
             }
             Err(error) => {
-                if let Err(store_error) = self.store.fail(message_id).await {
+                if let Err(store_error) = self.store.fail(claim).await {
                     crate::telemetry::record_inbox_outcome("failure");
                     return Err(store_error);
                 }

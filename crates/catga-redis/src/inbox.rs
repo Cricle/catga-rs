@@ -7,8 +7,8 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode, InboxStore, ProcessingState,
-    inbox_claim_expires_at, telemetry, validate_retention_cleanup_limit,
+    CatgaError, CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode, InboxClaim, InboxStore,
+    ProcessingState, inbox_claim_expires_at, telemetry, validate_retention_cleanup_limit,
 };
 use redis::{
     AsyncCommands, Script,
@@ -25,10 +25,13 @@ const FAILED: u8 = 4;
 const CLAIM: &str = r#"
 local value = redis.call('GET', KEYS[1])
 local state = value == false and 0 or string.byte(value, 1)
-local expiry = value == false and 0 or tonumber(string.match(string.sub(value, 2), '^(%d+):')) or 0
+local expiry, generation = value == false and 0 or string.match(string.sub(value, 2), '^(%d+):(%d+):')
+expiry = tonumber(expiry) or 0
+generation = tonumber(generation) or 0
 if value == false or state == 4 or (state == 1 and expiry <= tonumber(ARGV[1])) then
-    redis.call('SET', KEYS[1], string.char(1) .. ARGV[1] .. ':')
-    return 1
+    generation = generation + 1
+    redis.call('SET', KEYS[1], string.char(1) .. ARGV[1] .. ':' .. generation .. ':')
+    return generation
 end
 return 0
 "#;
@@ -37,6 +40,8 @@ const TRANSITION: &str = r#"
 local value = redis.call('GET', KEYS[1])
 if value == false then return -1 end
 if string.byte(value, 1) ~= 1 then return 0 end
+local generation = tonumber(string.match(string.sub(value, 2), '^%d+:(%d+):')) or 0
+if generation ~= tonumber(ARGV[2]) then return 0 end
 redis.call('SET', KEYS[1], ARGV[1])
 return 1
 "#;
@@ -45,8 +50,10 @@ const COMPLETE: &str = r#"
 local value = redis.call('GET', KEYS[1])
 if value == false then return -1 end
 if string.byte(value, 1) ~= 1 then return 0 end
+local generation = tonumber(string.match(string.sub(value, 2), '^%d+:(%d+):')) or 0
+if generation ~= tonumber(ARGV[2]) then return 0 end
 redis.call('SET', KEYS[1], ARGV[1])
-redis.call('ZADD', KEYS[2], ARGV[2], ARGV[3])
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[4])
 return 1
 "#;
 
@@ -98,11 +105,12 @@ impl RedisInbox {
         format!("{}:completed", self.prefix)
     }
 
-    async fn transition(&self, message_id: u64, value: Vec<u8>) -> CatgaResult<()> {
+    async fn transition(&self, claim: InboxClaim, value: Vec<u8>) -> CatgaResult<()> {
         let mut connection = self.connection.clone();
         match Script::new(TRANSITION)
-            .key(self.key(message_id))
+            .key(self.key(claim.message_id()))
             .arg(value)
+            .arg(claim.generation())
             .invoke_async::<i64>(&mut connection)
             .await
             .map_err(map_error)?
@@ -122,27 +130,47 @@ impl RedisInbox {
 
 #[async_trait]
 impl InboxStore for RedisInbox {
-    async fn try_claim(&self, message_id: u64) -> CatgaResult<bool> {
+    async fn try_claim(&self, message_id: u64) -> CatgaResult<Option<InboxClaim>> {
         self.try_claim_for(message_id, DEFAULT_INBOX_CLAIM_LEASE)
             .await
     }
 
-    async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
-        telemetry::record_persistence_claim("redis", "inbox", "try_claim", async {
+    async fn try_claim_for(
+        &self,
+        message_id: u64,
+        lease: Duration,
+    ) -> CatgaResult<Option<InboxClaim>> {
+        telemetry::record_persistence_optional_claim("redis", "inbox", "try_claim", async {
             let expires_at = inbox_claim_expires_at(lease)?;
             let mut connection = self.connection.clone();
-            Script::new(CLAIM)
+            let generation = Script::new(CLAIM)
                 .key(self.key(message_id))
                 .arg(expires_at)
                 .invoke_async::<i64>(&mut connection)
                 .await
-                .map(|result| result == 1)
-                .map_err(map_error)
+                .map_err(map_error)?;
+            if generation == 0 {
+                return Ok(None);
+            }
+            let generation = u64::try_from(generation).map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "Redis inbox claim generation is invalid",
+                )
+            })?;
+            InboxClaim::new(message_id, generation)
+                .map(Some)
+                .ok_or_else(|| {
+                    CatgaError::new(
+                        ErrorCode::Internal,
+                        "Redis inbox claim generation is invalid",
+                    )
+                })
         })
         .await
     }
 
-    async fn complete(&self, message_id: u64, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
+    async fn complete(&self, claim: InboxClaim, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
         telemetry::record_persistence("redis", "inbox", "complete", async {
             let mut value = Vec::with_capacity(
                 result
@@ -159,11 +187,12 @@ impl InboxStore for RedisInbox {
             }
             let mut connection = self.connection.clone();
             match Script::new(COMPLETE)
-                .key(self.key(message_id))
+                .key(self.key(claim.message_id()))
                 .key(self.completed())
                 .arg(value)
+                .arg(claim.generation())
                 .arg(current_unix_ms()?)
-                .arg(message_id)
+                .arg(claim.message_id())
                 .invoke_async::<i64>(&mut connection)
                 .await
                 .map_err(map_error)?
@@ -182,9 +211,9 @@ impl InboxStore for RedisInbox {
         .await
     }
 
-    async fn fail(&self, message_id: u64) -> CatgaResult<()> {
+    async fn fail(&self, claim: InboxClaim) -> CatgaResult<()> {
         telemetry::record_persistence("redis", "inbox", "fail", async {
-            self.transition(message_id, vec![FAILED]).await
+            self.transition(claim, vec![FAILED]).await
         })
         .await
     }

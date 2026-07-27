@@ -11,10 +11,14 @@ use catga_memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox};
 #[tokio::test]
 async fn inbox_and_idempotency_claim_exclusively_cache_results_and_allow_retry_after_failure() {
     let inbox = MemoryInbox::default();
-    assert!(inbox.try_claim(7).await.unwrap());
-    assert!(!inbox.try_claim(7).await.unwrap());
+    let claim = inbox
+        .try_claim(7)
+        .await
+        .unwrap()
+        .expect("first inbox claim succeeds");
+    assert!(inbox.try_claim(7).await.unwrap().is_none());
     inbox
-        .complete(7, Some(Arc::from([1_u8, 2, 3])))
+        .complete(claim, Some(Arc::from([1_u8, 2, 3])))
         .await
         .unwrap();
     assert_eq!(
@@ -25,7 +29,7 @@ async fn inbox_and_idempotency_claim_exclusively_cache_results_and_allow_retry_a
         inbox.result(7).await.unwrap().as_deref(),
         Some(&[1, 2, 3][..])
     );
-    assert!(!inbox.try_claim(7).await.unwrap());
+    assert!(inbox.try_claim(7).await.unwrap().is_none());
 
     let idempotency = MemoryIdempotency::default();
     assert!(idempotency.try_claim("create:7").await.unwrap());
@@ -74,7 +78,7 @@ async fn concurrent_inbox_claims_have_exactly_one_owner() {
 
     let mut owners = 0;
     while let Some(claim) = claims.join_next().await {
-        owners += usize::from(claim.unwrap());
+        owners += usize::from(claim.unwrap().is_some());
     }
     assert_eq!(owners, 1);
 }
@@ -87,12 +91,14 @@ async fn expired_inbox_claim_can_be_reclaimed_without_a_background_worker() {
             .try_claim_for(91, Duration::from_millis(100))
             .await
             .unwrap()
+            .is_some()
     );
     assert!(
-        !inbox
+        inbox
             .try_claim_for(91, Duration::from_secs(1))
             .await
             .unwrap()
+            .is_none()
     );
 
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -101,7 +107,43 @@ async fn expired_inbox_claim_can_be_reclaimed_without_a_background_worker() {
             .try_claim_for(91, Duration::from_secs(1))
             .await
             .unwrap()
+            .is_some()
     );
+}
+
+#[tokio::test]
+async fn expired_inbox_claim_fences_a_stale_owner() {
+    let inbox = MemoryInbox::default();
+    let first = inbox
+        .try_claim_for(93, Duration::from_millis(1))
+        .await
+        .unwrap()
+        .expect("initial owner acquires the inbox claim");
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let second = inbox
+        .try_claim_for(93, Duration::from_secs(1))
+        .await
+        .unwrap()
+        .expect("expired claim is reclaimed by a new owner");
+
+    assert!(matches!(
+        inbox.complete(first, Some(Arc::from([1_u8]))).await,
+        Err(error) if error.code() == catga_core::ErrorCode::Conflict
+    ));
+    assert_eq!(
+        inbox.state(93).await.unwrap(),
+        Some(ProcessingState::Claimed)
+    );
+    assert!(matches!(
+        inbox.fail(first).await,
+        Err(error) if error.code() == catga_core::ErrorCode::Conflict
+    ));
+    inbox
+        .complete(second, Some(Arc::from([2_u8])))
+        .await
+        .unwrap();
+    assert_eq!(inbox.result(93).await.unwrap().as_deref(), Some(&[2][..]));
 }
 
 #[tokio::test]
@@ -111,8 +153,12 @@ async fn completed_reliability_records_are_removed_by_bounded_retention_cleanup(
     idempotency.complete("retained-key", None).await.unwrap();
 
     let inbox = MemoryInbox::default();
-    assert!(inbox.try_claim(92).await.unwrap());
-    inbox.complete(92, None).await.unwrap();
+    let claim = inbox
+        .try_claim(92)
+        .await
+        .unwrap()
+        .expect("inbox claim succeeds");
+    inbox.complete(claim, None).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(idempotency.cleanup_completed(1).await.unwrap(), 1);

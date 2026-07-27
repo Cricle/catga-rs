@@ -1073,11 +1073,22 @@ async fn redis_inbox_claims_exclusively_retries_failures_and_caches_results() {
     let inbox = RedisInbox::connect(&config.server, format!("{}:inbox", config.stream))
         .await
         .unwrap();
-    assert!(inbox.try_claim(7).await.unwrap());
-    assert!(!inbox.try_claim(7).await.unwrap());
-    inbox.fail(7).await.unwrap();
-    assert!(inbox.try_claim(7).await.unwrap());
-    inbox.complete(7, Some(Arc::from([1_u8, 2]))).await.unwrap();
+    let first = inbox
+        .try_claim(7)
+        .await
+        .unwrap()
+        .expect("inbox claim succeeds");
+    assert!(inbox.try_claim(7).await.unwrap().is_none());
+    inbox.fail(first).await.unwrap();
+    let second = inbox
+        .try_claim(7)
+        .await
+        .unwrap()
+        .expect("inbox retry succeeds");
+    inbox
+        .complete(second, Some(Arc::from([1_u8, 2])))
+        .await
+        .unwrap();
     assert_eq!(
         inbox.state(7).await.unwrap(),
         Some(catga_core::ProcessingState::Completed)
@@ -1271,6 +1282,7 @@ async fn redis_inbox_reclaims_an_expired_processing_lease() {
             .try_claim_for(91, Duration::from_millis(1))
             .await
             .unwrap()
+            .is_some()
     );
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(
@@ -1278,7 +1290,50 @@ async fn redis_inbox_reclaims_an_expired_processing_lease() {
             .try_claim_for(91, Duration::from_secs(1))
             .await
             .unwrap()
+            .is_some()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_inbox_fences_a_reclaimed_claim_owner() {
+    let config = redis_config();
+    let inbox = RedisInbox::connect(
+        &config.server,
+        format!(
+            "{}:inbox-fence:{}",
+            config.stream,
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ),
+    )
+    .await
+    .unwrap();
+    let first = inbox
+        .try_claim_for(92, Duration::from_millis(1))
+        .await
+        .unwrap()
+        .expect("first owner acquires the inbox claim");
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let second = inbox
+        .try_claim_for(92, Duration::from_secs(1))
+        .await
+        .unwrap()
+        .expect("second owner reclaims the expired inbox claim");
+
+    assert!(matches!(
+        inbox.complete(first, Some(Arc::from([1_u8]))).await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    assert!(matches!(
+        inbox.fail(first).await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    inbox
+        .complete(second, Some(Arc::from([2_u8])))
+        .await
+        .unwrap();
+    assert_eq!(inbox.result(92).await.unwrap().as_deref(), Some(&[2][..]));
 }
 
 #[tokio::test]
@@ -1288,8 +1343,11 @@ async fn redis_inbox_removes_completed_records_with_a_bounded_scan() -> CatgaRes
     let inbox =
         RedisInbox::connect(&config.server, format!("{}:inbox-retention", config.stream)).await?;
     for message_id in [201_u64, 202] {
-        assert!(inbox.try_claim(message_id).await?);
-        inbox.complete(message_id, None).await?;
+        let claim = inbox
+            .try_claim(message_id)
+            .await?
+            .expect("inbox claim succeeds");
+        inbox.complete(claim, None).await?;
     }
 
     assert!(matches!(

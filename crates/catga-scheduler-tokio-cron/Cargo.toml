@@ -11,6 +11,7 @@ description = "Opt-in tokio-cron-scheduler adapter for bounded Catga flow due sw
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
 catga-core = { path = "../catga-core" }
 catga-flow = { path = "../catga-flow" }
 tokio-cron-scheduler = { version = "0.15.1", default-features = false }

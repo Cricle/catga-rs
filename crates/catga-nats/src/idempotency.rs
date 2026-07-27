@@ -105,16 +105,20 @@ impl NatsIdempotency {
         ))
     }
 
-    pub(crate) async fn try_claim_until(&self, key: &str, expires_at: u64) -> CatgaResult<bool> {
-        telemetry::record_persistence_claim("nats", "idempotency", "try_claim", async {
+    pub(crate) async fn try_claim_until(
+        &self,
+        key: &str,
+        expires_at: u64,
+    ) -> CatgaResult<Option<u64>> {
+        telemetry::record_persistence_optional_claim("nats", "idempotency", "try_claim", async {
             let key = kv_key(key);
             let value = claimed_with_expiry(expires_at);
             let now = now_millis();
             for _ in 0..RETRIES {
                 match self.entry(&key).await? {
                     None => {
-                        if self.store.create(&key, value.clone().into()).await.is_ok() {
-                            return Ok(true);
+                        if let Ok(revision) = self.store.create(&key, value.clone().into()).await {
+                            return Ok(Some(revision));
                         }
                     }
                     Some(entry)
@@ -123,37 +127,34 @@ impl NatsIdempotency {
                             kv::Operation::Delete | kv::Operation::Purge
                         ) =>
                     {
-                        if self
+                        if let Ok(revision) = self
                             .store
                             .update(&key, value.clone().into(), entry.revision)
                             .await
-                            .is_ok()
                         {
-                            return Ok(true);
+                            return Ok(Some(revision));
                         }
                     }
                     Some(entry) => match state(&entry.value)? {
                         ProcessingState::Failed => {
-                            if self
+                            if let Ok(revision) = self
                                 .store
                                 .update(&key, value.clone().into(), entry.revision)
                                 .await
-                                .is_ok()
                             {
-                                return Ok(true);
+                                return Ok(Some(revision));
                             }
                         }
                         ProcessingState::Claimed if claim_expired(&entry.value, now) => {
-                            if self
+                            if let Ok(revision) = self
                                 .store
                                 .update(&key, value.clone().into(), entry.revision)
                                 .await
-                                .is_ok()
                             {
-                                return Ok(true);
+                                return Ok(Some(revision));
                             }
                         }
-                        _ => return Ok(false),
+                        _ => return Ok(None),
                     },
                 }
             }
@@ -163,6 +164,53 @@ impl NatsIdempotency {
             ))
         })
         .await
+    }
+
+    pub(crate) async fn complete_claim(
+        &self,
+        key: &str,
+        generation: u64,
+        result: Option<Arc<[u8]>>,
+    ) -> CatgaResult<()> {
+        let mut value = Vec::with_capacity(
+            result
+                .as_ref()
+                .map_or(1, |value| value.len().saturating_add(1)),
+        );
+        value.push(if result.is_some() {
+            COMPLETED_RESULT
+        } else {
+            COMPLETED_EMPTY
+        });
+        if let Some(result) = result {
+            value.extend_from_slice(&result);
+        }
+        self.transition_claim(key, generation, value).await
+    }
+
+    pub(crate) async fn fail_claim(&self, key: &str, generation: u64) -> CatgaResult<()> {
+        self.transition_claim(key, generation, vec![FAILED]).await
+    }
+
+    async fn transition_claim(&self, key: &str, generation: u64, next: Vec<u8>) -> CatgaResult<()> {
+        let key = kv_key(key);
+        let Some(entry) = self.entry(&key).await? else {
+            return Err(CatgaError::new(
+                ErrorCode::NotFound,
+                "inbox message is not claimed",
+            ));
+        };
+        if entry.revision != generation || state(&entry.value)? != ProcessingState::Claimed {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "inbox claim is no longer owned",
+            ));
+        }
+        self.store
+            .update(&key, next.into(), generation)
+            .await
+            .map_err(|_| CatgaError::new(ErrorCode::Conflict, "inbox claim is no longer owned"))?;
+        Ok(())
     }
 
     pub(crate) async fn cleanup_completed_for(

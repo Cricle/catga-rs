@@ -104,11 +104,51 @@ pub enum ProcessingState {
     Failed,
 }
 
+/// An opaque, generation-fenced ownership record for one inbox message.
+///
+/// A store returns this only to the worker that acquired the current processing lease. Passing a
+/// claim to [`InboxStore::complete`] or [`InboxStore::fail`] proves that the worker still owns
+/// the same lease generation. A reclaimed lease necessarily has a different generation, so a
+/// delayed former owner cannot overwrite or release the new owner's work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct InboxClaim {
+    message_id: u64,
+    generation: u64,
+}
+
+impl InboxClaim {
+    /// Creates a claim issued by a store for `message_id` and its non-zero ownership generation.
+    ///
+    /// Store implementations must monotonically advance the generation whenever a message is
+    /// reclaimed. Zero is reserved so malformed persisted records cannot accidentally fence a
+    /// valid owner.
+    pub const fn new(message_id: u64, generation: u64) -> Option<Self> {
+        if generation == 0 {
+            None
+        } else {
+            Some(Self {
+                message_id,
+                generation,
+            })
+        }
+    }
+
+    /// Returns the message this claim owns.
+    pub const fn message_id(self) -> u64 {
+        self.message_id
+    }
+
+    /// Returns the store-issued ownership generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
 /// Stores exclusive processing state for received transport messages.
 #[async_trait]
 pub trait InboxStore: Send + Sync {
     /// Atomically acquires a message unless it is already claimed or completed.
-    async fn try_claim(&self, message_id: u64) -> CatgaResult<bool>;
+    async fn try_claim(&self, message_id: u64) -> CatgaResult<Option<InboxClaim>>;
 
     /// Atomically acquires a message for `lease` unless it is claimed or completed.
     ///
@@ -116,16 +156,26 @@ pub trait InboxStore: Send + Sync {
     /// expired claim. The default preserves compatibility for third-party
     /// stores that only implement [`Self::try_claim`]; built-in durable stores
     /// override it with lease-aware transitions.
-    async fn try_claim_for(&self, message_id: u64, lease: Duration) -> CatgaResult<bool> {
+    async fn try_claim_for(
+        &self,
+        message_id: u64,
+        lease: Duration,
+    ) -> CatgaResult<Option<InboxClaim>> {
         validate_inbox_claim_lease(lease)?;
         self.try_claim(message_id).await
     }
 
-    /// Marks a claimed message completed, retaining an optional serialized result.
-    async fn complete(&self, message_id: u64, result: Option<Arc<[u8]>>) -> CatgaResult<()>;
+    /// Marks `claim` completed, retaining an optional serialized result.
+    ///
+    /// Implementations return [`ErrorCode::Conflict`] when the claim has expired or another
+    /// worker has reclaimed the message.
+    async fn complete(&self, claim: InboxClaim, result: Option<Arc<[u8]>>) -> CatgaResult<()>;
 
-    /// Marks a claimed message failed so a later attempt may claim it.
-    async fn fail(&self, message_id: u64) -> CatgaResult<()>;
+    /// Marks `claim` failed so a later attempt may claim it.
+    ///
+    /// Implementations return [`ErrorCode::Conflict`] when the claim no longer owns the current
+    /// processing generation.
+    async fn fail(&self, claim: InboxClaim) -> CatgaResult<()>;
 
     /// Returns the current state when this process has retained the message.
     async fn state(&self, message_id: u64) -> CatgaResult<Option<ProcessingState>>;

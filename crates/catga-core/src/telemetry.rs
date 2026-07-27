@@ -199,6 +199,20 @@ pub async fn record_persistence_claim(
     result
 }
 
+/// Awaits a fenced claim operation and records acquisition or contention without exposing the
+/// claim token as metric data.
+pub async fn record_persistence_optional_claim<T>(
+    backend: &'static str,
+    component: &'static str,
+    operation: &'static str,
+    future: impl Future<Output = CatgaResult<Option<T>>>,
+) -> CatgaResult<Option<T>> {
+    let mut guard = persistence_operation(backend, component, operation);
+    let result = future.await;
+    guard.complete_optional_claim(&result);
+    result
+}
+
 /// Awaits one transport publish while recording its original result.
 ///
 /// `backend` and `mode` must be static low-cardinality labels, such as
@@ -487,6 +501,29 @@ impl Operation {
             .increment(1);
         }
         self.complete(result);
+    }
+
+    /// Completes a persistence claim operation whose ownership is represented by an optional
+    /// token rather than a boolean.
+    pub fn complete_optional_claim<T>(&mut self, result: &CatgaResult<Option<T>>) {
+        match result {
+            Ok(Some(_)) => self.record("success", None, false),
+            Ok(None) => {
+                metrics::counter!(
+                    PERSISTENCE_CONTENTION,
+                    "backend" => self.backend,
+                    "component" => self.component,
+                    "operation" => self.operation,
+                )
+                .increment(1);
+                self.record("success", None, false);
+            }
+            Err(error) => self.record(
+                "failure",
+                Some(error.message()),
+                error.code() == ErrorCode::Conflict,
+            ),
+        }
     }
 
     fn record(&mut self, outcome: &'static str, error: Option<&str>, conflict: bool) {
