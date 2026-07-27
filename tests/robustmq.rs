@@ -1,10 +1,55 @@
 //! RobustMQ mailbox adapter tests.
 
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use catga_core::{CatgaError, CatgaResult, Envelope, ErrorCode, MessageMetadata, MessagePriority};
+use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::{
+    CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, MessageMetadata, MessagePriority,
+};
 use catga_robustmq::{MailboxClient, MailboxPriority, MailboxRequestServer};
 use robustmq::Priority;
+
+#[path = "support/nats_e2e.rs"]
+mod nats_e2e;
+
+const TAGGED_ENVELOPE_CODEC_PREFIX: &[u8] = b"catga-robustmq-e2e-codec-v1\0";
+
+/// A deliberately non-default frame proving mailbox envelope APIs use their configured codec.
+#[derive(Clone, Default)]
+struct TaggedEnvelopeCodec {
+    encoded: Arc<AtomicUsize>,
+    decoded: Arc<AtomicUsize>,
+}
+
+impl EnvelopeCodec for TaggedEnvelopeCodec {
+    fn encode(&self, envelope: &Envelope) -> CatgaResult<Vec<u8>> {
+        self.encoded.fetch_add(1, Ordering::Relaxed);
+        let payload = MemoryPackCodec::default().encode(envelope)?;
+        let mut frame = Vec::with_capacity(TAGGED_ENVELOPE_CODEC_PREFIX.len() + payload.len());
+        frame.extend_from_slice(TAGGED_ENVELOPE_CODEC_PREFIX);
+        frame.extend_from_slice(&payload);
+        Ok(frame)
+    }
+
+    fn decode(&self, bytes: &[u8]) -> CatgaResult<Envelope> {
+        self.decoded.fetch_add(1, Ordering::Relaxed);
+        let payload = bytes
+            .strip_prefix(TAGGED_ENVELOPE_CODEC_PREFIX)
+            .ok_or_else(|| {
+                CatgaError::new(
+                    ErrorCode::Validation,
+                    "RobustMQ tagged codec frame prefix is missing",
+                )
+            })?;
+        MemoryPackCodec::default().decode(payload)
+    }
+}
 
 #[test]
 fn mailbox_priority_maps_without_protocol_leakage() {
@@ -42,6 +87,59 @@ fn mailbox_priority_uses_envelope_metadata() {
             "{priority:?} must retain its supported mailbox priority",
         );
     }
+}
+
+/// A custom envelope codec must frame public mailbox send and subscription delivery paths.
+///
+/// The lightweight mq9 raw-mailbox API runs directly over the real NATS test container, so no
+/// RobustMQ control plane is required for this wire-contract test.
+#[tokio::test]
+async fn mailbox_envelope_delivery_uses_the_injected_codec() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let codec = TaggedEnvelopeCodec::default();
+    let client = MailboxClient::connect_with_codec(server.url(), codec.clone()).await?;
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let mailbox = format!("catga-robustmq-codec-{}_{}", std::process::id(), suffix);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let subscription = client
+        .subscribe_envelopes(
+            &mailbox,
+            move |envelope| {
+                let sender = sender.clone();
+                async move {
+                    let _ = sender.send(envelope).await;
+                }
+            },
+            Some(MailboxPriority::Critical),
+            "",
+        )
+        .await?;
+    let envelope = Envelope::versioned(
+        42,
+        "order.created",
+        vec![1, 2, 3],
+        MessageMetadata::new(8, Some(7)),
+        3,
+    );
+    client
+        .send_envelope(&mailbox, &envelope, MailboxPriority::Critical)
+        .await?;
+    let delivered = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "mailbox did not deliver the envelope"))?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Transient, "mailbox subscription closed"))??;
+    subscription.unsubscribe();
+    assert_eq!(delivered, envelope);
+    assert_eq!(codec.encoded.load(Ordering::Relaxed), 1);
+    assert_eq!(codec.decoded.load(Ordering::Relaxed), 1);
+    drop(client);
+    server
+        .close()
+        .await
+        .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -126,10 +224,12 @@ async fn mailbox_request_fails_promptly_without_the_mailbox_control_plane() -> C
 
 #[tokio::test]
 #[ignore = "requires CATGA_ROBUSTMQ_URL"]
+/// A custom codec must frame both request directions and the request-server response.
 async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> CatgaResult<()> {
     let server = std::env::var("CATGA_ROBUSTMQ_URL")
         .expect("CATGA_ROBUSTMQ_URL must be set for ignored RobustMQ tests");
-    let client = MailboxClient::connect(&server).await?;
+    let codec = TaggedEnvelopeCodec::default();
+    let client = MailboxClient::connect_with_codec(&server, codec.clone()).await?;
     let mailbox = format!("catga-robustmq-rpc-{}", std::process::id());
     let mut request_server = MailboxRequestServer::subscribe(client.clone(), &mailbox, 8).await?;
     let request = Envelope::versioned(
@@ -161,5 +261,7 @@ async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> C
         CatgaError::new(ErrorCode::Internal, format!("request task failed: {error}"))
     })??;
     assert_eq!(reply.payload(), [3, 4]);
+    assert_eq!(codec.encoded.load(Ordering::Relaxed), 2);
+    assert_eq!(codec.decoded.load(Ordering::Relaxed), 2);
     Ok(())
 }

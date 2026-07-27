@@ -1,9 +1,26 @@
 //! Compile coverage for public NATS client-injection constructors.
 
+use catga_core::{CatgaResult, Envelope, EnvelopeCodec};
 use catga_nats::{
     NatsConfig, NatsPubSubConfig, NatsPubSubTransport, NatsRequestClient, NatsRequestServer,
     NatsTransport,
 };
+
+#[derive(Default)]
+struct MarkerCodec;
+
+impl EnvelopeCodec for MarkerCodec {
+    fn encode(&self, _: &Envelope) -> CatgaResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn decode(&self, _: &[u8]) -> CatgaResult<Envelope> {
+        Err(catga_core::CatgaError::new(
+            catga_core::ErrorCode::Internal,
+            "compile-only codec",
+        ))
+    }
+}
 
 fn transport_config() -> NatsConfig {
     NatsConfig {
@@ -53,4 +70,28 @@ fn client_injection_constructors_are_public(client: async_nats::Client) {
 #[test]
 fn client_injection_constructor_signatures_compile_without_a_nats_server() {
     let _ = client_injection_constructors_are_public as fn(async_nats::Client);
+}
+
+#[test]
+fn codec_injection_constructor_signatures_compile_without_a_nats_server() {
+    let config = transport_config();
+    std::mem::drop(NatsTransport::<MarkerCodec>::connect_with_codec(
+        config.clone(),
+        MarkerCodec,
+    ));
+    let from_client = |client: async_nats::Client| {
+        std::mem::drop(NatsTransport::<MarkerCodec>::from_client_with_codec(
+            client.clone(),
+            config.clone(),
+            MarkerCodec,
+        ));
+        std::mem::drop(
+            NatsTransport::<MarkerCodec>::connect_with_client_with_codec(
+                client,
+                config,
+                MarkerCodec,
+            ),
+        );
+    };
+    let _ = from_client;
 }

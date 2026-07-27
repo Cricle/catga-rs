@@ -25,24 +25,30 @@ use crate::{RedisConfig, RedisPendingReclaimOptions, acknowledgement::RedisAckno
 const RECLAIM_POLL_MILLIS: usize = 1_000;
 
 /// Redis Streams-backed at-least-once transport with explicit acknowledgement.
-pub struct RedisTransport {
+///
+/// `C` controls the envelope wire format. It defaults to [`MemoryPackCodec`] so existing
+/// construction calls keep Catga's standard bounded MemoryPack framing. Use a `*_with_codec`
+/// constructor to explicitly select another [`EnvelopeCodec`] for a stream.
+pub struct RedisTransport<C = MemoryPackCodec>
+where
+    C: EnvelopeCodec,
+{
     client: redis::Client,
     commands: ConnectionManager,
     stream: Box<str>,
     group: Box<str>,
     consumer: Box<str>,
     reclaim_options: RedisPendingReclaimOptions,
-    codec: MemoryPackCodec,
+    codec: C,
     in_flight: Arc<InFlight>,
     operations: OperationTracker,
     acceptance: AcceptanceGate,
 }
 
-impl RedisTransport {
+impl RedisTransport<MemoryPackCodec> {
     /// Connects with the default bounded cross-consumer pending-delivery recovery policy.
     pub async fn connect(config: RedisConfig) -> CatgaResult<Self> {
-        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
-        Self::from_client(client, config).await
+        Self::connect_with_codec(config, MemoryPackCodec::default()).await
     }
 
     /// Connects and idempotently provisions the configured stream and consumer group.
@@ -54,8 +60,12 @@ impl RedisTransport {
         config: RedisConfig,
         reclaim_options: RedisPendingReclaimOptions,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
-        Self::connect_with_client(client, config, reclaim_options).await
+        Self::connect_with_reclaim_options_with_codec(
+            config,
+            reclaim_options,
+            MemoryPackCodec::default(),
+        )
+        .await
     }
 
     /// Builds a transport from an application-owned Redis client.
@@ -66,7 +76,7 @@ impl RedisTransport {
     /// compatibility with [`Self::connect`]. The transport uses the default bounded
     /// cross-consumer pending-delivery recovery policy.
     pub async fn from_client(client: redis::Client, config: RedisConfig) -> CatgaResult<Self> {
-        Self::connect_with_client(client, config, RedisPendingReclaimOptions::default()).await
+        Self::from_client_with_codec(client, config, MemoryPackCodec::default()).await
     }
 
     /// Builds a transport from an application-owned Redis client with an explicit recovery policy.
@@ -80,13 +90,84 @@ impl RedisTransport {
         config: RedisConfig,
         reclaim_options: RedisPendingReclaimOptions,
     ) -> CatgaResult<Self> {
-        Self::initialize(client, config, reclaim_options).await
+        Self::connect_with_client_with_codec(
+            client,
+            config,
+            reclaim_options,
+            MemoryPackCodec::default(),
+        )
+        .await
+    }
+}
+
+impl<C> RedisTransport<C>
+where
+    C: EnvelopeCodec,
+{
+    /// Connects with the supplied envelope codec and the default bounded pending-delivery
+    /// recovery policy.
+    ///
+    /// All peers that publish to or receive from this stream must use the same codec contract.
+    /// The codec is retained by value, so no global serializer registry or dynamic dispatch is
+    /// required on the hot path.
+    pub async fn connect_with_codec(config: RedisConfig, codec: C) -> CatgaResult<Self> {
+        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        Self::from_client_with_codec(client, config, codec).await
+    }
+
+    /// Connects with an explicit bounded recovery policy and supplied envelope codec.
+    ///
+    /// `reclaim_options` only controls Redis Stream recovery; it does not alter the selected
+    /// codec or its frame validation policy.
+    pub async fn connect_with_reclaim_options_with_codec(
+        config: RedisConfig,
+        reclaim_options: RedisPendingReclaimOptions,
+        codec: C,
+    ) -> CatgaResult<Self> {
+        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        Self::connect_with_client_with_codec(client, config, reclaim_options, codec).await
+    }
+
+    /// Builds a transport from an application-owned Redis client and supplied envelope codec.
+    ///
+    /// This preserves the client's configured TLS, authentication, reconnection, and
+    /// observability behavior while provisioning the stream and consumer group in `config`.
+    /// The default bounded cross-consumer pending-delivery recovery policy is applied.
+    pub async fn from_client_with_codec(
+        client: redis::Client,
+        config: RedisConfig,
+        codec: C,
+    ) -> CatgaResult<Self> {
+        Self::connect_with_client_with_codec(
+            client,
+            config,
+            RedisPendingReclaimOptions::default(),
+            codec,
+        )
+        .await
+    }
+
+    /// Builds a transport from an application-owned Redis client, explicit recovery policy, and
+    /// supplied envelope codec.
+    ///
+    /// Like [`Self::from_client_with_codec`], this reuses the supplied client's TLS,
+    /// authentication, reconnection, and observability configuration instead of opening
+    /// `config.server`. It idempotently provisions `config.stream` and `config.group` before
+    /// retaining `codec` for every envelope encode and decode operation.
+    pub async fn connect_with_client_with_codec(
+        client: redis::Client,
+        config: RedisConfig,
+        reclaim_options: RedisPendingReclaimOptions,
+        codec: C,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config, reclaim_options, codec).await
     }
 
     async fn initialize(
         client: redis::Client,
         config: RedisConfig,
         reclaim_options: RedisPendingReclaimOptions,
+        codec: C,
     ) -> CatgaResult<Self> {
         let manager_config = ConnectionManagerConfig::new().set_response_timeout(None);
         let mut commands = client
@@ -110,7 +191,7 @@ impl RedisTransport {
             group: config.group,
             consumer: config.consumer,
             reclaim_options,
-            codec: MemoryPackCodec::default(),
+            codec,
             in_flight: Arc::new(InFlight::new()),
             operations: OperationTracker::default(),
             acceptance: AcceptanceGate::default(),
@@ -278,7 +359,10 @@ impl RedisTransport {
 }
 
 #[async_trait]
-impl MessageTransport for RedisTransport {
+impl<C> MessageTransport for RedisTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn publish(&self, envelope: Envelope) -> CatgaResult<()> {
         telemetry::record_message_publish("redis", "stream", async {
             self.acceptance.ensure_accepting()?;
@@ -302,7 +386,10 @@ impl MessageTransport for RedisTransport {
 }
 
 #[async_trait]
-impl DestinationTransport for RedisTransport {
+impl<C> DestinationTransport for RedisTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn send_to(&self, destination: &Destination, envelope: Envelope) -> CatgaResult<()> {
         telemetry::record_message_publish("redis", "destination_stream", async {
             self.acceptance.ensure_accepting()?;
@@ -332,7 +419,10 @@ fn destination_stream(destination: &Destination) -> Box<str> {
     format!("stream:{destination}").into_boxed_str()
 }
 
-impl Stoppable for RedisTransport {
+impl<C> Stoppable for RedisTransport<C>
+where
+    C: EnvelopeCodec,
+{
     fn stop_accepting(&self) {
         self.acceptance.stop_accepting();
     }
@@ -343,13 +433,19 @@ impl Stoppable for RedisTransport {
 }
 
 #[async_trait]
-impl AsyncInitializable for RedisTransport {
+impl<C> AsyncInitializable for RedisTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn initialize(&self) -> CatgaResult<()> {
         Ok(())
     }
 }
 
-impl HealthCheckable for RedisTransport {
+impl<C> HealthCheckable for RedisTransport<C>
+where
+    C: EnvelopeCodec,
+{
     fn is_healthy(&self) -> bool {
         true
     }
@@ -360,7 +456,10 @@ impl HealthCheckable for RedisTransport {
 }
 
 #[async_trait]
-impl Waitable for RedisTransport {
+impl<C> Waitable for RedisTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn wait_for_completion(&self, cancellation: CancellationToken) -> CatgaResult<()> {
         self.operations.wait_for_completion(cancellation).await
     }

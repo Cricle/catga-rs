@@ -25,7 +25,10 @@ pub struct MailboxConfig {
 }
 
 #[async_trait::async_trait]
-impl RequestTransport for MailboxClient {
+impl<C> RequestTransport for MailboxClient<C>
+where
+    C: EnvelopeCodec + 'static,
+{
     async fn request(
         &self,
         destination: &str,
@@ -36,19 +39,40 @@ impl RequestTransport for MailboxClient {
     }
 }
 
-/// A typed wrapper around the RobustMQ mq9 mailbox client.
+/// A RobustMQ mq9 mailbox client using `C` to frame complete Catga envelopes.
+///
+/// `C` defaults to [`MemoryPackCodec`], preserving Catga's standard bounded MemoryPack wire
+/// format. Construct a client with [`Self::connect_with_codec`] when communicating with a peer
+/// that uses a different [`EnvelopeCodec`]. Raw [`Self::send`] and [`Self::subscribe`] calls
+/// remain format-agnostic because they operate on caller-provided bytes.
 #[derive(Clone)]
-pub struct MailboxClient {
+pub struct MailboxClient<C = MemoryPackCodec> {
     client: Arc<MQ9Client>,
+    codec: Arc<C>,
 }
 
-impl MailboxClient {
+impl MailboxClient<MemoryPackCodec> {
     /// Connects to a RobustMQ NATS-compatible endpoint.
     pub async fn connect(server: &str) -> CatgaResult<Self> {
+        Self::connect_with_codec(server, MemoryPackCodec::default()).await
+    }
+}
+
+impl<C> MailboxClient<C>
+where
+    C: EnvelopeCodec + 'static,
+{
+    /// Connects to a RobustMQ NATS-compatible endpoint using `codec` for complete envelopes.
+    ///
+    /// Both request/reply directions, envelope subscriptions, and request-server responses use
+    /// the supplied codec. The codec is shared through an [`Arc`] so cloning the client does not
+    /// clone codec state or allocate a second codec instance.
+    pub async fn connect_with_codec(server: &str, codec: C) -> CatgaResult<Self> {
         MQ9Client::connect(server)
             .await
             .map(|client| Self {
                 client: Arc::new(client),
+                codec: Arc::new(codec),
             })
             .map_err(map_error)
     }
@@ -79,14 +103,19 @@ impl MailboxClient {
             .map_err(map_error)
     }
 
-    /// Sends a complete Catga envelope without losing its metadata or schema version.
+    /// Sends a complete Catga envelope with the client's configured [`EnvelopeCodec`].
+    ///
+    /// Unlike [`Self::send`], this preserves Catga envelope metadata, schema version, headers,
+    /// and reply routing. The bytes are compatible with [`Self::subscribe_envelopes`],
+    /// [`Self::request_to`], and [`MailboxRequestServer::subscribe`] created from a client using
+    /// the same codec type and configuration.
     pub async fn send_envelope(
         &self,
         mailbox_id: &str,
         envelope: &Envelope,
         priority: MailboxPriority,
     ) -> CatgaResult<()> {
-        let payload = MemoryPackCodec::default().encode(envelope)?;
+        let payload = encode_envelope(self.codec.as_ref(), envelope)?;
         self.client
             .send(mailbox_id, &payload, priority.as_sdk())
             .await
@@ -116,7 +145,10 @@ impl MailboxClient {
             .map_err(map_error)
     }
 
-    /// Subscribes to complete Catga envelopes, surfacing decode failures to the callback.
+    /// Subscribes to complete Catga envelopes with the client's configured codec.
+    ///
+    /// Decode failures are surfaced to `callback`; malformed remote data never panics the
+    /// subscription task.
     pub async fn subscribe_envelopes<F, Fut>(
         &self,
         mailbox_id: &str,
@@ -128,17 +160,20 @@ impl MailboxClient {
         F: Fn(CatgaResult<Envelope>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let codec = MemoryPackCodec::default();
+        let codec = Arc::clone(&self.codec);
         self.subscribe(
             mailbox_id,
-            move |message| callback(codec.decode(&message.payload)),
+            move |message| callback(decode_envelope(codec.as_ref(), &message.payload)),
             priority,
             queue_group,
         )
         .await
     }
 
-    /// Sends a request at its envelope priority and awaits one reply through a private mailbox.
+    /// Sends a request with the client's codec and awaits one reply through a private mailbox.
+    ///
+    /// The reply is decoded with the same codec instance, ensuring a custom wire format is used
+    /// consistently in both request directions.
     pub async fn request_to(
         &self,
         mailbox_id: &str,
@@ -163,13 +198,13 @@ impl MailboxClient {
             .await
             .map_err(map_error)?;
         let (sender, mut receiver) = mpsc::channel(1);
-        let codec = MemoryPackCodec::default();
+        let codec = Arc::clone(&self.codec);
         let subscription = self
             .client
             .subscribe(
                 &reply.mail_id,
                 move |message| {
-                    let decoded = codec.decode(&message.payload);
+                    let decoded = decode_envelope(codec.as_ref(), &message.payload);
                     let sender = sender.clone();
                     async move {
                         let _ = sender.send(decoded).await;
@@ -181,7 +216,7 @@ impl MailboxClient {
             .await
             .map_err(map_error)?;
         let priority = MailboxPriority::from_envelope(&request).as_sdk();
-        let payload = MemoryPackCodec::default().encode(&request.with_reply_to(reply.mail_id))?;
+        let payload = encode_envelope(self.codec.as_ref(), &request.with_reply_to(reply.mail_id))?;
         let result = async {
             self.client
                 .send(mailbox_id, &payload, priority)
@@ -201,15 +236,25 @@ impl MailboxClient {
 }
 
 /// A RobustMQ request server with bounded inbound backpressure.
-pub struct MailboxRequestServer {
+///
+/// `C` defaults to [`MemoryPackCodec`]. Use a [`MailboxClient`] constructed with
+/// [`MailboxClient::connect_with_codec`] to select another envelope format.
+pub struct MailboxRequestServer<C = MemoryPackCodec> {
     subscription: Option<Subscription>,
-    requests: mpsc::Receiver<CatgaResult<MailboxRequest>>,
+    requests: mpsc::Receiver<CatgaResult<MailboxRequest<C>>>,
 }
 
-impl MailboxRequestServer {
+impl<C> MailboxRequestServer<C>
+where
+    C: EnvelopeCodec + 'static,
+{
     /// Subscribes to one mailbox and buffers at most `capacity` decoded requests.
+    ///
+    /// Requests are decoded with the codec configured on `client`. Each returned
+    /// [`MailboxRequest`] retains that codec so its envelope response uses the matching wire
+    /// format.
     pub async fn subscribe(
-        client: MailboxClient,
+        client: MailboxClient<C>,
         mailbox_id: &str,
         capacity: usize,
     ) -> CatgaResult<Self> {
@@ -227,6 +272,7 @@ impl MailboxRequestServer {
         }
         let (sender, requests) = mpsc::channel(capacity);
         let request_client = Arc::clone(&client.client);
+        let codec = Arc::clone(&client.codec);
         let subscription = client
             .client
             .subscribe(
@@ -234,10 +280,16 @@ impl MailboxRequestServer {
                 move |message| {
                     let sender = sender.clone();
                     let client = Arc::clone(&request_client);
+                    let codec = Arc::clone(&codec);
                     async move {
-                        let request = MemoryPackCodec::default()
-                            .decode(&message.payload)
-                            .map(|envelope| MailboxRequest { client, envelope });
+                        let request =
+                            decode_envelope(codec.as_ref(), &message.payload).map(|envelope| {
+                                MailboxRequest {
+                                    client,
+                                    codec,
+                                    envelope,
+                                }
+                            });
                         let _ = sender.send(request).await;
                     }
                 },
@@ -253,7 +305,9 @@ impl MailboxRequestServer {
     }
 
     /// Receives the next request or reports that its mailbox subscription closed.
-    pub async fn next(&mut self) -> CatgaResult<MailboxRequest> {
+    ///
+    /// The returned request retains the envelope codec configured on the subscribing client.
+    pub async fn next(&mut self) -> CatgaResult<MailboxRequest<C>> {
         self.requests.recv().await.ok_or_else(|| {
             CatgaError::new(ErrorCode::Transient, "RobustMQ request subscription closed")
         })?
@@ -277,7 +331,7 @@ impl MailboxRequestServer {
     }
 }
 
-impl Drop for MailboxRequestServer {
+impl<C> Drop for MailboxRequestServer<C> {
     fn drop(&mut self) {
         if let Some(subscription) = self.subscription.take() {
             subscription.unsubscribe();
@@ -285,13 +339,21 @@ impl Drop for MailboxRequestServer {
     }
 }
 
-/// One received RobustMQ request and its private reply route.
-pub struct MailboxRequest {
+/// One received RobustMQ request, its private reply route, and its envelope codec.
+///
+/// The type parameter defaults to [`MemoryPackCodec`]. Custom-codec request servers produce a
+/// matching `MailboxRequest<C>` so [`Self::respond`] encodes replies with the same codec that
+/// decoded the request.
+pub struct MailboxRequest<C = MemoryPackCodec> {
     client: Arc<MQ9Client>,
+    codec: Arc<C>,
     envelope: Envelope,
 }
 
-impl MailboxRequest {
+impl<C> MailboxRequest<C>
+where
+    C: EnvelopeCodec + 'static,
+{
     /// Returns the decoded request envelope.
     pub const fn envelope(&self) -> &Envelope {
         &self.envelope
@@ -302,7 +364,10 @@ impl MailboxRequest {
         MemoryPackCodec::default().decode_value(self.envelope.payload())
     }
 
-    /// Sends one response at its envelope priority to the request's private reply mailbox.
+    /// Sends one response at its envelope priority to the private reply mailbox.
+    ///
+    /// The complete envelope is encoded with the codec retained from the request server; this
+    /// avoids accidentally replying in MemoryPack to a custom-codec peer.
     pub async fn respond(self, response: Envelope) -> CatgaResult<()> {
         let reply_to = self.envelope.reply_to().ok_or_else(|| {
             CatgaError::new(
@@ -311,7 +376,7 @@ impl MailboxRequest {
             )
         })?;
         let priority = MailboxPriority::from_envelope(&response).as_sdk();
-        let payload = MemoryPackCodec::default().encode(&response)?;
+        let payload = encode_envelope(self.codec.as_ref(), &response)?;
         self.client
             .send(reply_to, &payload, priority)
             .await
@@ -333,4 +398,58 @@ impl MailboxRequest {
 
 fn map_error(error: robustmq::MQ9Error) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
+}
+
+/// Encodes an envelope at the RobustMQ boundary without making a transport choice in Core.
+fn encode_envelope<C: EnvelopeCodec + ?Sized>(
+    codec: &C,
+    envelope: &Envelope,
+) -> CatgaResult<Vec<u8>> {
+    codec.encode(envelope)
+}
+
+/// Decodes an envelope at the RobustMQ boundary without making a transport choice in Core.
+fn decode_envelope<C: EnvelopeCodec + ?Sized>(codec: &C, bytes: &[u8]) -> CatgaResult<Envelope> {
+    codec.decode(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use catga_core::{EnvelopeCodec, MessageMetadata};
+
+    use super::*;
+
+    struct TaggedCodec;
+
+    impl EnvelopeCodec for TaggedCodec {
+        fn encode(&self, envelope: &Envelope) -> CatgaResult<Vec<u8>> {
+            Ok(format!("tagged:{}", envelope.id()).into_bytes())
+        }
+
+        fn decode(&self, bytes: &[u8]) -> CatgaResult<Envelope> {
+            let id = std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|value| value.strip_prefix("tagged:"))
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| CatgaError::new(ErrorCode::Validation, "invalid tagged frame"))?;
+            Ok(Envelope::new(
+                id,
+                "tagged",
+                Vec::new(),
+                MessageMetadata::new(id, None),
+            ))
+        }
+    }
+
+    #[test]
+    fn envelope_wire_helpers_use_the_supplied_codec() {
+        let envelope = Envelope::new(42, "request", vec![1, 2, 3], MessageMetadata::new(42, None));
+
+        let bytes = encode_envelope(&TaggedCodec, &envelope).expect("custom codec must encode");
+        assert_eq!(bytes, b"tagged:42");
+
+        let decoded = decode_envelope(&TaggedCodec, &bytes).expect("custom codec must decode");
+        assert_eq!(decoded.id(), 42);
+        assert_eq!(decoded.message_type(), "tagged");
+    }
 }

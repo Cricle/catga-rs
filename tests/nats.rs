@@ -1,7 +1,10 @@
 //! NATS JetStream integration tests.
 
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -35,6 +38,43 @@ mod dsl_progress_contract;
 mod nats_e2e;
 #[path = "flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
+
+const TAGGED_ENVELOPE_CODEC_PREFIX: &[u8] = b"catga-nats-e2e-codec-v1\0";
+
+/// A deliberately non-default envelope frame used to prove NATS codec injection end to end.
+///
+/// The prefix makes every frame incompatible with the default [`MemoryPackCodec`] at the
+/// transport boundary. The wrapped payload representation keeps this regression test focused on
+/// delegation through `NatsTransport`, instead of duplicating envelope serialization logic.
+#[derive(Clone, Default)]
+struct TaggedEnvelopeCodec {
+    encoded: Arc<AtomicUsize>,
+    decoded: Arc<AtomicUsize>,
+}
+
+impl EnvelopeCodec for TaggedEnvelopeCodec {
+    fn encode(&self, envelope: &Envelope) -> CatgaResult<Vec<u8>> {
+        self.encoded.fetch_add(1, Ordering::Relaxed);
+        let payload = MemoryPackCodec::default().encode(envelope)?;
+        let mut frame = Vec::with_capacity(TAGGED_ENVELOPE_CODEC_PREFIX.len() + payload.len());
+        frame.extend_from_slice(TAGGED_ENVELOPE_CODEC_PREFIX);
+        frame.extend_from_slice(&payload);
+        Ok(frame)
+    }
+
+    fn decode(&self, bytes: &[u8]) -> CatgaResult<Envelope> {
+        self.decoded.fetch_add(1, Ordering::Relaxed);
+        let payload = bytes
+            .strip_prefix(TAGGED_ENVELOPE_CODEC_PREFIX)
+            .ok_or_else(|| {
+                CatgaError::new(
+                    ErrorCode::Validation,
+                    "tagged NATS E2E codec frame prefix is missing",
+                )
+            })?;
+        MemoryPackCodec::default().decode(payload)
+    }
+}
 
 #[tokio::test]
 async fn nats_e2e_starts_a_jetstream_container_when_no_url_is_configured() {
@@ -903,6 +943,77 @@ async fn jetstream_round_trip_and_ack() {
             .code(),
         ErrorCode::Unavailable
     );
+}
+
+/// A custom envelope codec must frame both the configured subject and provisioned destinations.
+///
+/// This uses the real JetStream service supplied by `nats_e2e`, so it catches accidental fallback
+/// to the default codec in either publish/receive path as well as in destination routing.
+#[tokio::test]
+async fn jetstream_transport_round_trips_with_an_injected_envelope_codec() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!(
+        "codec_{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos())
+    );
+    let codec = TaggedEnvelopeCodec::default();
+    let transport = NatsTransport::<TaggedEnvelopeCodec>::connect_with_codec(
+        NatsConfig {
+            server: server.url().into(),
+            stream: format!("CATGA_CODEC_MAIN_{suffix}").into(),
+            subject: format!("catga.codec.main.{suffix}").into(),
+            consumer: format!("catga_codec_main_{suffix}").into(),
+        },
+        codec.clone(),
+    )
+    .await?;
+
+    let published = Envelope::new(
+        9_001,
+        "catga.codec.publish",
+        vec![9, 0, 0, 1],
+        MessageMetadata::new(9_001, None),
+    );
+    transport.publish(published.clone()).await?;
+    let delivery = tokio::time::timeout(Duration::from_secs(1), transport.receive())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "NATS publish delivery timed out"))??;
+    assert_eq!(delivery.envelope(), &published);
+    transport.ack(delivery).await?;
+
+    let destination = Destination::parse(format!("codec-destination:{suffix}"))?;
+    transport
+        .provision_destination(
+            destination.clone(),
+            NatsDestinationConfig {
+                stream: format!("CATGA_CODEC_DESTINATION_{suffix}").into(),
+                subject: format!("catga.codec.destination.{suffix}").into(),
+                consumer: format!("catga_codec_destination_{suffix}").into(),
+            },
+        )
+        .await?;
+    let directed = Envelope::new(
+        9_002,
+        "catga.codec.destination",
+        vec![9, 0, 0, 2],
+        MessageMetadata::new(9_002, None),
+    );
+    transport.send_to(&destination, directed.clone()).await?;
+    let delivery =
+        tokio::time::timeout(Duration::from_secs(1), transport.receive_from(&destination))
+            .await
+            .map_err(|_| {
+                CatgaError::new(ErrorCode::Timeout, "NATS destination delivery timed out")
+            })??;
+    assert_eq!(delivery.envelope(), &directed);
+    transport.ack(delivery).await?;
+
+    assert_eq!(codec.encoded.load(Ordering::Relaxed), 2);
+    assert_eq!(codec.decoded.load(Ordering::Relaxed), 2);
+    Ok(())
 }
 
 /// JetStream exposes its durable redelivery count through [`catga_core::Delivery`].

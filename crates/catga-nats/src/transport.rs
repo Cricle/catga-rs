@@ -26,12 +26,16 @@ const NATS_DEDUP_DROPS: &str = "catga.nats.dedup.drops";
 /// `AtMostOnce` uses Core NATS, `AtLeastOnce` waits for a JetStream publish acknowledgement, and
 /// `ExactlyOnce` additionally supplies the envelope message ID to JetStream's deduplication
 /// window. Received JetStream deliveries always expose explicit acknowledgement through
-/// [`MessageTransport::ack`].
-pub struct NatsTransport {
+/// [`MessageTransport::ack`]. The default [`MemoryPackCodec`] preserves the original wire format;
+/// applications with another envelope format can select it through a `*_with_codec` constructor.
+pub struct NatsTransport<C = MemoryPackCodec>
+where
+    C: EnvelopeCodec,
+{
     client: async_nats::Client,
     context: jetstream::Context,
     subject: Box<str>,
-    codec: MemoryPackCodec,
+    codec: C,
     consumer: consumer::PullConsumer,
     destinations: DashMap<Destination, NatsDestination>,
     operations: OperationTracker,
@@ -56,14 +60,10 @@ enum NatsPublishMode {
     JetStreamDeduplicated,
 }
 
-impl NatsTransport {
+impl NatsTransport<MemoryPackCodec> {
     /// Connects and idempotently provisions the configured stream and durable consumer.
     pub async fn connect(config: NatsConfig) -> CatgaResult<Self> {
-        validate_config(&config)?;
-        let client = async_nats::connect(config.server.as_ref())
-            .await
-            .map_err(map_error)?;
-        Self::from_client(client, config).await
+        Self::connect_with_codec(config, MemoryPackCodec::default()).await
     }
 
     /// Builds a transport from an application-owned NATS client.
@@ -73,7 +73,7 @@ impl NatsTransport {
     /// `config`. `config.server` is not opened by this constructor; it remains part of
     /// [`NatsConfig`] for compatibility with [`Self::connect`].
     pub async fn from_client(client: async_nats::Client, config: NatsConfig) -> CatgaResult<Self> {
-        Self::initialize(client, config).await
+        Self::from_client_with_codec(client, config, MemoryPackCodec::default()).await
     }
 
     /// Builds a transport from an application-owned NATS client.
@@ -85,10 +85,58 @@ impl NatsTransport {
         client: async_nats::Client,
         config: NatsConfig,
     ) -> CatgaResult<Self> {
-        Self::initialize(client, config).await
+        Self::connect_with_client_with_codec(client, config, MemoryPackCodec::default()).await
+    }
+}
+
+impl<C> NatsTransport<C>
+where
+    C: EnvelopeCodec,
+{
+    /// Connects with a caller-provided envelope codec and provisions the configured resources.
+    ///
+    /// The selected codec defines the envelope bytes written to and read from NATS. It must be
+    /// compatible with every producer and consumer that shares the configured subjects.
+    pub async fn connect_with_codec(config: NatsConfig, codec: C) -> CatgaResult<Self> {
+        validate_config(&config)?;
+        let client = async_nats::connect(config.server.as_ref())
+            .await
+            .map_err(map_error)?;
+        Self::from_client_with_codec(client, config, codec).await
     }
 
-    async fn initialize(client: async_nats::Client, config: NatsConfig) -> CatgaResult<Self> {
+    /// Builds a transport from an application-owned NATS client and caller-provided codec.
+    ///
+    /// This preserves the client's TLS, authentication, reconnection, and observability behavior
+    /// while idempotently provisioning the stream and durable consumer in `config`. The supplied
+    /// codec encodes published envelopes and decodes received envelopes; `config.server` is not
+    /// opened by this constructor.
+    pub async fn from_client_with_codec(
+        client: async_nats::Client,
+        config: NatsConfig,
+        codec: C,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config, codec).await
+    }
+
+    /// Builds a transport from an application-owned NATS client and caller-provided codec.
+    ///
+    /// This is equivalent to [`Self::from_client_with_codec`] and is available for applications
+    /// that use `connect_*` naming for transport factories. The supplied client is reused without
+    /// opening `config.server`.
+    pub async fn connect_with_client_with_codec(
+        client: async_nats::Client,
+        config: NatsConfig,
+        codec: C,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config, codec).await
+    }
+
+    async fn initialize(
+        client: async_nats::Client,
+        config: NatsConfig,
+        codec: C,
+    ) -> CatgaResult<Self> {
         validate_config(&config)?;
         let context = jetstream::new(client.clone());
         let stream = context
@@ -114,7 +162,7 @@ impl NatsTransport {
             client,
             context,
             subject: config.subject,
-            codec: MemoryPackCodec::default(),
+            codec,
             consumer,
             destinations: DashMap::new(),
             operations: OperationTracker::default(),
@@ -185,7 +233,7 @@ impl NatsTransport {
     }
 
     async fn publish_durable(&self, subject: &str, envelope: Envelope) -> CatgaResult<()> {
-        let payload = self.codec.encode(&envelope)?;
+        let payload = encode_envelope(&self.codec, &envelope)?;
         if envelope.metadata().quality_of_service() == QualityOfService::ExactlyOnce {
             let acknowledgement = self
                 .context
@@ -225,7 +273,7 @@ impl NatsTransport {
                 continue;
             };
             let message = message.map_err(map_error)?;
-            let envelope = self.codec.decode(&message.payload)?;
+            let envelope = decode_envelope(&self.codec, &message.payload)?;
             // JetStream embeds delivery metadata in the acknowledgement subject. `info` parses
             // that borrowed subject without allocating, so capture it before moving `message`
             // into its acknowledger. Core or malformed broker metadata safely falls back to the
@@ -249,7 +297,10 @@ impl NatsTransport {
 }
 
 #[async_trait]
-impl MessageTransport for NatsTransport {
+impl<C> MessageTransport for NatsTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn publish(&self, envelope: Envelope) -> CatgaResult<()> {
         let mode = publish_mode(envelope.metadata().quality_of_service());
         match mode {
@@ -259,7 +310,7 @@ impl MessageTransport for NatsTransport {
                     self.client
                         .publish(
                             self.subject.to_string(),
-                            self.codec.encode(&envelope)?.into(),
+                            encode_envelope(&self.codec, &envelope)?.into(),
                         )
                         .await
                         .map_err(map_error)
@@ -272,7 +323,7 @@ impl MessageTransport for NatsTransport {
                     self.context
                         .publish(
                             self.subject.to_string(),
-                            self.codec.encode(&envelope)?.into(),
+                            encode_envelope(&self.codec, &envelope)?.into(),
                         )
                         .await
                         .map_err(map_error)?
@@ -290,7 +341,7 @@ impl MessageTransport for NatsTransport {
                         .send_publish(
                             self.subject.to_string(),
                             jetstream::context::Publish::build()
-                                .payload(self.codec.encode(&envelope)?.into())
+                                .payload(encode_envelope(&self.codec, &envelope)?.into())
                                 .message_id(envelope.metadata().message_id().to_string()),
                         )
                         .await
@@ -314,7 +365,10 @@ impl MessageTransport for NatsTransport {
 }
 
 #[async_trait]
-impl DestinationTransport for NatsTransport {
+impl<C> DestinationTransport for NatsTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn send_to(&self, destination: &Destination, envelope: Envelope) -> CatgaResult<()> {
         telemetry::record_message_publish("nats", "jetstream_destination", async {
             self.acceptance.ensure_accepting()?;
@@ -334,7 +388,10 @@ impl DestinationTransport for NatsTransport {
     }
 }
 
-impl Stoppable for NatsTransport {
+impl<C> Stoppable for NatsTransport<C>
+where
+    C: EnvelopeCodec,
+{
     fn stop_accepting(&self) {
         self.acceptance.stop_accepting();
     }
@@ -345,13 +402,19 @@ impl Stoppable for NatsTransport {
 }
 
 #[async_trait]
-impl AsyncInitializable for NatsTransport {
+impl<C> AsyncInitializable for NatsTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn initialize(&self) -> CatgaResult<()> {
         Ok(())
     }
 }
 
-impl HealthCheckable for NatsTransport {
+impl<C> HealthCheckable for NatsTransport<C>
+where
+    C: EnvelopeCodec,
+{
     fn is_healthy(&self) -> bool {
         true
     }
@@ -362,7 +425,10 @@ impl HealthCheckable for NatsTransport {
 }
 
 #[async_trait]
-impl Waitable for NatsTransport {
+impl<C> Waitable for NatsTransport<C>
+where
+    C: EnvelopeCodec,
+{
     async fn wait_for_completion(&self, cancellation: CancellationToken) -> CatgaResult<()> {
         self.operations.wait_for_completion(cancellation).await
     }
@@ -374,6 +440,16 @@ impl Waitable for NatsTransport {
 
 fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
+}
+
+/// Delegates envelope encoding to the codec selected when the transport was constructed.
+fn encode_envelope<C: EnvelopeCodec>(codec: &C, envelope: &Envelope) -> CatgaResult<Vec<u8>> {
+    codec.encode(envelope)
+}
+
+/// Delegates envelope decoding to the codec selected when the transport was constructed.
+fn decode_envelope<C: EnvelopeCodec>(codec: &C, bytes: &[u8]) -> CatgaResult<Envelope> {
+    codec.decode(bytes)
 }
 
 /// Records the broker-owned duplicate decision for one ExactlyOnce publication.
@@ -428,18 +504,67 @@ const fn publish_mode(quality_of_service: QualityOfService) -> NatsPublishMode {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     };
 
-    use catga_core::QualityOfService;
+    use catga_core::{Envelope, EnvelopeCodec, MessageMetadata, QualityOfService};
     use metrics::{
         Counter, CounterFn, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
     };
 
     use crate::{NatsConfig, NatsTransport};
 
-    use super::{NatsPublishMode, publish_mode, record_broker_duplicate, validate_config};
+    use super::{
+        NatsPublishMode, decode_envelope, encode_envelope, publish_mode, record_broker_duplicate,
+        validate_config,
+    };
+
+    #[derive(Default)]
+    struct RecordingCodec {
+        encoded: AtomicUsize,
+        decoded: AtomicUsize,
+        envelope: Mutex<Option<Envelope>>,
+    }
+
+    impl EnvelopeCodec for RecordingCodec {
+        fn encode(&self, envelope: &Envelope) -> catga_core::CatgaResult<Vec<u8>> {
+            self.encoded.fetch_add(1, Ordering::Relaxed);
+            let mut stored = self.envelope.lock().map_err(|_| {
+                catga_core::CatgaError::new(
+                    catga_core::ErrorCode::Internal,
+                    "test codec lock poisoned",
+                )
+            })?;
+            *stored = Some(envelope.clone());
+            Ok(b"recording-codec".to_vec())
+        }
+
+        fn decode(&self, bytes: &[u8]) -> catga_core::CatgaResult<Envelope> {
+            self.decoded.fetch_add(1, Ordering::Relaxed);
+            if bytes != b"recording-codec" {
+                return Err(catga_core::CatgaError::new(
+                    catga_core::ErrorCode::Internal,
+                    "unexpected test codec bytes",
+                ));
+            }
+            self.envelope
+                .lock()
+                .map_err(|_| {
+                    catga_core::CatgaError::new(
+                        catga_core::ErrorCode::Internal,
+                        "test codec lock poisoned",
+                    )
+                })?
+                .clone()
+                .ok_or_else(|| {
+                    catga_core::CatgaError::new(
+                        catga_core::ErrorCode::Internal,
+                        "missing test envelope",
+                    )
+                })
+        }
+    }
 
     #[derive(Default)]
     struct CounterValue(AtomicU64);
@@ -531,6 +656,27 @@ mod tests {
         ] {
             assert!(validate_config(&config).is_err());
         }
+    }
+
+    #[test]
+    fn transport_codec_helpers_use_the_injected_envelope_codec_for_encode_and_decode()
+    -> catga_core::CatgaResult<()> {
+        let codec = RecordingCodec::default();
+        let envelope = Envelope::new(
+            42,
+            "tests.custom-codec",
+            vec![1, 2, 3],
+            MessageMetadata::new(42, None),
+        );
+
+        let encoded = encode_envelope(&codec, &envelope)?;
+        let decoded = decode_envelope(&codec, &encoded)?;
+
+        assert_eq!(encoded, b"recording-codec");
+        assert_eq!(decoded, envelope);
+        assert_eq!(codec.encoded.load(Ordering::Relaxed), 1);
+        assert_eq!(codec.decoded.load(Ordering::Relaxed), 1);
+        Ok(())
     }
 
     #[test]
