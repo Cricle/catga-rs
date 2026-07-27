@@ -981,6 +981,67 @@ async fn dsl_flow_when_any_commits_the_first_completed_branch_without_waiting_fo
 }
 
 #[tokio::test]
+async fn dsl_flow_when_any_ignores_an_early_failure_when_a_later_branch_succeeds() {
+    let flow = DslFlow::new().when_any(
+        [
+            DslFlow::new().action(dsl_action!(|state: &mut ParallelState| async move {
+                let _ = state;
+                Err(CatgaError::new(
+                    ErrorCode::Validation,
+                    "early branch failed",
+                ))
+            })),
+            DslFlow::new().action(dsl_action!(|state: &mut ParallelState| async move {
+                tokio::task::yield_now().await;
+                state.value = 42;
+                Ok(())
+            })),
+        ],
+        |state, winner| {
+            state.value = winner.value;
+            Ok(())
+        },
+    );
+    let mut state = ParallelState { value: 5 };
+
+    flow.run(&mut state)
+        .await
+        .expect("a later successful branch must win over an earlier failure");
+
+    assert_eq!(state.value, 42);
+}
+
+#[tokio::test]
+async fn dsl_flow_when_any_returns_the_final_structured_error_after_all_branches_fail() {
+    let flow = DslFlow::new().when_any(
+        [
+            DslFlow::new().action(dsl_action!(|state: &mut ParallelState| async move {
+                let _ = state;
+                Err(CatgaError::new(
+                    ErrorCode::Validation,
+                    "first branch failed",
+                ))
+            })),
+            DslFlow::new().action(dsl_action!(|state: &mut ParallelState| async move {
+                let _ = state;
+                tokio::task::yield_now().await;
+                Err(CatgaError::new(ErrorCode::Transient, "final branch failed"))
+            })),
+        ],
+        |_, _| Ok(()),
+    );
+    let mut state = ParallelState { value: 5 };
+
+    let error = flow
+        .run(&mut state)
+        .await
+        .expect_err("when_any must fail after every branch has failed");
+
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(error.message(), "final branch failed");
+}
+
+#[tokio::test]
 async fn dsl_flow_rejects_oversized_live_parallel_fan_out_before_running_a_branch() {
     let parallel_calls = Arc::new(AtomicUsize::new(0));
     let parallel_branches = (0..=MAX_DSL_PARALLEL_BRANCHES).map(|_| {

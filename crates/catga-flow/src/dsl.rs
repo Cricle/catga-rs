@@ -16,7 +16,7 @@ use crate::{
         validate_replayable_for_each_items,
     },
     dsl_when_any::run_checkpointed_when_any,
-    metrics::ForEachMetrics,
+    metrics::{FLOWS_COMPLETED, FLOWS_FAILED, FlowMetrics, ForEachMetrics},
 };
 use catga_codec_memorypack::{
     MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackable,
@@ -26,6 +26,7 @@ use catga_core::{
 };
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::Instrument;
 
 type Action<S> = Box<dyn for<'a> Fn(&'a mut S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
 type Condition<S> = Box<dyn Fn(&S) -> bool + Send + Sync>;
@@ -507,6 +508,7 @@ pub struct DslFlow<S> {
     steps: Vec<Step<S>>,
     lifecycle_observers: Vec<Arc<dyn DslFlowLifecycleObserver>>,
     lifecycle_hooks: Option<DslFlowLifecycleHooks<S>>,
+    metrics: FlowMetrics,
 }
 
 /// Shared concurrency budget for throttled flow actions.
@@ -539,11 +541,12 @@ impl FlowThrottle {
 
 impl<S: Send> DslFlow<S> {
     /// Creates an empty DSL flow.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             steps: Vec::new(),
             lifecycle_observers: Vec::new(),
             lifecycle_hooks: None,
+            metrics: FlowMetrics::default(),
         }
     }
 
@@ -806,10 +809,12 @@ impl<S: Send> DslFlow<S> {
         self.parallel(branches, merge)
     }
 
-    /// Appends branches that run concurrently until the first branch completes.
+    /// Appends branches that run concurrently until the first branch succeeds.
     ///
-    /// Every branch starts with an isolated state copy. The winning state is merged only after
-    /// its branch succeeds; unfinished cooperative futures are dropped without spawning tasks.
+    /// Every branch starts with an isolated state copy. Failed branches are ignored while another
+    /// branch remains pending; if every branch fails, the last completed structured error is
+    /// returned. The winning state is merged only after a successful branch, and unfinished
+    /// cooperative futures are dropped without spawning tasks.
     pub fn when_any<I, M>(mut self, branches: I, merge: M) -> Self
     where
         S: Clone,
@@ -1157,21 +1162,67 @@ impl<S: Send> DslFlow<S> {
     }
 
     /// Runs all selected steps against one mutable state value.
+    ///
+    /// The caller-owned future emits the standard bounded Flow counters, active gauge, execution
+    /// and top-level-step duration histograms, and `tracing` spans. The DSL has no stable durable
+    /// identity, so metrics carry no flow ID or user-defined label; the trace uses the static
+    /// `dsl` flow type to avoid unbounded metric cardinality.
     pub fn run<'a>(&'a self, state: &'a mut S) -> BoxFuture<'a, CatgaResult<()>> {
         Box::pin(async move {
+            self.metrics.record_started();
+            let mut execution = self.metrics.begin_execution("", "dsl");
             for (step_index, step) in self.steps.iter().enumerate() {
-                match self.run_step(state, step).await {
-                    Ok(()) => self.notify_step_succeeded(state, step_index).await?,
+                let mut step_execution = execution.begin_step("dsl");
+                let result = self
+                    .run_step(state, step)
+                    .instrument(step_execution.span())
+                    .await;
+                step_execution.complete(if result.is_ok() { "success" } else { "failure" });
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = self.notify_step_succeeded(state, step_index).await {
+                            self.complete_dsl_execution(&mut execution, &error);
+                            return Err(error);
+                        }
+                    }
                     Err(error) => {
-                        self.notify_step_failed(state, step_index, &error).await?;
-                        self.notify_flow_failed(state, &error).await?;
+                        if let Err(hook_error) =
+                            self.notify_step_failed(state, step_index, &error).await
+                        {
+                            self.complete_dsl_execution(&mut execution, &hook_error);
+                            return Err(hook_error);
+                        }
+                        if let Err(hook_error) = self.notify_flow_failed(state, &error).await {
+                            self.complete_dsl_execution(&mut execution, &hook_error);
+                            return Err(hook_error);
+                        }
+                        self.complete_dsl_execution(&mut execution, &error);
                         return Err(error);
                     }
                 }
             }
-            self.notify_flow_succeeded(state).await?;
+            if let Err(error) = self.notify_flow_succeeded(state).await {
+                self.complete_dsl_execution(&mut execution, &error);
+                return Err(error);
+            }
+            metrics::counter!(FLOWS_COMPLETED).increment(1);
+            execution.complete("success");
             Ok(())
         })
+    }
+
+    fn complete_dsl_execution(
+        &self,
+        execution: &mut crate::metrics::FlowExecution,
+        error: &CatgaError,
+    ) {
+        let outcome = if error.code() == ErrorCode::Cancelled {
+            "cancelled"
+        } else {
+            metrics::counter!(FLOWS_FAILED).increment(1);
+            "failure"
+        };
+        execution.complete(outcome);
     }
 
     fn notify(&self, event: DslFlowLifecycleEvent) {
@@ -1260,13 +1311,42 @@ impl<S: Send> DslFlow<S> {
     /// schedule-at behavior. A successful run writes one bounded terminal state before
     /// announcing [`DslFlowLifecycleEvent::FlowSucceeded`]; later invocations with the same
     /// `flow_id` restore that state without replaying steps or lifecycle hooks. Failed runs keep
-    /// their existing recovery behavior so transient step failures can be retried.
+    /// their existing recovery behavior so transient step failures can be retried. Each call
+    /// emits the same bounded Flow metrics and trace spans as [`Self::run`], while `flow_id`
+    /// remains trace-only rather than becoming a metric label.
     pub async fn run_checkpointed<C, P>(
+        &self,
+        flow_id: &str,
+        initial: S,
+        progress: &P,
+        codec: &C,
+    ) -> CatgaResult<S>
+    where
+        C: DslStateCodec<S>,
+        P: DslStepProgressStore + ?Sized,
+    {
+        self.metrics.record_started();
+        let mut execution = self.metrics.begin_execution(flow_id, "dsl_checkpointed");
+        let result = self
+            .run_checkpointed_inner(flow_id, initial, progress, codec, &mut execution)
+            .await;
+        match &result {
+            Ok(_) => {
+                metrics::counter!(FLOWS_COMPLETED).increment(1);
+                execution.complete("success");
+            }
+            Err(error) => self.complete_dsl_execution(&mut execution, error),
+        }
+        result
+    }
+
+    async fn run_checkpointed_inner<C, P>(
         &self,
         flow_id: &str,
         mut initial: S,
         progress: &P,
         codec: &C,
+        execution: &mut crate::metrics::FlowExecution,
     ) -> CatgaResult<S>
     where
         C: DslStateCodec<S>,
@@ -1306,10 +1386,13 @@ impl<S: Send> DslFlow<S> {
                 progress,
                 codec,
             };
-            match self
+            let mut step_execution = execution.begin_step("dsl");
+            let result = self
                 .run_checkpointed_step(&mut initial, step, step_cursor, &context)
-                .await
-            {
+                .instrument(step_execution.span())
+                .await;
+            step_execution.complete(if result.is_ok() { "success" } else { "failure" });
+            match result {
                 Ok(()) => self.notify_step_succeeded(&mut initial, index).await?,
                 Err(error) => {
                     self.notify_step_failed(&mut initial, index, &error).await?;
@@ -1900,11 +1983,17 @@ impl<S: Send> DslFlow<S> {
                             (branch_state, result)
                         });
                     }
-                    if let Some((winner, result)) = pending.next().await {
-                        result?;
-                        merge(state, winner)?;
+                    let mut last_error = None;
+                    while let Some((winner, result)) = pending.next().await {
+                        match result {
+                            Ok(()) => return merge(state, winner),
+                            Err(error) => last_error = Some(error),
+                        }
                     }
-                    Ok(())
+                    match last_error {
+                        Some(error) => Err(error),
+                        None => Ok(()),
+                    }
                 }
             }
         })

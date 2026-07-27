@@ -6,10 +6,10 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 
 | Upstream area | Rust replacement | Evidence | Status |
 | --- | --- | --- | --- |
-| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-memorypack` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel,event_store}` | Migrated; public Rustdoc is checked with warnings denied, event-store reads use validated cursor pages of at most 1,024 records, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience with rolling failure-ratio circuits and atomic full jitter, and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
+| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-memorypack` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel,event_store}` | Migrated; public Rustdoc is checked with warnings denied, event-store reads use validated cursor pages of at most 1,024 records, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience with rolling failure-ratio circuits and atomic full jitter by default (with explicit deterministic policies), and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
 | HTTP integration (11 C# files) | `catga-axum` | `tests/axum.rs` | Migrated with typed and arbitrary-signature static Axum routes instead of reflection discovery; leader forwarding and the opt-in `CorrelationHttpClient` retain ambient correlation and W3C trace context across HTTP hops without a global client wrapper, `EndpointValidation` maps input errors to the stable Catga validation result, `IntoCatgaHttpResponse` replaces overlapping mutable C# result builders with one allocation-conscious result-to-response trait, and opt-in `endpoint_panic_middleware` replaces endpoint exception handling without exposing panic payloads |
 | Cluster coordination (10 C# files) | `catga-cluster`, Axum raft transport | `tests/{cluster,raft_cluster,raft_runtime,raft_state_machine_runtime}.rs` | Migrated; committed application entries use a bounded in-memory page and resume from durable Raft storage without discarding overflow |
-| Flow and state machines (67 C# files) | `catga-flow`, Memory/Redis/NATS flow stores | `tests/flow`, `tests/state_machine*.rs`, `tests/observability.rs` | Migrated except upstream hot reload, which is intentionally excluded by project constraint. Durable DSL recovery uses bounded nested conditional paths, explicitly replayable ForEach item snapshots, branch-local parallel cursors, and a persisted `when_any` winner. Durable child fan-out first persists up to 1,024 caller-supplied stable child identities, then uses expiring CAS launch claims and an application-owned idempotent launcher; it retains no child task, no unbounded result list, and no result payload larger than 64 KiB. Tagged durable steps select caller-owned timeouts and bounded retries only for typed `Transient` errors; no detached timer or retry task is created, and every durable transition remains persisted regardless of a source-style persist marker. Discovery summaries and state-machine snapshots preserve exact creation and last-successful-update timestamps in their first Rust durable format, with no backend-specific schema expansion. Async step lifecycle hooks are serial, caller-owned, and emitted before ordinary checkpoint persistence, preserving at-least-once replay. `FlowSucceeded` is emitted only after an atomically created bounded terminal state, so later invocations restore the terminal state without replaying steps or that success hook. The same recovery contract is exercised in memory and compiled through explicit Redis/NATS service-gated tests |
+| Flow and state machines (67 C# files) | `catga-flow`, Memory/Redis/NATS flow stores | `tests/flow`, `tests/state_machine*.rs`, `tests/observability.rs` | Migrated except upstream hot reload, which is intentionally excluded by project constraint. Durable DSL recovery uses bounded nested conditional paths, explicitly replayable ForEach item snapshots, branch-local parallel cursors, and a persisted `when_any` first-success winner; failed branches are ignored while a success remains possible, then the final failure is returned. `FlowCompletionAdapter` provides the source completion-event convenience layer as an explicit caller-owned adapter over existing correlation-fenced persistence, with no transport coupling or hidden worker. Durable child fan-out first persists up to 1,024 caller-supplied stable child identities, then uses expiring CAS launch claims and an application-owned idempotent launcher; it retains no child task, no unbounded result list, and no result payload larger than 64 KiB. Tagged durable steps select caller-owned timeouts and bounded retries only for typed `Transient` errors; no detached timer or retry task is created, and every durable transition remains persisted regardless of a source-style persist marker. State-machine event categories replace reflection inheritance matching: events explicitly declare zero-allocation marker categories, exact transitions take precedence, and category transitions use a caller-supplied safe extractor. Discovery summaries and state-machine snapshots preserve exact creation and last-successful-update timestamps in their first Rust durable format, with no backend-specific schema expansion. Async step lifecycle hooks are serial, caller-owned, and emitted before ordinary checkpoint persistence, preserving at-least-once replay. `FlowSucceeded` is emitted only after an atomically created bounded terminal state, so later invocations restore the terminal state without replaying steps or that success hook. The same recovery contract is exercised in memory and compiled through explicit Redis/NATS service-gated tests |
 | SQL Flow persistence | `catga-flow-store` | `crates/catga-flow-store/tests/{sqlite,mysql,postgres,mssql}.rs`, `tests/redis.rs` | Migrated as feature-gated SQLite, MySQL, PostgreSQL, and SQL Server adapters. The Redis feature re-exports `RedisFlows` and `RedisSuspendedFlows`; plain state uses Lua atomic create/version CAS/heartbeat transitions and a 32-candidate per-type stale-claim index. All SQL values use bound parameters, continuation discovery has physical scan indexes, summaries preserve exact sub-millisecond creation times, claims use bounded revision fencing, and SQL Server holds skip-locked selection plus CAS in one transaction. No worker, RabbitMQ/AMQP adapter, or HTTP health route is introduced |
 | In-memory persistence (17 C# files) | `catga-memory` | `tests/{memory_reliability,event_sourcing,flow}` | Migrated |
 | NATS persistence and transport (24 C# files) | `catga-nats` | `tests/{nats,nats_request}.rs` | Migrated; real Core NATS and JetStream regressions include explicit QoS separation and native redelivery-attempt reporting |
@@ -130,7 +130,10 @@ no machine-dependent timing threshold.
 * Subscription stream versions remain signed for source compatibility. Rust
   treats `i64::MAX` as a terminal persisted checkpoint or event version rather
   than adding one and panicking or wrapping to an invalid read position.
-* Existing source abstractions that solely configure .NET DI are represented
+* The source manual recovery operation maps to `RecoveryManager::recover_all`, which invokes
+  every registered component, including components currently reporting healthy. Automatic
+  recovery deliberately uses `recover_unhealthy_until`, retaining the efficient unhealthy-only
+  sweep and cancellation boundary. Existing source abstractions that solely configure .NET DI are represented
   by explicit Rust construction and typed composition, not a global registry.
 * The source recovery hosted service maps to caller-owned
   `RecoveryManager::run_auto_recovery`. It performs its first sweep
@@ -164,8 +167,9 @@ no machine-dependent timing threshold.
   readers accept their legacy records as explicitly marked legacy diagnostics.
 * Source Polly-style circuit and retry policy maps to a caller-owned rolling
   bounded outcome window with explicit minimum throughput and exact failure
-  ratio. `RetryJitter::Full` advances one atomic state per retry and retains no
-  task or waiter; the compatibility default remains deterministic no-jitter.
+  ratio. Production constructors default to `RetryJitter::Full`, which advances
+  one atomic state per retry and retains no task or waiter; tests and callers
+  needing deterministic schedules explicitly select `None` or `Fixed`.
 * .NET cancellation-token parameters map to cancellation by dropping Rust
   futures or to explicit `CancellationToken` arguments on long-lived workers.
   Short-lived mediator dispatch also provides opt-in
@@ -267,12 +271,13 @@ no machine-dependent timing threshold.
   dynamic destination labels. The Redis and JetStream regression targets remain
   endpoint-gated; without their environment variables they compile and execute
   the deterministic skip path rather than claiming a live service verification.
-* Source Flow lifecycle counters map to the durable `FlowRuntime` transition
-  boundaries. `catga.flow.active` counts claimed drives currently executing in
-  this process rather than persisted suspended flows, so it is restored through
-  cancellation-safe RAII without polling a store or retaining flow ids. Flow
-  IDs, flow types, and step names are tracing-only fields; Flow metric labels
-  are static outcomes where a histogram needs one.
+* Source Flow lifecycle counters map to `FlowRuntime` transition boundaries and
+  caller-owned `DslFlow` / checkpointed-DSL executions. `catga.flow.active`
+  counts executions currently driving in this process rather than persisted
+  suspended flows, so cancellation-safe RAII restores it without polling a
+  store or retaining flow ids. Flow IDs, flow types, and step names are
+  tracing-only fields; Flow metric labels are static outcomes where a histogram
+  needs one.
 * Cluster coordination publishes low-cardinality Raft leader, role, term,
   commit/apply, pending-commit, inbound-queue, and command-queue gauges plus
   transition and fixed-kind failure counters. Numeric member identities are
@@ -373,7 +378,7 @@ no machine-dependent timing threshold.
   fields. Rust durable flows instead advance immutable, versioned `FlowState`
   revisions. `DslFlow::run_checkpointed` persists bounded nested conditional
   paths, explicit replayable ForEach item snapshots, per-branch local progress
-  for parallel work, and one completed `when_any` winner before merging it.
+  for parallel work, and one first-success `when_any` winner before merging it.
   The legacy generic `for_each` remains available for in-process execution but
   returns validation from checkpointed execution; callers opt into the
   serialization-bounded replayable form when restart recovery is required.

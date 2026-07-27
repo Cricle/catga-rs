@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
 
 use catga_core::{ErrorCode, Event, Message};
 use catga_flow::{
@@ -60,6 +63,38 @@ struct RoutedPaid {
 impl Message for RoutedPaid {}
 impl Event for RoutedPaid {}
 
+struct PaymentEvent;
+
+const PAYMENT_EVENT_CATEGORIES: &[TypeId] = &[TypeId::of::<PaymentEvent>()];
+
+#[derive(Clone)]
+struct CardPaid;
+
+impl Message for CardPaid {}
+
+impl Event for CardPaid {
+    fn categories(&self) -> &'static [TypeId] {
+        PAYMENT_EVENT_CATEGORIES
+    }
+}
+
+#[derive(Clone)]
+struct WirePaid;
+
+impl Message for WirePaid {}
+
+impl Event for WirePaid {
+    fn categories(&self) -> &'static [TypeId] {
+        PAYMENT_EVENT_CATEGORIES
+    }
+}
+
+#[derive(Clone)]
+struct UnrelatedPaymentEvent;
+
+impl Message for UnrelatedPaymentEvent {}
+impl Event for UnrelatedPaymentEvent {}
+
 fn machine() -> StateMachine<Order, State> {
     let mut definition = StateMachine::<Order, State>::builder(State::Pending);
     definition
@@ -112,6 +147,98 @@ fn factory_machine() -> StateMachine<Order, State> {
         .on::<Started>()
         .transition_to(State::Paid);
     definition.build()
+}
+
+fn category_machine() -> StateMachine<Order, State> {
+    let mut definition = StateMachine::<Order, State>::builder(State::Pending);
+    definition
+        .state(State::Pending)
+        .on_category::<PaymentEvent, _>(|event| {
+            if let Some(event) = event.downcast_ref::<CardPaid>() {
+                Some(event as &dyn Any)
+            } else {
+                event
+                    .downcast_ref::<WirePaid>()
+                    .map(|event| event as &dyn Any)
+            }
+        })
+        .execute(|order, _| {
+            order.trace.push("category");
+            Ok(())
+        })
+        .finish()
+        .on::<CardPaid>()
+        .execute(|order, _| {
+            order.trace.push("exact");
+            Ok(())
+        })
+        .finish();
+    definition.build()
+}
+
+fn declining_category_machine() -> StateMachine<Order, State> {
+    let mut definition = StateMachine::<Order, State>::builder(State::Pending);
+    definition
+        .state(State::Pending)
+        .on_category::<PaymentEvent, _>(|_| None)
+        .execute(|order, _| {
+            order.trace.push("category");
+            Ok(())
+        })
+        .finish();
+    definition.build()
+}
+
+#[tokio::test]
+async fn category_transition_prefers_an_exact_transition() {
+    let mut order = Order::default();
+
+    let result = category_machine()
+        .handle(&mut order, &CardPaid)
+        .await
+        .unwrap();
+
+    assert!(result.handled());
+    assert_eq!(order.trace, ["exact"]);
+}
+
+#[tokio::test]
+async fn category_transition_handles_a_declared_event_category() {
+    let mut order = Order::default();
+
+    let result = category_machine()
+        .handle(&mut order, &WirePaid)
+        .await
+        .unwrap();
+
+    assert!(result.handled());
+    assert_eq!(order.trace, ["category"]);
+}
+
+#[tokio::test]
+async fn category_transition_leaves_unrelated_events_unhandled() {
+    let mut order = Order::default();
+
+    let result = category_machine()
+        .handle(&mut order, &UnrelatedPaymentEvent)
+        .await
+        .unwrap();
+
+    assert!(!result.handled());
+    assert!(order.trace.is_empty());
+}
+
+#[tokio::test]
+async fn category_transition_leaves_events_unhandled_when_extraction_declines() {
+    let mut order = Order::default();
+
+    let result = declining_category_machine()
+        .handle(&mut order, &CardPaid)
+        .await
+        .unwrap();
+
+    assert!(!result.handled());
+    assert!(order.trace.is_empty());
 }
 
 #[tokio::test]

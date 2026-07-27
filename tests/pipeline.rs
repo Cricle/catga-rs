@@ -132,6 +132,23 @@ impl CommandBehavior<ShipOrder> for CommandCancellationScopeBehavior {
     }
 }
 
+#[test]
+fn default_retry_behavior_uses_full_jitter() {
+    assert!(matches!(
+        RetryBehavior::new(1, Duration::ZERO).jitter_policy(),
+        RetryJitter::Full { .. }
+    ));
+    assert_eq!(
+        RetryBehavior::with_jitter(1, Duration::ZERO, RetryJitter::none()).jitter_policy(),
+        RetryJitter::none()
+    );
+    assert_eq!(
+        RetryBehavior::with_jitter(1, Duration::ZERO, RetryJitter::fixed(Duration::ZERO))
+            .jitter_policy(),
+        RetryJitter::fixed(Duration::ZERO)
+    );
+}
+
 #[tokio::test]
 async fn pipeline_behaviors_wrap_a_registered_handler_in_registration_order() {
     let trace = Arc::new(Mutex::new(Vec::new()));

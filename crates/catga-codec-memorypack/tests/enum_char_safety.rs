@@ -1,3 +1,5 @@
+//! Regression coverage for enum discriminants and UTF-16 character decoding.
+
 use catga_codec_memorypack::{MemoryPackError, MemoryPackSerializer, MemoryPackable};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, MemoryPackable)]

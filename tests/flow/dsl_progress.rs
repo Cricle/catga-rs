@@ -830,6 +830,67 @@ async fn checkpointed_dsl_restores_the_single_when_any_winner_without_rerunning_
 }
 
 #[tokio::test]
+async fn checkpointed_dsl_when_any_persists_a_later_success_after_an_early_failure() {
+    let store = MemoryDslStepProgress::default();
+    let failed_branch = Arc::new(AtomicUsize::new(0));
+    let successful_branch = Arc::new(AtomicUsize::new(0));
+    let merge_attempts = Arc::new(AtomicUsize::new(0));
+    let failed_attempts = Arc::clone(&failed_branch);
+    let successful_attempts = Arc::clone(&successful_branch);
+    let merge_attempts_for_flow = Arc::clone(&merge_attempts);
+    let flow = DslFlow::new().when_any(
+        [
+            DslFlow::new().action(move |_: &mut u32| {
+                let failed_attempts = Arc::clone(&failed_attempts);
+                Box::pin(async move {
+                    failed_attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(CatgaError::new(
+                        ErrorCode::Validation,
+                        "early branch failed",
+                    ))
+                })
+            }),
+            DslFlow::new().action(move |value: &mut u32| {
+                let successful_attempts = Arc::clone(&successful_attempts);
+                Box::pin(async move {
+                    successful_attempts.fetch_add(1, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    *value = 7;
+                    Ok(())
+                })
+            }),
+        ],
+        move |value, winner| {
+            if merge_attempts_for_flow.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(CatgaError::new(ErrorCode::Transient, "retry merge"));
+            }
+            *value = winner;
+            Ok(())
+        },
+    );
+
+    assert_eq!(
+        flow.run_checkpointed("payment/when-any-failure", 0, &store, &U32Codec)
+            .await
+            .expect_err("the persisted success winner must still run the merge")
+            .code(),
+        ErrorCode::Transient
+    );
+    assert_eq!(failed_branch.load(Ordering::SeqCst), 1);
+    assert_eq!(successful_branch.load(Ordering::SeqCst), 1);
+
+    assert_eq!(
+        flow.run_checkpointed("payment/when-any-failure", 0, &store, &U32Codec)
+            .await
+            .expect("the checkpointed winner must be restored without rerunning branches"),
+        7
+    );
+    assert_eq!(failed_branch.load(Ordering::SeqCst), 1);
+    assert_eq!(successful_branch.load(Ordering::SeqCst), 1);
+    assert_eq!(merge_attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn checkpointed_dsl_rejects_stream_for_each_without_a_replay_cursor() {
     let store = MemoryDslStepProgress::default();
     let flow = DslFlow::new().for_each_stream(

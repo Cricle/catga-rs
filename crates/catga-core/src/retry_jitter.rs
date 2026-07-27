@@ -5,6 +5,9 @@ use std::{
     time::Duration,
 };
 
+/// Stable non-zero seed for the bounded production full-jitter sequence.
+const DEFAULT_FULL_JITTER_SEED: u64 = 0xd1b5_4a32_d192_ed03;
+
 /// Chooses how a retry delay is jittered.
 ///
 /// [`RetryJitter::None`] preserves the configured exponential delay. Full
@@ -28,6 +31,13 @@ pub enum RetryJitter {
 }
 
 impl RetryJitter {
+    /// Returns the bounded full-jitter policy used by production constructors.
+    pub const fn production_default() -> Self {
+        Self::Full {
+            seed: DEFAULT_FULL_JITTER_SEED,
+        }
+    }
+
     /// Returns the compatibility policy that leaves calculated delays unchanged.
     pub const fn none() -> Self {
         Self::None
@@ -79,6 +89,10 @@ impl RetryJitterState {
             RetryJitter::None | RetryJitter::Fixed { .. } => 0,
         };
         self.jitter.delay_for_sample(base, sample)
+    }
+
+    pub(crate) const fn policy(&self) -> RetryJitter {
+        self.jitter
     }
 
     fn next_sample(&self) -> u64 {

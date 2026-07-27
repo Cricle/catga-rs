@@ -9,11 +9,12 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowChildLauncher, FlowContinuation, FlowDefinition, FlowQuery, FlowRuntime, FlowState,
-    FlowStepOutcome, FlowSummary, FlowTagPolicy, FlowTimeoutOptions, FlowTimeoutService,
-    MAX_FLOW_TIMEOUT_BATCH_SIZE, MAX_FLOW_TIMEOUT_SCAN_LIMIT, MAX_WAIT_CHILDREN,
-    MAX_WAIT_RESULT_BYTES, MemoryFlowScheduler, SuspendedFlowStore, TimedOutFlowPoll,
-    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
+    FlowChildLauncher, FlowCompletion, FlowCompletionAdapter, FlowContinuation, FlowDefinition,
+    FlowQuery, FlowRuntime, FlowState, FlowStepOutcome, FlowSummary, FlowTagPolicy,
+    FlowTimeoutOptions, FlowTimeoutService, MAX_FLOW_TIMEOUT_BATCH_SIZE,
+    MAX_FLOW_TIMEOUT_SCAN_LIMIT, MAX_WAIT_CHILDREN, MAX_WAIT_RESULT_BYTES, MemoryFlowScheduler,
+    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
+    WaitPolicy,
 };
 use catga_memory::MemorySuspendedFlows;
 use tokio_util::sync::CancellationToken;
@@ -506,6 +507,236 @@ async fn durable_child_failure_fails_the_parent_by_correlation_id() {
             .await
             .expect("child failure is accepted")
             .is_failure()
+    );
+}
+
+#[tokio::test]
+async fn flow_completion_adapter_records_successes_by_correlation() {
+    let wait = WaitCondition::for_children(
+        "adapter-success-correlation",
+        WaitPolicy::All,
+        ["child-a", "child-b"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .expect("bounded child wait is valid");
+    let runtime = Arc::new(FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("adapter-success")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    ));
+    let adapter = FlowCompletionAdapter::new(Arc::clone(&runtime));
+
+    assert!(
+        runtime
+            .start("adapter-success/1", [])
+            .await
+            .expect("parent starts")
+            .is_suspended()
+    );
+
+    assert!(
+        adapter
+            .record(FlowCompletion::success(
+                "adapter-success-correlation",
+                "child-a",
+                b"first".to_vec(),
+            ))
+            .await
+            .expect("first completion is accepted")
+            .is_suspended()
+    );
+    assert!(
+        adapter
+            .record(FlowCompletion::success(
+                "adapter-success-correlation",
+                "child-b",
+                b"second".to_vec(),
+            ))
+            .await
+            .expect("final completion resumes the parent")
+            .is_success()
+    );
+}
+
+#[tokio::test]
+async fn flow_completion_adapter_records_failures_by_correlation() {
+    let wait = WaitCondition::for_children(
+        "adapter-failure-correlation",
+        WaitPolicy::All,
+        ["child-a"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .expect("bounded child wait is valid");
+    let runtime = Arc::new(FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("adapter-failure")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    ));
+    let adapter = FlowCompletionAdapter::new(Arc::clone(&runtime));
+
+    assert!(
+        runtime
+            .start("adapter-failure/1", [])
+            .await
+            .expect("parent starts")
+            .is_suspended()
+    );
+
+    let result = adapter
+        .record(FlowCompletion::failure(
+            "adapter-failure-correlation",
+            "child-a",
+            CatgaError::new(ErrorCode::Transient, "child failed"),
+        ))
+        .await
+        .expect("child failure is accepted");
+
+    assert!(result.is_failure());
+    let persisted = result
+        .state()
+        .error()
+        .expect("failed parent retains the supplied child error");
+    assert_eq!(persisted.code(), ErrorCode::Transient);
+    assert_eq!(persisted.message(), "child failed");
+}
+
+#[tokio::test]
+async fn flow_completion_adapter_retains_duplicate_completion_outcomes() {
+    let wait = WaitCondition::for_children(
+        "adapter-duplicate-correlation",
+        WaitPolicy::All,
+        ["child-a", "child-b"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .expect("bounded child wait is valid");
+    let runtime = Arc::new(FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("adapter-duplicate")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    ));
+    let adapter = FlowCompletionAdapter::new(Arc::clone(&runtime));
+
+    assert!(
+        runtime
+            .start("adapter-duplicate/1", [])
+            .await
+            .expect("parent starts")
+            .is_suspended()
+    );
+
+    for payload in [b"first".as_slice(), b"duplicate-first".as_slice()] {
+        assert!(
+            adapter
+                .record(FlowCompletion::success(
+                    "adapter-duplicate-correlation",
+                    "child-a",
+                    payload.to_vec(),
+                ))
+                .await
+                .expect("duplicate pending completion is accepted idempotently")
+                .is_suspended()
+        );
+    }
+    assert!(
+        adapter
+            .record(FlowCompletion::success(
+                "adapter-duplicate-correlation",
+                "child-b",
+                b"second".to_vec(),
+            ))
+            .await
+            .expect("final completion resumes the parent")
+            .is_success()
+    );
+}
+
+#[tokio::test]
+async fn flow_completion_adapter_rejects_oversized_success_payloads() {
+    let wait = WaitCondition::for_children(
+        "adapter-oversized-correlation",
+        WaitPolicy::All,
+        ["child-a"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .expect("bounded child wait is valid");
+    let runtime = Arc::new(FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("adapter-oversized")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    ));
+    let adapter = FlowCompletionAdapter::new(Arc::clone(&runtime));
+
+    assert!(
+        runtime
+            .start("adapter-oversized/1", [])
+            .await
+            .expect("parent starts")
+            .is_suspended()
+    );
+    assert_eq!(
+        adapter
+            .record(FlowCompletion::success(
+                "adapter-oversized-correlation",
+                "child-a",
+                vec![0; MAX_WAIT_RESULT_BYTES + 1],
+            ))
+            .await
+            .expect_err("oversized child payload is rejected")
+            .code(),
+        ErrorCode::Validation
+    );
+}
+
+#[tokio::test]
+async fn flow_completion_adapter_rejects_unknown_correlations() {
+    let runtime = Arc::new(FlowRuntime::new(
+        Arc::new(MemorySuspendedFlows::default()),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("adapter-unknown")
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    ));
+    let adapter = FlowCompletionAdapter::new(runtime);
+
+    assert_eq!(
+        adapter
+            .record(FlowCompletion::success(
+                "unknown-correlation",
+                "child-a",
+                b"result".to_vec(),
+            ))
+            .await
+            .expect_err("unknown correlations must be rejected")
+            .code(),
+        ErrorCode::NotFound
     );
 }
 

@@ -13,8 +13,8 @@ use futures::future::BoxFuture;
 use super::{
     StateMachineResult, StateMachineState,
     actions::{
-        ErasedEvent, ErasedInitialStateFactory, EventAction, StateAction, StateDefinition,
-        TypedInitialStateFactory, TypedTransition,
+        CategoryEventAction, CategoryTransition, ErasedEvent, ErasedInitialStateFactory,
+        EventAction, StateAction, StateDefinition, TypedInitialStateFactory, TypedTransition,
     },
 };
 
@@ -65,23 +65,33 @@ where
     where
         E: Event,
     {
+        let categories = event.categories();
         let event: &ErasedEvent = event;
-        self.handle_erased(state, event).await
+        self.handle_erased(state, event, categories).await
     }
 
     pub(crate) async fn handle_erased(
         &self,
         state: &mut S,
         event: &ErasedEvent,
+        categories: &[TypeId],
     ) -> CatgaResult<StateMachineResult<K>> {
         let previous = state.current_state().clone();
         let Some(definition) = self.definition.states.get(&previous) else {
             return Ok(StateMachineResult::new(previous.clone(), previous, false));
         };
         let mut selected = None;
-        for transition in &definition.transitions {
-            if transition.event_type() == event.type_id() && transition.applies(state, event)? {
-                selected = Some(transition);
+        for exact in [true, false] {
+            for transition in &definition.transitions {
+                if transition.is_exact() == exact
+                    && transition.matches(event.type_id(), categories)
+                    && transition.applies(state, event)?
+                {
+                    selected = Some(transition);
+                    break;
+                }
+            }
+            if selected.is_some() {
                 break;
             }
         }
@@ -270,6 +280,24 @@ where
             transition: TypedTransition::new(),
         }
     }
+
+    /// Starts configuring a transition for the explicit category marker `C`.
+    ///
+    /// `extractor` receives the erased event only after its [`Event::categories`] declaration
+    /// includes `C`. It returns the value exposed to the guard and action, or `None` to leave
+    /// the event unhandled. This makes category membership explicit and avoids reflection or a
+    /// global type registry.
+    pub fn on_category<C, F>(self, extractor: F) -> CategoryTransitionBuilder<'a, S, K, C>
+    where
+        C: 'static,
+        F: for<'b> Fn(&'b ErasedEvent) -> Option<&'b dyn std::any::Any> + Send + Sync + 'static,
+    {
+        CategoryTransitionBuilder {
+            definition: self.definition,
+            transition: CategoryTransition::new::<C, F>(extractor),
+            marker: std::marker::PhantomData,
+        }
+    }
 }
 
 /// Startup-only fluent builder for a typed transition.
@@ -323,6 +351,74 @@ where
     }
 
     /// Commits this transition and returns to the containing state configuration.
+    pub fn finish(self) -> StateDefinitionBuilder<'a, S, K> {
+        self.definition.transitions.push(Arc::new(self.transition));
+        StateDefinitionBuilder {
+            definition: self.definition,
+        }
+    }
+
+    /// Alias for [`Self::finish`] that reads naturally after a transition.
+    pub fn and(self) -> StateDefinitionBuilder<'a, S, K> {
+        self.finish()
+    }
+}
+
+/// Startup-only fluent builder for an explicit category transition.
+pub struct CategoryTransitionBuilder<'a, S, K, C>
+where
+    S: StateMachineState<K>,
+    K: Clone + Send + Sync + 'static,
+    C: 'static,
+{
+    definition: &'a mut StateDefinition<S, K>,
+    transition: CategoryTransition<S, K>,
+    marker: std::marker::PhantomData<C>,
+}
+
+impl<'a, S, K, C> CategoryTransitionBuilder<'a, S, K, C>
+where
+    S: StateMachineState<K>,
+    K: Clone + Send + Sync + 'static,
+    C: 'static,
+{
+    /// Requires a guard to approve the extracted category value.
+    pub fn when<F>(mut self, guard: F) -> Self
+    where
+        F: Fn(&S, &dyn std::any::Any) -> bool + Send + Sync + 'static,
+    {
+        self.transition.guard = Some(Arc::new(guard));
+        self
+    }
+
+    /// Registers a synchronous transition action for the extracted category value.
+    pub fn execute<F>(mut self, action: F) -> Self
+    where
+        F: Fn(&mut S, &dyn std::any::Any) -> CatgaResult<()> + Send + Sync + 'static,
+    {
+        self.transition.action = CategoryEventAction::Sync(Arc::new(action));
+        self
+    }
+
+    /// Registers an asynchronous transition action for the extracted category value.
+    pub fn execute_async<F>(mut self, action: F) -> Self
+    where
+        F: for<'b> Fn(&'b mut S, &'b dyn std::any::Any) -> BoxFuture<'b, CatgaResult<()>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.transition.action = CategoryEventAction::Async(Arc::new(action));
+        self
+    }
+
+    /// Changes the current state after the transition action succeeds and commits the transition.
+    pub fn transition_to(mut self, target: K) -> StateDefinitionBuilder<'a, S, K> {
+        self.transition.target = Some(target);
+        self.finish()
+    }
+
+    /// Commits this category transition and returns to the containing state configuration.
     pub fn finish(self) -> StateDefinitionBuilder<'a, S, K> {
         self.definition.transitions.push(Arc::new(self.transition));
         StateDefinitionBuilder {

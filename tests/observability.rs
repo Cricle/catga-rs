@@ -24,7 +24,7 @@ use catga_core::{
     Registry, Request, RetryBehavior, TracingBehavior, current_correlation_id,
     scope_correlation_id,
 };
-use catga_flow::{FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler};
+use catga_flow::{DslFlow, FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler};
 use catga_memory::{
     MemoryEventStore, MemoryIdempotency, MemoryInbox, MemoryLeases, MemoryOutbox,
     MemoryPubSubTransport, MemorySuspendedFlows, MemoryTransport,
@@ -1439,6 +1439,55 @@ async fn flow_runtime_records_terminal_and_step_metrics() {
     );
     assert_eq!(
         recorder.histogram_samples("catga.flow.latency|outcome=failure"),
+        1
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dsl_flow_records_terminal_and_step_metrics() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let successful = DslFlow::new().action(|state: &mut u32| {
+        Box::pin(async move {
+            *state = 1;
+            Ok(())
+        })
+    });
+    let failing = DslFlow::new().action(|state: &mut u32| {
+        Box::pin(async move {
+            let _ = state;
+            Err(CatgaError::new(ErrorCode::Validation, "DSL flow rejected"))
+        })
+    });
+    let mut successful_state = 0;
+    let mut failing_state = 0;
+
+    successful
+        .run(&mut successful_state)
+        .await
+        .expect("successful DSL flow completes");
+    assert_eq!(
+        failing
+            .run(&mut failing_state)
+            .await
+            .expect_err("failing DSL flow returns its error")
+            .code(),
+        ErrorCode::Validation
+    );
+    drop(guard);
+
+    assert_eq!(recorder.counter("catga.flow.started|"), 2);
+    assert_eq!(recorder.counter("catga.flow.completed|"), 1);
+    assert_eq!(recorder.counter("catga.flow.failed|"), 1);
+    assert_eq!(recorder.counter("catga.flow.step.executed|"), 2);
+    assert_eq!(recorder.counter("catga.flow.step.succeeded|"), 1);
+    assert_eq!(recorder.counter("catga.flow.step.failed|"), 1);
+    assert_eq!(
+        recorder.histogram_samples("catga.flow.duration|outcome=success"),
+        1
+    );
+    assert_eq!(
+        recorder.histogram_samples("catga.flow.duration|outcome=failure"),
         1
     );
 }

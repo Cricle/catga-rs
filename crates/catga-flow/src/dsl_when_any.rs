@@ -64,22 +64,30 @@ where
                 (index, branch_state, result)
             });
         }
-        let Some((winner, winner_state, result)) = pending.next().await else {
-            return Ok(());
-        };
-        result?;
-        let winner = u32::try_from(winner).map_err(|_| {
-            CatgaError::new(ErrorCode::Validation, "when_any winner index exceeds u32")
-        })?;
-        let payload = CheckpointFrame::encode(
-            levels,
-            context.codec.encode(state)?,
-            CheckpointWork::WhenAny {
-                winner,
-                state: context.codec.encode(&winner_state)?,
-            },
-        )?;
-        persist_checkpoint_payload(context, payload, true).await?;
-        merge(state, winner_state)
+        let mut last_error = None;
+        while let Some((winner, winner_state, result)) = pending.next().await {
+            match result {
+                Ok(()) => {
+                    let winner = u32::try_from(winner).map_err(|_| {
+                        CatgaError::new(ErrorCode::Validation, "when_any winner index exceeds u32")
+                    })?;
+                    let payload = CheckpointFrame::encode(
+                        levels,
+                        context.codec.encode(state)?,
+                        CheckpointWork::WhenAny {
+                            winner,
+                            state: context.codec.encode(&winner_state)?,
+                        },
+                    )?;
+                    persist_checkpoint_payload(context, payload, true).await?;
+                    return merge(state, winner_state);
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        match last_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     })
 }

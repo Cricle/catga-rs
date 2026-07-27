@@ -2,6 +2,7 @@
 //! Durable and compensating flow primitives for Catga.
 
 mod child_launch;
+mod completion;
 mod definition;
 mod dsl;
 mod dsl_checkpoint;
@@ -26,6 +27,7 @@ mod tag_policy;
 mod timeout;
 
 pub use child_launch::FlowChildLauncher;
+pub use completion::{FlowCompletion, FlowCompletionAdapter};
 pub use definition::{FlowDefinition, FlowStepOutcome};
 pub use dsl::{
     DslFlow, DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks,

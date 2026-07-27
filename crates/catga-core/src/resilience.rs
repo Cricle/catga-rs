@@ -103,12 +103,12 @@ pub struct ResilienceExecutor {
 impl ResilienceExecutor {
     /// Creates an executor after validating admission and timing bounds.
     pub fn new(options: ResilienceOptions) -> CatgaResult<Self> {
-        Self::with_jitter(options, RetryJitter::None)
+        Self::with_jitter(options, RetryJitter::production_default())
     }
 
     /// Creates an executor with an explicit bounded retry-jitter policy.
     ///
-    /// [`RetryJitter::None`] preserves the delay behavior of [`Self::new`].
+    /// [`RetryJitter::None`] preserves calculated retry delays without jitter.
     pub fn with_jitter(options: ResilienceOptions, retry_jitter: RetryJitter) -> CatgaResult<Self> {
         let circuit = CircuitBreakerOptions::builder(
             options.circuit_failure_threshold,
@@ -137,6 +137,11 @@ impl ResilienceExecutor {
             circuit: Circuit::new(circuit_options),
             options,
         })
+    }
+
+    /// Returns this executor's configured retry-jitter policy without sampling it.
+    pub const fn jitter_policy(&self) -> RetryJitter {
+        self.retry_jitter.policy()
     }
 
     /// Executes `operation` under this executor's policy.

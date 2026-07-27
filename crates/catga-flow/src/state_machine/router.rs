@@ -135,6 +135,7 @@ where
                 ),
             ));
         };
+        let categories = event.categories();
         let event: &ErasedEvent = event;
         let instance_id = fallback(event)?;
         if instance_id.trim().is_empty() {
@@ -143,6 +144,8 @@ where
                 "state-machine fallback instance id cannot be empty",
             ));
         }
-        self.executor.handle_erased(&instance_id, event).await
+        self.executor
+            .handle_erased(&instance_id, event, categories)
+            .await
     }
 }

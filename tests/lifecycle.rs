@@ -34,6 +34,10 @@ struct BlockingRecoverable {
     started: Notify,
 }
 
+struct HealthyBlockingRecoverable {
+    started: Notify,
+}
+
 struct LifecycleTransport {
     accepting: AtomicBool,
     pending: AtomicUsize,
@@ -108,6 +112,22 @@ impl RecoverableComponent for BlockingRecoverable {
 
     fn is_healthy(&self) -> bool {
         false
+    }
+
+    async fn recover(&self) -> CatgaResult<()> {
+        self.started.notify_waiters();
+        std::future::pending().await
+    }
+}
+
+#[async_trait]
+impl RecoverableComponent for HealthyBlockingRecoverable {
+    fn name(&self) -> &str {
+        "healthy-blocking"
+    }
+
+    fn is_healthy(&self) -> bool {
+        true
     }
 
     async fn recover(&self) -> CatgaResult<()> {
@@ -201,6 +221,54 @@ async fn recovery_and_shutdown_use_explicit_lock_free_lifecycle_state() {
             ..
         }
     ));
+}
+
+#[tokio::test]
+async fn manual_recovery_runs_registered_healthy_components() {
+    let manager = RecoveryManager::default();
+    let component = Arc::new(Recoverable {
+        healthy: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+    });
+    let registered: Arc<dyn RecoverableComponent> = component.clone();
+    manager.register(registered);
+
+    assert!(matches!(
+        manager.recover_all().await,
+        RecoveryResult::Completed {
+            succeeded: 1,
+            failed: 0,
+            ..
+        }
+    ));
+    assert_eq!(component.calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn manual_recovery_cancels_an_in_progress_healthy_component() {
+    let manager = Arc::new(RecoveryManager::default());
+    let component = Arc::new(HealthyBlockingRecoverable {
+        started: Notify::new(),
+    });
+    let registered: Arc<dyn RecoverableComponent> = component.clone();
+    manager.register(registered);
+
+    let cancellation = CancellationToken::new();
+    let recovery = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        let cancellation = cancellation.clone();
+        async move { manager.recover_all_until(cancellation).await }
+    });
+    component.started.notified().await;
+    cancellation.cancel();
+
+    let error = tokio::time::timeout(Duration::from_secs(1), recovery)
+        .await
+        .expect("manual recovery observes cancellation")
+        .expect("manual recovery task does not panic")
+        .expect_err("cancelled manual recovery returns an error");
+    assert_eq!(error.code(), ErrorCode::Cancelled);
+    assert!(!manager.is_recovering());
 }
 
 #[tokio::test]

@@ -18,7 +18,11 @@ pub struct RetryBehavior {
 impl RetryBehavior {
     /// Creates a retry behavior with at most `max_retries` additional attempts.
     pub const fn new(max_retries: usize, initial_delay: Duration) -> Self {
-        Self::with_jitter(max_retries, initial_delay, RetryJitter::None)
+        Self::with_jitter(
+            max_retries,
+            initial_delay,
+            RetryJitter::production_default(),
+        )
     }
 
     /// Creates a retry behavior with an explicit bounded jitter policy.
@@ -32,6 +36,11 @@ impl RetryBehavior {
             initial_delay,
             jitter: RetryJitterState::new(jitter),
         }
+    }
+
+    /// Returns this behavior's configured retry-jitter policy without sampling it.
+    pub const fn jitter_policy(&self) -> RetryJitter {
+        self.jitter.policy()
     }
 
     fn delay_for(&self, retry: usize) -> Duration {

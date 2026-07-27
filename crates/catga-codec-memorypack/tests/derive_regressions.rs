@@ -1,3 +1,5 @@
+//! Regression coverage for the `MemoryPackable` derive macro.
+
 use catga_codec_memorypack::{MemoryPackError, MemoryPackSerializer, MemoryPackable};
 
 #[derive(Debug, Eq, PartialEq, MemoryPackable)]

@@ -67,7 +67,17 @@ pub trait Request: Message {
 pub trait Command: Message {}
 
 /// A message delivered to zero or more subscribers.
-pub trait Event: Message + Clone {}
+pub trait Event: Message + Clone {
+    /// Returns explicit marker categories accepted by this event.
+    ///
+    /// State machines use these markers for deliberately declared category transitions. The
+    /// default is a shared empty slice, so events that do not opt in perform no allocation or
+    /// dynamic type discovery. Categories are not inheritance: an event implementation lists
+    /// each marker it wants to expose.
+    fn categories(&self) -> &'static [std::any::TypeId] {
+        &[]
+    }
+}
 
 /// A message that declares when its durable outbox delivery may begin.
 ///

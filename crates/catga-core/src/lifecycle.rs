@@ -510,6 +510,87 @@ impl RecoveryManager {
         }
     }
 
+    /// Explicitly invokes recovery for every currently registered component.
+    ///
+    /// This is the manual recovery operation: unlike [`Self::recover_unhealthy`], it also calls
+    /// healthy components so an operator can request transport reinitialization, credential
+    /// renewal, or another component-defined recovery action. Registration remains lock-free and
+    /// a component error or panic is counted as one failure without stopping the immutable
+    /// component snapshot sweep.
+    pub async fn recover_all(&self) -> RecoveryResult {
+        if self
+            .recovering
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return RecoveryResult::AlreadyRecovering;
+        }
+        let _recovery_guard = RecoveryGuard {
+            recovering: &self.recovering,
+        };
+        let started = std::time::Instant::now();
+        let mut succeeded = 0;
+        let mut failed = 0;
+        for component in self.components.load_full().iter() {
+            if recover_component(component.as_ref(), None)
+                .await
+                .is_ok_and(|success| success)
+            {
+                succeeded += 1;
+            } else {
+                failed += 1;
+            }
+        }
+        RecoveryResult::Completed {
+            succeeded,
+            failed,
+            duration: started.elapsed(),
+        }
+    }
+
+    /// Explicitly recovers every registered component until `cancellation` is requested.
+    ///
+    /// This is the cancellation-aware counterpart to [`Self::recover_all`]. Cancellation is
+    /// observed before the sweep, between components, and while an individual recovery future
+    /// is pending. It drops an in-progress recovery future and clears the exclusive sweep state
+    /// before returning [`ErrorCode::Cancelled`].
+    pub async fn recover_all_until(
+        &self,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<RecoveryResult> {
+        if cancellation.is_cancelled() {
+            return Err(recovery_cancelled());
+        }
+        if self
+            .recovering
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(RecoveryResult::AlreadyRecovering);
+        }
+        let _recovery_guard = RecoveryGuard {
+            recovering: &self.recovering,
+        };
+        let started = std::time::Instant::now();
+        let mut succeeded = 0;
+        let mut failed = 0;
+        for component in self.components.load_full().iter() {
+            if cancellation.is_cancelled() {
+                return Err(recovery_cancelled());
+            }
+            match recover_component(component.as_ref(), Some(&cancellation)).await {
+                Ok(true) => succeeded += 1,
+                Ok(false) => failed += 1,
+                Err(()) => return Err(recovery_cancelled()),
+            }
+        }
+        Ok(RecoveryResult::Completed {
+            succeeded,
+            failed,
+            duration: started.elapsed(),
+        })
+    }
+
     /// Recovers every currently unhealthy component, without blocking registration or reads.
     ///
     /// A component's returned error or panic counts as one failed recovery and does not prevent

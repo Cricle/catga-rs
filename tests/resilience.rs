@@ -37,6 +37,37 @@ fn error_with_retryability(code: ErrorCode, retryable: bool) -> CatgaError {
     .expect("a CatgaError wire override is valid")
 }
 
+#[test]
+fn default_resilience_executor_uses_full_jitter() {
+    assert!(matches!(
+        ResilienceExecutor::new(options())
+            .expect("valid resilience options")
+            .jitter_policy(),
+        RetryJitter::Full { .. }
+    ));
+    assert_eq!(
+        ResilienceExecutor::with_jitter(options(), RetryJitter::none())
+            .expect("valid explicit jitter policy")
+            .jitter_policy(),
+        RetryJitter::none()
+    );
+    assert_eq!(
+        ResilienceExecutor::with_jitter(options(), RetryJitter::fixed(Duration::ZERO))
+            .expect("valid explicit jitter policy")
+            .jitter_policy(),
+        RetryJitter::fixed(Duration::ZERO)
+    );
+    let circuit = CircuitBreakerOptions::builder(2, Duration::from_secs(1))
+        .build()
+        .expect("valid explicit circuit policy");
+    assert_eq!(
+        ResilienceExecutor::with_policies(options(), circuit, RetryJitter::fixed(Duration::ZERO),)
+            .expect("valid explicit resilience policies")
+            .jitter_policy(),
+        RetryJitter::fixed(Duration::ZERO)
+    );
+}
+
 #[derive(Default)]
 struct FlakyTransport {
     publish_attempts: AtomicUsize,

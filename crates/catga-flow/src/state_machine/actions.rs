@@ -15,6 +15,13 @@ pub(super) type SyncEventAction<S, E> = Arc<dyn Fn(&mut S, &E) -> CatgaResult<()
 pub(super) type AsyncEventAction<S, E> =
     Arc<dyn for<'a> Fn(&'a mut S, &'a E) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
 pub(super) type EventGuard<S, E> = Arc<dyn Fn(&S, &E) -> bool + Send + Sync>;
+pub(super) type CategoryEventExtractor =
+    Arc<dyn for<'a> Fn(&'a ErasedEvent) -> Option<&'a dyn Any> + Send + Sync>;
+pub(super) type SyncCategoryEventAction<S> =
+    Arc<dyn Fn(&mut S, &dyn Any) -> CatgaResult<()> + Send + Sync>;
+pub(super) type AsyncCategoryEventAction<S> =
+    Arc<dyn for<'a> Fn(&'a mut S, &'a dyn Any) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
+pub(super) type CategoryEventGuard<S> = Arc<dyn Fn(&S, &dyn Any) -> bool + Send + Sync>;
 pub(super) type InitialStateFactory<S, E> = Arc<dyn Fn(&E, &str) -> S + Send + Sync>;
 pub(crate) type ErasedEvent = dyn Any + Send + Sync;
 
@@ -49,7 +56,13 @@ impl<S, K> Default for StateDefinition<S, K> {
 }
 
 pub(super) trait ErasedTransition<S, K>: Send + Sync {
-    fn event_type(&self) -> TypeId;
+    /// Returns whether this transition selects the supplied concrete type and declared
+    /// categories without allocating or discovering additional runtime types.
+    fn matches(&self, event_type: TypeId, categories: &[TypeId]) -> bool;
+    /// Returns whether this transition is an exact concrete-event transition.
+    ///
+    /// Exact transitions always receive precedence over category transitions.
+    fn is_exact(&self) -> bool;
     fn applies(&self, state: &S, event: &ErasedEvent) -> CatgaResult<bool>;
     fn target(&self) -> Option<&K>;
     fn execute<'a>(
@@ -132,8 +145,12 @@ where
     K: Send + Sync,
     E: Event,
 {
-    fn event_type(&self) -> TypeId {
-        TypeId::of::<E>()
+    fn matches(&self, event_type: TypeId, _: &[TypeId]) -> bool {
+        event_type == TypeId::of::<E>()
+    }
+
+    fn is_exact(&self) -> bool {
+        true
     }
 
     fn applies(&self, state: &S, event: &ErasedEvent) -> CatgaResult<bool> {
@@ -158,6 +175,86 @@ where
             EventAction::None => futures::future::ready(Ok(())).boxed(),
             EventAction::Sync(action) => futures::future::ready(action(state, event)).boxed(),
             EventAction::Async(action) => action(state, event),
+        }
+    }
+}
+
+/// An immutable transition selected by an event's explicitly declared marker category.
+pub(super) struct CategoryTransition<S, K> {
+    pub(super) category: TypeId,
+    pub(super) extractor: CategoryEventExtractor,
+    pub(super) target: Option<K>,
+    pub(super) guard: Option<CategoryEventGuard<S>>,
+    pub(super) action: CategoryEventAction<S>,
+}
+
+impl<S, K> CategoryTransition<S, K> {
+    pub(super) fn new<C, F>(extractor: F) -> Self
+    where
+        C: 'static,
+        F: for<'a> Fn(&'a ErasedEvent) -> Option<&'a dyn Any> + Send + Sync + 'static,
+    {
+        Self {
+            category: TypeId::of::<C>(),
+            extractor: Arc::new(extractor),
+            target: None,
+            guard: None,
+            action: CategoryEventAction::None,
+        }
+    }
+}
+
+pub(super) enum CategoryEventAction<S> {
+    None,
+    Sync(SyncCategoryEventAction<S>),
+    Async(AsyncCategoryEventAction<S>),
+}
+
+impl<S, K> ErasedTransition<S, K> for CategoryTransition<S, K>
+where
+    S: Send + Sync,
+    K: Send + Sync,
+{
+    fn matches(&self, _: TypeId, categories: &[TypeId]) -> bool {
+        categories.contains(&self.category)
+    }
+
+    fn is_exact(&self) -> bool {
+        false
+    }
+
+    fn applies(&self, state: &S, event: &ErasedEvent) -> CatgaResult<bool> {
+        let Some(extracted) = (self.extractor)(event) else {
+            return Ok(false);
+        };
+        Ok(self
+            .guard
+            .as_ref()
+            .is_none_or(|guard| guard(state, extracted)))
+    }
+
+    fn target(&self) -> Option<&K> {
+        self.target.as_ref()
+    }
+
+    fn execute<'a>(
+        &'a self,
+        state: &'a mut S,
+        event: &'a ErasedEvent,
+    ) -> BoxFuture<'a, CatgaResult<()>> {
+        let Some(extracted) = (self.extractor)(event) else {
+            return futures::future::ready(Err(CatgaError::new(
+                ErrorCode::Internal,
+                "state-machine category extractor declined a selected event",
+            )))
+            .boxed();
+        };
+        match &self.action {
+            CategoryEventAction::None => futures::future::ready(Ok(())).boxed(),
+            CategoryEventAction::Sync(action) => {
+                futures::future::ready(action(state, extracted)).boxed()
+            }
+            CategoryEventAction::Async(action) => action(state, extracted),
         }
     }
 }
