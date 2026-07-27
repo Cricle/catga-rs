@@ -13,7 +13,7 @@ use catga_core::{
     RequestClient,
 };
 use catga_flow::{
-    DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver, Flow,
+    DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver, DslStep, Flow,
     FlowTagPolicy, FlowThrottle, MAX_DSL_PARALLEL_BRANCHES, dsl_action, dsl_each_action,
 };
 use futures::{StreamExt, stream};
@@ -1434,4 +1434,244 @@ fn flow_tag_policy_uses_matching_rules_and_default_values_without_locks() {
     );
     assert_eq!(policy.retries_for("other"), 1);
     assert!(!policy.should_persist("other"));
+}
+
+#[tokio::test]
+async fn dsl_step_only_when_skips_its_action() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let action_calls = Arc::clone(&calls);
+    let flow = DslFlow::new().step(
+        DslStep::action(move |_: &mut ()| {
+            let calls = Arc::clone(&action_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        })
+        .only_when(|_: &()| false),
+    );
+
+    flow.run(&mut ()).await.unwrap();
+
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn dsl_step_optional_error_allows_the_next_step_to_run() {
+    let completed = Arc::new(AtomicUsize::new(0));
+    let next_completed = Arc::clone(&completed);
+    let flow = DslFlow::new()
+        .step(
+            DslStep::action(|_: &mut ()| {
+                Box::pin(async { Err(CatgaError::new(ErrorCode::Transient, "best effort")) })
+            })
+            .optional(),
+        )
+        .action(move |_: &mut ()| {
+            let completed = Arc::clone(&next_completed);
+            Box::pin(async move {
+                completed.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        });
+
+    flow.run(&mut ()).await.unwrap();
+
+    assert_eq!(completed.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn dsl_step_optional_preserves_cancellation() {
+    let flow = DslFlow::new().step(
+        DslStep::action(|_: &mut ()| {
+            Box::pin(async { Err(CatgaError::new(ErrorCode::Cancelled, "shutting down")) })
+        })
+        .optional(),
+    );
+
+    let error = flow.run(&mut ()).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Cancelled);
+}
+
+#[tokio::test]
+async fn dsl_query_step_optional_preserves_cancellation_before_writing_state() {
+    let flow = DslFlow::new().step(
+        DslStep::query(|_: &u32| {
+            Box::pin(async {
+                Err::<u32, _>(CatgaError::new(ErrorCode::Cancelled, "shutting down"))
+            })
+        })
+        .optional()
+        .into_state(|state, response| *state = response),
+    );
+    let mut state = 0;
+
+    let error = flow.run(&mut state).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Cancelled);
+    assert_eq!(state, 0);
+}
+
+#[tokio::test]
+async fn dsl_step_fail_if_stops_before_later_steps() {
+    let later_calls = Arc::new(AtomicUsize::new(0));
+    let later_action_calls = Arc::clone(&later_calls);
+    let flow = DslFlow::new()
+        .step(
+            DslStep::action(|state: &mut u32| {
+                Box::pin(async move {
+                    *state = 7;
+                    Ok(())
+                })
+            })
+            .fail_if(|state| *state == 7),
+        )
+        .action(move |_: &mut u32| {
+            let calls = Arc::clone(&later_action_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        });
+    let mut state = 0;
+
+    let error = flow.run(&mut state).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(state, 7);
+    assert_eq!(later_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn dsl_step_combines_multiple_conditions_with_logical_and() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let action_calls = Arc::clone(&calls);
+    let flow = DslFlow::new().step(
+        DslStep::action(move |_: &mut ()| {
+            let calls = Arc::clone(&action_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        })
+        .only_when(|_: &()| false)
+        .only_when(|_: &()| true),
+    );
+
+    flow.run(&mut ()).await.unwrap();
+
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn dsl_step_uses_the_first_matching_failure_condition() {
+    let flow = DslFlow::new().step(
+        DslStep::action(|_: &mut ()| Box::pin(async { Ok(()) }))
+            .fail_if_with(
+                |_: &()| true,
+                |_| CatgaError::new(ErrorCode::Conflict, "first condition"),
+            )
+            .fail_if_with(
+                |_: &()| true,
+                |_| CatgaError::new(ErrorCode::Validation, "second condition"),
+            ),
+    );
+
+    let error = flow.run(&mut ()).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Conflict);
+    assert_eq!(error.message(), "first condition");
+}
+
+#[tokio::test]
+async fn dsl_step_optional_does_not_suppress_a_failure_condition() {
+    let flow = DslFlow::new().step(
+        DslStep::action(|_: &mut ()| Box::pin(async { Ok(()) }))
+            .optional()
+            .fail_if(|_: &()| true),
+    );
+
+    let error = flow.run(&mut ()).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+}
+
+#[tokio::test]
+async fn dsl_query_step_rejects_a_response_before_mutating_state() {
+    let flow = DslFlow::new().step(
+        DslStep::query(|_: &u32| Box::pin(async { Ok(42_u32) }))
+            .fail_if_response(|response| *response == 42)
+            .into_state(|state, response| *state = response),
+    );
+    let mut state = 0;
+
+    let error = flow.run(&mut state).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(state, 0);
+}
+
+#[tokio::test]
+async fn dsl_query_step_sends_a_typed_request_before_writing_its_response() {
+    struct State {
+        value: u32,
+    }
+
+    let mut registry = Registry::new();
+    registry
+        .register_request::<Double, _>(DoubleHandler)
+        .expect("test request registration succeeds");
+    let mediator = Arc::new(Mediator::new(registry));
+    let flow = DslFlow::new().step(
+        DslStep::send(Arc::clone(&mediator), |state: &State| Double(state.value))
+            .into_state(|state, response| state.value = response),
+    );
+    let mut state = State { value: 21 };
+
+    flow.run(&mut state)
+        .await
+        .expect("decorated mediator request succeeds");
+
+    assert_eq!(state.value, 42);
+}
+
+#[tokio::test]
+async fn dsl_query_step_only_when_skips_request_construction() {
+    let constructed = Arc::new(AtomicUsize::new(0));
+    let request_construction = Arc::clone(&constructed);
+    let flow = DslFlow::new().step(
+        DslStep::send(Arc::new(Mediator::new(Registry::new())), move |_: &()| {
+            request_construction.fetch_add(1, Ordering::Relaxed);
+            Double(21)
+        })
+        .only_when(|_: &()| false)
+        .only_when(|_: &()| true)
+        .discard(),
+    );
+
+    flow.run(&mut ()).await.unwrap();
+
+    assert_eq!(constructed.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn dsl_query_step_uses_the_caller_selected_remote_client() {
+    struct State {
+        value: u32,
+    }
+
+    let flow = DslFlow::new().step(
+        DslStep::remote_request(Arc::new(RemoteDoubleClient), |state: &State| {
+            Double(state.value)
+        })
+        .into_state(|state, response| state.value = response),
+    );
+    let mut state = State { value: 21 };
+
+    flow.run(&mut state)
+        .await
+        .expect("decorated remote request succeeds");
+
+    assert_eq!(state.value, 42);
 }

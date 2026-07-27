@@ -332,12 +332,15 @@ no machine-dependent timing threshold.
   application explicitly composes the executor around operations known to be
   idempotent, retaining optimistic-concurrency and lease transitions as
   single-attempt operations.
-* Source builder modifiers that hide control flow (`Optional`, `OnlyWhen`, and
-  `FailIf`) remain explicit Rust closures and `CatgaResult` values. Conditional
-  routing uses `if_else` or `match_on`; an application that intentionally
-  suppresses a failure must map that particular error to `Ok(())` in its
-  action. This keeps error swallowing auditable and prevents a broad fluent
-  flag from accidentally masking operational failures.
+* Source per-step modifiers map to composable `DslStep` and `DslQueryStep`
+  builders. `only_when` skips the action before request construction,
+  `optional` suppresses only non-cancellation `CatgaError` values returned by
+  the underlying action or request (not a later `fail_if` predicate), and
+  `fail_if` / `fail_if_response` return explicit structured errors before a
+  later step or a response-to-state write can occur. This retains the useful
+  fluent composition without catching panics or weakening Rust's cooperative
+  cancellation semantics. Conditional routing remains explicit through
+  `if_else` and `match_on`.
 * The source flow-state change-tracking generator targets mutable C# POCO
   fields. Rust durable flows instead advance immutable, versioned `FlowState`
   revisions. `DslFlow::run_checkpointed` persists bounded nested conditional

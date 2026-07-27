@@ -30,7 +30,7 @@ pub use definition::{FlowDefinition, FlowStepOutcome};
 pub use dsl::{
     DslFlow, DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks,
     DslFlowLifecycleObserver, DslFlowStepFailedHook, DslFlowStepSucceededHook,
-    DslFlowSucceededHook, FlowThrottle, MAX_DSL_PARALLEL_BRANCHES,
+    DslFlowSucceededHook, DslQueryStep, DslStep, FlowThrottle, MAX_DSL_PARALLEL_BRANCHES,
 };
 pub use dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
 pub use due_service::{DueFlowOptions, FlowDueService};
