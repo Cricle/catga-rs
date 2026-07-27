@@ -14,6 +14,23 @@ use catga_flow::{
 use catga_flow_store::{SqlFlowScheduler, SqlFlowStore, SqlSuspendedFlowStore};
 
 #[tokio::test]
+async fn mssql_continuation_migration_is_concurrent_and_repeatable() -> CatgaResult<()> {
+    let Ok(url) = env::var("CATGA_MSSQL_URL") else {
+        return Ok(());
+    };
+    let (first, second) = tokio::join!(
+        SqlSuspendedFlowStore::connect_mssql(&url),
+        SqlSuspendedFlowStore::connect_mssql(&url),
+    );
+    let first = first?;
+    let second = second?;
+    let (first_result, second_result) = tokio::join!(first.migrate(), second.migrate());
+    first_result?;
+    second_result?;
+    first.migrate().await
+}
+
+#[tokio::test]
 async fn mssql_scheduler_is_idempotent_and_lease_fenced() -> CatgaResult<()> {
     let Ok(url) = env::var("CATGA_MSSQL_URL") else {
         return Ok(());

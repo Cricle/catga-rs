@@ -146,7 +146,7 @@ pub(crate) async fn claim_due(
         )
     })?;
     let mut query = Query::new(
-        ";WITH due AS (SELECT TOP (@P5) schedule_id, flow_id, state_id, due_at_ms, due_at_subsec_ns \
+        ";WITH due AS (SELECT TOP (@P5) schedule_id, flow_id, state_id, due_at_ms, due_at_subsec_ns, lease_owner, lease_until_ms \
            FROM dbo.catga_flow_schedules WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK, ROWLOCK, INDEX(catga_flow_schedules_due_idx)) \
            WHERE (due_at_ms < @P3 OR (due_at_ms = @P3 AND due_at_subsec_ns <= @P4)) \
              AND (lease_owner IS NULL OR lease_until_ms IS NULL OR lease_until_ms <= @P3) \

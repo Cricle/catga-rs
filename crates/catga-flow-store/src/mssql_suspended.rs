@@ -25,6 +25,8 @@ struct StoredContinuation {
 }
 
 /// Creates the continuation table and its bounded discovery indexes.
+///
+/// Concurrent migrators serialize their schema changes with a SQL Server application lock.
 pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
     let mut connection = pool
         .get()
@@ -32,88 +34,54 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
         .map_err(|error| database_error("acquire SQL Server continuation migration", error))?;
     connection
         .execute(
-            "IF OBJECT_ID(N'dbo.catga_flow_continuations', N'U') IS NULL BEGIN \
-             CREATE TABLE dbo.catga_flow_continuations (\
-               flow_key BINARY(32) NOT NULL PRIMARY KEY, flow_id NVARCHAR(MAX) NOT NULL, \
-               flow_type NVARCHAR(MAX) NOT NULL, flow_type_key BINARY(32) NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, \
-               created_at_ms BIGINT NOT NULL, created_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
-               updated_at_ms BIGINT NOT NULL DEFAULT 0, updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
-               deadline_ms BIGINT NULL, wait_correlation NVARCHAR(MAX) NULL, \
-               wait_correlation_key BINARY(32) NULL, revision BIGINT NOT NULL, \
-               due_token BINARY(16) NULL, lease_until_ms BIGINT NULL, payload VARBINARY(MAX) NOT NULL); \
-             CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
-               (status, created_at_ms, created_at_subsec_ns, flow_key); \
-             CREATE INDEX catga_flow_continuations_type_query_idx ON dbo.catga_flow_continuations \
-               (flow_type_key, status, created_at_ms, created_at_subsec_ns, flow_key); \
-             CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
-               (created_at_ms, created_at_subsec_ns, flow_key); \
-             CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
-               (deadline_ms, lease_until_ms, flow_key); \
-             CREATE INDEX catga_flow_continuations_wait_correlation_idx ON dbo.catga_flow_continuations \
-               (wait_correlation_key, flow_key); END; \
-             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'created_at_subsec_ns') IS NULL \
-               ALTER TABLE dbo.catga_flow_continuations ADD created_at_subsec_ns BIGINT NOT NULL DEFAULT 0; \
-             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'updated_at_ms') IS NULL BEGIN \
-               ALTER TABLE dbo.catga_flow_continuations ADD updated_at_ms BIGINT NOT NULL DEFAULT 0; \
-               ALTER TABLE dbo.catga_flow_continuations ADD updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0; \
-               UPDATE dbo.catga_flow_continuations SET updated_at_ms = created_at_ms, updated_at_subsec_ns = created_at_subsec_ns; END; \
-             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
-               AND name = N'catga_flow_continuations_order_idx') \
-               CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
-                 (created_at_ms, created_at_subsec_ns, flow_key); \
-             DECLARE @drop_continuation_id_unique nvarchar(max) = N''; \
-             SELECT @drop_continuation_id_unique += N'ALTER TABLE dbo.catga_flow_continuations DROP CONSTRAINT ' \
-               + QUOTENAME(key_constraint.name) + N';' \
-             FROM sys.key_constraints AS key_constraint \
-             INNER JOIN sys.index_columns AS index_column \
-               ON index_column.object_id = key_constraint.parent_object_id \
-               AND index_column.index_id = key_constraint.unique_index_id \
-             WHERE key_constraint.parent_object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
-               AND key_constraint.type = N'UQ' \
-               AND COL_NAME(index_column.object_id, index_column.column_id) = N'flow_id'; \
-             IF @drop_continuation_id_unique <> N'' EXEC sys.sp_executesql @drop_continuation_id_unique; \
-             IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
-               AND name = N'catga_flow_continuations_query_idx') \
-               DROP INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations; \
-             IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
-               AND name = N'catga_flow_continuations_type_query_idx') \
-               DROP INDEX catga_flow_continuations_type_query_idx ON dbo.catga_flow_continuations; \
-             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_id') <> -1 \
-               ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_id NVARCHAR(MAX) NOT NULL; \
-             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_type') <> -1 \
-               ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_type NVARCHAR(MAX) NOT NULL; \
-             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_type_key') IS NULL \
-               ALTER TABLE dbo.catga_flow_continuations ADD flow_type_key BINARY(32) NULL; \
-             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'wait_correlation') IS NULL \
-               ALTER TABLE dbo.catga_flow_continuations ADD wait_correlation NVARCHAR(MAX) NULL; \
-             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'wait_correlation_key') IS NULL \
-               ALTER TABLE dbo.catga_flow_continuations ADD wait_correlation_key BINARY(32) NULL; \
-             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
-               AND name = N'catga_flow_continuations_due_idx') \
-               CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
-                 (deadline_ms, lease_until_ms, flow_key); \
-             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
-               AND name = N'catga_flow_continuations_wait_correlation_idx') \
-               CREATE INDEX catga_flow_continuations_wait_correlation_idx ON dbo.catga_flow_continuations \
-                 (wait_correlation_key, flow_key);",
+            "BEGIN TRY \
+               BEGIN TRANSACTION; \
+               DECLARE @result INT; \
+               EXEC @result = sys.sp_getapplock @Resource = N'catga_flow_continuations_schema', \
+                 @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 5000; \
+               IF @result < 0 THROW 50000, 'could not acquire the Catga continuation schema lock', 1; \
+               IF OBJECT_ID(N'dbo.catga_flow_continuations', N'U') IS NULL BEGIN \
+                 CREATE TABLE dbo.catga_flow_continuations (\
+                   flow_key BINARY(32) NOT NULL PRIMARY KEY, flow_id NVARCHAR(MAX) NOT NULL, \
+                   flow_type NVARCHAR(MAX) NOT NULL, flow_type_key BINARY(32) NOT NULL, \
+                   status BIGINT NOT NULL, version BIGINT NOT NULL, \
+                   created_at_ms BIGINT NOT NULL, created_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
+                   updated_at_ms BIGINT NOT NULL DEFAULT 0, updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
+                   deadline_ms BIGINT NULL, wait_correlation NVARCHAR(MAX) NULL, \
+                   wait_correlation_key BINARY(32) NULL, revision BIGINT NOT NULL, \
+                   due_token BINARY(16) NULL, lease_until_ms BIGINT NULL, payload VARBINARY(MAX) NOT NULL); \
+               END; \
+               IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+                 AND name = N'catga_flow_continuations_query_idx') \
+                 CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
+                   (status, created_at_ms, created_at_subsec_ns, flow_key); \
+               IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+                 AND name = N'catga_flow_continuations_type_query_idx') \
+                 CREATE INDEX catga_flow_continuations_type_query_idx ON dbo.catga_flow_continuations \
+                   (flow_type_key, status, created_at_ms, created_at_subsec_ns, flow_key); \
+               IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+                 AND name = N'catga_flow_continuations_order_idx') \
+                 CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
+                   (created_at_ms, created_at_subsec_ns, flow_key); \
+               IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+                 AND name = N'catga_flow_continuations_due_idx') \
+                 CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
+                   (deadline_ms, lease_until_ms, flow_key); \
+               IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+                 AND name = N'catga_flow_continuations_wait_correlation_idx') \
+                 CREATE INDEX catga_flow_continuations_wait_correlation_idx ON dbo.catga_flow_continuations \
+                   (wait_correlation_key, flow_key); \
+               COMMIT TRANSACTION; \
+             END TRY \
+             BEGIN CATCH \
+               IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION; \
+               THROW; \
+             END CATCH;",
             &[],
         )
         .await
         .map(|_| ())
-        .map_err(|error| database_error("create SQL Server continuation schema", error))?;
-    backfill_flow_type_keys(&mut connection).await?;
-    connection
-        .execute(
-            "ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_type_key BINARY(32) NOT NULL; \
-             CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
-               (status, created_at_ms, created_at_subsec_ns, flow_key); \
-             CREATE INDEX catga_flow_continuations_type_query_idx ON dbo.catga_flow_continuations \
-               (flow_type_key, status, created_at_ms, created_at_subsec_ns, flow_key);",
-            &[],
-        )
-        .await
-        .map(|_| ())
-        .map_err(|error| database_error("finalize SQL Server continuation migration", error))
+        .map_err(|error| database_error("create SQL Server continuation schema", error))
 }
 
 /// Inserts a continuation without replacing an existing identity.
@@ -626,42 +594,6 @@ async fn replace(
         .await
         .map(|result| result.total() == 1)
         .map_err(|error| database_error("replace SQL Server continuation", error))
-}
-
-async fn backfill_flow_type_keys(
-    connection: &mut bb8::PooledConnection<'_, bb8_tiberius::ConnectionManager>,
-) -> CatgaResult<()> {
-    let rows = connection
-        .query(
-            "SELECT flow_key, flow_type FROM dbo.catga_flow_continuations \
-             WHERE flow_type_key IS NULL",
-            &[],
-        )
-        .await
-        .map_err(|error| database_error("read SQL Server continuation type-key backfill", error))?
-        .into_first_result()
-        .await
-        .map_err(|error| database_error("read SQL Server continuation type-key backfill", error))?;
-    for row in rows {
-        let row_key = required_bytes(&row, "flow_key", "SQL Server continuation type-key row")?;
-        let flow_type = required_str(
-            &row,
-            "flow_type",
-            "SQL Server continuation type-key flow type",
-        )?;
-        let flow_type_key = flow_key(flow_type);
-        let mut update = Query::new(
-            "UPDATE dbo.catga_flow_continuations SET flow_type_key = @P1 \
-             WHERE flow_key = @P2 AND flow_type_key IS NULL",
-        );
-        update.bind(flow_type_key.as_slice());
-        update.bind(row_key);
-        update
-            .execute(&mut *connection)
-            .await
-            .map_err(|error| database_error("backfill SQL Server continuation type key", error))?;
-    }
-    Ok(())
 }
 
 fn wait_correlation(continuation: &FlowContinuation) -> Option<&str> {
