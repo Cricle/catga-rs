@@ -163,6 +163,12 @@ no machine-dependent timing threshold.
   `*_with_cancellation` methods; handlers and pipeline behavior can
   cooperatively inspect the task-scoped token through `current_cancellation()`.
   Ordinary dispatch stays token-free, preserving the minimal Rust API.
+* Source request and no-response command pipeline behaviors map to distinct,
+  typed `Pipeline` and `CommandPipeline` contracts. Both enforce the same
+  startup depth bound, compose only explicitly supplied behaviors, carry the
+  task-scoped cancellation token, and isolate recoverable handler or behavior
+  panics as `Internal` errors without representing a command as a synthetic
+  `Request<Response = ()>`.
 * The source automatic batching behavior maps to the paired
   `AutoBatchingBehavior` and `AutoBatchingRunner` types. Construction returns
   the bounded sender and its single-use receiver together; the application

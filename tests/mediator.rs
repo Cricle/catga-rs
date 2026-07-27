@@ -215,12 +215,21 @@ struct ShipOrderHandler {
     shipped_order: Arc<AtomicUsize>,
 }
 
+struct PanickingShipOrderHandler;
+
 #[async_trait]
 impl CommandHandler<ShipOrder> for ShipOrderHandler {
     async fn handle(&self, command: ShipOrder) -> CatgaResult<()> {
         self.shipped_order
             .store(command.0 as usize, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl CommandHandler<ShipOrder> for PanickingShipOrderHandler {
+    async fn handle(&self, _: ShipOrder) -> CatgaResult<()> {
+        panic!("command handler panic must not escape the mediator");
     }
 }
 
@@ -236,6 +245,21 @@ async fn command_routes_to_its_sole_handler() -> CatgaResult<()> {
     mediator.send_command(ShipOrder(42)).await?;
 
     assert_eq!(shipped_order.load(Ordering::Relaxed), 42);
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_handler_panics_become_internal_errors() -> CatgaResult<()> {
+    let mut registry = Registry::new();
+    registry.register_command::<ShipOrder, _>(PanickingShipOrderHandler)?;
+    let mediator = Mediator::new(registry);
+
+    let error = mediator
+        .send_command(ShipOrder(1))
+        .await
+        .expect_err("command panic must become a structured error");
+
+    assert_eq!(error.code(), ErrorCode::Internal);
     Ok(())
 }
 

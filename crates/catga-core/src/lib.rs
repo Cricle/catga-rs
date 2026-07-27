@@ -103,7 +103,9 @@ pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;
 pub use observability::TRACING_TARGET;
 pub use outbox_processor::{OutboxLoopOptions, OutboxProcessor, OutboxRun};
-pub use pipeline::{Behavior, MAX_PIPELINE_DEPTH, Next, Pipeline};
+pub use pipeline::{
+    Behavior, CommandBehavior, CommandNext, CommandPipeline, MAX_PIPELINE_DEPTH, Next, Pipeline,
+};
 pub use projection::{
     CatchUpProjectionRunner, LiveProjection, Projection, ProjectionCheckpoint,
     ProjectionCheckpointStore, ProjectionRun,

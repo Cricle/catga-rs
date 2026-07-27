@@ -12,8 +12,8 @@ use tracing::Instrument;
 
 use crate::cancellation::until_cancelled;
 use crate::{
-    CatgaError, CatgaResult, Command, ErrorCode, Event, MAX_PIPELINE_DEPTH, Next, Pipeline,
-    Registry, Request, observability, scope_cancellation,
+    CatgaError, CatgaResult, Command, CommandNext, CommandPipeline, ErrorCode, Event,
+    MAX_PIPELINE_DEPTH, Next, Pipeline, Registry, Request, observability, scope_cancellation,
 };
 
 /// Maximum number of requests retained by one [`Mediator::send_batch`] call.
@@ -137,9 +137,10 @@ impl Mediator {
         let span = observability::request_span(request_type);
         observability::record_message_tags(&span, &message);
         let started = Instant::now();
-        let result =
-            isolate_request_panic(Self::dispatch(&self.registry, message).instrument(span.clone()))
-                .await;
+        let result = isolate_mediator_panic(
+            Self::dispatch(&self.registry, message).instrument(span.clone()),
+        )
+        .await;
         observability::record_request(&span, request_type, started.elapsed(), &result);
         result
     }
@@ -159,14 +160,19 @@ impl Mediator {
     }
 
     /// Routes a command to its sole registered handler.
+    ///
+    /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust panic strategy is
+    /// unwinding. Builds configured with `panic = "abort"` terminate instead and cannot be
+    /// recovered by this method.
     pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
         let command_type = std::any::type_name::<C>();
         let span = observability::command_span(command_type);
         observability::record_message_tags(&span, &command);
         let started = Instant::now();
-        let result = Self::dispatch_command(&self.registry, command)
-            .instrument(span.clone())
-            .await;
+        let result = isolate_mediator_panic(
+            Self::dispatch_command(&self.registry, command).instrument(span.clone()),
+        )
+        .await;
         observability::record_command(&span, command_type, started.elapsed(), &result);
         result
     }
@@ -178,6 +184,55 @@ impl Mediator {
         cancellation: CancellationToken,
     ) -> CatgaResult<()> {
         let operation = scope_cancellation(cancellation.clone(), self.send_command(command));
+        until_cancelled(cancellation, operation).await
+    }
+
+    /// Routes a command through a typed pipeline before its registered handler.
+    ///
+    /// This is the command counterpart to [`Self::send_with`]. Command behavior remains a
+    /// separate type-safe contract because a command has no response value.
+    pub async fn send_command_with<C: Command>(
+        &self,
+        command: C,
+        pipeline: &CommandPipeline<C>,
+    ) -> CatgaResult<()> {
+        if pipeline.len() > MAX_PIPELINE_DEPTH {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "pipeline depth exceeds the supported maximum",
+            ));
+        }
+        let registry = Arc::clone(&self.registry);
+        let terminal = CommandNext::new(move |command| {
+            let registry = Arc::clone(&registry);
+            Box::pin(async move { Self::dispatch_command(&registry, command).await })
+        });
+        let command_type = std::any::type_name::<C>();
+        let span = observability::command_span(command_type);
+        observability::record_message_tags(&span, &command);
+        let started = Instant::now();
+        let result = isolate_mediator_panic(
+            pipeline
+                .wrap(terminal)
+                .run(command)
+                .instrument(span.clone()),
+        )
+        .await;
+        observability::record_command(&span, command_type, started.elapsed(), &result);
+        result
+    }
+
+    /// Routes a command through `pipeline` with explicit cooperative cancellation.
+    pub async fn send_command_with_cancellation_and_pipeline<C: Command>(
+        &self,
+        command: C,
+        pipeline: &CommandPipeline<C>,
+        cancellation: CancellationToken,
+    ) -> CatgaResult<()> {
+        let operation = scope_cancellation(
+            cancellation.clone(),
+            self.send_command_with(command, pipeline),
+        );
         until_cancelled(cancellation, operation).await
     }
 
@@ -207,7 +262,7 @@ impl Mediator {
         let span = observability::request_span(request_type);
         observability::record_message_tags(&span, &message);
         let started = Instant::now();
-        let result = isolate_request_panic(
+        let result = isolate_mediator_panic(
             pipeline
                 .wrap(terminal)
                 .run(message)
@@ -453,19 +508,19 @@ impl Mediator {
     }
 }
 
-/// Converts a recoverable unwind from request processing into a structured framework error.
+/// Converts a recoverable unwind from mediator processing into a structured framework error.
 ///
 /// Rust builds configured with `panic = "abort"` cannot recover from panics; this boundary only
 /// isolates the normal unwinding panic strategy. Keeping the boundary around the complete future
-/// also covers both registered handlers and every pipeline behavior.
-async fn isolate_request_panic<T>(
+/// also covers registered request or command handlers and every pipeline behavior.
+async fn isolate_mediator_panic<T>(
     operation: impl Future<Output = CatgaResult<T>>,
 ) -> CatgaResult<T> {
     match AssertUnwindSafe(operation).catch_unwind().await {
         Ok(result) => result,
         Err(_) => Err(CatgaError::new(
             ErrorCode::Internal,
-            "mediator request processing panicked",
+            "mediator processing panicked",
         )),
     }
 }

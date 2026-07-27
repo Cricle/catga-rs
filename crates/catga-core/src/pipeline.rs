@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
-use crate::{CatgaError, CatgaResult, ErrorCode, Request};
+use crate::{CatgaError, CatgaResult, Command, ErrorCode, Request};
 
 /// Maximum number of behaviors that can wrap one request dispatch.
 ///
@@ -127,6 +127,126 @@ impl<M: Request> Pipeline<M> {
                     let behavior = Arc::clone(&behavior);
                     let next = next.clone();
                     Box::pin(async move { behavior.handle(message, next).await })
+                })
+            })
+    }
+}
+
+type CommandContinuation<C> = dyn Fn(C) -> BoxFuture<'static, CatgaResult<()>> + Send + Sync;
+
+/// Invokes the next behavior or the registered command handler in a command pipeline.
+pub struct CommandNext<C: Command> {
+    continuation: Arc<CommandContinuation<C>>,
+}
+
+impl<C: Command> Clone for CommandNext<C> {
+    fn clone(&self) -> Self {
+        Self {
+            continuation: Arc::clone(&self.continuation),
+        }
+    }
+}
+
+impl<C: Command> CommandNext<C> {
+    pub(crate) fn new(
+        continuation: impl Fn(C) -> BoxFuture<'static, CatgaResult<()>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            continuation: Arc::new(continuation),
+        }
+    }
+
+    /// Continues command processing with the supplied command.
+    pub fn run(&self, command: C) -> BoxFuture<'static, CatgaResult<()>> {
+        (self.continuation)(command)
+    }
+}
+
+/// Wraps typed command processing before and after the next pipeline stage.
+///
+/// Command pipelines remain separate from request pipelines because commands produce no
+/// response. This prevents a `Command` from being represented as an artificial
+/// `Request<Response = ()>` and keeps handler registration type-safe.
+#[async_trait]
+pub trait CommandBehavior<C: Command>: Send + Sync {
+    /// Handles a command and optionally invokes the next behavior or command handler.
+    async fn handle(&self, command: C, next: CommandNext<C>) -> CatgaResult<()>;
+}
+
+/// An immutable, typed sequence of command behaviors built during application startup.
+pub struct CommandPipeline<C: Command> {
+    behaviors: Vec<Arc<dyn CommandBehavior<C>>>,
+}
+
+impl<C: Command> Default for CommandPipeline<C> {
+    fn default() -> Self {
+        Self {
+            behaviors: Vec::new(),
+        }
+    }
+}
+
+impl<C: Command> CommandPipeline<C> {
+    /// Creates an empty command pipeline.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a command behavior after the existing stages.
+    pub fn with<B>(mut self, behavior: B) -> Self
+    where
+        B: CommandBehavior<C> + 'static,
+    {
+        self.behaviors.push(Arc::new(behavior));
+        self
+    }
+
+    /// Adds a shared command behavior after the existing stages.
+    pub fn with_shared(mut self, behavior: Arc<dyn CommandBehavior<C>>) -> Self {
+        self.behaviors.push(behavior);
+        self
+    }
+
+    /// Adds a command behavior while enforcing [`MAX_PIPELINE_DEPTH`].
+    pub fn try_with<B>(self, behavior: B) -> CatgaResult<Self>
+    where
+        B: CommandBehavior<C> + 'static,
+    {
+        self.try_with_shared(Arc::new(behavior))
+    }
+
+    /// Adds a shared command behavior while enforcing [`MAX_PIPELINE_DEPTH`].
+    pub fn try_with_shared(mut self, behavior: Arc<dyn CommandBehavior<C>>) -> CatgaResult<Self> {
+        if self.behaviors.len() >= MAX_PIPELINE_DEPTH {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "pipeline depth exceeds the supported maximum",
+            ));
+        }
+        self.behaviors.push(behavior);
+        Ok(self)
+    }
+
+    /// Returns the number of configured command behaviors.
+    pub const fn len(&self) -> usize {
+        self.behaviors.len()
+    }
+
+    /// Returns whether this pipeline has no configured command behaviors.
+    pub const fn is_empty(&self) -> bool {
+        self.behaviors.is_empty()
+    }
+
+    pub(crate) fn wrap(&self, terminal: CommandNext<C>) -> CommandNext<C> {
+        self.behaviors
+            .iter()
+            .rev()
+            .fold(terminal, |next, behavior| {
+                let behavior = Arc::clone(behavior);
+                CommandNext::new(move |command| {
+                    let behavior = Arc::clone(&behavior);
+                    let next = next.clone();
+                    Box::pin(async move { behavior.handle(command, next).await })
                 })
             })
     }
