@@ -9,14 +9,14 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardSnapshotCodec;
+use catga_codec_memorypack::MemoryPackSnapshotCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Snapshot, SnapshotCodec, SnapshotStore};
 
 const METADATA_BYTES: usize = 16;
 const MAX_CAS_RETRIES: usize = 8;
 
 /// JetStream KV-backed latest snapshots for one explicit aggregate state type.
-pub struct NatsSnapshotStore<S, C = PostcardSnapshotCodec<S>> {
+pub struct NatsSnapshotStore<S, C = MemoryPackSnapshotCodec<S>> {
     store: kv::Store,
     codec: C,
     state: PhantomData<fn() -> S>,
@@ -25,11 +25,11 @@ pub struct NatsSnapshotStore<S, C = PostcardSnapshotCodec<S>> {
 impl<S> NatsSnapshotStore<S>
 where
     S: Send + Sync + 'static,
-    PostcardSnapshotCodec<S>: SnapshotCodec<S>,
+    MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
-    /// Connects using compact Postcard state serialization.
+    /// Connects using compact MemoryPack state serialization.
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        Self::with_codec(server, bucket, PostcardSnapshotCodec::default()).await
+        Self::with_codec(server, bucket, MemoryPackSnapshotCodec::default()).await
     }
 }
 

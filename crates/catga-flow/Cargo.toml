@@ -12,10 +12,10 @@ workspace = true
 [dependencies]
 async-trait = "0.1"
 catga-core = { path = "../catga-core" }
+catga-codec-memorypack = { path = "../catga-codec-memorypack" }
 dashmap = "6"
 futures = "0.3"
 metrics = "0.24"
-postcard = { version = "1", default-features = false, features = ["alloc"] }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive", "rc"] }
 tracing = "0.1"

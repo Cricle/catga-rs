@@ -13,6 +13,7 @@ unsafe_code = "forbid"
 missing_docs = "allow"
 
 [dependencies]
+async-trait = "0.1"
 catga-core = { path = "../catga-core" }
 byteorder = { version = "1.5.0", features = ["i128"] }
 memorypack-derive = { version = "1.1.0", path = "memorypack-derive", optional = true }
@@ -31,6 +32,9 @@ rust_decimal_macros = { version = "1.39", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 url = { version = "2.5", features = ["serde"], optional = true }
 uuid = { version = "1.18", features = ["serde"], optional = true }
+
+[dev-dependencies]
+futures = "0.3"
 
 [features]
 default = ["derive", "serde"]

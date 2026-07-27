@@ -30,7 +30,7 @@ mod suspended_flow;
 mod suspended_flow_timeout;
 mod transport;
 
-pub use catga_codec_postcard::{PostcardRequestClient, PostcardRpcResponse};
+pub use catga_codec_memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
 pub use config::{
     MAX_REDIS_PENDING_RECLAIM_SCANS, RedisConfig, RedisPendingReclaimOptions, RedisPubSubConfig,
 };

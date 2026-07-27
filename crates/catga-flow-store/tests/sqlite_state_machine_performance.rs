@@ -12,16 +12,16 @@
 
 use std::time::Instant;
 
+use catga_codec_memorypack::MemoryPackable;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{StateMachineSnapshot, StateMachineStore};
 use catga_flow_store::SqlStateMachineStore;
-use serde::{Deserialize, Serialize};
 
 const RECORD_COUNT: usize = 128;
 const PAYLOAD_BYTES: usize = 256;
 const OPERATIONS_PER_LIFECYCLE: usize = 4;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, MemoryPackable, PartialEq)]
 struct BenchmarkStateMachine {
     completed: bool,
     payload: Vec<u8>,

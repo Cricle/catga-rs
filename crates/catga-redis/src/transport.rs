@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, Delivery, Destination,
     DestinationTransport, Envelope, EnvelopeCodec, ErrorCode, HealthCheckable, MessageTransport,
@@ -32,7 +32,7 @@ pub struct RedisTransport {
     group: Box<str>,
     consumer: Box<str>,
     reclaim_options: RedisPendingReclaimOptions,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
     in_flight: Arc<InFlight>,
     operations: OperationTracker,
     acceptance: AcceptanceGate,
@@ -110,7 +110,7 @@ impl RedisTransport {
             group: config.group,
             consumer: config.consumer,
             reclaim_options,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
             in_flight: Arc::new(InFlight::new()),
             operations: OperationTracker::default(),
             acceptance: AcceptanceGate::default(),

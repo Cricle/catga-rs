@@ -11,7 +11,7 @@
 //!   continuation contracts, plus Redis-backed timeout and scheduling support.
 //! - `tls-rustls` enables Rustls support for whichever network SQL drivers are selected.
 //!
-//! SQL backends share versioned Postcard frames, fixed SHA-256 identity keys, bounded
+//! SQL backends share versioned MemoryPack frames, fixed SHA-256 identity keys, bounded
 //! optimistic-concurrency retries, bounded discovery scans, and receipt fencing. Dialect-specific
 //! modules retain native parameter binding, skip-locked claims, and indexed time ordering without
 //! duplicating the public store contract. No adapter creates a worker or background task.

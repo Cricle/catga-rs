@@ -1,7 +1,7 @@
 //! Ephemeral Redis Pub/Sub transport.
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, Delivery, Envelope, EnvelopeCodec,
     ErrorCode, HealthCheckable, MessageTransport, Stoppable, Waitable, telemetry,
@@ -46,7 +46,7 @@ pub struct RedisPubSubTransport {
     channel: Box<str>,
     subscription: Mutex<redis::aio::PubSub>,
     receiver_id: Uuid,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
     acceptance: AcceptanceGate,
 }
 
@@ -102,7 +102,7 @@ impl RedisPubSubTransport {
             channel: config.channel,
             subscription: Mutex::new(subscription),
             receiver_id: Uuid::new_v4(),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
             acceptance: AcceptanceGate::default(),
         })
     }

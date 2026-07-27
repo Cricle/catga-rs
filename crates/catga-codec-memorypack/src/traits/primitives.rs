@@ -3,6 +3,20 @@ use crate::reader::MemoryPackReader;
 use crate::traits::{MemoryPackDeserialize, MemoryPackSerialize};
 use crate::writer::MemoryPackWriter;
 
+impl MemoryPackSerialize for () {
+    #[inline(always)]
+    fn serialize(&self, _: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
+        Ok(())
+    }
+}
+
+impl MemoryPackDeserialize for () {
+    #[inline(always)]
+    fn deserialize(_: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
+        Ok(())
+    }
+}
+
 impl MemoryPackSerialize for bool {
     #[inline(always)]
     fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {

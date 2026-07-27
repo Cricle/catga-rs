@@ -5,33 +5,32 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_codec_postcard::PostcardScheduledOutbox;
+use catga_codec_memorypack::{MemoryPackScheduledOutbox, MemoryPackable};
 use catga_core::{
     DistributedIdGenerator, Envelope, EnvelopeHeaders, Event, Message, MessageMetadata,
     MessagePriority, OutboxMessage, OutboxStore, QualityOfService, SnowflakeIdGenerator,
     SnowflakeLayout, scope_transport_context,
 };
 use catga_memory::MemoryOutbox;
-use serde::Serialize;
 
-#[derive(Serialize, catga_core::Message)]
+#[derive(MemoryPackable, catga_core::Message)]
 struct ShipOrder {
     order_id: u64,
 }
 
-#[derive(Serialize, catga_core::Message)]
+#[derive(MemoryPackable, catga_core::Message)]
 #[catga(version = 3, priority = high)]
 struct VersionedShipOrder {
     order_id: u64,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, MemoryPackable)]
 struct OrderScheduled(u64);
 
 impl Message for OrderScheduled {}
 impl Event for OrderScheduled {}
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, MemoryPackable)]
 struct ReliableOrderScheduled(u64);
 
 impl Message for ReliableOrderScheduled {}
@@ -79,13 +78,13 @@ async fn pending_scheduled_message_can_be_cancelled_once() {
 }
 
 #[tokio::test]
-async fn postcard_scheduler_persists_a_typed_message_until_its_deadline() {
+async fn memorypack_scheduler_persists_a_typed_message_until_its_deadline() {
     let store = Arc::new(MemoryOutbox::default());
     let ids: Arc<dyn DistributedIdGenerator> = Arc::new(
         SnowflakeIdGenerator::new(3, SnowflakeLayout::default())
             .expect("valid Snowflake configuration"),
     );
-    let scheduler = PostcardScheduledOutbox::new(Arc::clone(&store), ids);
+    let scheduler = MemoryPackScheduledOutbox::new(Arc::clone(&store), ids);
 
     let id = scheduler
         .schedule_at(
@@ -107,13 +106,13 @@ async fn postcard_scheduler_persists_a_typed_message_until_its_deadline() {
 }
 
 #[tokio::test]
-async fn postcard_scheduler_persists_the_derived_schema_version() {
+async fn memorypack_scheduler_persists_the_derived_schema_version() {
     let store = Arc::new(MemoryOutbox::default());
     let ids: Arc<dyn DistributedIdGenerator> = Arc::new(
         SnowflakeIdGenerator::new(3, SnowflakeLayout::default())
             .expect("valid Snowflake configuration"),
     );
-    let scheduler = PostcardScheduledOutbox::new(Arc::clone(&store), ids);
+    let scheduler = MemoryPackScheduledOutbox::new(Arc::clone(&store), ids);
 
     scheduler
         .schedule_at(
@@ -137,13 +136,13 @@ async fn postcard_scheduler_persists_the_derived_schema_version() {
 }
 
 #[tokio::test]
-async fn postcard_scheduler_inherits_scoped_transport_headers_and_priority() {
+async fn memorypack_scheduler_inherits_scoped_transport_headers_and_priority() {
     let store = Arc::new(MemoryOutbox::default());
     let ids: Arc<dyn DistributedIdGenerator> = Arc::new(
         SnowflakeIdGenerator::new(3, SnowflakeLayout::default())
             .expect("valid Snowflake configuration"),
     );
-    let scheduler = PostcardScheduledOutbox::new(Arc::clone(&store), ids);
+    let scheduler = MemoryPackScheduledOutbox::new(Arc::clone(&store), ids);
     let inbound = Envelope::new(
         81,
         "orders.received",
@@ -177,13 +176,13 @@ async fn postcard_scheduler_inherits_scoped_transport_headers_and_priority() {
 }
 
 #[tokio::test]
-async fn postcard_scheduler_preserves_event_delivery_defaults() {
+async fn memorypack_scheduler_preserves_event_delivery_defaults() {
     let store = Arc::new(MemoryOutbox::default());
     let ids: Arc<dyn DistributedIdGenerator> = Arc::new(
         SnowflakeIdGenerator::new(3, SnowflakeLayout::default())
             .expect("valid Snowflake configuration"),
     );
-    let scheduler = PostcardScheduledOutbox::new(Arc::clone(&store), ids);
+    let scheduler = MemoryPackScheduledOutbox::new(Arc::clone(&store), ids);
     let due = SystemTime::now() - Duration::from_secs(1);
 
     scheduler

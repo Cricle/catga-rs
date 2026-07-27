@@ -3,8 +3,14 @@
 use std::{sync::Arc, time::SystemTime};
 
 use async_trait::async_trait;
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackWriter, MemoryPackable,
+};
 use catga_core::CatgaResult;
 use serde::{Deserialize, Serialize};
+
+use crate::memorypack::{TimeWire, decode_time, encode_time};
 
 /// Distinguishes application state from Catga-owned checkpoint metadata.
 ///
@@ -48,6 +54,63 @@ pub struct DslStepProgress {
     kind: DslProgressKind,
     payload: Arc<[u8]>,
     updated_at: SystemTime,
+}
+
+#[derive(MemoryPackable)]
+struct DslStepProgressWire {
+    flow_id: String,
+    step_index: u32,
+    version: i64,
+    kind: u8,
+    payload: Vec<u8>,
+    updated_at: TimeWire,
+}
+
+impl MemoryPackSerialize for DslStepProgress {
+    fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
+        DslStepProgressWire {
+            flow_id: self.flow_id.to_string(),
+            step_index: self.step_index,
+            version: self.version,
+            kind: encode_progress_kind(self.kind),
+            payload: self.payload.to_vec(),
+            updated_at: encode_time(self.updated_at),
+        }
+        .serialize(writer)
+    }
+}
+
+impl MemoryPackDeserialize for DslStepProgress {
+    fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
+        let wire = DslStepProgressWire::deserialize(reader)?;
+        Ok(Self {
+            flow_id: wire.flow_id.into_boxed_str(),
+            step_index: wire.step_index,
+            version: wire.version,
+            kind: decode_progress_kind(wire.kind)?,
+            payload: Arc::from(wire.payload),
+            updated_at: decode_time(wire.updated_at)?,
+        })
+    }
+}
+
+fn encode_progress_kind(value: DslProgressKind) -> u8 {
+    match value {
+        DslProgressKind::ApplicationState => 0,
+        DslProgressKind::CheckpointFrame => 1,
+        DslProgressKind::Terminal => 2,
+    }
+}
+
+fn decode_progress_kind(value: u8) -> Result<DslProgressKind, MemoryPackError> {
+    match value {
+        0 => Ok(DslProgressKind::ApplicationState),
+        1 => Ok(DslProgressKind::CheckpointFrame),
+        2 => Ok(DslProgressKind::Terminal),
+        value => Err(MemoryPackError::DeserializationError(format!(
+            "invalid DSL progress kind: {value}"
+        ))),
+    }
 }
 
 impl DslStepProgress {

@@ -1,7 +1,7 @@
 //! Redis persistence for versioned, application-encoded DSL step progress.
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::CatgaResult;
 use catga_flow::{DslStepProgress, DslStepProgressStore};
 use redis::{
@@ -26,13 +26,13 @@ return 1
 /// Redis-backed CAS storage for recoverable [`DslStepProgress`] records.
 ///
 /// Each flow identity and step index maps to one SHA-256-derived key. The
-/// application payload remains an opaque Postcard value, while a separate
+/// application payload remains an opaque MemoryPack value, while a separate
 /// Redis hash field lets the update script compare its version atomically.
 /// This prevents a read-modify-write race between distributed flow workers.
 pub struct RedisDslStepProgress {
     connection: ConnectionManager,
     prefix: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl RedisDslStepProgress {
@@ -51,7 +51,7 @@ impl RedisDslStepProgress {
         Ok(Self {
             connection,
             prefix: prefix.into(),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 

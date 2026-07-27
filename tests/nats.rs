@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_nats::jetstream::{self, kv};
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::{MemoryPackCodec, MemoryPackSerializer};
 use catga_core::{
     AsyncInitializable, CatgaError, CatgaResult, DeadLetter, DeadLetterStore, Destination,
     DestinationTransport, EnhancedSnapshotStore, Envelope, EnvelopeCodec, ErrorCode, EventStore,
@@ -539,7 +539,7 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
             .strip_prefix(b"CNR1")
             .and_then(|value| value.get(16..))
             .expect("the index page has a create envelope");
-        let ids = postcard::from_bytes::<Vec<Box<str>>>(payload).unwrap();
+        let ids = MemoryPackSerializer::deserialize::<Vec<Box<str>>>(payload).unwrap();
         assert_eq!(ids.len(), expected_entries);
     }
 
@@ -560,7 +560,7 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
         .strip_prefix(b"CNR1")
         .and_then(|value| value.get(16..))
         .expect("the index page has a create envelope");
-    let ids = postcard::from_bytes::<Vec<Box<str>>>(payload).unwrap();
+    let ids = MemoryPackSerializer::deserialize::<Vec<Box<str>>>(payload).unwrap();
     assert_eq!(ids.len(), INDEX_PAGE_CAPACITY.saturating_sub(1));
     assert!(!ids.iter().any(|id| id.as_ref() == terminal.id()));
 
@@ -575,7 +575,9 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
     states
         .create(
             format!("f{:x}", Sha256::digest(interrupted.id().as_bytes())),
-            postcard::to_allocvec(&interrupted).unwrap().into(),
+            MemoryPackSerializer::serialize(&interrupted)
+                .unwrap()
+                .into(),
         )
         .await
         .unwrap();
@@ -1471,7 +1473,7 @@ async fn nats_outbox_updates_legacy_keys_and_releases_for_immediate_reclaim() ->
         .await
         .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?;
     let id = 74_u64;
-    let payload = PostcardCodec.encode(&Envelope::new(
+    let payload = MemoryPackCodec::default().encode(&Envelope::new(
         id,
         "order.created",
         vec![1],

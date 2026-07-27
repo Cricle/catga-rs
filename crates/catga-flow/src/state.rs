@@ -1,7 +1,15 @@
 use std::{sync::Arc, time::SystemTime};
 
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackWriter, MemoryPackable,
+};
 use catga_core::CatgaError;
 use serde::{Deserialize, Serialize};
+
+use crate::memorypack::{
+    ErrorWire, TimeWire, decode_error, decode_time, encode_error, encode_time,
+};
 
 /// The lifecycle phase of a durable flow.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -39,6 +47,78 @@ pub struct FlowState {
     heartbeat: SystemTime,
     data: Arc<[u8]>,
     error: Option<CatgaError>,
+}
+
+#[derive(MemoryPackable)]
+struct FlowStateWire {
+    id: String,
+    flow_type: String,
+    status: u8,
+    step: u32,
+    version: i64,
+    owner: Option<String>,
+    heartbeat: TimeWire,
+    data: Vec<u8>,
+    error: Option<ErrorWire>,
+}
+
+impl MemoryPackSerialize for FlowState {
+    fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
+        FlowStateWire {
+            id: self.id.to_string(),
+            flow_type: self.flow_type.to_string(),
+            status: encode_flow_status(self.status),
+            step: self.step,
+            version: self.version,
+            owner: self.owner.as_deref().map(str::to_owned),
+            heartbeat: encode_time(self.heartbeat),
+            data: self.data.to_vec(),
+            error: self.error.as_ref().map(encode_error),
+        }
+        .serialize(writer)
+    }
+}
+
+impl MemoryPackDeserialize for FlowState {
+    fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
+        let wire = FlowStateWire::deserialize(reader)?;
+        Ok(Self {
+            id: wire.id.into_boxed_str(),
+            flow_type: wire.flow_type.into_boxed_str(),
+            status: decode_flow_status(wire.status)?,
+            step: wire.step,
+            version: wire.version,
+            owner: wire.owner.map(String::into_boxed_str),
+            heartbeat: decode_time(wire.heartbeat)?,
+            data: Arc::from(wire.data),
+            error: wire.error.map(decode_error).transpose()?,
+        })
+    }
+}
+
+fn encode_flow_status(value: FlowStatus) -> u8 {
+    match value {
+        FlowStatus::Running => 0,
+        FlowStatus::Compensating => 1,
+        FlowStatus::Suspended => 2,
+        FlowStatus::Done => 3,
+        FlowStatus::Failed => 4,
+        FlowStatus::Cancelled => 5,
+    }
+}
+
+fn decode_flow_status(value: u8) -> Result<FlowStatus, MemoryPackError> {
+    match value {
+        0 => Ok(FlowStatus::Running),
+        1 => Ok(FlowStatus::Compensating),
+        2 => Ok(FlowStatus::Suspended),
+        3 => Ok(FlowStatus::Done),
+        4 => Ok(FlowStatus::Failed),
+        5 => Ok(FlowStatus::Cancelled),
+        value => Err(MemoryPackError::DeserializationError(format!(
+            "invalid flow status: {value}"
+        ))),
+    }
 }
 
 impl FlowState {

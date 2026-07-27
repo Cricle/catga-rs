@@ -20,6 +20,20 @@ impl<T: MemoryPackDeserialize> MemoryPackDeserialize for Box<T> {
     }
 }
 
+impl MemoryPackSerialize for Box<str> {
+    #[inline]
+    fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
+        writer.write_string(self)
+    }
+}
+
+impl MemoryPackDeserialize for Box<str> {
+    #[inline]
+    fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
+        Ok(reader.read_string()?.into_boxed_str())
+    }
+}
+
 impl<T: MemoryPackSerialize> MemoryPackSerialize for Rc<T> {
     #[inline]
     fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {

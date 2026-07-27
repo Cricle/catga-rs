@@ -1,12 +1,13 @@
 //! Validation and versioned framing for durable DSL step progress.
 
+use catga_codec_memorypack::MemoryPackSerializer;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::DslStepProgress;
 
 /// Mirrors the maximum durable payload accepted by DSL parallel recovery frames.
 pub(crate) const MAX_DSL_STEP_PROGRESS_PAYLOAD_BYTES: usize = 1024 * 1024;
 
-const DSL_STEP_PROGRESS_FORMAT_VERSION: u8 = 1;
+const DSL_STEP_PROGRESS_FORMAT_VERSION: u8 = 2;
 
 /// Validates the opaque payload before it reaches a database driver.
 pub(crate) fn validate_progress(progress: &DslStepProgress) -> CatgaResult<()> {
@@ -27,7 +28,7 @@ pub(crate) fn advances_version(expected: i64, next: i64) -> bool {
 /// Encodes every public progress field so private checkpoint metadata round-trips exactly.
 pub(crate) fn encode_progress(progress: &DslStepProgress) -> CatgaResult<Vec<u8>> {
     validate_progress(progress)?;
-    let payload = postcard::to_allocvec(progress).map_err(|error| {
+    let payload = MemoryPackSerializer::serialize(progress).map_err(|error| {
         CatgaError::new(
             ErrorCode::Internal,
             format!("cannot encode SQL DSL step progress: {error}"),
@@ -53,10 +54,10 @@ pub(crate) fn decode_progress(frame: &[u8]) -> CatgaResult<DslStepProgress> {
             format!("unsupported SQL DSL step progress format version {version}"),
         ));
     }
-    let progress = postcard::from_bytes(payload).map_err(|error| {
+    let progress = MemoryPackSerializer::deserialize(payload).map_err(|error| {
         CatgaError::new(
             ErrorCode::Internal,
-            format!("cannot decode SQL DSL step progress: {error}"),
+            format!("cannot decode MemoryPack SQL DSL step progress: {error}"),
         )
     })?;
     validate_progress(&progress)?;
@@ -65,10 +66,29 @@ pub(crate) fn decode_progress(frame: &[u8]) -> CatgaResult<DslStepProgress> {
 
 #[cfg(test)]
 mod tests {
-    use super::advances_version;
+    use super::{advances_version, decode_progress, encode_progress};
+    use catga_flow::DslStepProgress;
 
     #[test]
     fn maximum_version_cannot_be_its_own_successor() {
         assert!(!advances_version(i64::MAX, i64::MAX));
+    }
+
+    #[test]
+    fn progress_frames_use_the_memorypack_format_version() {
+        let progress = DslStepProgress::new("memorypack-version", 0, []);
+
+        let encoded = encode_progress(&progress).expect("encode progress");
+
+        assert_eq!(encoded.first(), Some(&2));
+    }
+
+    #[test]
+    fn progress_decoder_rejects_trailing_bytes() {
+        let progress = DslStepProgress::new("exact-frame", 0, []);
+        let mut encoded = encode_progress(&progress).expect("encode progress");
+        encoded.push(0);
+
+        assert!(decode_progress(&encoded).is_err());
     }
 }

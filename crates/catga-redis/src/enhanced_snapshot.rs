@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_codec_postcard::{PostcardCodec, PostcardSnapshotCodec};
+use catga_codec_memorypack::{MemoryPackCodec, MemoryPackSnapshotCodec, MemoryPackable};
 use catga_core::{
     CatgaError, CatgaResult, EnhancedSnapshotStore, ErrorCode, Snapshot, SnapshotCodec,
     SnapshotInfo, SnapshotStore,
@@ -75,7 +75,7 @@ return #versions
 "#;
 const MUTATION_BATCH: i64 = 128;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, MemoryPackable, Serialize)]
 struct StoredSnapshot {
     timestamp_millis: i64,
     state: Vec<u8>,
@@ -84,30 +84,30 @@ struct StoredSnapshot {
 /// Redis-backed, multi-version snapshots for one explicit aggregate state type.
 ///
 /// The adapter keeps an all-zero-score sorted set of order-preserving version
-/// members plus a hash of compact Postcard records. Lexicographic version
+/// members plus a hash of compact MemoryPack records. Lexicographic version
 /// ordering avoids precision loss from Redis floating-point scores, while Lua
 /// scripts update both structures atomically. Cleanup and range deletion work
 /// in bounded batches so one stream cannot create an unbounded server-side
 /// script invocation.
-pub struct RedisEnhancedSnapshots<S, C = PostcardSnapshotCodec<S>> {
+pub struct RedisEnhancedSnapshots<S, C = MemoryPackSnapshotCodec<S>> {
     connection: ConnectionManager,
     prefix: Box<str>,
     codec: C,
-    value_codec: PostcardCodec,
+    value_codec: MemoryPackCodec,
     state: PhantomData<fn() -> S>,
 }
 
 impl<S> RedisEnhancedSnapshots<S>
 where
     S: Send + Sync + 'static,
-    PostcardSnapshotCodec<S>: SnapshotCodec<S>,
+    MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
-    /// Connects using compact Postcard aggregate-state serialization.
+    /// Connects using compact MemoryPack aggregate-state serialization.
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        Self::with_codec(server, prefix, PostcardSnapshotCodec::default()).await
+        Self::with_codec(server, prefix, MemoryPackSnapshotCodec::default()).await
     }
 }
 
@@ -133,7 +133,7 @@ where
             connection,
             prefix: prefix.into(),
             codec,
-            value_codec: PostcardCodec,
+            value_codec: MemoryPackCodec::default(),
             state: PhantomData,
         })
     }

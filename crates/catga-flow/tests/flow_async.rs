@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use async_trait::async_trait;
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Request, RequestClient};
 use futures::{executor::block_on, future::BoxFuture};
 
 type UnaryCallback =
@@ -15,6 +16,22 @@ type TernaryCallback = Box<
 
 async fn always_fails() -> CatgaResult<()> {
     Err(CatgaError::new(ErrorCode::Validation, "callback failed"))
+}
+
+#[derive(catga_core::Message)]
+struct WireOnlyDouble(u32);
+
+impl Request for WireOnlyDouble {
+    type Response = u32;
+}
+
+struct WireOnlyDoubleClient;
+
+#[async_trait]
+impl RequestClient<WireOnlyDouble> for WireOnlyDoubleClient {
+    async fn request(&self, request: &WireOnlyDouble) -> CatgaResult<u32> {
+        Ok(request.0.saturating_mul(2))
+    }
 }
 
 #[test]
@@ -66,4 +83,21 @@ fn flow_async_propagates_catga_errors() {
         }
         Ok(()) => panic!("callback should propagate the CatgaError"),
     }
+}
+
+#[test]
+fn dsl_remote_send_accepts_a_request_without_serde_traits() {
+    struct State {
+        value: u32,
+    }
+
+    let flow = catga_flow::DslFlow::new().remote_send_into(
+        Arc::new(WireOnlyDoubleClient),
+        |state: &State| WireOnlyDouble(state.value),
+        |state, response| state.value = response,
+    );
+    let mut state = State { value: 21 };
+
+    assert_eq!(block_on(flow.run(&mut state)), Ok(()));
+    assert_eq!(state.value, 42);
 }

@@ -7,7 +7,9 @@
 
 extern crate self as catga_codec_memorypack;
 
+mod api;
 mod codec;
+mod envelope;
 mod limits;
 mod reader;
 mod writer;
@@ -18,6 +20,10 @@ pub mod state;
 pub mod traits;
 pub mod varint;
 
+pub use api::{
+    MemoryPackRequestClient, MemoryPackRequestClientFactory, MemoryPackRpcResponse,
+    MemoryPackScheduledOutbox, MemoryPackSnapshotCodec,
+};
 pub use codec::MemoryPackCodec;
 pub use error::MemoryPackError;
 pub use limits::MemoryPackDecodeLimits;
@@ -26,6 +32,18 @@ pub use serializer::MemoryPackSerializer;
 pub use state::{MemoryPackReaderOptionalState, MemoryPackWriterOptionalState};
 pub use traits::{MemoryPackDeserialize, MemoryPackDeserializeZeroCopy, MemoryPackSerialize};
 pub use writer::MemoryPackWriter;
+
+/// The core typed transport specialized for [`MemoryPackCodec`].
+///
+/// This alias reuses Catga's shared
+/// acknowledgement, batching, destination, and transport-context implementation.
+pub type MemoryPackTransport<T> = catga_core::TypedTransport<T, MemoryPackCodec>;
+
+/// A typed MemoryPack delivery that retains its backend acknowledgement token.
+pub type MemoryPackDelivery<M> = catga_core::TypedDelivery<M>;
+
+/// The acknowledgement result produced by [`MemoryPackTransport::process_next`].
+pub type MemoryPackProcessOutcome = catga_core::TypedProcessOutcome;
 
 pub use traits::{NullableString, NullableVec};
 

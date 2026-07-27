@@ -17,7 +17,7 @@ use async_nats::{
     },
 };
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
     EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage, VersionHistoryPage,
@@ -48,7 +48,7 @@ pub struct NatsEventStore {
     ids: kv::Store,
     stream_name: Box<str>,
     subject_prefix: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl NatsEventStore {
@@ -119,7 +119,7 @@ impl NatsEventStore {
             ids,
             stream_name,
             subject_prefix,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 

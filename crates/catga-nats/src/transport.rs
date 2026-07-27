@@ -6,7 +6,7 @@ use async_nats::jetstream::{
     stream,
 };
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, Delivery, Destination,
     DestinationTransport, Envelope, EnvelopeCodec, ErrorCode, HealthCheckable, MessageTransport,
@@ -31,7 +31,7 @@ pub struct NatsTransport {
     client: async_nats::Client,
     context: jetstream::Context,
     subject: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
     consumer: consumer::PullConsumer,
     destinations: DashMap<Destination, NatsDestination>,
     operations: OperationTracker,
@@ -114,7 +114,7 @@ impl NatsTransport {
             client,
             context,
             subject: config.subject,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
             consumer,
             destinations: DashMap::new(),
             operations: OperationTracker::default(),

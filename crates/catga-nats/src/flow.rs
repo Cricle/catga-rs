@@ -7,6 +7,9 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackable,
+};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{FlowState, FlowStatus, FlowStore};
 use serde::{Deserialize, Serialize};
@@ -17,14 +20,14 @@ use crate::record::{create_record, decode_record};
 const MAX_CAS_RETRIES: usize = 8;
 const MAX_INDEX_PAGE_ENTRIES: usize = 32;
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, MemoryPackable, Serialize)]
 struct TypeIndex {
     tail_page: u64,
     scan_page: u64,
     scan_offset: u32,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, MemoryPackable, Serialize)]
 struct IndexMarker {
     page: u64,
 }
@@ -423,7 +426,11 @@ async fn open_bucket(context: &jetstream::Context, bucket: &str) -> CatgaResult<
     }
 }
 
-async fn create<T: Serialize>(store: &kv::Store, key: &str, value: &T) -> CatgaResult<bool> {
+async fn create<T: MemoryPackSerialize>(
+    store: &kv::Store,
+    key: &str,
+    value: &T,
+) -> CatgaResult<bool> {
     let record = create_record(&encode(value)?);
     match store.update(key, record.value().to_vec().into(), 0).await {
         Ok(_) => Ok(true),
@@ -505,12 +512,12 @@ fn validate_index_page(ids: &[Box<str>]) -> CatgaResult<()> {
     }
     Ok(())
 }
-fn encode<T: Serialize>(value: &T) -> CatgaResult<Vec<u8>> {
-    postcard::to_allocvec(value)
+fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
+    MemoryPackSerializer::serialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
-fn decode<T: for<'de> Deserialize<'de>>(value: &[u8]) -> CatgaResult<T> {
-    postcard::from_bytes(value)
+fn decode<T: MemoryPackDeserialize>(value: &[u8]) -> CatgaResult<T> {
+    MemoryPackSerializer::deserialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 fn is_revision_conflict(error: &kv::UpdateError) -> bool {

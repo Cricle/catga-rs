@@ -8,7 +8,7 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DEFAULT_OUTBOX_CLAIM_LEASE, DEFAULT_OUTBOX_MAX_RETRIES, EnvelopeCodec,
     ErrorCode, OutboxMessage, OutboxState, OutboxStore, outbox_claim_expires_at, telemetry,
@@ -20,7 +20,7 @@ use uuid::Uuid;
 /// JetStream KV outbox with revision-CAS owner transitions.
 pub struct NatsOutbox {
     store: kv::Store,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 impl NatsOutbox {
     /// Connects and provisions a one-history KV bucket for outbox messages.
@@ -46,7 +46,7 @@ impl NatsOutbox {
         };
         Ok(Self {
             store,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
     fn key(id: u64) -> String {
@@ -421,7 +421,7 @@ impl StoredRecord {
 }
 
 fn encode(
-    codec: &PostcardCodec,
+    codec: &MemoryPackCodec,
     state: StoredState,
     message: &OutboxMessage,
 ) -> CatgaResult<Vec<u8>> {
@@ -477,7 +477,7 @@ fn encode(
     Ok(value)
 }
 
-fn decode(codec: &PostcardCodec, value: &[u8]) -> CatgaResult<StoredRecord> {
+fn decode(codec: &MemoryPackCodec, value: &[u8]) -> CatgaResult<StoredRecord> {
     if value.starts_with(RECORD_MAGIC) {
         return decode_versioned(codec, &value[RECORD_MAGIC.len()..], true, true, true);
     }
@@ -512,7 +512,7 @@ fn decode(codec: &PostcardCodec, value: &[u8]) -> CatgaResult<StoredRecord> {
 }
 
 fn decode_versioned(
-    codec: &PostcardCodec,
+    codec: &MemoryPackCodec,
     value: &[u8],
     includes_published_at: bool,
     includes_claimed_until: bool,
@@ -651,7 +651,7 @@ fn decode_versioned(
     })
 }
 
-fn decode_legacy(codec: &PostcardCodec, value: &[u8]) -> CatgaResult<StoredRecord> {
+fn decode_legacy(codec: &MemoryPackCodec, value: &[u8]) -> CatgaResult<StoredRecord> {
     if value.len() < 2 {
         return Err(CatgaError::new(
             ErrorCode::Internal,
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn legacy_record_decodes_with_the_default_retry_policy() -> CatgaResult<()> {
-        let codec = PostcardCodec;
+        let codec = MemoryPackCodec::default();
         let payload = codec.encode(&Envelope::new(
             7,
             "order.created",
@@ -771,7 +771,7 @@ mod tests {
 
     #[test]
     fn current_record_round_trips_published_state_and_timestamp() -> CatgaResult<()> {
-        let codec = PostcardCodec;
+        let codec = MemoryPackCodec::default();
         let mut message = OutboxMessage::new(Envelope::new(
             8,
             "order.published",

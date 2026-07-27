@@ -11,14 +11,13 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::{MemoryPackCodec, MemoryPackDeserialize, MemoryPackSerialize};
 use catga_core::{
     CatgaError, CatgaResult, Delivery, Destination, DestinationTransport, Envelope, EnvelopeCodec,
     ErrorCode, Handler, Request, RequestTransport,
 };
 use futures::StreamExt;
 use redis::AsyncCommands;
-use serde::{Serialize, de::DeserializeOwned};
 
 use crate::transport::map_error;
 
@@ -33,7 +32,7 @@ use crate::transport::map_error;
 pub struct RedisStreamsRequestClient<T: ?Sized> {
     transport: Arc<T>,
     client: redis::Client,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl<T> RedisStreamsRequestClient<T>
@@ -48,7 +47,7 @@ where
         Ok(Self {
             transport,
             client: redis::Client::open(server).map_err(map_error)?,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 
@@ -121,7 +120,7 @@ pub struct RedisStreamsRequestServer<T: ?Sized> {
     transport: Arc<T>,
     destination: Destination,
     client: redis::Client,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl<T> RedisStreamsRequestServer<T>
@@ -137,7 +136,7 @@ where
             transport,
             destination,
             client: redis::Client::open(server).map_err(map_error)?,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 
@@ -166,8 +165,8 @@ where
     /// not acknowledge the request, preserving at-least-once redelivery semantics.
     pub async fn handle_next<M, H>(&self, handler: &H) -> CatgaResult<()>
     where
-        M: Request + DeserializeOwned,
-        M::Response: Serialize,
+        M: Request + MemoryPackDeserialize,
+        M::Response: MemoryPackSerialize,
         H: Handler<M>,
     {
         let request = self.next().await?;
@@ -190,7 +189,7 @@ where
 pub struct RedisStreamsRequest {
     delivery: Delivery,
     client: redis::Client,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl RedisStreamsRequest {
@@ -205,7 +204,7 @@ impl RedisStreamsRequest {
     }
 
     /// Deserializes a typed request payload without copying it first.
-    pub fn decode<M: DeserializeOwned>(&self) -> CatgaResult<M> {
+    pub fn decode<M: MemoryPackDeserialize>(&self) -> CatgaResult<M> {
         self.codec.decode_value(self.delivery.envelope().payload())
     }
 
@@ -240,7 +239,7 @@ impl RedisStreamsRequest {
     }
 
     /// Serializes and sends a typed successful response with propagated correlation metadata.
-    pub async fn respond_value<T: Serialize>(self, response: &T) -> CatgaResult<()> {
+    pub async fn respond_value<T: MemoryPackSerialize>(self, response: &T) -> CatgaResult<()> {
         let envelope = self
             .codec
             .typed_success(self.delivery.envelope(), response)?;

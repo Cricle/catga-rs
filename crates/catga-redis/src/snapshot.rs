@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardSnapshotCodec;
+use catga_codec_memorypack::MemoryPackSnapshotCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Snapshot, SnapshotCodec, SnapshotStore};
 use redis::{
     AsyncCommands, Script,
@@ -28,7 +28,7 @@ return ARGV[1]
 "#;
 
 /// Redis-backed latest snapshots for one explicit aggregate state type.
-pub struct RedisSnapshotStore<S, C = PostcardSnapshotCodec<S>> {
+pub struct RedisSnapshotStore<S, C = MemoryPackSnapshotCodec<S>> {
     connection: ConnectionManager,
     prefix: Box<str>,
     codec: C,
@@ -38,14 +38,14 @@ pub struct RedisSnapshotStore<S, C = PostcardSnapshotCodec<S>> {
 impl<S> RedisSnapshotStore<S>
 where
     S: Send + Sync + 'static,
-    PostcardSnapshotCodec<S>: SnapshotCodec<S>,
+    MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
-    /// Connects using compact Postcard state serialization.
+    /// Connects using compact MemoryPack state serialization.
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        Self::with_codec(server, prefix, PostcardSnapshotCodec::default()).await
+        Self::with_codec(server, prefix, MemoryPackSnapshotCodec::default()).await
     }
 }
 

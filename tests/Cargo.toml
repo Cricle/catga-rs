@@ -13,7 +13,6 @@ axum = "0.8"
 catga-axum = { path = "../crates/catga-axum" }
 catga-core = { path = "../crates/catga-core" }
 catga-flow = { path = "../crates/catga-flow" }
-catga-codec-postcard = { path = "../crates/catga-codec-postcard" }
 catga-codec-memorypack = { path = "../crates/catga-codec-memorypack" }
 catga-cluster = { path = "../crates/catga-cluster" }
 catga-memory = { path = "../crates/catga-memory" }
@@ -23,7 +22,6 @@ catga-robustmq = { path = "../crates/catga-robustmq" }
 catga-testing = { path = "../crates/catga-testing" }
 futures = "0.3"
 metrics = "0.24"
-postcard = { version = "1", default-features = false, features = ["alloc"] }
 robustmq = "1"
 raft = { version = "0.7", default-features = false, features = ["protobuf-codec"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{FlowState, FlowStatus, FlowStore};
 use redis::{
@@ -67,7 +67,7 @@ return 1
 pub struct RedisFlows {
     connection: ConnectionManager,
     prefix: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl RedisFlows {
@@ -86,7 +86,7 @@ impl RedisFlows {
         Ok(Self {
             connection,
             prefix: prefix.into(),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 

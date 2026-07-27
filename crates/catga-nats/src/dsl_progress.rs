@@ -4,9 +4,11 @@ use std::error::Error as _;
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackError, MemoryPackSerialize, MemoryPackSerializer,
+};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{DslStepProgress, DslStepProgressStore};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};
@@ -106,8 +108,7 @@ impl DslStepProgressStore for NatsDslStepProgress {
             return Ok(false);
         }
         let record = decode_record(&entry.value)?;
-        let current: DslStepProgress =
-            postcard::from_bytes(record.payload()).map_err(map_postcard)?;
+        let current: DslStepProgress = decode(record.payload())?;
         if current.version() != expected_version {
             return Ok(false);
         }
@@ -125,9 +126,7 @@ impl DslStepProgressStore for NatsDslStepProgress {
         ) {
             return Ok(None);
         }
-        postcard::from_bytes(decode_record(&entry.value)?.payload())
-            .map(Some)
-            .map_err(map_postcard)
+        decode(decode_record(&entry.value)?.payload()).map(Some)
     }
 
     async fn delete(&self, flow_id: &str, step_index: u32) -> CatgaResult<bool> {
@@ -165,10 +164,13 @@ fn key(flow_id: &str, step_index: u32) -> String {
     format!("d{:x}", digest.finalize())
 }
 
-fn encode<T: Serialize>(value: &T) -> CatgaResult<Vec<u8>> {
-    postcard::to_allocvec(value).map_err(map_postcard)
+fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
+    MemoryPackSerializer::serialize(value).map_err(map_memorypack)
 }
-fn map_postcard(error: postcard::Error) -> CatgaError {
+fn decode<T: MemoryPackDeserialize>(value: &[u8]) -> CatgaResult<T> {
+    MemoryPackSerializer::deserialize(value).map_err(map_memorypack)
+}
+fn map_memorypack(error: MemoryPackError) -> CatgaError {
     CatgaError::new(ErrorCode::Internal, error.to_string())
 }
 fn is_revision_conflict(error: &kv::UpdateError) -> bool {

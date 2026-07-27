@@ -18,11 +18,13 @@ use crate::{
     dsl_when_any::run_checkpointed_when_any,
     metrics::ForEachMetrics,
 };
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackable,
+};
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, Event, Mediator, RemoteRequest, Request, RequestClient,
 };
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 type Action<S> = Box<dyn for<'a> Fn(&'a mut S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync>;
@@ -49,7 +51,7 @@ const DEFAULT_BRANCH: u32 = u32::MAX;
 const DSL_TERMINAL_STEP_INDEX: u32 = u32::MAX;
 const MAX_DSL_TERMINAL_BYTES: usize = 1024 * 1024;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, MemoryPackable)]
 struct CheckpointTerminal(Vec<u8>);
 
 /// Largest number of branches one DSL parallel or `when_any` step may retain.
@@ -400,7 +402,6 @@ impl<S: Send> DslFlow<S> {
     pub fn remote_send<M, C, F>(self, client: Arc<C>, request: F) -> Self
     where
         M: RemoteRequest,
-        M::Response: DeserializeOwned,
         C: RequestClient<M> + 'static,
         F: Fn(&S) -> M + Send + Sync + 'static,
     {
@@ -418,7 +419,6 @@ impl<S: Send> DslFlow<S> {
     pub fn remote_send_into<M, C, F, Set>(self, client: Arc<C>, request: F, set: Set) -> Self
     where
         M: RemoteRequest,
-        M::Response: DeserializeOwned,
         C: RequestClient<M> + 'static,
         F: Fn(&S) -> M + Send + Sync + 'static,
         Set: Fn(&mut S, M::Response) + Send + Sync + 'static,
@@ -656,7 +656,7 @@ impl<S: Send> DslFlow<S> {
     /// are bounded; selections that exceed the checkpoint limit return [`ErrorCode::Validation`].
     pub fn for_each_replayable<T, Select, F>(mut self, select: Select, action: F) -> Self
     where
-        T: Serialize + DeserializeOwned + Send + 'static,
+        T: MemoryPackSerialize + MemoryPackDeserialize + Send + 'static,
         Select: Fn(&S) -> Vec<T> + Send + Sync + 'static,
         F: for<'a> Fn(&'a mut S, T) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync + 'static,
     {
@@ -667,7 +667,7 @@ impl<S: Send> DslFlow<S> {
                 select(state)
                     .into_iter()
                     .map(|item| {
-                        postcard::to_allocvec(&item).map_err(|_| {
+                        MemoryPackSerializer::serialize(&item).map_err(|_| {
                             CatgaError::new(
                                 ErrorCode::Validation,
                                 "replayable for_each item cannot be encoded",
@@ -677,7 +677,7 @@ impl<S: Send> DslFlow<S> {
                     .collect()
             }),
             action: Box::new(move |state, bytes| {
-                let item = postcard::from_bytes(bytes).map_err(|_| {
+                let item = MemoryPackSerializer::deserialize(bytes).map_err(|_| {
                     CatgaError::new(
                         ErrorCode::Validation,
                         "replayable for_each checkpoint item is invalid",
@@ -705,7 +705,7 @@ impl<S: Send> DslFlow<S> {
         on_error: OnError,
     ) -> Self
     where
-        T: Serialize + DeserializeOwned + Send + 'static,
+        T: MemoryPackSerialize + MemoryPackDeserialize + Send + 'static,
         Select: Fn(&S) -> Vec<T> + Send + Sync + 'static,
         F: for<'a> Fn(&'a mut S, T) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync + 'static,
         OnError: for<'a> Fn(&'a mut S, usize, CatgaError) -> BoxFuture<'a, CatgaResult<()>>
@@ -720,7 +720,7 @@ impl<S: Send> DslFlow<S> {
                 select(state)
                     .into_iter()
                     .map(|item| {
-                        postcard::to_allocvec(&item).map_err(|_| {
+                        MemoryPackSerializer::serialize(&item).map_err(|_| {
                             CatgaError::new(
                                 ErrorCode::Validation,
                                 "replayable for_each item cannot be encoded",
@@ -730,7 +730,7 @@ impl<S: Send> DslFlow<S> {
                     .collect()
             }),
             action: Box::new(move |state, bytes| {
-                let item = postcard::from_bytes(bytes).map_err(|_| {
+                let item = MemoryPackSerializer::deserialize(bytes).map_err(|_| {
                     CatgaError::new(
                         ErrorCode::Validation,
                         "replayable for_each checkpoint item is invalid",
@@ -1645,7 +1645,7 @@ where
                     "DSL terminal progress slot is not a terminal record",
                 ));
             }
-            postcard::from_bytes(progress.payload()).map_err(|error| {
+            MemoryPackSerializer::deserialize(progress.payload()).map_err(|error| {
                 CatgaError::new(ErrorCode::Validation, "DSL terminal record is invalid")
                     .with_details(error.to_string())
             })
@@ -1661,7 +1661,7 @@ async fn persist_checkpoint_terminal<P>(
 where
     P: DslStepProgressStore + ?Sized,
 {
-    let payload = postcard::to_allocvec(&terminal).map_err(|error| {
+    let payload = MemoryPackSerializer::serialize(&terminal).map_err(|error| {
         CatgaError::new(ErrorCode::Internal, "encode DSL terminal record")
             .with_details(error.to_string())
     })?;

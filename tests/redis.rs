@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     AsyncInitializable, CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DeadLetter,
     DeadLetterStore, Destination, DestinationTransport, EnhancedSnapshotStore, Envelope,
@@ -142,7 +142,7 @@ async fn redis_pubsub_transport_deduplicates_exactly_once_receptions() -> CatgaR
         vec![9, 4],
         MessageMetadata::new(94, None).with_quality_of_service(QualityOfService::ExactlyOnce),
     );
-    let payload = PostcardCodec.encode(&envelope)?;
+    let payload = MemoryPackCodec::default().encode(&envelope)?;
     let client = redis::Client::open(server)
         .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?;
     let mut connection = client
@@ -1333,7 +1333,7 @@ async fn redis_outbox_reclaims_and_completes_a_legacy_owner_only_record() -> Cat
     let config = redis_config();
     let prefix = format!("{}:outbox-legacy-owner", config.stream);
     let id = 74_u64;
-    let payload = PostcardCodec.encode(&Envelope::new(
+    let payload = MemoryPackCodec::default().encode(&Envelope::new(
         id,
         "order.created",
         vec![1],
@@ -1383,7 +1383,7 @@ async fn redis_outbox_reclaims_and_completes_a_legacy_owner_only_record() -> Cat
 async fn redis_outbox_rotates_its_bounded_claim_scan_past_active_leases() -> CatgaResult<()> {
     let config = redis_config();
     let prefix = format!("{}:outbox-scan-fairness", config.stream);
-    let payload = PostcardCodec.encode(&Envelope::new(
+    let payload = MemoryPackCodec::default().encode(&Envelope::new(
         1,
         "order.created",
         vec![1],

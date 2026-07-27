@@ -1,26 +1,16 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{CatgaError, CatgaResult, Envelope, ErrorCode, Message, Request};
 
-/// A request whose wire value and response can be encoded by a typed remote client.
+/// A format-neutral request accepted by a typed remote client.
 ///
-/// This blanket trait keeps remote-call bounds in one place without asking
-/// application message types for a second explicit implementation.
-pub trait RemoteRequest: Message + Request + Serialize
-where
-    Self::Response: DeserializeOwned,
-{
-}
+/// This blanket trait keeps remote-call bounds in one place without coupling application message
+/// types to a particular serialization format.
+pub trait RemoteRequest: Message + Request {}
 
-impl<T> RemoteRequest for T
-where
-    T: Message + Request + Serialize,
-    T::Response: DeserializeOwned,
-{
-}
+impl<T> RemoteRequest for T where T: Message + Request {}
 
 /// Sends one typed request through an already-configured remote endpoint.
 ///
@@ -31,7 +21,6 @@ where
 pub trait RequestClient<M>: Send + Sync
 where
     M: RemoteRequest,
-    M::Response: DeserializeOwned,
 {
     /// Sends `request` using the client's configured default timeout.
     async fn request(&self, request: &M) -> CatgaResult<M::Response>;

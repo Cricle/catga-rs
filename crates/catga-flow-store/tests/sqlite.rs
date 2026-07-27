@@ -3,6 +3,7 @@
 
 use std::time::{Duration, SystemTime};
 
+use catga_codec_memorypack::MemoryPackable;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
     DslStepProgress, DslStepProgressStore, FlowContinuation, FlowQuery, FlowState, FlowStore,
@@ -12,12 +13,11 @@ use catga_flow::{
 use catga_flow_store::{
     SqlDslStepProgressStore, SqlFlowStore, SqlStateMachineStore, SqlSuspendedFlowStore,
 };
-use serde::{Deserialize, Serialize};
 
 #[path = "../../../tests/flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, MemoryPackable, PartialEq)]
 struct PersistedStateMachine {
     paid: bool,
     quantity: u32,

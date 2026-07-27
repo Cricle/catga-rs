@@ -9,17 +9,17 @@ use std::{
 };
 
 use async_trait::async_trait;
+use catga_codec_memorypack::MemoryPackable;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, Handler, MessageMetadata, Request,
     SnowflakeIdGenerator, SnowflakeLayout,
 };
 use catga_nats::{NatsRequestClient, NatsRequestServer};
-use serde::{Deserialize, Serialize};
 
 #[path = "support/nats_e2e.rs"]
 mod nats_e2e;
 
-#[derive(Deserialize, Serialize, catga_core::Message)]
+#[derive(MemoryPackable, catga_core::Message)]
 struct CreateOrder {
     order_id: u64,
 }
@@ -28,7 +28,7 @@ impl Request for CreateOrder {
     type Response = OrderCreated;
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Debug, Eq, PartialEq, MemoryPackable)]
 struct OrderCreated {
     order_id: u64,
 }

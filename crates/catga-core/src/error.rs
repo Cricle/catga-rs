@@ -86,7 +86,7 @@ impl ErrorCode {
 /// A failure has a stable category, explanatory message, optional diagnostic details, and an
 /// optional retryability override. Incoming details are retained only up to
 /// [`MAX_ERROR_DETAILS_BYTES`] at a UTF-8 character boundary. The bounded details decoder asks
-/// binary formats for a borrowed string, so Postcard frames do not allocate an unbounded remote
+/// binary formats for a borrowed string, so transport frames do not allocate an unbounded remote
 /// detail string before the limit is applied. Protocol-specific compatibility for legacy error
 /// layouts belongs to the relevant codec boundary rather than this type's deserializer.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

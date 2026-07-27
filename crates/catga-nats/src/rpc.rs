@@ -2,13 +2,14 @@
 
 use std::time::Duration;
 
-use catga_codec_postcard::{PostcardCodec, PostcardRequestClient};
+use catga_codec_memorypack::{
+    MemoryPackCodec, MemoryPackDeserialize, MemoryPackRequestClient, MemoryPackSerialize,
+};
 use catga_core::{
     CatgaError, CatgaResult, DistributedIdGenerator, Envelope, EnvelopeCodec, ErrorCode, Handler,
     Request, RequestTransport,
 };
 use futures::StreamExt;
-use serde::{Serialize, de::DeserializeOwned};
 
 /// A native NATS request client using a private inbox for every request.
 ///
@@ -18,7 +19,7 @@ use serde::{Serialize, de::DeserializeOwned};
 pub struct NatsRequestClient {
     client: async_nats::Client,
     subject: async_nats::Subject,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl NatsRequestClient {
@@ -50,7 +51,7 @@ impl NatsRequestClient {
         Ok(Self {
             client,
             subject: subject.into(),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 
@@ -90,7 +91,7 @@ impl NatsRequestClient {
         id_generator: std::sync::Arc<dyn DistributedIdGenerator>,
     ) -> CatgaResult<NatsTypedRequestClient> {
         let destination = self.subject.to_string();
-        PostcardRequestClient::new(
+        MemoryPackRequestClient::new(
             std::sync::Arc::new(self),
             destination,
             Duration::from_secs(30),
@@ -111,14 +112,14 @@ impl RequestTransport for NatsRequestClient {
     }
 }
 
-/// A typed Postcard request client backed by native NATS request/reply.
-pub type NatsTypedRequestClient = PostcardRequestClient<NatsRequestClient>;
+/// A typed MemoryPack request client backed by native NATS request/reply.
+pub type NatsTypedRequestClient = MemoryPackRequestClient<NatsRequestClient>;
 
 /// A subscription accepting native NATS requests for one service subject.
 pub struct NatsRequestServer {
     client: async_nats::Client,
     subscription: async_nats::Subscriber,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl NatsRequestServer {
@@ -159,7 +160,7 @@ impl NatsRequestServer {
         Ok(Self {
             client,
             subscription,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 
@@ -186,8 +187,8 @@ impl NatsRequestServer {
     /// Receives one typed request and routes its result through the private reply inbox.
     pub async fn handle_next<M, H>(&mut self, handler: &H) -> CatgaResult<()>
     where
-        M: Request + DeserializeOwned,
-        M::Response: Serialize,
+        M: Request + MemoryPackDeserialize,
+        M::Response: MemoryPackSerialize,
         H: Handler<M>,
     {
         let request = self.next().await?;
@@ -206,7 +207,7 @@ pub struct NatsRequest {
     client: async_nats::Client,
     reply: async_nats::Subject,
     envelope: Envelope,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl NatsRequest {
@@ -216,7 +217,7 @@ impl NatsRequest {
     }
 
     /// Deserializes the typed request payload without copying it.
-    pub fn decode<M: DeserializeOwned>(&self) -> CatgaResult<M> {
+    pub fn decode<M: MemoryPackDeserialize>(&self) -> CatgaResult<M> {
         self.codec.decode_value(self.envelope.payload())
     }
 
@@ -230,7 +231,7 @@ impl NatsRequest {
     }
 
     /// Serializes and sends a typed successful response with propagated correlation metadata.
-    pub async fn respond_value<T: Serialize>(self, response: &T) -> CatgaResult<()> {
+    pub async fn respond_value<T: MemoryPackSerialize>(self, response: &T) -> CatgaResult<()> {
         let envelope = self.codec.typed_success(&self.envelope, response)?;
         self.respond(envelope).await
     }

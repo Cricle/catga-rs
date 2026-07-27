@@ -1,11 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::{MemoryPackCodec, MemoryPackDeserialize, MemoryPackSerialize};
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, Handler, Request, RequestTransport,
 };
 use robustmq::{MQ9Client, Mailbox, Subscription};
-use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::mpsc;
 
 use crate::MailboxPriority;
@@ -87,7 +86,7 @@ impl MailboxClient {
         envelope: &Envelope,
         priority: MailboxPriority,
     ) -> CatgaResult<()> {
-        let payload = PostcardCodec.encode(envelope)?;
+        let payload = MemoryPackCodec::default().encode(envelope)?;
         self.client
             .send(mailbox_id, &payload, priority.as_sdk())
             .await
@@ -129,7 +128,7 @@ impl MailboxClient {
         F: Fn(CatgaResult<Envelope>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let codec = PostcardCodec;
+        let codec = MemoryPackCodec::default();
         self.subscribe(
             mailbox_id,
             move |message| callback(codec.decode(&message.payload)),
@@ -164,7 +163,7 @@ impl MailboxClient {
             .await
             .map_err(map_error)?;
         let (sender, mut receiver) = mpsc::channel(1);
-        let codec = PostcardCodec;
+        let codec = MemoryPackCodec::default();
         let subscription = self
             .client
             .subscribe(
@@ -182,7 +181,7 @@ impl MailboxClient {
             .await
             .map_err(map_error)?;
         let priority = MailboxPriority::from_envelope(&request).as_sdk();
-        let payload = PostcardCodec.encode(&request.with_reply_to(reply.mail_id))?;
+        let payload = MemoryPackCodec::default().encode(&request.with_reply_to(reply.mail_id))?;
         let result = async {
             self.client
                 .send(mailbox_id, &payload, priority)
@@ -236,7 +235,7 @@ impl MailboxRequestServer {
                     let sender = sender.clone();
                     let client = Arc::clone(&request_client);
                     async move {
-                        let request = PostcardCodec
+                        let request = MemoryPackCodec::default()
                             .decode(&message.payload)
                             .map(|envelope| MailboxRequest { client, envelope });
                         let _ = sender.send(request).await;
@@ -263,8 +262,8 @@ impl MailboxRequestServer {
     /// Receives one typed request and sends its handler result to the private reply mailbox.
     pub async fn handle_next<M, H>(&mut self, handler: &H) -> CatgaResult<()>
     where
-        M: Request + DeserializeOwned,
-        M::Response: Serialize,
+        M: Request + MemoryPackDeserialize,
+        M::Response: MemoryPackSerialize,
         H: Handler<M>,
     {
         let request = self.next().await?;
@@ -299,8 +298,8 @@ impl MailboxRequest {
     }
 
     /// Deserializes the typed request payload without copying it first.
-    pub fn decode<M: DeserializeOwned>(&self) -> CatgaResult<M> {
-        PostcardCodec.decode_value(self.envelope.payload())
+    pub fn decode<M: MemoryPackDeserialize>(&self) -> CatgaResult<M> {
+        MemoryPackCodec::default().decode_value(self.envelope.payload())
     }
 
     /// Sends one response at its envelope priority to the request's private reply mailbox.
@@ -312,7 +311,7 @@ impl MailboxRequest {
             )
         })?;
         let priority = MailboxPriority::from_envelope(&response).as_sdk();
-        let payload = PostcardCodec.encode(&response)?;
+        let payload = MemoryPackCodec::default().encode(&response)?;
         self.client
             .send(reply_to, &payload, priority)
             .await
@@ -320,14 +319,14 @@ impl MailboxRequest {
     }
 
     /// Serializes and sends a typed response with propagated correlation and priority metadata.
-    pub async fn respond_value<T: Serialize>(self, response: &T) -> CatgaResult<()> {
-        let envelope = PostcardCodec.typed_success(&self.envelope, response)?;
+    pub async fn respond_value<T: MemoryPackSerialize>(self, response: &T) -> CatgaResult<()> {
+        let envelope = MemoryPackCodec::default().typed_success(&self.envelope, response)?;
         self.respond(envelope).await
     }
 
     /// Sends a structured typed failure to the request's private reply mailbox.
     pub async fn respond_error(self, error: CatgaError) -> CatgaResult<()> {
-        let envelope = PostcardCodec.typed_failure(&self.envelope, error)?;
+        let envelope = MemoryPackCodec::default().typed_failure(&self.envelope, error)?;
         self.respond(envelope).await
     }
 }

@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardSnapshotCodec;
+use catga_codec_memorypack::MemoryPackSnapshotCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use catga_flow::{
     StateMachineSnapshot, StateMachineStore, decode_state_machine_snapshot,
@@ -26,7 +26,7 @@ return 0
 "#;
 
 /// Redis-backed state-machine store using per-instance binary compare-and-set.
-pub struct RedisStateMachines<S, C = PostcardSnapshotCodec<S>> {
+pub struct RedisStateMachines<S, C = MemoryPackSnapshotCodec<S>> {
     connection: ConnectionManager,
     prefix: Box<str>,
     codec: C,
@@ -36,14 +36,14 @@ pub struct RedisStateMachines<S, C = PostcardSnapshotCodec<S>> {
 impl<S> RedisStateMachines<S>
 where
     S: Send + Sync + 'static,
-    PostcardSnapshotCodec<S>: SnapshotCodec<S>,
+    MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
-    /// Connects with compact Postcard state encoding.
+    /// Connects with compact MemoryPack state encoding.
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        Self::with_codec(server, prefix, PostcardSnapshotCodec::default()).await
+        Self::with_codec(server, prefix, MemoryPackSnapshotCodec::default()).await
     }
 }
 

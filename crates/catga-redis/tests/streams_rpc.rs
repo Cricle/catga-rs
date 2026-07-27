@@ -4,7 +4,7 @@
 
 use std::{env, sync::Arc, time::Duration};
 
-use catga_codec_postcard::{PostcardCodec, PostcardRpcResponse};
+use catga_codec_memorypack::{MemoryPackCodec, MemoryPackRpcResponse};
 use catga_core::{
     CatgaError, CatgaResult, Destination, DestinationTransport, Envelope, ErrorCode,
     MessageMetadata,
@@ -107,10 +107,11 @@ async fn streams_rpc_returns_structured_remote_errors() -> CatgaResult<()> {
     let response = client
         .request_to(destination.as_str(), request(2), Duration::from_secs(2))
         .await?;
-    let decoded: PostcardRpcResponse<()> = PostcardCodec.decode_rpc_response(response.payload())?;
+    let decoded: MemoryPackRpcResponse<()> =
+        MemoryPackCodec::default().decode_rpc_response(response.payload())?;
     assert!(matches!(
         decoded,
-        PostcardRpcResponse::Failure(error) if error.code() == ErrorCode::Validation
+        MemoryPackRpcResponse::Failure(error) if error.code() == ErrorCode::Validation
     ));
     worker
         .await

@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DEFAULT_OUTBOX_CLAIM_LEASE, DEFAULT_OUTBOX_MAX_RETRIES, EnvelopeCodec,
     ErrorCode, OutboxMessage, OutboxStore, outbox_claim_expires_at, telemetry,
@@ -46,7 +46,7 @@ return removed
 pub struct RedisOutbox {
     connection: ConnectionManager,
     prefix: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
     claim_scan_offset: AtomicUsize,
 }
 
@@ -66,7 +66,7 @@ impl RedisOutbox {
         Ok(Self {
             connection,
             prefix: prefix.into(),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
             claim_scan_offset: AtomicUsize::new(0),
         })
     }

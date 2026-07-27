@@ -70,6 +70,28 @@ fn default_deserialize_is_also_exact_and_bounded() {
 }
 
 #[test]
+fn default_deserialize_rejects_a_frame_above_its_default_limit() {
+    let bytes = vec![0_u8; MemoryPackDecodeLimits::default().max_frame_bytes() + 1];
+
+    let error = MemoryPackSerializer::deserialize::<u8>(&bytes)
+        .expect_err("the public default decoder must retain its frame limit");
+
+    assert!(error.to_string().contains("frame"));
+}
+
+#[test]
+fn zero_copy_deserialize_is_also_an_exact_bounded_frame_decoder() {
+    let mut bytes =
+        MemoryPackSerializer::serialize(&"memorypack").expect("test zero-copy string serializes");
+    bytes.push(0);
+
+    let error = MemoryPackSerializer::deserialize_zero_copy::<&str>(&bytes)
+        .expect_err("zero-copy decoding must not accept trailing input");
+
+    assert!(error.to_string().contains("trailing"));
+}
+
+#[test]
 fn rejects_invalid_boolean_wire_values() {
     let mut reader = MemoryPackReader::new_bounded(&[2], limits())
         .expect("small frame fits the configured frame limit");

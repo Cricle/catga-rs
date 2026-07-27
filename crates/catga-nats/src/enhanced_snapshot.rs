@@ -10,7 +10,10 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardSnapshotCodec;
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackSnapshotCodec,
+    MemoryPackable,
+};
 use catga_core::{
     CatgaError, CatgaResult, EnhancedSnapshotStore, ErrorCode, Snapshot, SnapshotCodec,
     SnapshotInfo, SnapshotStore,
@@ -24,10 +27,10 @@ const MAX_CAS_RETRIES: usize = 8;
 
 /// A JetStream KV store retaining multiple immutable snapshots for one concrete aggregate state.
 ///
-/// Every event stream maps to one SHA-256-derived KV key. Its compact Postcard value contains an
+/// Every event stream maps to one SHA-256-derived KV key. Its compact MemoryPack value contains an
 /// ordered version history, so reads and cleanup do not enumerate the bucket or expose stream IDs
 /// as broker keys. Revision CAS serializes concurrent writers without a process-local lock.
-pub struct NatsEnhancedSnapshots<S, C = PostcardSnapshotCodec<S>> {
+pub struct NatsEnhancedSnapshots<S, C = MemoryPackSnapshotCodec<S>> {
     store: kv::Store,
     codec: C,
     state: PhantomData<fn() -> S>,
@@ -36,11 +39,11 @@ pub struct NatsEnhancedSnapshots<S, C = PostcardSnapshotCodec<S>> {
 impl<S> NatsEnhancedSnapshots<S>
 where
     S: Send + Sync + 'static,
-    PostcardSnapshotCodec<S>: SnapshotCodec<S>,
+    MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
-    /// Connects with compact Postcard encoding for aggregate state `S`.
+    /// Connects with compact MemoryPack encoding for aggregate state `S`.
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        Self::with_codec(server, bucket, PostcardSnapshotCodec::default()).await
+        Self::with_codec(server, bucket, MemoryPackSnapshotCodec::default()).await
     }
 }
 
@@ -418,7 +421,7 @@ where
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, MemoryPackable, Serialize)]
 struct StoredHistory {
     entries: Vec<StoredSnapshot>,
 }
@@ -441,7 +444,7 @@ impl StoredHistory {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, MemoryPackable, Serialize)]
 struct StoredSnapshot {
     version: i64,
     timestamp_unix_ms: u64,
@@ -452,13 +455,13 @@ fn stream_key(stream_id: &str) -> String {
     format!("s{:x}", Sha256::digest(stream_id.as_bytes()))
 }
 
-fn encode<T: Serialize>(value: &T) -> CatgaResult<Vec<u8>> {
-    postcard::to_allocvec(value)
+fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
+    MemoryPackSerializer::serialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 
-fn decode<T: for<'de> Deserialize<'de>>(value: &[u8]) -> CatgaResult<T> {
-    postcard::from_bytes(value)
+fn decode<T: MemoryPackDeserialize>(value: &[u8]) -> CatgaResult<T> {
+    MemoryPackSerializer::deserialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 

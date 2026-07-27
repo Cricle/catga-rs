@@ -23,11 +23,10 @@ async-trait = "0.1"
 bb8 = { version = "0.9", optional = true }
 bb8-tiberius = { version = "0.16", default-features = false, features = ["tds73", "with-tokio"], optional = true }
 catga-core = { path = "../catga-core" }
-catga-codec-postcard = { path = "../catga-codec-postcard" }
+catga-codec-memorypack = { path = "../catga-codec-memorypack" }
 catga-flow = { path = "../catga-flow" }
 catga-redis = { path = "../catga-redis", optional = true }
 sha2 = "0.10"
-postcard = { version = "1", default-features = false, features = ["alloc"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"], optional = true }
 tiberius = { version = "0.12", default-features = false, optional = true }
 uuid = { version = "1", features = ["v4"] }

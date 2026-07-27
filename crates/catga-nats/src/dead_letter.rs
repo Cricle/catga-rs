@@ -5,7 +5,7 @@ use async_nats::jetstream::{
     stream::{self, Stream},
 };
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore, EnvelopeCodec,
     ErrorCode,
@@ -18,7 +18,7 @@ pub struct NatsDeadLetters {
     context: jetstream::Context,
     stream: Stream,
     subject: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 impl NatsDeadLetters {
     /// Connects and provisions an append-only dead-letter stream.
@@ -42,7 +42,7 @@ impl NatsDeadLetters {
             context,
             stream,
             subject,
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 }
@@ -92,7 +92,7 @@ impl DeadLetterStore for NatsDeadLetters {
         Ok(letters)
     }
 }
-fn encode(codec: &PostcardCodec, letter: &DeadLetter) -> CatgaResult<Vec<u8>> {
+fn encode(codec: &MemoryPackCodec, letter: &DeadLetter) -> CatgaResult<Vec<u8>> {
     let envelope = codec.encode(letter.envelope())?;
     let reason = letter.reason().as_bytes();
     let diagnostics = letter.diagnostics();
@@ -142,7 +142,7 @@ fn encode(codec: &PostcardCodec, letter: &DeadLetter) -> CatgaResult<Vec<u8>> {
     value.extend_from_slice(stage);
     Ok(value)
 }
-fn decode(codec: &PostcardCodec, value: &[u8]) -> CatgaResult<DeadLetter> {
+fn decode(codec: &MemoryPackCodec, value: &[u8]) -> CatgaResult<DeadLetter> {
     if value.len() < 12 {
         return Err(CatgaError::new(
             ErrorCode::Internal,
@@ -254,7 +254,7 @@ fn map_error(error: impl std::fmt::Display) -> CatgaError {
 #[cfg(test)]
 mod tests {
     use super::{decode, encode};
-    use catga_codec_postcard::PostcardCodec;
+    use catga_codec_memorypack::MemoryPackCodec;
     use catga_core::{
         DeadLetter, DeadLetterDiagnostics, Envelope, EnvelopeCodec, ErrorCode, MessageMetadata,
     };
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn nats_dead_letter_wire_round_trips_diagnostics() -> catga_core::CatgaResult<()> {
-        let codec = PostcardCodec;
+        let codec = MemoryPackCodec::default();
         let diagnostics =
             DeadLetterDiagnostics::try_at(123, ErrorCode::Timeout, "consumer.handle")?;
         let letter = DeadLetter::try_with_diagnostics(envelope(), "expired", 2, diagnostics)?;
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn nats_dead_letter_wire_decodes_legacy_records() -> catga_core::CatgaResult<()> {
-        let codec = PostcardCodec;
+        let codec = MemoryPackCodec::default();
         let payload = codec.encode(&envelope())?;
         let reason = b"old failure";
         let mut legacy = Vec::new();

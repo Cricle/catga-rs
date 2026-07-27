@@ -4,7 +4,7 @@ use std::{error::Error as _, marker::PhantomData};
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardSnapshotCodec;
+use catga_codec_memorypack::MemoryPackSnapshotCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use catga_flow::{
     StateMachineSnapshot, StateMachineStore, decode_state_machine_snapshot,
@@ -17,7 +17,7 @@ use crate::record::{create_record, decode_record};
 const MAX_CAS_RETRIES: usize = 8;
 
 /// JetStream KV-backed state-machine store using per-key revision CAS.
-pub struct NatsStateMachines<S, C = PostcardSnapshotCodec<S>> {
+pub struct NatsStateMachines<S, C = MemoryPackSnapshotCodec<S>> {
     store: kv::Store,
     codec: C,
     state: PhantomData<fn() -> S>,
@@ -26,11 +26,11 @@ pub struct NatsStateMachines<S, C = PostcardSnapshotCodec<S>> {
 impl<S> NatsStateMachines<S>
 where
     S: Send + Sync + 'static,
-    PostcardSnapshotCodec<S>: SnapshotCodec<S>,
+    MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
-    /// Connects with compact Postcard state encoding.
+    /// Connects with compact MemoryPack state encoding.
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        Self::with_codec(server, bucket, PostcardSnapshotCodec::default()).await
+        Self::with_codec(server, bucket, MemoryPackSnapshotCodec::default()).await
     }
 }
 

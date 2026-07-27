@@ -1,7 +1,10 @@
 //! Internal checkpoint-frame encoding for the closure-based DSL.
 
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
+};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use serde::{Deserialize, Serialize};
 
 pub(super) const MAX_CHECKPOINT_PATH_DEPTH: usize = 32;
 const CHECKPOINT_FRAME_MAGIC: &[u8; 4] = b"CDF1";
@@ -25,7 +28,7 @@ pub(super) struct CheckpointFrame {
     pub(super) work: CheckpointWork,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone)]
 pub(super) enum CheckpointWork {
     Branch,
     // Retained so older serialized frames remain decodable and reject at the legacy API boundary.
@@ -49,7 +52,7 @@ pub(super) enum CheckpointWork {
     },
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone)]
 pub(super) enum ParallelBranchProgress {
     Completed {
         state: Vec<u8>,
@@ -59,6 +62,184 @@ pub(super) enum ParallelBranchProgress {
         checkpoint_frame: bool,
         payload: Vec<u8>,
     },
+}
+
+#[derive(Default, MemoryPackable)]
+struct ForEachWire {
+    next_index: u32,
+    total: u32,
+}
+
+#[derive(Default, MemoryPackable)]
+struct ReplayableForEachWire {
+    next_index: u32,
+    items: Vec<Vec<u8>>,
+}
+
+#[derive(Default, MemoryPackable)]
+struct ParallelWire {
+    states: Vec<Option<Vec<u8>>>,
+}
+
+#[derive(Default, MemoryPackable)]
+struct WhenAnyWire {
+    winner: u32,
+    state: Vec<u8>,
+}
+
+#[derive(Default, MemoryPackable)]
+struct ParallelBranchesWire {
+    branches: Vec<Option<ParallelBranchProgress>>,
+}
+
+#[derive(Default, MemoryPackable)]
+struct ParallelCompletedWire {
+    state: Vec<u8>,
+}
+
+#[derive(Default, MemoryPackable)]
+struct ParallelInProgressWire {
+    step_index: u32,
+    checkpoint_frame: bool,
+    payload: Vec<u8>,
+}
+
+impl MemoryPackSerialize for CheckpointWork {
+    fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
+        match self {
+            Self::Branch => writer.write_u8(0),
+            Self::ForEach { next_index, total } => {
+                writer.write_u8(1)?;
+                ForEachWire {
+                    next_index: *next_index,
+                    total: *total,
+                }
+                .serialize(writer)
+            }
+            Self::ReplayableForEach { next_index, items } => {
+                writer.write_u8(2)?;
+                ReplayableForEachWire {
+                    next_index: *next_index,
+                    items: items.clone(),
+                }
+                .serialize(writer)
+            }
+            Self::Parallel { states } => {
+                writer.write_u8(3)?;
+                ParallelWire {
+                    states: states.clone(),
+                }
+                .serialize(writer)
+            }
+            Self::WhenAny { winner, state } => {
+                writer.write_u8(4)?;
+                WhenAnyWire {
+                    winner: *winner,
+                    state: state.clone(),
+                }
+                .serialize(writer)
+            }
+            Self::ParallelBranches { branches } => {
+                writer.write_u8(5)?;
+                ParallelBranchesWire {
+                    branches: branches.clone(),
+                }
+                .serialize(writer)
+            }
+        }
+    }
+}
+
+impl MemoryPackDeserialize for CheckpointWork {
+    fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
+        match reader.read_u8()? {
+            0 => Ok(Self::Branch),
+            1 => {
+                let wire = ForEachWire::deserialize(reader)?;
+                Ok(Self::ForEach {
+                    next_index: wire.next_index,
+                    total: wire.total,
+                })
+            }
+            2 => {
+                let wire = ReplayableForEachWire::deserialize(reader)?;
+                Ok(Self::ReplayableForEach {
+                    next_index: wire.next_index,
+                    items: wire.items,
+                })
+            }
+            3 => Ok(Self::Parallel {
+                states: ParallelWire::deserialize(reader)?.states,
+            }),
+            4 => {
+                let wire = WhenAnyWire::deserialize(reader)?;
+                Ok(Self::WhenAny {
+                    winner: wire.winner,
+                    state: wire.state,
+                })
+            }
+            5 => Ok(Self::ParallelBranches {
+                branches: ParallelBranchesWire::deserialize(reader)?.branches,
+            }),
+            value => Err(MemoryPackError::DeserializationError(format!(
+                "invalid DSL checkpoint work tag: {value}"
+            ))),
+        }
+    }
+}
+
+impl MemoryPackSerialize for ParallelBranchProgress {
+    fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
+        match self {
+            Self::Completed { state } => {
+                writer.write_u8(0)?;
+                ParallelCompletedWire {
+                    state: state.clone(),
+                }
+                .serialize(writer)
+            }
+            Self::InProgress {
+                step_index,
+                checkpoint_frame,
+                payload,
+            } => {
+                writer.write_u8(1)?;
+                ParallelInProgressWire {
+                    step_index: *step_index,
+                    checkpoint_frame: *checkpoint_frame,
+                    payload: payload.clone(),
+                }
+                .serialize(writer)
+            }
+        }
+    }
+}
+
+impl MemoryPackDeserialize for ParallelBranchProgress {
+    fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
+        match reader.read_u8()? {
+            0 => Ok(Self::Completed {
+                state: ParallelCompletedWire::deserialize(reader)?.state,
+            }),
+            1 => {
+                let wire = ParallelInProgressWire::deserialize(reader)?;
+                Ok(Self::InProgress {
+                    step_index: wire.step_index,
+                    checkpoint_frame: wire.checkpoint_frame,
+                    payload: wire.payload,
+                })
+            }
+            value => Err(MemoryPackError::DeserializationError(format!(
+                "invalid DSL parallel branch tag: {value}"
+            ))),
+        }
+    }
+}
+
+impl Default for ParallelBranchProgress {
+    fn default() -> Self {
+        Self::Completed { state: Vec::new() }
+    }
 }
 
 impl CheckpointFrame {
@@ -85,7 +266,7 @@ impl CheckpointFrame {
             .ok_or_else(|| {
                 CatgaError::new(ErrorCode::Validation, "DSL checkpoint path is too large")
             })?;
-        let work = postcard::to_allocvec(&work).map_err(|_| {
+        let work = MemoryPackSerializer::serialize(&work).map_err(|_| {
             CatgaError::new(
                 ErrorCode::Validation,
                 "DSL checkpoint work cursor cannot be encoded",
@@ -248,7 +429,11 @@ impl CheckpointFrame {
                     "DSL checkpoint work cursor has an invalid length",
                 ));
             }
-            postcard::from_bytes(&payload[work_length_end..work_end]).map_err(|_| {
+            MemoryPackSerializer::deserialize_bounded(
+                &payload[work_length_end..work_end],
+                Default::default(),
+            )
+            .map_err(|_| {
                 CatgaError::new(
                     ErrorCode::Validation,
                     "DSL checkpoint work cursor is invalid",

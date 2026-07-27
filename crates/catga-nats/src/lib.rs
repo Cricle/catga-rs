@@ -23,7 +23,7 @@ mod subscription;
 mod suspended_flow;
 mod suspended_flow_timeout;
 
-pub use catga_codec_postcard::{PostcardRequestClient, PostcardRpcResponse};
+pub use catga_codec_memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
 mod transport;
 
 pub use config::{NatsConfig, NatsDestinationConfig, NatsPubSubConfig};

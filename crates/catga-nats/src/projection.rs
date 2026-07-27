@@ -7,6 +7,9 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackable,
+};
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, ProjectionCheckpoint, ProjectionCheckpointStore,
 };
@@ -20,7 +23,7 @@ const MAX_CAS_RETRIES: usize = 8;
 /// A JetStream KV-backed projection checkpoint store.
 ///
 /// Each projection is stored under a SHA-256-derived key and contains its stream checkpoints in
-/// one compact Postcard record. This makes deleting every checkpoint for a projection one
+/// one compact MemoryPack record. This makes deleting every checkpoint for a projection one
 /// revision-checked operation and avoids exposing caller-provided names as KV keys.
 pub struct NatsProjectionCheckpoints {
     store: kv::Store,
@@ -228,7 +231,7 @@ impl ProjectionCheckpointStore for NatsProjectionCheckpoints {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, MemoryPackable, Serialize)]
 struct StoredCheckpoints {
     checkpoints: Vec<StoredCheckpoint>,
 }
@@ -260,7 +263,7 @@ impl StoredCheckpoints {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, MemoryPackable, Serialize)]
 struct StoredCheckpoint {
     stream_id: Box<str>,
     version: i64,
@@ -292,13 +295,13 @@ fn projection_key(projection_name: &str) -> String {
     format!("p{:x}", Sha256::digest(projection_name.as_bytes()))
 }
 
-fn encode<T: Serialize>(value: &T) -> CatgaResult<Vec<u8>> {
-    postcard::to_allocvec(value)
+fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
+    MemoryPackSerializer::serialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 
-fn decode<T: for<'de> Deserialize<'de>>(value: &[u8]) -> CatgaResult<T> {
-    postcard::from_bytes(value)
+fn decode<T: MemoryPackDeserialize>(value: &[u8]) -> CatgaResult<T> {
+    MemoryPackSerializer::deserialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 

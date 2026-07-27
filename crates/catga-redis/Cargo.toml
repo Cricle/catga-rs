@@ -14,7 +14,7 @@ streams-rpc = []
 
 [dependencies]
 async-trait = "0.1"
-catga-codec-postcard = { path = "../catga-codec-postcard" }
+catga-codec-memorypack = { path = "../catga-codec-memorypack" }
 catga-core = { path = "../catga-core" }
 catga-flow = { path = "../catga-flow" }
 dashmap = "6"

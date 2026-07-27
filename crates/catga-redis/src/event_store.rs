@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
     EventStream, StoredEvent, StreamIdsPage, VersionHistoryPage, VersionInfo, telemetry,
@@ -43,7 +43,7 @@ return current
 pub struct RedisEventStore {
     connection: ConnectionManager,
     prefix: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl RedisEventStore {
@@ -62,7 +62,7 @@ impl RedisEventStore {
         Ok(Self {
             connection,
             prefix: prefix.into(),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
 

@@ -1,9 +1,9 @@
+use catga_codec_memorypack::MemoryPackable;
 use catga_flow::{StateMachineSnapshot, StateMachineStore};
 use catga_nats::NatsStateMachines;
 use catga_redis::RedisStateMachines;
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, MemoryPackable)]
 struct PersistedOrder {
     quantity: u32,
     paid: bool,

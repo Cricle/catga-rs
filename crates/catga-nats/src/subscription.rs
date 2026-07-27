@@ -7,6 +7,9 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
+use catga_codec_memorypack::{
+    MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackable,
+};
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, PersistentSubscription, SubscriptionCheckpoint,
     SubscriptionStore,
@@ -419,7 +422,7 @@ impl SubscriptionStore for NatsSubscriptions {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, MemoryPackable, Serialize)]
 struct StoredSubscription {
     name: Box<str>,
     stream_pattern: Box<str>,
@@ -462,13 +465,13 @@ impl From<StoredSubscription> for PersistentSubscription {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, MemoryPackable, Serialize)]
 struct StoredCheckpoint {
     stream_id: Box<str>,
     version: i64,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, MemoryPackable, Serialize)]
 struct LeaseRecord {
     owner: Box<str>,
     expires_at_unix_ms: u64,
@@ -496,13 +499,13 @@ fn lease_key(subscription_name: &str) -> String {
     format!("l{:x}", Sha256::digest(subscription_name.as_bytes()))
 }
 
-fn encode<T: Serialize>(value: &T) -> CatgaResult<Vec<u8>> {
-    postcard::to_allocvec(value)
+fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
+    MemoryPackSerializer::serialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 
-fn decode<T: for<'de> Deserialize<'de>>(value: &[u8]) -> CatgaResult<T> {
-    postcard::from_bytes(value)
+fn decode<T: MemoryPackDeserialize>(value: &[u8]) -> CatgaResult<T> {
+    MemoryPackSerializer::deserialize(value)
         .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))
 }
 

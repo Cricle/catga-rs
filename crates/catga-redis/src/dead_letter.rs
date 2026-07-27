@@ -1,7 +1,7 @@
 //! Redis-backed ordered dead-letter queue.
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore, EnvelopeCodec,
     ErrorCode,
@@ -19,7 +19,7 @@ const ENQUEUE: &str = r#"local id=redis.call('INCR',KEYS[1]); local key=KEYS[2].
 pub struct RedisDeadLetters {
     connection: ConnectionManager,
     prefix: Box<str>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
 }
 
 impl RedisDeadLetters {
@@ -38,7 +38,7 @@ impl RedisDeadLetters {
         Ok(Self {
             connection,
             prefix: prefix.into(),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
         })
     }
     fn sequence(&self) -> String {
@@ -112,7 +112,7 @@ impl DeadLetterStore for RedisDeadLetters {
 }
 
 fn decode_dead_letter(
-    codec: &PostcardCodec,
+    codec: &MemoryPackCodec,
     payload: Vec<u8>,
     reason: String,
     attempts: u32,
@@ -156,12 +156,12 @@ fn decode_dead_letter(
 #[cfg(test)]
 mod tests {
     use super::decode_dead_letter;
-    use catga_codec_postcard::PostcardCodec;
+    use catga_codec_memorypack::MemoryPackCodec;
     use catga_core::{Envelope, EnvelopeCodec, ErrorCode, MessageMetadata};
 
     #[test]
     fn redis_dead_letter_decoder_accepts_legacy_hash_fields() -> catga_core::CatgaResult<()> {
-        let codec = PostcardCodec;
+        let codec = MemoryPackCodec::default();
         let envelope = Envelope::new(
             4,
             "tests.dead-letter",

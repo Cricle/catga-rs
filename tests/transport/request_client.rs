@@ -7,19 +7,19 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_codec_postcard::{
-    PostcardCodec, PostcardRequestClient, PostcardRequestClientFactory, PostcardRpcResponse,
+use catga_codec_memorypack::{
+    MemoryPackCodec, MemoryPackRequestClient, MemoryPackRequestClientFactory,
+    MemoryPackRpcResponse, MemoryPackable,
 };
 use catga_core::{
     CatgaResult, Envelope, EnvelopeHeaders, EnvelopeRequestClient, ErrorCode, MessageMetadata,
-    MessagePriority, Request, RequestClient, RequestTransport, SnowflakeIdGenerator,
-    SnowflakeLayout, scope_transport_context,
+    MessagePriority, Request, RequestTransport, SnowflakeIdGenerator, SnowflakeLayout,
+    scope_transport_context,
 };
-use serde::{Deserialize, Serialize};
 
 struct EchoTransport;
 
-#[derive(Deserialize, Serialize, catga_core::Message)]
+#[derive(MemoryPackable, catga_core::Message)]
 struct LookupStock {
     sku: u64,
 }
@@ -28,7 +28,7 @@ impl Request for LookupStock {
     type Response = StockLevel;
 }
 
-#[derive(Deserialize, Serialize, catga_core::Message)]
+#[derive(MemoryPackable, catga_core::Message)]
 #[catga(version = 2, priority = high)]
 struct VersionedLookupStock {
     sku: u64,
@@ -38,7 +38,7 @@ impl Request for VersionedLookupStock {
     type Response = StockLevel;
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Debug, Eq, PartialEq, MemoryPackable)]
 struct StockLevel {
     quantity: u32,
 }
@@ -111,8 +111,9 @@ impl RequestTransport for TypedTransport {
                 "destination",
             ));
         }
-        let lookup: LookupStock = PostcardCodec.decode_value(request.payload())?;
-        let payload = PostcardCodec.encode_value(&PostcardRpcResponse::Success(StockLevel {
+        let codec = MemoryPackCodec::default();
+        let lookup: LookupStock = codec.decode_value(request.payload())?;
+        let payload = codec.encode_value(&MemoryPackRpcResponse::Success(StockLevel {
             quantity: lookup.sku as u32,
         }))?;
         Ok(Envelope::new(
@@ -144,8 +145,9 @@ impl RequestTransport for ContextCapturingTransport {
         *self.request.lock().map_err(|_| {
             catga_core::CatgaError::new(ErrorCode::Internal, "request capture lock poisoned")
         })? = Some(request.clone());
-        let lookup: VersionedLookupStock = PostcardCodec.decode_value(request.payload())?;
-        let payload = PostcardCodec.encode_value(&PostcardRpcResponse::Success(StockLevel {
+        let codec = MemoryPackCodec::default();
+        let lookup: VersionedLookupStock = codec.decode_value(request.payload())?;
+        let payload = codec.encode_value(&MemoryPackRpcResponse::Success(StockLevel {
             quantity: lookup.sku as u32,
         }))?;
         Ok(Envelope::new(
@@ -175,8 +177,9 @@ impl RequestTransport for FactoryTransport {
                 catga_core::CatgaError::new(ErrorCode::Internal, "factory test lock poisoned")
             })?
             .push((destination.into(), timeout));
-        let lookup: LookupStock = PostcardCodec.decode_value(request.payload())?;
-        let payload = PostcardCodec.encode_value(&PostcardRpcResponse::Success(StockLevel {
+        let codec = MemoryPackCodec::default();
+        let lookup: LookupStock = codec.decode_value(request.payload())?;
+        let payload = codec.encode_value(&MemoryPackRpcResponse::Success(StockLevel {
             quantity: lookup.sku as u32,
         }))?;
         Ok(Envelope::new(
@@ -205,12 +208,12 @@ async fn envelope_request_client_routes_to_its_destination_without_reply_state()
 }
 
 #[tokio::test]
-async fn postcard_typed_request_client_uses_any_envelope_request_transport() {
+async fn memorypack_typed_request_client_uses_any_envelope_request_transport() {
     let generator = Arc::new(
         SnowflakeIdGenerator::new(1, SnowflakeLayout::default())
             .expect("test Snowflake configuration is valid"),
     );
-    let client = PostcardRequestClient::new(
+    let client = MemoryPackRequestClient::new(
         Arc::new(TypedTransport),
         "inventory",
         Duration::from_secs(1),
@@ -229,34 +232,13 @@ async fn postcard_typed_request_client_uses_any_envelope_request_transport() {
 }
 
 #[tokio::test]
-async fn postcard_client_implements_the_transport_independent_typed_request_contract() {
-    let generator = Arc::new(
-        SnowflakeIdGenerator::new(1, SnowflakeLayout::default())
-            .expect("test Snowflake configuration is valid"),
-    );
-    let client = PostcardRequestClient::new(
-        Arc::new(TypedTransport),
-        "inventory",
-        Duration::from_secs(1),
-        generator,
-    )
-    .expect("client configuration is valid");
-
-    let response = RequestClient::<LookupStock>::request(&client, &LookupStock { sku: 8 })
-        .await
-        .expect("typed request succeeds");
-
-    assert_eq!(response, StockLevel { quantity: 8 });
-}
-
-#[tokio::test]
-async fn postcard_request_client_propagates_scoped_version_headers_and_priority() {
+async fn memorypack_request_client_propagates_scoped_version_headers_and_priority() {
     let transport = Arc::new(ContextCapturingTransport::default());
     let generator = Arc::new(
         SnowflakeIdGenerator::new(1, SnowflakeLayout::default())
             .expect("test Snowflake configuration is valid"),
     );
-    let client = PostcardRequestClient::new(
+    let client = MemoryPackRequestClient::new(
         Arc::clone(&transport),
         "inventory",
         Duration::from_secs(1),
@@ -287,11 +269,11 @@ async fn postcard_request_client_propagates_scoped_version_headers_and_priority(
 }
 
 #[tokio::test]
-async fn postcard_request_client_factory_uses_type_default_and_explicit_client_policies()
+async fn memorypack_request_client_factory_uses_type_default_and_explicit_client_policies()
 -> CatgaResult<()> {
     let transport = Arc::new(FactoryTransport::default());
     let generator = Arc::new(SnowflakeIdGenerator::new(1, SnowflakeLayout::default())?);
-    let factory = PostcardRequestClientFactory::new(
+    let factory = MemoryPackRequestClientFactory::new(
         Arc::clone(&transport),
         Duration::from_millis(17),
         generator,

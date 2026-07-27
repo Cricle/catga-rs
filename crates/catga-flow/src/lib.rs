@@ -12,6 +12,7 @@ mod dsl_when_any;
 mod due_service;
 mod executor;
 mod local;
+mod memorypack;
 mod metrics;
 mod persistence;
 mod runtime;

@@ -18,7 +18,7 @@ use std::time::Duration;
     feature = "mssql"
 ))]
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardSnapshotCodec;
+use catga_codec_memorypack::MemoryPackSnapshotCodec;
 #[cfg(any(
     feature = "sqlite",
     feature = "mysql",
@@ -39,13 +39,13 @@ use crate::backend::Backend;
 
 /// A feature-selected SQL implementation of durable state-machine snapshots.
 ///
-/// The default type parameter uses compact Postcard encoding; use one of the `*_with_codec`
+/// The default type parameter uses bounded MemoryPack encoding; use one of the `*_with_codec`
 /// constructors for an application-specific [`SnapshotCodec`]. Construct the store with an enabled
 /// backend and call its `migrate` method before accepting state-machine traffic. Rows use a fixed
 /// SHA-256 identity key plus the original identity for collision detection, retain both logical
 /// versions and physical revisions for bounded compare-and-set, and cap each encoded state at one
 /// mebibyte. This type creates neither background tasks nor unbounded queues.
-pub struct SqlStateMachineStore<S, C = PostcardSnapshotCodec<S>> {
+pub struct SqlStateMachineStore<S, C = MemoryPackSnapshotCodec<S>> {
     #[cfg_attr(
         not(any(
             feature = "sqlite",
@@ -72,30 +72,30 @@ pub struct SqlStateMachineStore<S, C = PostcardSnapshotCodec<S>> {
 impl<S> SqlStateMachineStore<S>
 where
     S: Send + Sync + 'static,
-    PostcardSnapshotCodec<S>: SnapshotCodec<S>,
+    MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
-    /// Opens a SQL Server store using compact Postcard state encoding.
+    /// Opens a SQL Server store using bounded MemoryPack state encoding.
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql(url: &str) -> CatgaResult<Self> {
-        Self::connect_mssql_with_codec(url, PostcardSnapshotCodec::default()).await
+        Self::connect_mssql_with_codec(url, MemoryPackSnapshotCodec::default()).await
     }
 
-    /// Opens a MySQL 8 store using compact Postcard state encoding.
+    /// Opens a MySQL 8 store using bounded MemoryPack state encoding.
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql(url: &str) -> CatgaResult<Self> {
-        Self::connect_mysql_with_codec(url, PostcardSnapshotCodec::default()).await
+        Self::connect_mysql_with_codec(url, MemoryPackSnapshotCodec::default()).await
     }
 
-    /// Opens a PostgreSQL store using compact Postcard state encoding.
+    /// Opens a PostgreSQL store using bounded MemoryPack state encoding.
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres(url: &str) -> CatgaResult<Self> {
-        Self::connect_postgres_with_codec(url, PostcardSnapshotCodec::default()).await
+        Self::connect_postgres_with_codec(url, MemoryPackSnapshotCodec::default()).await
     }
 
-    /// Opens a SQLite store using compact Postcard state encoding.
+    /// Opens a SQLite store using bounded MemoryPack state encoding.
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
-        Self::connect_sqlite_with_codec(url, PostcardSnapshotCodec::default()).await
+        Self::connect_sqlite_with_codec(url, MemoryPackSnapshotCodec::default()).await
     }
 }
 

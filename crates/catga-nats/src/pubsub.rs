@@ -1,7 +1,7 @@
 //! Ephemeral Core NATS Pub/Sub transport.
 
 use async_trait::async_trait;
-use catga_codec_postcard::PostcardCodec;
+use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, Delivery, Envelope, EnvelopeCodec,
     ErrorCode, HealthCheckable, MessageTransport, QualityOfService, Stoppable, Waitable, telemetry,
@@ -22,7 +22,7 @@ pub struct NatsPubSubTransport {
     client: async_nats::Client,
     subject: async_nats::Subject,
     subscription: Mutex<async_nats::Subscriber>,
-    codec: PostcardCodec,
+    codec: MemoryPackCodec,
     acceptance: AcceptanceGate,
 }
 
@@ -69,7 +69,7 @@ impl NatsPubSubTransport {
             client,
             subject,
             subscription: Mutex::new(subscription),
-            codec: PostcardCodec,
+            codec: MemoryPackCodec::default(),
             acceptance: AcceptanceGate::default(),
         })
     }
