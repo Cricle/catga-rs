@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{panic::AssertUnwindSafe, sync::Arc};
 
 use async_trait::async_trait;
+use futures::FutureExt;
 
 use crate::{
     Behavior, CatgaResult, Command, CommandBehavior, CommandNext, DeadLetter, DeadLetterStore,
@@ -48,6 +49,19 @@ impl DeadLetterBehavior {
             ),
         }
     }
+
+    async fn next_result<T>(
+        &self,
+        operation: impl std::future::Future<Output = CatgaResult<T>>,
+    ) -> CatgaResult<T> {
+        match AssertUnwindSafe(operation).catch_unwind().await {
+            Ok(result) => result,
+            Err(_) => Err(crate::CatgaError::new(
+                ErrorCode::Internal,
+                "dead-letter pipeline processing panicked",
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -57,7 +71,7 @@ where
 {
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         let envelope = message.dead_letter_envelope();
-        match next.run(message).await {
+        match self.next_result(next.run(message)).await {
             Err(error) if error.code() != ErrorCode::Transient => {
                 self.record_failure(envelope, &error).await;
                 Err(error)
@@ -74,7 +88,7 @@ where
 {
     async fn handle(&self, command: C, next: CommandNext<C>) -> CatgaResult<()> {
         let envelope = command.dead_letter_envelope();
-        match next.run(command).await {
+        match self.next_result(next.run(command)).await {
             Err(error) if error.code() != ErrorCode::Transient => {
                 self.record_failure(envelope, &error).await;
                 Err(error)

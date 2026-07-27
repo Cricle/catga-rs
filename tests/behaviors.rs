@@ -216,6 +216,15 @@ impl Handler<DeadWork> for DeadHandler {
     }
 }
 
+struct PanickingDeadHandler;
+
+#[async_trait]
+impl Handler<DeadWork> for PanickingDeadHandler {
+    async fn handle(&self, _: DeadWork) -> CatgaResult<()> {
+        panic!("dead-letter handler panic");
+    }
+}
+
 struct DeadCommand;
 
 impl catga_core::Message for DeadCommand {}
@@ -778,4 +787,26 @@ async fn dead_letter_storage_failure_never_masks_the_original_handler_error() {
 
     assert_eq!(error.code(), ErrorCode::Validation);
     assert_eq!(error.message(), "fatal");
+}
+
+#[cfg(panic = "unwind")]
+#[tokio::test]
+async fn dead_letter_behavior_records_a_structured_failure_when_the_handler_panics() {
+    let mut registry = Registry::new();
+    registry
+        .register_request::<DeadWork, _>(PanickingDeadHandler)
+        .expect("request handler registers");
+    let mediator = Mediator::new(registry);
+    let store = Arc::new(MemoryDeadLetters::new(1).expect("dead letter capacity is valid"));
+    let pipeline = Pipeline::new().with(DeadLetterBehavior::new(Arc::clone(&store), 1));
+
+    let error = mediator
+        .send_with(DeadWork, &pipeline)
+        .await
+        .expect_err("panic is converted into a structured error");
+
+    assert_eq!(error.code(), ErrorCode::Internal);
+    let letters = store.list(1).await.expect("dead letter list succeeds");
+    assert_eq!(letters.len(), 1);
+    assert_eq!(letters[0].diagnostics().error_code(), ErrorCode::Internal);
 }
