@@ -20,6 +20,7 @@ use crate::suspended_flow_timeout::{DueIndex, receipt_token};
 #[derive(Default)]
 pub struct MemorySuspendedFlows {
     continuations: DashMap<Box<str>, Arc<ContinuationSlot>>,
+    wait_correlations: DashMap<Box<str>, Vec<Box<str>>>,
     due: Mutex<DueIndex>,
 }
 
@@ -47,6 +48,54 @@ impl ContinuationSlot {
     }
 }
 
+impl MemorySuspendedFlows {
+    fn index_wait_correlation(&self, continuation: &FlowContinuation) {
+        let Some(wait) = continuation.wait() else {
+            return;
+        };
+        match self.wait_correlations.entry(wait.correlation_id().into()) {
+            Entry::Vacant(entry) => {
+                entry.insert(vec![continuation.state().id().into()]);
+            }
+            Entry::Occupied(mut entry) => {
+                if !entry
+                    .get()
+                    .iter()
+                    .any(|flow_id| flow_id.as_ref() == continuation.state().id())
+                {
+                    entry.get_mut().push(continuation.state().id().into());
+                }
+            }
+        }
+    }
+
+    fn remove_wait_correlation(&self, continuation: &FlowContinuation) {
+        let Some(wait) = continuation.wait() else {
+            return;
+        };
+        let Some(mut existing) = self.wait_correlations.get_mut(wait.correlation_id()) else {
+            return;
+        };
+        existing.retain(|flow_id| flow_id.as_ref() != continuation.state().id());
+        let remove = existing.is_empty();
+        drop(existing);
+        if remove {
+            self.wait_correlations.remove(wait.correlation_id());
+        }
+    }
+
+    fn commit_wait_correlation(&self, previous: &FlowContinuation, next: &FlowContinuation) {
+        if previous.wait().is_some_and(|wait| {
+            next.wait()
+                .is_some_and(|next| next.correlation_id() == wait.correlation_id())
+        }) {
+            return;
+        }
+        self.remove_wait_correlation(previous);
+        self.index_wait_correlation(next);
+    }
+}
+
 #[async_trait]
 impl SuspendedFlowStore for MemorySuspendedFlows {
     async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
@@ -55,6 +104,7 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
             match self.continuations.entry(continuation.state().id().into()) {
                 Entry::Vacant(entry) => {
                     due.replace(&continuation);
+                    self.index_wait_correlation(&continuation);
                     entry.insert(Arc::new(ContinuationSlot::new(continuation)));
                     true
                 }
@@ -68,6 +118,39 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
             .continuations
             .get(flow_id)
             .map(|slot| (*slot.continuation.load_full()).clone()))
+    }
+
+    async fn get_by_wait_correlation(
+        &self,
+        correlation_id: &str,
+    ) -> CatgaResult<Option<FlowContinuation>> {
+        // Every continuation mutation holds this mutex while it updates the pointer and index.
+        // Correlation completions are external control-plane work, so this short lock provides a
+        // consistent lookup without putting a mutex on ordinary continuation reads.
+        let _due = self.due.lock().map_err(lock_error)?;
+        let Some(flow_ids) = self
+            .wait_correlations
+            .get(correlation_id)
+            .map(|entry| entry.value().clone())
+        else {
+            return Ok(None);
+        };
+        if flow_ids.len() != 1 {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "flow wait correlation identifies multiple active flows",
+            ));
+        }
+        let flow_id = &flow_ids[0];
+        let continuation = self
+            .continuations
+            .get(flow_id.as_ref())
+            .map(|slot| (*slot.continuation.load_full()).clone());
+        Ok(continuation.filter(|continuation| {
+            continuation
+                .wait()
+                .is_some_and(|wait| wait.correlation_id() == correlation_id)
+        }))
     }
 
     async fn query(&self, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
@@ -106,6 +189,7 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
                 })
                 .is_some()
             {
+                self.remove_wait_correlation(&current);
                 due.remove(flow_id);
                 return Ok(true);
             }
@@ -133,6 +217,7 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
                 return Ok(false);
             }
             if slot.replace(&current, next.clone()).is_some() {
+                self.commit_wait_correlation(&current, &next);
                 due.replace(&next);
                 return Ok(true);
             }
@@ -163,6 +248,7 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
                 return Ok(false);
             }
             if slot.replace(&current, next.clone()).is_some() {
+                self.commit_wait_correlation(&current, &next);
                 due.replace(&next);
                 return Ok(true);
             }
@@ -199,6 +285,7 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
             }
             let next = (*current).clone().with_wait(next_wait);
             if slot.replace(&current, next.clone()).is_some() {
+                self.commit_wait_correlation(&current, &next);
                 due.replace(&next);
                 return Ok(true);
             }
@@ -234,6 +321,7 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
             }
             let next = (*current).clone().with_wait(next_wait);
             if slot.replace(&current, next.clone()).is_some() {
+                self.commit_wait_correlation(&current, &next);
                 due.replace(&next);
                 return Ok(true);
             }
@@ -258,6 +346,7 @@ impl SuspendedFlowStore for MemorySuspendedFlows {
                 .clone()
                 .with_state(current.state().clone().heartbeated_at(SystemTime::now()));
             if slot.replace(&current, next.clone()).is_some() {
+                self.commit_wait_correlation(&current, &next);
                 due.replace(&next);
                 return Ok(true);
             }

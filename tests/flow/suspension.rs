@@ -320,6 +320,146 @@ async fn durable_child_fan_out_launches_each_stable_child_once_and_rejects_unkno
 }
 
 #[tokio::test]
+async fn durable_child_completion_resumes_the_parent_by_correlation_id() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let wait = WaitCondition::for_children(
+        "parent-correlation",
+        WaitPolicy::All,
+        ["child-a", "child-b"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .expect("bounded child wait is valid");
+    let runtime = FlowRuntime::new(
+        store,
+        scheduler,
+        FlowDefinition::new("parent")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+
+    assert!(
+        runtime
+            .start("parent-by-correlation", [])
+            .await
+            .expect("parent starts")
+            .is_suspended()
+    );
+    assert!(
+        runtime
+            .record_wait_success_by_correlation("parent-correlation", "child-a", b"first".to_vec(),)
+            .await
+            .expect("first child completion is accepted")
+            .is_suspended()
+    );
+    assert!(runtime
+        .record_wait_success_by_correlation(
+            "parent-correlation",
+            "child-b",
+            b"second".to_vec(),
+        )
+        .await
+        .expect("second child completion resumes the parent")
+        .is_success());
+}
+
+#[tokio::test]
+async fn durable_child_failure_fails_the_parent_by_correlation_id() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let wait = WaitCondition::for_children(
+        "parent-failure-correlation",
+        WaitPolicy::All,
+        ["child-a"],
+        SystemTime::now(),
+        Duration::from_secs(30),
+    )
+    .expect("bounded child wait is valid");
+    let runtime = FlowRuntime::new(
+        store,
+        scheduler,
+        FlowDefinition::new("parent-failure")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+
+    assert!(
+        runtime
+            .start("parent-failure-by-correlation", [])
+            .await
+            .expect("parent starts")
+            .is_suspended()
+    );
+    assert!(
+        runtime
+            .record_wait_failure_by_correlation(
+                "parent-failure-correlation",
+                "child-a",
+                CatgaError::new(ErrorCode::Transient, "child failed"),
+            )
+            .await
+            .expect("child failure is accepted")
+            .is_failure()
+    );
+}
+
+#[tokio::test]
+async fn correlated_child_completion_rejects_ambiguous_parent_waits() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let wait = WaitCondition::new(
+        "shared-parent-correlation",
+        WaitPolicy::All,
+        1,
+        SystemTime::now(),
+        Duration::from_secs(30),
+    );
+    let runtime = FlowRuntime::new(
+        store,
+        scheduler,
+        FlowDefinition::new("ambiguous-parent")
+            .step("wait", move |_| {
+                let wait = wait.clone();
+                async move { Ok(FlowStepOutcome::wait(wait)) }
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+
+    for flow_id in ["ambiguous-parent/1", "ambiguous-parent/2"] {
+        assert!(
+            runtime
+                .start(flow_id, [])
+                .await
+                .expect("parent starts")
+                .is_suspended()
+        );
+    }
+
+    assert_eq!(
+        runtime
+            .record_wait_success_by_correlation(
+                "shared-parent-correlation",
+                "child-a",
+                b"completion".to_vec(),
+            )
+            .await
+            .expect_err("ambiguous correlation must not choose a parent")
+            .code(),
+        ErrorCode::Conflict
+    );
+}
+
+#[tokio::test]
 async fn durable_child_launch_recovers_an_expired_claim_with_the_same_child_identity() {
     let store = Arc::new(MemorySuspendedFlows::default());
     let scheduler = Arc::new(MemoryFlowScheduler::default());

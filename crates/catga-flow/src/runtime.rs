@@ -312,6 +312,49 @@ where
         self.resume(flow_id).await
     }
 
+    /// Records a successful child result using only its parent wait correlation identity.
+    ///
+    /// Message consumers can use this when a child completion crosses a transport boundary and
+    /// does not otherwise know the parent's flow identity. The store performs an indexed lookup;
+    /// the existing version-fenced completion path still owns payload validation, duplicate
+    /// detection, and parent resumption.
+    pub async fn record_wait_success_by_correlation(
+        &self,
+        correlation_id: &str,
+        child_id: &str,
+        payload: Vec<u8>,
+    ) -> CatgaResult<FlowRuntimeResult> {
+        let Some(continuation) = self.store.get_by_wait_correlation(correlation_id).await? else {
+            return Err(CatgaError::new(
+                ErrorCode::NotFound,
+                "flow wait correlation does not exist",
+            ));
+        };
+        self.record_wait_success(continuation.state().id(), child_id, payload)
+            .await
+    }
+
+    /// Records a failed child result using only its parent wait correlation identity.
+    ///
+    /// This has the same indexed lookup and version fencing as
+    /// [`Self::record_wait_success_by_correlation`]. The persisted wait policy decides whether
+    /// the parent keeps waiting or transitions into its ordinary failure and compensation path.
+    pub async fn record_wait_failure_by_correlation(
+        &self,
+        correlation_id: &str,
+        child_id: &str,
+        error: CatgaError,
+    ) -> CatgaResult<FlowRuntimeResult> {
+        let Some(continuation) = self.store.get_by_wait_correlation(correlation_id).await? else {
+            return Err(CatgaError::new(
+                ErrorCode::NotFound,
+                "flow wait correlation does not exist",
+            ));
+        };
+        self.record_wait_failure(continuation.state().id(), child_id, error)
+            .await
+    }
+
     /// Records one failed child result and resumes when the wait policy is resolved.
     pub async fn record_wait_failure(
         &self,

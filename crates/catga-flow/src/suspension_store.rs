@@ -194,6 +194,21 @@ pub trait SuspendedFlowStore: Send + Sync {
     /// Loads one continuation by flow identity.
     async fn get(&self, flow_id: &str) -> CatgaResult<Option<FlowContinuation>>;
 
+    /// Loads the suspended continuation owning an active wait correlation identity.
+    ///
+    /// Implementations must use an indexed lookup rather than a whole-store scan. The returned
+    /// continuation is only a snapshot: callers still use the normal version-fenced wait-result
+    /// operations before accepting a child completion.
+    async fn get_by_wait_correlation(
+        &self,
+        _correlation_id: &str,
+    ) -> CatgaResult<Option<FlowContinuation>> {
+        Err(CatgaError::new(
+            ErrorCode::Unsupported,
+            "wait-correlation lookup is not supported by this store",
+        ))
+    }
+
     /// Returns summaries matching `query` after inspecting at most its configured scan bound.
     async fn query(&self, _query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
         Err(CatgaError::new(
