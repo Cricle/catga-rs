@@ -10,7 +10,11 @@ use catga_core::{
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 
-use crate::{DEFAULT_MEMORY_RECORD_CAPACITY, capacity::RecordCapacity, claim::ClaimRecord};
+use crate::{
+    DEFAULT_MEMORY_RECORD_CAPACITY,
+    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity},
+    claim::ClaimRecord,
+};
 
 /// A process-local idempotency store using atomic per-key claim transitions.
 pub struct MemoryIdempotency {
@@ -58,15 +62,30 @@ impl MemoryIdempotency {
 impl IdempotencyStore for MemoryIdempotency {
     async fn try_claim(&self, key: &str) -> CatgaResult<bool> {
         let mut operation = telemetry::persistence_operation("memory", "idempotency", "try_claim");
-        let result = match self.records.entry(key.into()) {
-            Entry::Occupied(record) => Ok(record.get().try_claim()),
-            Entry::Vacant(entry) => {
+        let result = if let Some(record) = self.records.get(key) {
+            Ok(record.try_claim())
+        } else {
+            if !self.capacity.reserve() {
+                if let Err(error) = self.cleanup_completed(OPPORTUNISTIC_CLEANUP_LIMIT).await {
+                    let result = Err(error);
+                    operation.complete_claim(&result);
+                    return result;
+                }
                 if !self.capacity.reserve() {
-                    Err(CatgaError::new(
+                    let result = Err(CatgaError::new(
                         ErrorCode::Unavailable,
                         "memory idempotency record capacity is exhausted",
-                    ))
-                } else {
+                    ));
+                    operation.complete_claim(&result);
+                    return result;
+                }
+            }
+            match self.records.entry(key.into()) {
+                Entry::Occupied(record) => {
+                    self.capacity.release();
+                    Ok(record.get().try_claim())
+                }
+                Entry::Vacant(entry) => {
                     entry.insert(ClaimRecord::claimed());
                     Ok(true)
                 }

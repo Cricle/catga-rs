@@ -1,5 +1,7 @@
 //! In-memory durable-store capacity tests.
 
+use std::time::Duration;
+
 use catga_core::{
     Envelope, ErrorCode, IdempotencyStore, InboxStore, MessageMetadata, OutboxMessage, OutboxStore,
 };
@@ -54,4 +56,23 @@ async fn memory_outbox_rejects_new_messages_when_its_record_capacity_is_exhauste
         store.enqueue(message(2)).await,
         Err(error) if error.code() == ErrorCode::Unavailable
     ));
+}
+
+#[tokio::test]
+async fn capacity_exhaustion_reclaims_expired_idempotency_records_without_a_worker() {
+    let store = MemoryIdempotency::with_retention_and_capacity(Duration::from_millis(1), 1)
+        .expect("valid bounded store");
+    assert!(store.try_claim("first").await.expect("first key claims"));
+    store
+        .complete("first", None)
+        .await
+        .expect("first key completes");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    assert!(
+        store
+            .try_claim("second")
+            .await
+            .expect("expired completed key is reclaimed on capacity pressure")
+    );
 }
