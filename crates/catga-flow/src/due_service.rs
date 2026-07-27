@@ -36,8 +36,11 @@ impl Default for DueFlowOptions {
 /// This service is the pure-Rust counterpart to an external scheduler callback. It makes no
 /// background task of its own: applications either call [`Self::check_at`] from their own loop or
 /// supervise [`Self::run`] with a cancellation token. A completed resume is acknowledged. A
-/// transient runtime failure is released for retry. Stale schedule targets and deleted flows are
-/// acknowledged because retrying them can never make them current again.
+/// transient runtime failure is released for retry. Before each due claim, it also makes one
+/// bounded attempt to reconcile delayed suspensions whose schedule identity was not persisted.
+/// Stores that do not support bounded continuation discovery retain the previous due-work-only
+/// behavior. Stale schedule targets and deleted flows are acknowledged because retrying them can
+/// never make them current again.
 pub struct FlowDueService<S: ?Sized, H: ?Sized> {
     runtime: Arc<FlowRuntime<S, H>>,
     scheduler: Arc<H>,
@@ -92,7 +95,8 @@ where
     ///
     /// Returns the number of schedules acknowledged in this batch. If a resume fails with a
     /// retryable runtime error, the schedule is released and that error is returned so the task
-    /// owner can apply its normal supervision policy.
+    /// owner can apply its normal supervision policy. Delayed-suspension reconciliation uses the
+    /// same `batch_size` for both its result and scan bounds before this claim.
     pub async fn check_at(&self, now: SystemTime) -> CatgaResult<usize> {
         self.check_at_until(now, None).await
     }
@@ -102,6 +106,14 @@ where
         now: SystemTime,
         cancellation: Option<&CancellationToken>,
     ) -> CatgaResult<usize> {
+        if let Err(error) = self
+            .runtime
+            .reconcile_delayed_suspensions(self.options.batch_size, self.options.batch_size)
+            .await
+            && error.code() != ErrorCode::Unsupported
+        {
+            return Err(error);
+        }
         let schedules = self
             .scheduler
             .claim_due(

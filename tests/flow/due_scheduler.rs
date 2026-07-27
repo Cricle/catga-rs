@@ -1,19 +1,96 @@
 //! Due scheduler ownership and lease recovery tests.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, ErrorCode};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    DueFlowOptions, DueFlowScheduler, FlowContinuation, FlowDefinition, FlowDueService,
-    FlowRuntime, FlowScheduler, FlowState, FlowStepOutcome, MemoryFlowScheduler, ScheduledResume,
-    SuspendedFlowStore,
+    DueFlowOptions, DueFlowScheduler, FlowContinuation, FlowDefinition, FlowDueService, FlowQuery,
+    FlowRuntime, FlowScheduler, FlowState, FlowStepOutcome, FlowSummary, MemoryFlowScheduler,
+    ScheduledResume, SuspendedFlowStore,
 };
 use catga_memory::MemorySuspendedFlows;
 use tokio::sync::oneshot;
+
+struct ScheduleIdentityWriteFailureStore {
+    inner: Arc<MemorySuspendedFlows>,
+    fail_next_schedule_identity_write: AtomicBool,
+    successful_schedule_identity_writes: AtomicUsize,
+}
+
+#[async_trait]
+impl SuspendedFlowStore for ScheduleIdentityWriteFailureStore {
+    async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
+        self.inner.create(continuation).await
+    }
+
+    async fn get(&self, flow_id: &str) -> CatgaResult<Option<FlowContinuation>> {
+        self.inner.get(flow_id).await
+    }
+
+    async fn query(&self, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
+        self.inner.query(query).await
+    }
+
+    async fn update(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool> {
+        if next.schedule_id().is_some() {
+            if self
+                .fail_next_schedule_identity_write
+                .swap(false, Ordering::SeqCst)
+            {
+                return Err(CatgaError::new(
+                    ErrorCode::Transient,
+                    "simulated schedule identity persistence failure",
+                ));
+            }
+            self.successful_schedule_identity_writes
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        self.inner.update(expected_version, next).await
+    }
+
+    async fn claim(
+        &self,
+        expected: &FlowContinuation,
+        next: FlowContinuation,
+    ) -> CatgaResult<bool> {
+        self.inner.claim(expected, next).await
+    }
+
+    async fn record_wait_success(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        payload: Vec<u8>,
+    ) -> CatgaResult<bool> {
+        self.inner
+            .record_wait_success(flow_id, version, child_id, payload)
+            .await
+    }
+
+    async fn record_wait_failure(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        error: CatgaError,
+    ) -> CatgaResult<bool> {
+        self.inner
+            .record_wait_failure(flow_id, version, child_id, error)
+            .await
+    }
+
+    async fn heartbeat(&self, flow_id: &str, owner: &str, version: i64) -> CatgaResult<bool> {
+        self.inner.heartbeat(flow_id, owner, version).await
+    }
+}
 
 struct RenewalObservableScheduler {
     state: Mutex<RenewalObservableSchedulerState>,
@@ -359,6 +436,51 @@ async fn due_flow_service_resumes_claimed_work_and_acknowledges_it() {
             .status()
             .is_terminal()
     );
+}
+
+#[tokio::test]
+async fn due_flow_service_reconciles_a_missing_schedule_identity_before_claiming_due_work()
+-> CatgaResult<()> {
+    let store = Arc::new(ScheduleIdentityWriteFailureStore {
+        inner: Arc::new(MemorySuspendedFlows::default()),
+        fail_next_schedule_identity_write: AtomicBool::new(true),
+        successful_schedule_identity_writes: AtomicUsize::new(0),
+    });
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let due_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let runtime = Arc::new(FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::clone(&scheduler),
+        FlowDefinition::new("due-reconciliation")
+            .step("delay", move |_| async move {
+                Ok(FlowStepOutcome::SuspendUntil(due_at))
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "flow-worker",
+    ));
+
+    assert!(
+        runtime
+            .start("due-reconciliation/1", [])
+            .await?
+            .is_suspended()
+    );
+    let service = FlowDueService::new(runtime, scheduler, "scheduler-worker");
+
+    assert_eq!(service.check_at(due_at).await?, 1);
+    assert_eq!(
+        store
+            .successful_schedule_identity_writes
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert!(
+        store
+            .get("due-reconciliation/1")
+            .await?
+            .is_some_and(|continuation| continuation.state().status().is_terminal())
+    );
+    Ok(())
 }
 
 #[tokio::test]

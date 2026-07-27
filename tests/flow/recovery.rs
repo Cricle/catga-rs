@@ -167,6 +167,23 @@ async fn memory_scheduler_allows_distinct_state_resumes_for_one_flow() {
 }
 
 #[tokio::test]
+async fn memory_scheduler_reuses_the_same_schedule_for_the_same_flow_state() -> CatgaResult<()> {
+    let scheduler = MemoryFlowScheduler::default();
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+
+    let first = scheduler
+        .schedule_resume("flow-idempotent", "charge", now)
+        .await?;
+    let second = scheduler
+        .schedule_resume("flow-idempotent", "charge", now)
+        .await?;
+
+    assert_eq!(second, first);
+    assert_eq!(scheduler.take_due(now).len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn memory_scheduler_yields_due_resumes_in_deadline_order() {
     let scheduler = MemoryFlowScheduler::default();
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);

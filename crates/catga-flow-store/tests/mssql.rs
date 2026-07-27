@@ -8,10 +8,52 @@ use std::{
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowState, FlowStore, SuspendedFlowStore, TimedOutFlowPoll,
-    TimedOutFlowStore, WaitCondition, WaitPolicy,
+    DueFlowScheduler, FlowContinuation, FlowScheduler, FlowState, FlowStore, SuspendedFlowStore,
+    TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
-use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
+use catga_flow_store::{SqlFlowScheduler, SqlFlowStore, SqlSuspendedFlowStore};
+
+#[tokio::test]
+async fn mssql_scheduler_is_idempotent_and_lease_fenced() -> CatgaResult<()> {
+    let Ok(url) = env::var("CATGA_MSSQL_URL") else {
+        return Ok(());
+    };
+    let scheduler = SqlFlowScheduler::connect_mssql(&url).await?;
+    scheduler.migrate().await?;
+    let target = format!("mssql-schedule-{}", uuid::Uuid::new_v4());
+    let due = SystemTime::now() + Duration::from_secs(5);
+    let (first, second) = tokio::join!(
+        scheduler.schedule_resume(&target, "resume", due),
+        scheduler.schedule_resume(&target, "resume", due),
+    );
+    let first = first?;
+    assert_eq!(first, second?);
+    let claimed = scheduler
+        .claim_due("worker-a", due, Duration::from_secs(30), 1)
+        .await?;
+    assert_eq!(claimed.len(), 1);
+    assert!(!scheduler.cancel_resume(first.as_ref()).await?);
+    assert!(
+        scheduler
+            .release_due("worker-a", claimed[0].schedule_id())
+            .await?
+    );
+    let reclaimed = scheduler
+        .claim_due(
+            "worker-b",
+            due + Duration::from_secs(1),
+            Duration::from_secs(30),
+            1,
+        )
+        .await?;
+    assert_eq!(reclaimed.len(), 1);
+    assert!(
+        scheduler
+            .ack_due("worker-b", reclaimed[0].schedule_id())
+            .await?
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn mssql_flow_and_continuation_contracts() -> CatgaResult<()> {

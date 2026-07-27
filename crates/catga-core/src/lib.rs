@@ -171,6 +171,7 @@ pub use versioned_transport::VersionedMessageTransport;
 /// ```
 /// # use std::time::Duration;
 /// # use catga_core::{Pipeline, RetryBehavior, TimeoutBehavior};
+/// # #[derive(Clone)]
 /// # struct Request;
 /// # impl catga_core::Message for Request {}
 /// # impl catga_core::Request for Request { type Response = (); }

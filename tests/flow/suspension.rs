@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -590,6 +590,76 @@ struct ObservingTimeoutStore {
     released: tokio::sync::Mutex<Vec<Box<str>>>,
 }
 
+struct ScheduleIdentityWriteFailureStore {
+    inner: Arc<MemorySuspendedFlows>,
+    fail_next_schedule_identity_write: AtomicBool,
+}
+
+#[async_trait]
+impl SuspendedFlowStore for ScheduleIdentityWriteFailureStore {
+    async fn create(&self, continuation: FlowContinuation) -> CatgaResult<bool> {
+        self.inner.create(continuation).await
+    }
+
+    async fn get(&self, flow_id: &str) -> CatgaResult<Option<FlowContinuation>> {
+        self.inner.get(flow_id).await
+    }
+
+    async fn query(&self, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
+        self.inner.query(query).await
+    }
+
+    async fn update(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool> {
+        if next.schedule_id().is_some()
+            && self
+                .fail_next_schedule_identity_write
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "simulated schedule identity persistence failure",
+            ));
+        }
+        self.inner.update(expected_version, next).await
+    }
+
+    async fn claim(
+        &self,
+        expected: &FlowContinuation,
+        next: FlowContinuation,
+    ) -> CatgaResult<bool> {
+        self.inner.claim(expected, next).await
+    }
+
+    async fn record_wait_success(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        payload: Vec<u8>,
+    ) -> CatgaResult<bool> {
+        self.inner
+            .record_wait_success(flow_id, version, child_id, payload)
+            .await
+    }
+
+    async fn record_wait_failure(
+        &self,
+        flow_id: &str,
+        version: i64,
+        child_id: &str,
+        error: CatgaError,
+    ) -> CatgaResult<bool> {
+        self.inner
+            .record_wait_failure(flow_id, version, child_id, error)
+            .await
+    }
+
+    async fn heartbeat(&self, flow_id: &str, owner: &str, version: i64) -> CatgaResult<bool> {
+        self.inner.heartbeat(flow_id, owner, version).await
+    }
+}
+
 impl ObservingTimeoutStore {
     fn new(receipts: Vec<TimedOutFlowReceipt>, fail_ack: bool) -> Self {
         Self {
@@ -826,6 +896,41 @@ async fn delayed_flow_persists_and_resumes_registered_steps() {
     assert_eq!(scheduler.take_due(SystemTime::now()).len(), 1);
 
     assert!(runtime.resume("flow-13").await.unwrap().is_success());
+}
+
+#[tokio::test]
+async fn delayed_schedule_identity_write_failure_is_reconciled_without_duplicate_jobs()
+-> CatgaResult<()> {
+    let store = Arc::new(ScheduleIdentityWriteFailureStore {
+        inner: Arc::new(MemorySuspendedFlows::default()),
+        fail_next_schedule_identity_write: AtomicBool::new(true),
+    });
+    let scheduler = Arc::new(MemoryFlowScheduler::default());
+    let due_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::clone(&scheduler),
+        FlowDefinition::new("schedule-reconciliation")
+            .step("delay", move |_| async move {
+                Ok(FlowStepOutcome::suspend_until(due_at))
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+
+    assert!(
+        runtime
+            .start("schedule-reconciliation/1", [])
+            .await?
+            .is_suspended()
+    );
+    let persisted = store.get("schedule-reconciliation/1").await?;
+    assert!(persisted.is_some_and(|continuation| continuation.schedule_id().is_none()));
+
+    assert_eq!(runtime.reconcile_delayed_suspensions(1, 1).await?, 1);
+    assert_eq!(runtime.reconcile_delayed_suspensions(1, 1).await?, 0);
+    assert_eq!(scheduler.take_due(due_at).len(), 1);
+    Ok(())
 }
 
 #[tokio::test]

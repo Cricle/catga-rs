@@ -15,7 +15,9 @@ pub trait FlowScheduler: Send + Sync {
     /// Schedules one suspended `state_id` of `flow_id` for resumption at `due_at`.
     ///
     /// The `state_id` keeps independently suspended branches of the same flow distinct. The
-    /// returned identity can be used to cancel precisely this scheduled resumption.
+    /// returned identity can be used to cancel precisely this scheduled resumption. Repeating
+    /// the same `(flow_id, state_id)` registration must return the already registered identity
+    /// and retain its original due time, so durable reconciliation cannot create duplicate jobs.
     ///
     /// Returns [`ErrorCode::Unavailable`] when this scheduler has exhausted its non-reusable
     /// schedule identities.
@@ -302,15 +304,12 @@ impl FlowScheduler for MemoryFlowScheduler {
         due_at: SystemTime,
     ) -> CatgaResult<Box<str>> {
         let target = ScheduleTarget::new(flow_id, state_id);
+        let mut state = self.state.lock();
+        if let Some(schedule_id) = state.target_schedules.get(&target) {
+            return Ok(schedule_id.clone());
+        }
         let id = self.allocate_schedule_id()?;
         let schedule_id: Box<str> = format!("flow-resume-{id}").into();
-        let mut state = self.state.lock();
-        if state.target_schedules.contains_key(&target) {
-            return Err(catga_core::CatgaError::new(
-                catga_core::ErrorCode::Conflict,
-                "a resume is already scheduled for this flow state",
-            ));
-        }
         state.enqueue_due(due_at, due_at, schedule_id.clone())?;
         state
             .target_schedules

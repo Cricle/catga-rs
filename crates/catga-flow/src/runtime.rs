@@ -7,8 +7,8 @@ use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use tracing::Instrument;
 
 use crate::{
-    FlowChildLauncher, FlowContinuation, FlowDefinition, FlowScheduler, FlowState, FlowStatus,
-    FlowStepOutcome, FlowTagPolicy, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowChildLauncher, FlowContinuation, FlowDefinition, FlowQuery, FlowScheduler, FlowState,
+    FlowStatus, FlowStepOutcome, FlowTagPolicy, SuspendedFlowStore, WaitCondition, WaitPolicy,
     metrics::FlowMetrics,
 };
 
@@ -448,6 +448,50 @@ where
         self.store.heartbeat(flow_id, &self.owner, version).await
     }
 
+    /// Registers missing scheduler identities for delayed suspensions in one caller-owned batch.
+    ///
+    /// The method inspects at most `max_scan` continuations and attempts to reconcile at most
+    /// `max_results` suspended continuations belonging to this runtime's definition. It does not
+    /// spawn background work. Callers decide when to invoke it, such as after process recovery or
+    /// before polling due work. Repeated calls are safe when the scheduler implements the
+    /// [`FlowScheduler::schedule_resume`] idempotency contract for `(flow_id, state_id)`.
+    ///
+    /// Returns the number of schedule identities durably recorded. A concurrent state change is
+    /// left for a later bounded call, preserving the newer continuation without overwriting it.
+    /// Returns [`ErrorCode::Unsupported`] when the selected store cannot perform bounded
+    /// continuation discovery.
+    pub async fn reconcile_delayed_suspensions(
+        &self,
+        max_results: usize,
+        max_scan: usize,
+    ) -> CatgaResult<usize> {
+        let query = FlowQuery::new(max_results, max_scan)?
+            .with_status(FlowStatus::Suspended)
+            .with_flow_type(self.definition.name());
+        let summaries = self.store.query(&query).await?;
+        let mut reconciled = 0_usize;
+        for summary in summaries {
+            let Some(continuation) = self.store.get(summary.id()).await? else {
+                continue;
+            };
+            if continuation.state().status() != FlowStatus::Suspended
+                || continuation.state().flow_type() != self.definition.name()
+                || continuation.schedule_id().is_some()
+                || continuation.resume_at().is_none()
+            {
+                continue;
+            }
+            if self
+                .persist_delayed_schedule_identity(continuation)
+                .await?
+                .is_some()
+            {
+                reconciled = reconciled.saturating_add(1);
+            }
+        }
+        Ok(reconciled)
+    }
+
     async fn drive(&self, mut continuation: FlowContinuation) -> CatgaResult<FlowRuntimeResult> {
         let mut execution = self
             .metrics
@@ -528,21 +572,23 @@ where
                         .at_step(next_step)
                         .with_state(state.at_step(completed_steps).suspended().next_version())
                         .delayed_until(resume_at);
-                    let schedule_id = match self
-                        .scheduler
-                        .schedule_resume(pending.state().id(), pending.step_name(), resume_at)
+                    self.persist(expected_version, pending.clone()).await?;
+                    let suspended = match self
+                        .persist_delayed_schedule_identity(pending.clone())
                         .await
                     {
-                        Ok(schedule_id) => schedule_id,
+                        Ok(Some(suspended)) => suspended,
+                        Ok(None) => pending.clone(),
                         Err(error) => {
-                            return self.fail(compensated, error, Some(&mut execution)).await;
+                            tracing::warn!(
+                                flow_id = pending.state().id(),
+                                state_id = pending.step_name(),
+                                error = ?error,
+                                "delayed flow suspension persisted, but its schedule identity will be reconciled later"
+                            );
+                            pending.clone()
                         }
                     };
-                    let suspended = pending.with_schedule_id(schedule_id.clone());
-                    if let Err(error) = self.persist(expected_version, suspended.clone()).await {
-                        let _ = self.scheduler.cancel_resume(&schedule_id).await;
-                        return Err(error);
-                    }
                     execution.complete("suspended");
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
@@ -840,6 +886,32 @@ where
                 "flow continuation changed before it could be persisted",
             ))
         }
+    }
+
+    async fn persist_delayed_schedule_identity(
+        &self,
+        continuation: FlowContinuation,
+    ) -> CatgaResult<Option<FlowContinuation>> {
+        let Some(resume_at) = continuation.resume_at() else {
+            return Ok(None);
+        };
+        let schedule_id = self
+            .scheduler
+            .schedule_resume(
+                continuation.state().id(),
+                continuation.step_name(),
+                resume_at,
+            )
+            .await?;
+        let scheduled = continuation
+            .clone()
+            .with_state(continuation.state().clone().next_version())
+            .with_schedule_id(schedule_id);
+        Ok(self
+            .store
+            .update(continuation.state().version(), scheduled.clone())
+            .await?
+            .then_some(scheduled))
     }
 
     async fn claim(&self, continuation: FlowContinuation) -> CatgaResult<Option<FlowContinuation>> {

@@ -6,16 +6,98 @@ use std::time::{Duration, SystemTime};
 use catga_codec_memorypack::MemoryPackable;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    DslStepProgress, DslStepProgressStore, FlowContinuation, FlowQuery, FlowState, FlowStore,
-    StateMachineSnapshot, StateMachineStore, SuspendedFlowStore, TimedOutFlowPoll,
-    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
+    DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowQuery,
+    FlowScheduler, FlowState, FlowStore, StateMachineSnapshot, StateMachineStore,
+    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
+    WaitPolicy,
 };
 use catga_flow_store::{
-    SqlDslStepProgressStore, SqlFlowStore, SqlStateMachineStore, SqlSuspendedFlowStore,
+    SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
+    SqlSuspendedFlowStore,
 };
 
 #[path = "../../../tests/flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
+
+#[tokio::test]
+async fn sqlite_flow_scheduler_is_idempotent_bounded_and_lease_fenced() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("schedules.db");
+    let url = format!("sqlite://{}", database.display());
+    let scheduler = SqlFlowScheduler::connect_sqlite(&url).await?;
+    scheduler.migrate().await?;
+    let due = SystemTime::now() + Duration::from_secs(10);
+
+    let schedule_id = scheduler
+        .schedule_resume("scheduler-flow", "charge", due)
+        .await?;
+    assert_eq!(
+        scheduler
+            .schedule_resume("scheduler-flow", "charge", due + Duration::from_secs(1))
+            .await?,
+        schedule_id
+    );
+    let first = scheduler
+        .claim_due("worker-a", due, Duration::from_secs(30), 2)
+        .await?;
+    assert_eq!(first.len(), 1);
+    assert!(
+        scheduler
+            .claim_due("worker-b", due, Duration::from_secs(30), 2)
+            .await?
+            .is_empty()
+    );
+    let claimed = first
+        .iter()
+        .find(|resume| resume.schedule_id() == schedule_id.as_ref())
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "initial schedule was not claimed"))?;
+    assert!(!scheduler.cancel_resume(claimed.schedule_id()).await?);
+    assert!(
+        scheduler
+            .renew_due(
+                "worker-a",
+                claimed.schedule_id(),
+                due + Duration::from_secs(1),
+                Duration::from_secs(30),
+            )
+            .await?
+    );
+    assert!(
+        scheduler
+            .release_due("worker-a", claimed.schedule_id())
+            .await?
+    );
+    let reclaimed = scheduler
+        .claim_due(
+            "worker-b",
+            due + Duration::from_secs(2),
+            Duration::from_secs(30),
+            3,
+        )
+        .await?;
+    let resumed = reclaimed
+        .iter()
+        .find(|resume| resume.schedule_id() == schedule_id.as_ref())
+        .ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "released schedule was not reclaimed")
+        })?;
+    assert!(scheduler.ack_due("worker-b", resumed.schedule_id()).await?);
+    assert!(!scheduler.ack_due("worker-b", resumed.schedule_id()).await?);
+
+    for state_id in ["reserve", "notify", "receipt"] {
+        scheduler
+            .schedule_resume("scheduler-flow", state_id, due)
+            .await?;
+    }
+    assert_eq!(
+        scheduler
+            .claim_due("worker-c", due, Duration::from_secs(30), 2)
+            .await?
+            .len(),
+        2
+    );
+    Ok(())
+}
 
 #[derive(Clone, Debug, Eq, MemoryPackable, PartialEq)]
 struct PersistedStateMachine {

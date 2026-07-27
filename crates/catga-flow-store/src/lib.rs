@@ -4,9 +4,13 @@
 //! Enable only the adapters an application deploys:
 //!
 //! - `sqlite`, `mysql`, `postgres`, and `mssql` provide [`SqlFlowStore`],
-//!   [`SqlSuspendedFlowStore`], [`SqlDslStepProgressStore`], and [`SqlStateMachineStore`].
+//!   [`SqlSuspendedFlowStore`], [`SqlFlowScheduler`], [`SqlDslStepProgressStore`], and
+//!   [`SqlStateMachineStore`].
 //!   Multiple SQL features may be enabled in one binary; the constructor selects the concrete
 //!   pool without dynamic SQL or a driver-wide connection abstraction.
+//!   Applications call each store's `migrate` method and explicitly poll
+//!   [`catga_flow::DueFlowScheduler::claim_due`] on `SqlFlowScheduler`; the adapter owns no
+//!   worker or timer.
 //! - `redis` re-exports `RedisFlows` and `RedisSuspendedFlows` for the plain state and
 //!   continuation contracts, plus Redis-backed timeout and scheduling support.
 //! - `tls-rustls` enables Rustls support for whichever network SQL drivers are selected.
@@ -45,6 +49,8 @@ mod mssql;
 #[cfg(feature = "mssql")]
 mod mssql_dsl_progress;
 #[cfg(feature = "mssql")]
+mod mssql_scheduler;
+#[cfg(feature = "mssql")]
 mod mssql_state_machine;
 #[cfg(feature = "mssql")]
 mod mssql_suspended;
@@ -54,6 +60,8 @@ mod mssql_timeout;
 mod mysql;
 #[cfg(feature = "mysql")]
 mod mysql_dsl_progress;
+#[cfg(feature = "mysql")]
+mod mysql_scheduler;
 #[cfg(feature = "mysql")]
 mod mysql_state_machine;
 #[cfg(feature = "mysql")]
@@ -65,13 +73,25 @@ mod postgres;
 #[cfg(feature = "postgres")]
 mod postgres_dsl_progress;
 #[cfg(feature = "postgres")]
+mod postgres_scheduler;
+#[cfg(feature = "postgres")]
 mod postgres_state_machine;
 #[cfg(feature = "postgres")]
 mod postgres_suspended;
 #[cfg(feature = "postgres")]
 mod postgres_timeout;
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
+mod scheduler_common;
+mod scheduler_store;
 #[cfg(any(feature = "mysql", feature = "postgres"))]
 mod server_dsl_progress;
+#[cfg(any(feature = "mysql", feature = "postgres"))]
+mod server_scheduler;
 #[cfg(any(feature = "mysql", feature = "postgres"))]
 mod server_state_machine;
 #[cfg(any(feature = "mysql", feature = "postgres"))]
@@ -91,6 +111,8 @@ mod sql_common;
 mod sqlite;
 #[cfg(feature = "sqlite")]
 mod sqlite_dsl_progress;
+#[cfg(feature = "sqlite")]
+mod sqlite_scheduler;
 #[cfg(feature = "sqlite")]
 mod sqlite_state_machine;
 #[cfg(feature = "sqlite")]
@@ -116,6 +138,7 @@ mod suspended_store;
 
 pub use dsl_progress_store::SqlDslStepProgressStore;
 pub use flow_store::SqlFlowStore;
+pub use scheduler_store::SqlFlowScheduler;
 pub use state_machine_store::SqlStateMachineStore;
 pub use suspended_store::SqlSuspendedFlowStore;
 
