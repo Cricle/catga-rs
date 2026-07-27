@@ -76,3 +76,27 @@ async fn capacity_exhaustion_reclaims_expired_idempotency_records_without_a_work
             .expect("expired completed key is reclaimed on capacity pressure")
     );
 }
+
+#[tokio::test]
+async fn capacity_exhaustion_reclaims_expired_inbox_records_without_a_worker() {
+    let inbox = MemoryInbox::with_retention_and_capacity(Duration::from_millis(1), 1)
+        .expect("valid bounded inbox");
+    let claim = inbox
+        .try_claim(1)
+        .await
+        .expect("first message claims")
+        .expect("first message is owned");
+    inbox
+        .complete(claim, None)
+        .await
+        .expect("first message completes");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    assert!(
+        inbox
+            .try_claim(2)
+            .await
+            .expect("expired completed message is reclaimed on capacity pressure")
+            .is_some()
+    );
+}

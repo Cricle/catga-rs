@@ -5,18 +5,24 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode, InboxClaim, InboxStore,
-    ProcessingState, inbox_claim_expires_at, telemetry,
+    CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode,
+    InboxClaim, InboxStore, ProcessingState, inbox_claim_expires_at, telemetry,
+    validate_completed_retention,
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 
-use crate::{DEFAULT_MEMORY_RECORD_CAPACITY, capacity::RecordCapacity, claim::ClaimRecord};
+use crate::{
+    DEFAULT_MEMORY_RECORD_CAPACITY,
+    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity},
+    claim::ClaimRecord,
+};
 
 /// A process-local inbox using atomic per-message claim transitions.
 pub struct MemoryInbox {
     records: DashMap<u64, ClaimRecord>,
     completed: DashMap<u64, u64>,
     capacity: RecordCapacity,
+    retention: Duration,
 }
 
 impl Default for MemoryInbox {
@@ -25,6 +31,7 @@ impl Default for MemoryInbox {
             records: DashMap::new(),
             completed: DashMap::new(),
             capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
+            retention: DEFAULT_IDEMPOTENCY_RETENTION,
         }
     }
 }
@@ -32,10 +39,17 @@ impl Default for MemoryInbox {
 impl MemoryInbox {
     /// Creates an inbox with a fixed maximum number of retained records.
     pub fn new(capacity: usize) -> CatgaResult<Self> {
+        Self::with_retention_and_capacity(DEFAULT_IDEMPOTENCY_RETENTION, capacity)
+    }
+
+    /// Creates an inbox retaining completed records for `retention` within `capacity` records.
+    pub fn with_retention_and_capacity(retention: Duration, capacity: usize) -> CatgaResult<Self> {
+        validate_completed_retention(retention)?;
         Ok(Self {
             records: DashMap::with_capacity(capacity),
             completed: DashMap::with_capacity(capacity),
             capacity: RecordCapacity::new(capacity)?,
+            retention,
         })
     }
 }
@@ -55,18 +69,38 @@ impl InboxStore for MemoryInbox {
         let mut operation = telemetry::persistence_operation("memory", "inbox", "try_claim");
         let expires_at = inbox_claim_expires_at(lease)?;
         let now = now_millis();
-        let result = match self.records.entry(message_id) {
-            Entry::Occupied(record) => Ok(record
-                .get()
+        let result = if let Some(record) = self.records.get(&message_id) {
+            Ok(record
                 .try_claim_generation_until(expires_at, now)
-                .and_then(|generation| InboxClaim::new(message_id, generation))),
-            Entry::Vacant(entry) => {
+                .and_then(|generation| InboxClaim::new(message_id, generation)))
+        } else {
+            if !self.capacity.reserve() {
+                if let Err(error) = self
+                    .cleanup_completed(self.retention, OPPORTUNISTIC_CLEANUP_LIMIT)
+                    .await
+                {
+                    let result = Err(error);
+                    operation.complete_optional_claim(&result);
+                    return result;
+                }
                 if !self.capacity.reserve() {
-                    Err(CatgaError::new(
+                    let result = Err(CatgaError::new(
                         ErrorCode::Unavailable,
                         "memory inbox record capacity is exhausted",
-                    ))
-                } else {
+                    ));
+                    operation.complete_optional_claim(&result);
+                    return result;
+                }
+            }
+            match self.records.entry(message_id) {
+                Entry::Occupied(record) => {
+                    self.capacity.release();
+                    Ok(record
+                        .get()
+                        .try_claim_generation_until(expires_at, now)
+                        .and_then(|generation| InboxClaim::new(message_id, generation)))
+                }
+                Entry::Vacant(entry) => {
                     let record = ClaimRecord::claimed();
                     let claimed = record
                         .try_claim_generation_until(expires_at, now)
