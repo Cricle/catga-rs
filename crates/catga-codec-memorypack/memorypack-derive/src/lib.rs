@@ -26,7 +26,7 @@ use enums::{
 };
 use helpers::is_single_field_i32;
 use regular::{generate_deserialize, generate_serialize};
-use unions::{generate_union_deserialize, generate_union_serialize};
+use unions::{generate_union_deserialize, generate_union_serialize, resolve_union_tags};
 
 /// Derives Catga's static MemoryPack serialization traits for a type.
 ///
@@ -43,6 +43,17 @@ pub fn derive_memorypack(input: TokenStream) -> TokenStream {
 
     let attrs = AttributeFlags::parse(&input.attrs);
 
+    if let Data::Struct(data_struct) = &input.data
+        && data_struct.fields.len() > usize::from(u8::MAX)
+    {
+        return syn::Error::new_spanned(
+            &input,
+            "MemoryPack objects cannot contain more than 255 serialized fields",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let (serialize_impl, deserialize_impl) = match &input.data {
         Data::Struct(data_struct) if attrs.is_transparent && is_single_field_i32(data_struct) => (
             generate_transparent_serialize(),
@@ -57,13 +68,19 @@ pub fn derive_memorypack(input: TokenStream) -> TokenStream {
             .into();
         }
         Data::Struct(_) => (
-            generate_serialize(&input.data),
+            generate_serialize(&input.data, attrs.is_zero_copy),
             generate_deserialize(&input.data, attrs.is_zero_copy),
         ),
-        Data::Enum(data_enum) if attrs.is_union => (
-            generate_union_serialize(data_enum),
-            generate_union_deserialize(name, data_enum),
-        ),
+        Data::Enum(data_enum) if attrs.is_union => {
+            let tags = match resolve_union_tags(data_enum) {
+                Ok(tags) => tags,
+                Err(error) => return error.to_compile_error().into(),
+            };
+            (
+                generate_union_serialize(data_enum, &tags),
+                generate_union_deserialize(name, data_enum, &tags),
+            )
+        }
         Data::Enum(data_enum) => {
             if !attrs.has_repr_i32 {
                 return syn::Error::new_spanned(

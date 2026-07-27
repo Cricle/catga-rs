@@ -7,7 +7,7 @@ use catga_codec_memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackWriter, MemoryPackable,
 };
-use catga_core::CatgaResult;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use serde::{Deserialize, Serialize};
 
 use crate::memorypack::{TimeWire, decode_time, encode_time};
@@ -166,13 +166,21 @@ impl DslStepProgress {
     }
 
     /// Replaces the payload and advances the version for a compare-and-set update.
-    pub fn next_version(self, payload: impl Into<Arc<[u8]>>) -> Self {
-        Self {
-            version: self.version.saturating_add(1),
+    ///
+    /// Returns [`ErrorCode::Conflict`] when the version cannot advance beyond `i64::MAX`.
+    pub fn next_version(self, payload: impl Into<Arc<[u8]>>) -> CatgaResult<Self> {
+        let version = self.version.checked_add(1).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Conflict,
+                "DSL step progress version cannot advance beyond i64::MAX",
+            )
+        })?;
+        Ok(Self {
+            version,
             payload: payload.into(),
             updated_at: SystemTime::now(),
             ..self
-        }
+        })
     }
 
     /// Replaces a completed internal cursor with application state at the next version.
@@ -180,14 +188,23 @@ impl DslStepProgress {
     /// A checkpoint frame is only valid while a nested operation is in progress. Completion must
     /// clear that marker so a future recovery decodes the payload with the caller's
     /// [`DslStateCodec`] instead of treating ordinary state bytes as a Catga-owned frame.
-    pub(crate) fn completed_application_state(self, payload: impl Into<Arc<[u8]>>) -> Self {
-        Self {
-            version: self.version.saturating_add(1),
+    pub(crate) fn completed_application_state(
+        self,
+        payload: impl Into<Arc<[u8]>>,
+    ) -> CatgaResult<Self> {
+        let version = self.version.checked_add(1).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Conflict,
+                "DSL step progress version cannot advance beyond i64::MAX",
+            )
+        })?;
+        Ok(Self {
+            version,
             kind: DslProgressKind::ApplicationState,
             payload: payload.into(),
             updated_at: SystemTime::now(),
             ..self
-        }
+        })
     }
 
     /// Replaces the payload with a Catga-owned internal checkpoint frame.
@@ -207,6 +224,14 @@ impl DslStepProgress {
             ..self
         }
     }
+
+    /// Returns whether `next` is the exact representable successor of `expected`.
+    ///
+    /// Progress stores use this to reject same-version writes at `i64::MAX` and every other
+    /// non-successor update before persisting it.
+    pub const fn is_next_version(expected: i64, next: i64) -> bool {
+        matches!(expected.checked_add(1), Some(candidate) if candidate == next)
+    }
 }
 
 /// Persists explicitly encoded progress for recoverable DSL flow steps.
@@ -215,7 +240,8 @@ pub trait DslStepProgressStore: Send + Sync {
     /// Creates initial step progress only when no record has the same flow and step identity.
     async fn create(&self, progress: DslStepProgress) -> CatgaResult<bool>;
 
-    /// Replaces progress only when `expected_version` is current and `next` advances it by one.
+    /// Replaces progress only when `expected_version` is current and `next` is its exact
+    /// representable successor.
     async fn update(&self, expected_version: i64, next: DslStepProgress) -> CatgaResult<bool>;
 
     /// Loads progress for one flow step.

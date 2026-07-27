@@ -75,11 +75,14 @@ pub fn is_borrowed_str(ty: &syn::Type) -> bool {
 }
 
 #[inline]
-pub fn is_borrowed_slice(ty: &syn::Type) -> bool {
-    if let syn::Type::Reference(type_ref) = ty {
-        return matches!(&*type_ref.elem, syn::Type::Slice(_));
-    }
-    false
+pub fn is_borrowed_u8_slice(ty: &syn::Type) -> bool {
+    let syn::Type::Reference(type_ref) = ty else {
+        return false;
+    };
+    let syn::Type::Slice(slice) = &*type_ref.elem else {
+        return false;
+    };
+    matches!(&*slice.elem, syn::Type::Path(type_path) if type_path.path.is_ident("u8"))
 }
 
 pub struct OrderedField<'a> {
@@ -123,8 +126,21 @@ pub fn generate_field_deserialize(
         if is_borrowed_str(ty) {
             return quote! { let #name = reader.read_str()?; };
         }
-        if is_borrowed_slice(ty) {
-            return quote! { let #name = reader.read_bytes()?; };
+        if is_borrowed_u8_slice(ty) {
+            return quote! {
+                let #name: #ty = {
+                    let length = reader.read_i32()?;
+                    match length {
+                        -1 | 0 => &[],
+                        value if value < 0 => {
+                            return Err(catga_codec_memorypack::MemoryPackError::DeserializationError(
+                                "invalid zero-copy byte slice length".into(),
+                            ));
+                        }
+                        value => reader.read_bytes(value as usize)?,
+                    }
+                };
+            };
         }
         if is_field_zero_copy {
             return quote! { let #name = catga_codec_memorypack::MemoryPackDeserializeZeroCopy::deserialize(reader)?; };

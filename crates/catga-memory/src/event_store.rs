@@ -27,9 +27,14 @@ impl Default for MemoryEventStream {
 }
 
 impl MemoryEventStore {
-    fn page_stream(&self, stream_id: &str, from_version: u64, max_count: usize) -> EventStream {
+    fn page_stream(
+        &self,
+        stream_id: &str,
+        from_version: u64,
+        max_count: usize,
+    ) -> CatgaResult<EventStream> {
         let Some(stream) = self.streams.get(stream_id) else {
-            return EventStream::new(stream_id, -1, Vec::new());
+            return Ok(EventStream::new(stream_id, -1, Vec::new()));
         };
         let snapshot = stream.events.load_full();
         let start = usize::try_from(from_version).unwrap_or(usize::MAX);
@@ -40,7 +45,11 @@ impl MemoryEventStore {
             .take(max_count)
             .cloned()
             .collect();
-        EventStream::new(stream_id, snapshot.len() as i64 - 1, events)
+        Ok(EventStream::new(
+            stream_id,
+            event_stream_version(snapshot.len())?,
+            events,
+        ))
     }
 
     fn record<T>(
@@ -64,10 +73,9 @@ impl EventStore for MemoryEventStore {
     ) -> CatgaResult<i64> {
         Self::record("append", || {
             if events.is_empty() {
-                return Ok(self
-                    .streams
-                    .get(stream_id)
-                    .map_or(-1, |stream| stream.events.load().len() as i64 - 1));
+                return self.streams.get(stream_id).map_or(Ok(-1), |stream| {
+                    event_stream_version(stream.events.load().len())
+                });
             }
             let stream = self.streams.entry(stream_id.into()).or_default().clone();
             stream.append(events, expected_version)
@@ -82,7 +90,7 @@ impl EventStore for MemoryEventStore {
     ) -> CatgaResult<EventPage> {
         validate_event_store_page_size(max_count)?;
         Self::record("read_page", || {
-            let stream = self.page_stream(stream_id, from_version, max_count);
+            let stream = self.page_stream(stream_id, from_version, max_count)?;
             let next_version = stream.events().last().and_then(|event| {
                 (event.version() < stream.version())
                     .then(|| u64::try_from(event.version().saturating_add(1)).ok())
@@ -94,10 +102,9 @@ impl EventStore for MemoryEventStore {
 
     async fn version(&self, stream_id: &str) -> CatgaResult<i64> {
         Self::record("version", || {
-            Ok(self
-                .streams
-                .get(stream_id)
-                .map_or(-1, |stream| stream.events.load().len() as i64 - 1))
+            self.streams.get(stream_id).map_or(Ok(-1), |stream| {
+                event_stream_version(stream.events.load().len())
+            })
         })
     }
 
@@ -116,7 +123,7 @@ impl EventStore for MemoryEventStore {
                     None,
                 ));
             }
-            let stream = self.page_stream(stream_id, from_version, max_count);
+            let stream = self.page_stream(stream_id, from_version, max_count)?;
             let events: Vec<_> = stream
                 .events()
                 .iter()
@@ -145,7 +152,7 @@ impl EventStore for MemoryEventStore {
     ) -> CatgaResult<EventPage> {
         validate_event_store_page_size(max_count)?;
         Self::record("read_to_time_page", || {
-            let stream = self.page_stream(stream_id, from_version, max_count);
+            let stream = self.page_stream(stream_id, from_version, max_count)?;
             let last_scanned = stream.events().last().map(StoredEvent::version);
             let events: Vec<_> = stream
                 .events()
@@ -174,7 +181,7 @@ impl EventStore for MemoryEventStore {
     ) -> CatgaResult<VersionHistoryPage> {
         validate_event_store_page_size(max_count)?;
         Self::record("version_history_page", || {
-            let stream = self.page_stream(stream_id, from_version, max_count);
+            let stream = self.page_stream(stream_id, from_version, max_count)?;
             let entries = stream
                 .events()
                 .iter()
@@ -232,29 +239,58 @@ impl MemoryEventStream {
     fn append(&self, events: Vec<Envelope>, expected_version: Option<i64>) -> CatgaResult<i64> {
         loop {
             let current = self.events.load_full();
-            let version = current.len() as i64 - 1;
+            let mut version = event_stream_version(current.len())?;
             if expected_version.is_some_and(|expected| expected != version) {
                 return Err(CatgaError::new(
                     ErrorCode::Conflict,
                     "event stream version conflict",
                 ));
             }
+            let appended_version = checked_appended_event_version(version, events.len())?;
             let timestamp = SystemTime::now();
-            let mut next = Vec::with_capacity(current.len() + events.len());
+            let next_len = current.len().checked_add(events.len()).ok_or_else(|| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "event stream length exceeds memory range",
+                )
+            })?;
+            let mut next = Vec::new();
+            next.try_reserve_exact(next_len).map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "event stream allocation exceeds memory range",
+                )
+            })?;
             next.extend(current.iter().cloned());
-            next.extend(
-                events
-                    .iter()
-                    .cloned()
-                    .enumerate()
-                    .map(|(offset, envelope)| {
-                        StoredEvent::new(version + offset as i64 + 1, Arc::new(envelope), timestamp)
-                    }),
-            );
+            for envelope in &events {
+                version = version.checked_add(1).ok_or_else(|| {
+                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                })?;
+                next.push(StoredEvent::new(
+                    version,
+                    Arc::new(envelope.clone()),
+                    timestamp,
+                ));
+            }
             let previous = self.events.compare_and_swap(&current, Arc::new(next));
             if Arc::ptr_eq(&*previous, &current) {
-                return Ok(version + events.len() as i64);
+                return Ok(appended_version);
             }
         }
     }
+}
+
+fn event_stream_version(event_count: usize) -> CatgaResult<i64> {
+    i64::try_from(event_count)
+        .map_err(|_| CatgaError::new(ErrorCode::Internal, "event stream version is exhausted"))?
+        .checked_sub(1)
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "event stream version is exhausted"))
+}
+
+fn checked_appended_event_version(current: i64, event_count: usize) -> CatgaResult<i64> {
+    current
+        .checked_add(i64::try_from(event_count).map_err(|_| {
+            CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+        })?)
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "event stream version is exhausted"))
 }

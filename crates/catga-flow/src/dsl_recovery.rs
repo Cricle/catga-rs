@@ -90,26 +90,15 @@ where
                     "DSL checkpoint disappeared while updating its cursor",
                 )
             })?;
-        if current.version() == i64::MAX {
-            return Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "DSL checkpoint version cannot advance further",
-            ));
-        }
-        if context
-            .progress
-            .update(
-                current.version(),
-                if checkpoint_frame {
-                    current
-                        .next_version(payload.clone())
-                        .checkpoint_frame(payload.clone())
-                } else {
-                    current.completed_application_state(payload.clone())
-                },
-            )
-            .await?
-        {
+        let expected_version = current.version();
+        let next = if checkpoint_frame {
+            current
+                .next_version(payload.clone())?
+                .checkpoint_frame(payload.clone())
+        } else {
+            current.completed_application_state(payload.clone())?
+        };
+        if context.progress.update(expected_version, next).await? {
             return Ok(());
         }
     }

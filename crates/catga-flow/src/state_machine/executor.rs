@@ -77,7 +77,7 @@ where
         if !result.handled() {
             return Ok(result);
         }
-        let next = snapshot.next_version(state);
+        let next = snapshot.next_version(state)?;
         if self.store.update(snapshot.version(), next).await? {
             return Ok(result);
         }

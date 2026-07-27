@@ -567,7 +567,12 @@ where
                             )
                             .await;
                     };
-                    let completed_steps = state.step().saturating_add(1);
+                    let completed_steps = state.step().checked_add(1).ok_or_else(|| {
+                        CatgaError::new(
+                            ErrorCode::Internal,
+                            "flow completed step counter is exhausted",
+                        )
+                    })?;
                     let expected_version = state.version();
                     let pending = compensated
                         .clone()
@@ -609,7 +614,12 @@ where
                             )
                             .await;
                     };
-                    let completed_steps = state.step().saturating_add(1);
+                    let completed_steps = state.step().checked_add(1).ok_or_else(|| {
+                        CatgaError::new(
+                            ErrorCode::Internal,
+                            "flow completed step counter is exhausted",
+                        )
+                    })?;
                     let expected_version = state.version();
                     if let Err(error) = wait.validate() {
                         return self.fail(compensated, error, Some(&mut execution)).await;
@@ -738,7 +748,12 @@ where
         state: FlowState,
         execution: &mut crate::metrics::FlowExecution,
     ) -> CatgaResult<FlowRuntimeResult> {
-        let completed_steps = state.step().saturating_add(1);
+        let completed_steps = state.step().checked_add(1).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "flow completed step counter is exhausted",
+            )
+        })?;
         let done = continuation
             .clone()
             .with_state(state.done(completed_steps).next_version()?);
@@ -857,7 +872,12 @@ where
         state: FlowState,
         next_step: &str,
     ) -> CatgaResult<Option<FlowContinuation>> {
-        let completed_steps = state.step().saturating_add(1);
+        let completed_steps = state.step().checked_add(1).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "flow completed step counter is exhausted",
+            )
+        })?;
         let next = continuation
             .clone()
             .at_step(next_step)

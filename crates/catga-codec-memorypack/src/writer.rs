@@ -53,15 +53,28 @@ impl MemoryPackWriter {
         self.buffer.is_empty()
     }
 
+    /// Converts an in-memory length into the signed 32-bit length used by MemoryPack wire data.
+    ///
+    /// MemoryPack length headers cannot represent values greater than [`i32::MAX`]. Callers must
+    /// use this conversion before writing any length derived from a [`usize`].
+    #[inline]
+    pub fn checked_i32_length(length: usize) -> Result<i32, MemoryPackError> {
+        i32::try_from(length).map_err(|_| {
+            MemoryPackError::SerializationError("MemoryPack wire length exceeds i32::MAX".into())
+        })
+    }
+
     #[inline]
     pub fn write_string(&mut self, value: &str) -> Result<(), MemoryPackError> {
         if value.is_empty() {
             return self.write_i32(0);
         }
         let bytes = value.as_bytes();
+        let byte_length = Self::checked_i32_length(bytes.len())?;
         let utf16_length: usize = value.chars().map(|c| c.len_utf16()).sum();
-        self.write_i32(!(bytes.len() as i32))?;
-        self.write_i32(utf16_length as i32)?;
+        let utf16_length = Self::checked_i32_length(utf16_length)?;
+        self.write_i32(!byte_length)?;
+        self.write_i32(utf16_length)?;
         self.buffer.extend_from_slice(bytes);
         Ok(())
     }

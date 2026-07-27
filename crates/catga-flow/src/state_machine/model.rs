@@ -138,14 +138,30 @@ impl<S> StateMachineSnapshot<S> {
     }
 
     /// Produces the next version with an updated state payload.
-    pub fn next_version(&self, state: S) -> Self {
+    ///
+    /// Returns [`ErrorCode::Conflict`] when the version cannot advance beyond `i64::MAX`.
+    pub fn next_version(&self, state: S) -> CatgaResult<Self> {
         let now = SystemTime::now();
-        Self {
+        let version = self.version.checked_add(1).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Conflict,
+                "state-machine snapshot version cannot advance beyond i64::MAX",
+            )
+        })?;
+        Ok(Self {
             instance_id: self.instance_id.clone(),
             state,
-            version: self.version.saturating_add(1),
+            version,
             created_at: self.created_at,
             updated_at: now.max(self.updated_at),
-        }
+        })
+    }
+
+    /// Returns whether `next` is the exact representable successor of `expected`.
+    ///
+    /// State-machine stores use this to reject same-version writes at `i64::MAX` and every other
+    /// non-successor update before persisting it.
+    pub const fn is_next_version(expected: i64, next: i64) -> bool {
+        matches!(expected.checked_add(1), Some(candidate) if candidate == next)
     }
 }

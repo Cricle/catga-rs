@@ -14,7 +14,8 @@ pub trait StateMachineStore<S>: Send + Sync {
     /// Loads one instance snapshot by identity.
     async fn get(&self, instance_id: &str) -> CatgaResult<Option<StateMachineSnapshot<S>>>;
 
-    /// Replaces a snapshot only when its current version is `expected_version`.
+    /// Replaces a snapshot only when its current version is `expected_version` and `next` is its
+    /// exact representable successor.
     async fn update(
         &self,
         expected_version: i64,

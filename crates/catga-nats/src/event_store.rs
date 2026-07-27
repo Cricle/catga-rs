@@ -259,10 +259,19 @@ impl EventStore for NatsEventStore {
                 ));
             }
             let mut version = current.map_or(-1, |value| value.0);
+            let final_version = version
+                .checked_add(i64::try_from(events.len()).map_err(|_| {
+                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                })?)
+                .ok_or_else(|| {
+                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                })?;
             let mut previous_sequence = current.map_or(0, |value| value.1);
             let timestamp = unix_millis(SystemTime::now());
             for event in events {
-                version = version.saturating_add(1);
+                version = version.checked_add(1).ok_or_else(|| {
+                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                })?;
                 let payload = self.codec.encode(&event)?;
                 let version_text = version.to_string();
                 let timestamp_text = timestamp.to_string();
@@ -286,7 +295,7 @@ impl EventStore for NatsEventStore {
                 .put(stream_id, "".into())
                 .await
                 .map_err(map_error)?;
-            Ok(version)
+            Ok(final_version)
         })
         .await
     }

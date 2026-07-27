@@ -170,12 +170,14 @@ impl FlowState {
     /// Returns the bounded MemoryPack decode policy for durable flow records.
     pub fn memorypack_decode_limits() -> CatgaResult<MemoryPackDecodeLimits> {
         let maximum = MAX_FLOW_DATA_BYTES.saturating_add(MAX_FLOW_CODEC_METADATA_BYTES);
-        MemoryPackDecodeLimits::new(maximum, maximum, 256 * 1024, 65_536, 32).map_err(|error| {
-            CatgaError::new(
-                ErrorCode::Internal,
-                format!("cannot configure flow state decode limits: {error}"),
-            )
-        })
+        MemoryPackDecodeLimits::new(maximum, maximum, 256 * 1024, MAX_FLOW_DATA_BYTES, 32).map_err(
+            |error| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    format!("cannot configure flow state decode limits: {error}"),
+                )
+            },
+        )
     }
 
     /// Returns the stable flow identity.

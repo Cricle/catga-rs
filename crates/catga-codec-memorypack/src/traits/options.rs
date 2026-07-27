@@ -26,11 +26,15 @@ pub(super) fn deserialize_option_generic<T: MemoryPackDeserialize>(
     reader: &mut MemoryPackReader,
 ) -> Result<Option<T>, MemoryPackError> {
     let has_value = reader.read_i32()?;
-    let value = T::deserialize(reader)?;
-    if has_value == 0 {
-        Ok(None)
-    } else {
-        Ok(Some(value))
+    match has_value {
+        0 => {
+            T::deserialize(reader)?;
+            Ok(None)
+        }
+        1 => Ok(Some(T::deserialize(reader)?)),
+        _ => Err(MemoryPackError::DeserializationError(
+            "invalid generic Option presence flag".into(),
+        )),
     }
 }
 
@@ -65,7 +69,7 @@ pub(super) fn serialize_nullable_vec<T: MemoryPackSerialize>(
 ) -> Result<(), MemoryPackError> {
     match opt {
         Some(vec) => {
-            writer.write_i32(vec.len() as i32)?;
+            writer.write_i32(MemoryPackWriter::checked_i32_length(vec.len())?)?;
             for item in vec.iter() {
                 item.serialize(writer)?;
             }

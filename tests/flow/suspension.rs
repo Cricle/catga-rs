@@ -99,6 +99,60 @@ async fn durable_runtime_completes_when_the_final_sequential_step_advances() {
 }
 
 #[tokio::test]
+async fn durable_runtime_rejects_a_suspension_after_the_completed_step_counter_is_exhausted() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let runtime = FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("step-counter-exhaustion")
+            .step("wait", |_| async {
+                Ok(FlowStepOutcome::wait(WaitCondition::new(
+                    "step-counter-exhaustion-wait",
+                    WaitPolicy::All,
+                    1,
+                    SystemTime::now(),
+                    Duration::from_secs(30),
+                )))
+            })
+            .step("finish", |_| async { Ok(FlowStepOutcome::complete()) }),
+        "node-a",
+    );
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new(
+                    "step-counter-exhaustion/1",
+                    "step-counter-exhaustion",
+                    [],
+                    "node-a",
+                )
+                .at_step(u32::MAX)
+                .suspended(),
+                "wait",
+            ))
+            .await
+            .expect("exhausted state remains representable for validation")
+    );
+
+    let error = runtime
+        .resume("step-counter-exhaustion/1")
+        .await
+        .expect_err("a durable transition must not reuse u32::MAX as the next completed step");
+
+    assert_eq!(error.code(), ErrorCode::Internal);
+    assert_eq!(
+        store
+            .get("step-counter-exhaustion/1")
+            .await
+            .expect("memory store remains available")
+            .expect("original continuation remains durable")
+            .state()
+            .step(),
+        u32::MAX
+    );
+}
+
+#[tokio::test]
 async fn durable_runtime_rejects_waits_without_a_correlation_or_expected_children() {
     for (suffix, correlation_id, expected_count) in
         [("empty-correlation", "", 1), ("zero-count", "wait", 0)]

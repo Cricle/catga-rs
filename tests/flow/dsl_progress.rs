@@ -6,6 +6,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
+use catga_codec_memorypack::{MemoryPackSerializer, MemoryPackable};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
     DslFlow, DslFlowLifecycleHooks, DslStateCodec, DslStepProgress, DslStepProgressStore,
@@ -14,6 +15,23 @@ use catga_memory::MemoryDslStepProgress;
 
 #[path = "dsl_progress_contract.rs"]
 mod dsl_progress_contract;
+
+#[derive(MemoryPackable)]
+struct RawTimeWire {
+    before_epoch: bool,
+    seconds: u64,
+    nanoseconds: u32,
+}
+
+#[derive(MemoryPackable)]
+struct RawDslStepProgressWire {
+    flow_id: String,
+    step_index: u32,
+    version: i64,
+    kind: u8,
+    payload: Vec<u8>,
+    updated_at: RawTimeWire,
+}
 
 #[tokio::test]
 async fn dsl_step_progress_uses_versions_and_keeps_payloads_per_step() {
@@ -25,7 +43,7 @@ async fn dsl_step_progress_uses_versions_and_keeps_payloads_per_step() {
         store
             .update(
                 first.version(),
-                first.clone().next_version(b"cursor:4".to_vec())
+                first.clone().next_version(b"cursor:4".to_vec()).unwrap()
             )
             .await
             .unwrap()
@@ -36,6 +54,34 @@ async fn dsl_step_progress_uses_versions_and_keeps_payloads_per_step() {
     );
     assert!(store.delete("payment/7", 2).await.unwrap());
     assert!(!store.delete("payment/7", 2).await.unwrap());
+}
+
+#[tokio::test]
+async fn dsl_step_progress_versions_cannot_saturate() -> CatgaResult<()> {
+    let raw = MemoryPackSerializer::serialize(&RawDslStepProgressWire {
+        flow_id: "payment/version-limit".into(),
+        step_index: 2,
+        version: i64::MAX,
+        kind: 0,
+        payload: b"cursor".to_vec(),
+        updated_at: RawTimeWire {
+            before_epoch: false,
+            seconds: 0,
+            nanoseconds: 0,
+        },
+    })
+    .unwrap();
+    let progress = MemoryPackSerializer::deserialize::<DslStepProgress>(&raw).unwrap();
+    let error = progress
+        .clone()
+        .next_version(b"updated".to_vec())
+        .expect_err("the maximum DSL progress version cannot advance");
+    assert_eq!(error.code(), ErrorCode::Conflict);
+
+    let store = MemoryDslStepProgress::default();
+    assert!(store.create(progress.clone()).await?);
+    assert!(!store.update(progress.version(), progress).await?);
+    Ok(())
 }
 
 struct U32Codec;

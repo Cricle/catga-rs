@@ -70,7 +70,7 @@ where
         expected_version: i64,
         next: StateMachineSnapshot<S>,
     ) -> CatgaResult<bool> {
-        if next.version() != expected_version.saturating_add(1) {
+        if !StateMachineSnapshot::<S>::is_next_version(expected_version, next.version()) {
             return Ok(false);
         }
         let Some(slot) = self

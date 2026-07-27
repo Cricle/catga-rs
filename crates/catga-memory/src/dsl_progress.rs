@@ -24,7 +24,7 @@ impl DslStepProgressStore for MemoryDslStepProgress {
     }
 
     async fn update(&self, expected_version: i64, next: DslStepProgress) -> CatgaResult<bool> {
-        if next.version() != expected_version.saturating_add(1) {
+        if !DslStepProgress::is_next_version(expected_version, next.version()) {
             return Ok(false);
         }
         match self.progress.entry(key(&next)) {

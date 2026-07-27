@@ -1,0 +1,6 @@
+error: duplicate union tag 4
+ --> tests/ui/duplicate_union_tags.rs:8:5
+  |
+8 | /     #[tag = 4]
+9 | |     Second(u8),
+  | |______________^

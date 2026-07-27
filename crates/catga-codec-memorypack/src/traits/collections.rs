@@ -40,7 +40,7 @@ fn write_collection_header(
     writer: &mut MemoryPackWriter,
     len: usize,
 ) -> Result<(), MemoryPackError> {
-    writer.write_i32(len as i32)
+    writer.write_i32(MemoryPackWriter::checked_i32_length(len)?)
 }
 
 impl<T: MemoryPackSerialize> MemoryPackSerialize for Vec<T> {

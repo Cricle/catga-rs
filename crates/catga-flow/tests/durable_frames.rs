@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use catga_codec_memorypack::{MemoryPackSerializer, MemoryPackSnapshotCodec, MemoryPackable};
-use catga_core::CatgaResult;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
     FlowContinuation, FlowState, MAX_FLOW_DATA_BYTES, StateMachineSnapshot, WaitCondition,
     WaitPolicy, decode_continuation, decode_state_machine_snapshot, encode_continuation,
@@ -35,7 +35,7 @@ struct RawFlowStateWire {
     error: Option<RawErrorWire>,
 }
 
-#[derive(MemoryPackable)]
+#[derive(Default, MemoryPackable)]
 struct RawErrorWire {
     code: u8,
     message: String,
@@ -105,6 +105,12 @@ fn flow_state_decoder_rejects_an_oversized_raw_data_field() -> CatgaResult<()> {
         },
         data: vec![0_u8; MAX_FLOW_DATA_BYTES + 1],
         error: None,
+    })
+    .map_err(|error| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            format!("encode oversized raw flow-state frame: {error}"),
+        )
     })?;
 
     assert!(

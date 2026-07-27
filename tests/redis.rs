@@ -941,6 +941,57 @@ async fn redis_event_store_appends_atomically_and_reads_versioned_history() {
 
 #[tokio::test]
 #[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_event_store_rejects_version_exhaustion_without_changing_the_stream() {
+    let config = redis_config();
+    let prefix = format!("{}:events", config.stream);
+    let stream_id = "exhausted";
+    let mut connection = redis::Client::open(config.server.as_ref())
+        .expect("configured Redis URL is valid")
+        .get_multiplexed_async_connection()
+        .await
+        .expect("Redis connection is available");
+    let version_key = format!("{prefix}:version:{stream_id}");
+    connection
+        .set::<_, _, ()>(&version_key, i64::MAX - 1)
+        .await
+        .expect("test version is seeded");
+
+    let store = RedisEventStore::connect(&config.server, prefix)
+        .await
+        .expect("event store connects");
+    let error = store
+        .append(
+            stream_id,
+            vec![
+                Envelope::new(1, "order.created", vec![1], MessageMetadata::new(1, None)),
+                Envelope::new(2, "order.paid", vec![2], MessageMetadata::new(2, None)),
+            ],
+            Some(i64::MAX - 1),
+        )
+        .await
+        .expect_err("appending beyond i64::MAX must fail");
+
+    assert_eq!(error.code(), ErrorCode::Internal);
+    assert_eq!(
+        connection
+            .get::<_, i64>(&version_key)
+            .await
+            .expect("failed append leaves the version intact"),
+        i64::MAX - 1
+    );
+    assert!(
+        store
+            .read_page(stream_id, 0, 1)
+            .await
+            .expect("failed append leaves no stream entries")
+            .stream()
+            .events()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
 async fn redis_snapshots_round_trip_and_reject_stale_writers_atomically() {
     let config = redis_config();
     let store = Arc::new(
@@ -1036,7 +1087,7 @@ async fn redis_dsl_progress_uses_versioned_create_update_and_delete() -> CatgaRe
     assert!(store.create(initial.clone()).await?);
     assert!(!store.create(initial.clone()).await?);
 
-    let next = initial.clone().next_version(vec![2_u8]);
+    let next = initial.clone().next_version(vec![2_u8])?;
     assert!(!store.update(1, next.clone()).await?);
     assert!(store.update(0, next).await?);
     let current = store

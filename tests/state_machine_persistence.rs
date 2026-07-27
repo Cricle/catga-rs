@@ -51,10 +51,12 @@ where
     assert!(store.create(initial.clone()).await.unwrap());
     assert!(!store.create(initial.clone()).await.unwrap());
 
-    let next = initial.next_version(PersistedOrder {
-        quantity: 3,
-        paid: true,
-    });
+    let next = initial
+        .next_version(PersistedOrder {
+            quantity: 3,
+            paid: true,
+        })
+        .unwrap();
     assert!(store.update(initial.version(), next.clone()).await.unwrap());
     assert!(!store.update(initial.version(), next.clone()).await.unwrap());
 
@@ -69,14 +71,18 @@ where
         },
     );
     assert!(store.create(racing.clone()).await.unwrap());
-    let first = racing.next_version(PersistedOrder {
-        quantity: 2,
-        paid: true,
-    });
-    let second = racing.next_version(PersistedOrder {
-        quantity: 3,
-        paid: true,
-    });
+    let first = racing
+        .next_version(PersistedOrder {
+            quantity: 2,
+            paid: true,
+        })
+        .unwrap();
+    let second = racing
+        .next_version(PersistedOrder {
+            quantity: 3,
+            paid: true,
+        })
+        .unwrap();
     let (first, second) = tokio::join!(
         store.update(racing.version(), first),
         store.update(racing.version(), second),

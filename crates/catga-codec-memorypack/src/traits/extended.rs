@@ -94,7 +94,7 @@ impl MemoryPackSerialize for num_bigint::BigInt {
             twos_complement_invert(&mut bytes);
         }
 
-        writer.write_i32(bytes.len() as i32)?;
+        writer.write_i32(MemoryPackWriter::checked_i32_length(bytes.len())?)?;
         writer.buffer.extend_from_slice(&bytes);
         Ok(())
     }
@@ -134,7 +134,7 @@ impl MemoryPackSerialize for num_bigint::BigUint {
     #[inline]
     fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
         let bytes = self.to_bytes_le();
-        writer.write_i32(bytes.len() as i32)?;
+        writer.write_i32(MemoryPackWriter::checked_i32_length(bytes.len())?)?;
         writer.buffer.extend_from_slice(&bytes);
         Ok(())
     }

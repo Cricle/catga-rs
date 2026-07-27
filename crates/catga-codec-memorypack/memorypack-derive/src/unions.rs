@@ -1,25 +1,97 @@
 use quote::quote;
-use syn::Fields;
+use syn::{Expr, Fields, Lit, Meta};
 
-pub fn generate_union_serialize(data_enum: &syn::DataEnum) -> proc_macro2::TokenStream {
-    for variant in &data_enum.variants {
+pub fn resolve_union_tags(data_enum: &syn::DataEnum) -> syn::Result<Vec<u8>> {
+    let mut tags = Vec::with_capacity(data_enum.variants.len());
+
+    for (ordinal, variant) in data_enum.variants.iter().enumerate() {
         match &variant.fields {
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {}
             _ => {
-                return quote! {
-                    compile_error!("Union variants must have exactly one unnamed field");
-                };
+                return Err(syn::Error::new_spanned(
+                    variant,
+                    "Union variants must have exactly one unnamed field",
+                ));
             }
         }
+
+        let mut explicit_tag = None;
+        for attr in variant
+            .attrs
+            .iter()
+            .filter(|attr| attr.path().is_ident("tag"))
+        {
+            if explicit_tag.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "union variants may specify only one tag",
+                ));
+            }
+
+            let Meta::NameValue(tag) = &attr.meta else {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "union tags must use #[tag = N]",
+                ));
+            };
+            let Expr::Lit(tag) = &tag.value else {
+                return Err(syn::Error::new_spanned(
+                    &tag.value,
+                    "union tags must be integer literals",
+                ));
+            };
+            let Lit::Int(tag_literal) = &tag.lit else {
+                return Err(syn::Error::new_spanned(
+                    &tag.lit,
+                    "union tags must be integer literals",
+                ));
+            };
+            let tag = tag_literal.base10_parse::<u16>().map_err(|_| {
+                syn::Error::new_spanned(
+                    tag_literal,
+                    "union tags must be integer literals in 0..=255",
+                )
+            })?;
+            if tag > u8::MAX as u16 {
+                return Err(syn::Error::new_spanned(
+                    tag_literal,
+                    "union tags must be in 0..=255",
+                ));
+            }
+            explicit_tag = Some(tag as u8);
+        }
+
+        let tag = match explicit_tag {
+            Some(tag) => tag,
+            None => u8::try_from(ordinal).map_err(|_| {
+                syn::Error::new_spanned(
+                    variant,
+                    "union variants without an explicit tag must have an ordinal in 0..=255",
+                )
+            })?,
+        };
+        if tags.contains(&tag) {
+            return Err(syn::Error::new_spanned(
+                variant,
+                format!("duplicate union tag {tag}"),
+            ));
+        }
+        tags.push(tag);
     }
 
-    let variants = data_enum.variants.iter().enumerate().map(|(tag, variant)| {
+    Ok(tags)
+}
+
+pub fn generate_union_serialize(
+    data_enum: &syn::DataEnum,
+    tags: &[u8],
+) -> proc_macro2::TokenStream {
+    let variants = data_enum.variants.iter().zip(tags).map(|(variant, tag)| {
         let variant_name = &variant.ident;
-        let tag_value = tag as u8;
 
         quote! {
             Self::#variant_name(inner) => {
-                writer.write_u8(#tag_value)?;
+                writer.write_u8(#tag)?;
                 catga_codec_memorypack::MemoryPackSerialize::serialize(inner, writer)?;
             }
         }
@@ -35,13 +107,13 @@ pub fn generate_union_serialize(data_enum: &syn::DataEnum) -> proc_macro2::Token
 pub fn generate_union_deserialize(
     name: &syn::Ident,
     data_enum: &syn::DataEnum,
+    tags: &[u8],
 ) -> proc_macro2::TokenStream {
-    let variants = data_enum.variants.iter().enumerate().map(|(tag, variant)| {
+    let variants = data_enum.variants.iter().zip(tags).map(|(variant, tag)| {
         let variant_name = &variant.ident;
-        let tag_value = tag as u8;
 
         quote! {
-            #tag_value => {
+            #tag => {
                 let inner = catga_codec_memorypack::MemoryPackDeserialize::deserialize(reader)?;
                 Ok(Self::#variant_name(inner))
             }

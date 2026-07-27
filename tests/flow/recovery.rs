@@ -217,7 +217,7 @@ async fn concurrent_resumes_return_current_state_instead_of_transient_errors() {
             WaitCondition::new(
                 "race-wait",
                 WaitPolicy::All,
-                0,
+                1,
                 SystemTime::now(),
                 Duration::from_secs(30),
             ),

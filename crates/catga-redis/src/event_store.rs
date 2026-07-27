@@ -24,15 +24,41 @@ use crate::transport::map_error;
 
 const APPEND: &str = r#"
 local current = redis.call('GET', KEYS[1])
-if current == false then current = -1 else current = tonumber(current) end
-if ARGV[1] ~= '' and tonumber(ARGV[1]) ~= current then
+if current == false then current = '-1' end
+if ARGV[1] ~= '' and ARGV[1] ~= current then
     return {err = 'CATGA_VERSION_CONFLICT'}
 end
+
+local function increment(value)
+    if value == '-1' then return '0' end
+    local digits = { string.byte(value, 1, #value) }
+    local carry = 1
+    for index = #digits, 1, -1 do
+        local digit = digits[index] - string.byte('0') + carry
+        if digit == 10 then
+            digits[index] = string.byte('0')
+        else
+            digits[index] = string.byte('0') + digit
+            carry = 0
+            break
+        end
+    end
+    if carry == 1 then table.insert(digits, 1, string.byte('1')) end
+    return string.char(unpack(digits))
+end
+
 local count = tonumber(ARGV[2])
+local final = current
 for i = 1, count do
-    current = current + 1
+    if final == '9223372036854775807' then
+        return {err = 'CATGA_VERSION_EXHAUSTED'}
+    end
+    final = increment(final)
+end
+for i = 1, count do
+    current = increment(current)
     local offset = 3 + (i - 1) * 2
-    redis.call('XADD', KEYS[2], tostring(current + 1) .. '-0', 'version', current, 'payload', ARGV[offset], 'timestamp', ARGV[offset + 1])
+    redis.call('XADD', KEYS[2], increment(current) .. '-0', 'version', current, 'payload', ARGV[offset], 'timestamp', ARGV[offset + 1])
 end
 redis.call('SET', KEYS[1], current)
 redis.call('SADD', KEYS[3], ARGV[3 + count * 2])
@@ -397,9 +423,12 @@ fn stream_entry_id(version: u64) -> CatgaResult<String> {
 }
 
 fn map_append_error(error: redis::RedisError) -> CatgaError {
-    if error.to_string().contains("CATGA_VERSION_CONFLICT") {
+    let message = error.to_string();
+    if message.contains("CATGA_VERSION_CONFLICT") {
         CatgaError::new(ErrorCode::Conflict, "event stream version conflict")
+    } else if message.contains("CATGA_VERSION_EXHAUSTED") {
+        CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
     } else {
-        map_error(error)
+        map_error(message)
     }
 }

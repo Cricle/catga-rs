@@ -48,13 +48,22 @@ impl<T> MultiDimArray<T> {
 impl<T: MemoryPackSerialize> MemoryPackSerialize for MultiDimArray<T> {
     #[inline]
     fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
-        writer.write_u8((self.rank() + 1) as u8)?;
+        let rank_plus_one = self
+            .rank()
+            .checked_add(1)
+            .and_then(|rank| u8::try_from(rank).ok())
+            .ok_or_else(|| {
+                MemoryPackError::SerializationError(
+                    "multidimensional array rank exceeds the u8 wire range".into(),
+                )
+            })?;
+        writer.write_u8(rank_plus_one)?;
 
         for &dim in &self.dimensions {
-            writer.write_i32(dim as i32)?;
+            writer.write_i32(MemoryPackWriter::checked_i32_length(dim)?)?;
         }
 
-        writer.write_i32(self.total_elements() as i32)?;
+        writer.write_i32(MemoryPackWriter::checked_i32_length(self.total_elements())?)?;
 
         for item in &self.data {
             item.serialize(writer)?;

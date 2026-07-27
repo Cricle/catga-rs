@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use async_nats::jetstream::{self, kv};
+use async_nats::jetstream::{self, context::Publish, kv};
 use catga_codec_memorypack::{MemoryPackCodec, MemoryPackSerializer};
 use catga_core::{
     AsyncInitializable, CatgaError, CatgaResult, DeadLetter, DeadLetterStore, Destination,
@@ -661,7 +661,7 @@ async fn nats_dsl_step_progress_uses_hashed_keys_and_revision_updates() {
         store
             .update(
                 initial.version(),
-                initial.clone().next_version(b"cursor:4".to_vec()),
+                initial.clone().next_version(b"cursor:4".to_vec()).unwrap(),
             )
             .await
             .unwrap()
@@ -1374,6 +1374,57 @@ async fn nats_event_store_persists_versioned_history_with_subject_cas() {
     assert_eq!(
         store.stream_ids_page(None, 3).await.unwrap().ids(),
         ["orders-7"]
+    );
+}
+
+#[tokio::test]
+async fn nats_event_store_rejects_version_exhaustion_before_publishing() {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("{}-exhausted", std::process::id());
+    let stream_name = format!("CATGA_EVENTS_{suffix}");
+    let subject_prefix = format!("catga.events.{suffix}");
+    let stream_id = "orders";
+    let store = NatsEventStore::connect(&server, stream_name, subject_prefix.clone())
+        .await
+        .expect("event store connects");
+    let context = jetstream::new(
+        async_nats::connect(server.url())
+            .await
+            .expect("the test container accepts NATS connections"),
+    );
+    let max_version = (i64::MAX - 1).to_string();
+    context
+        .send_publish(
+            format!("{subject_prefix}.{stream_id}"),
+            Publish::build()
+                .payload(Vec::<u8>::new().into())
+                .header("Catga-Version", max_version.as_str())
+                .header("Catga-Timestamp", "0"),
+        )
+        .await
+        .expect("seed publish is accepted")
+        .await
+        .expect("seed publish is acknowledged");
+
+    let error = store
+        .append(
+            stream_id,
+            vec![
+                Envelope::new(1, "order.created", vec![1], MessageMetadata::new(1, None)),
+                Envelope::new(2, "order.paid", vec![2], MessageMetadata::new(2, None)),
+            ],
+            Some(i64::MAX - 1),
+        )
+        .await
+        .expect_err("appending beyond i64::MAX must fail");
+
+    assert_eq!(error.code(), ErrorCode::Internal);
+    assert_eq!(
+        store
+            .version(stream_id)
+            .await
+            .expect("store remains available"),
+        i64::MAX - 1
     );
 }
 

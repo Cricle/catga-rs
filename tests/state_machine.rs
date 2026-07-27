@@ -188,14 +188,17 @@ async fn memory_store_uses_versions_and_executor_persists_handled_events() {
         store
             .update(
                 snapshot.version(),
-                snapshot.clone().next_version(initial.clone())
+                snapshot.clone().next_version(initial.clone()).unwrap()
             )
             .await
             .unwrap()
     );
     assert!(
         !store
-            .update(snapshot.version(), snapshot.next_version(initial.clone()))
+            .update(
+                snapshot.version(),
+                snapshot.next_version(initial.clone()).unwrap()
+            )
             .await
             .unwrap()
     );
@@ -208,6 +211,26 @@ async fn memory_store_uses_versions_and_executor_persists_handled_events() {
     assert!(result.handled());
     assert_eq!(saved.version(), 1);
     assert_eq!(saved.state().current_state(), &State::Paid);
+}
+
+#[tokio::test]
+async fn state_machine_versions_cannot_saturate() -> catga_core::CatgaResult<()> {
+    let snapshot = StateMachineSnapshot::restore(
+        "order-version-limit",
+        Order::default(),
+        i64::MAX,
+        std::time::SystemTime::UNIX_EPOCH,
+        std::time::SystemTime::UNIX_EPOCH,
+    )?;
+    let error = snapshot
+        .next_version(Order::default())
+        .expect_err("the maximum state-machine version cannot advance");
+    assert_eq!(error.code(), ErrorCode::Conflict);
+
+    let store = MemoryStateMachines::default();
+    assert!(store.create(snapshot.clone()).await?);
+    assert!(!store.update(snapshot.version(), snapshot).await?);
+    Ok(())
 }
 
 #[test]

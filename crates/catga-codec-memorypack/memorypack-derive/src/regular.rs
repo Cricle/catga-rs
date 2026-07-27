@@ -1,9 +1,12 @@
-use crate::helpers::{generate_field_deserialize, prepare_ordered_fields, should_skip_field};
+use crate::helpers::{
+    generate_field_deserialize, is_borrowed_u8_slice, is_zero_copy_field, prepare_ordered_fields,
+    should_skip_field,
+};
 
 use quote::quote;
 use syn::{Data, Fields};
 
-pub fn generate_serialize(data: &Data) -> proc_macro2::TokenStream {
+pub fn generate_serialize(data: &Data, is_zero_copy: bool) -> proc_macro2::TokenStream {
     let Data::Struct(data_struct) = data else {
         return quote! {
             compile_error!("MemoryPackable serialize can only be derived for structs");
@@ -18,11 +21,19 @@ pub fn generate_serialize(data: &Data) -> proc_macro2::TokenStream {
                 .filter(|f| !should_skip_field(f))
                 .collect();
             let ordered = prepare_ordered_fields(&non_skip);
-            let field_count = ordered.len() as u8;
+            let field_count = match u8::try_from(ordered.len()) {
+                Ok(field_count) => field_count,
+                Err(_) => {
+                    return quote! {
+                        compile_error!("MemoryPack objects cannot contain more than 255 serialized fields");
+                    };
+                }
+            };
 
             let serialize_fields = ordered.iter().map(|of| {
                 let name = of.ident;
-                quote! { catga_codec_memorypack::MemoryPackSerialize::serialize(&self.#name, writer)?; }
+                let field = of.field;
+                generate_field_serialize(field, quote! { self.#name }, is_zero_copy)
             });
 
             quote! {
@@ -31,10 +42,18 @@ pub fn generate_serialize(data: &Data) -> proc_macro2::TokenStream {
             }
         }
         Fields::Unnamed(fields) => {
-            let field_count = fields.unnamed.len() as u8;
+            let field_count = match u8::try_from(fields.unnamed.len()) {
+                Ok(field_count) => field_count,
+                Err(_) => {
+                    return quote! {
+                        compile_error!("MemoryPack objects cannot contain more than 255 serialized fields");
+                    };
+                }
+            };
             let serialize_fields = (0..fields.unnamed.len()).map(|i| {
                 let index = syn::Index::from(i);
-                quote! { catga_codec_memorypack::MemoryPackSerialize::serialize(&self.#index, writer)?; }
+                let field = &fields.unnamed[i];
+                generate_field_serialize(field, quote! { self.#index }, is_zero_copy)
             });
 
             quote! {
@@ -44,6 +63,26 @@ pub fn generate_serialize(data: &Data) -> proc_macro2::TokenStream {
         }
         Fields::Unit => quote! {},
     }
+}
+
+fn generate_field_serialize(
+    field: &syn::Field,
+    access: proc_macro2::TokenStream,
+    is_zero_copy_struct: bool,
+) -> proc_macro2::TokenStream {
+    if (is_zero_copy_struct || is_zero_copy_field(field)) && is_borrowed_u8_slice(&field.ty) {
+        return quote! {
+            let length = i32::try_from(#access.len()).map_err(|_| {
+                catga_codec_memorypack::MemoryPackError::SerializationError(
+                    "zero-copy byte slice length exceeds i32::MAX".into(),
+                )
+            })?;
+            writer.write_i32(length)?;
+            writer.buffer.extend_from_slice(#access);
+        };
+    }
+
+    quote! { catga_codec_memorypack::MemoryPackSerialize::serialize(&#access, writer)?; }
 }
 
 pub fn generate_deserialize(data: &Data, is_zero_copy: bool) -> proc_macro2::TokenStream {
@@ -61,6 +100,14 @@ pub fn generate_deserialize(data: &Data, is_zero_copy: bool) -> proc_macro2::Tok
                 .filter(|f| !should_skip_field(f))
                 .collect();
             let ordered = prepare_ordered_fields(&non_skip);
+            let field_count = match u8::try_from(ordered.len()) {
+                Ok(field_count) => field_count,
+                Err(_) => {
+                    return quote! {
+                        compile_error!("MemoryPack objects cannot contain more than 255 serialized fields");
+                    };
+                }
+            };
 
             let all_field_names: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
 
@@ -94,7 +141,16 @@ pub fn generate_deserialize(data: &Data, is_zero_copy: bool) -> proc_macro2::Tok
             quote! {
                 reader.enter_object()?;
                 let result = (|| {
-                    let _header = reader.read_u8()?;
+                    let received_field_count = reader.read_u8()?;
+                    if received_field_count != #field_count {
+                        return Err(catga_codec_memorypack::MemoryPackError::DeserializationError(
+                            format!(
+                                "MemoryPack object field count mismatch: expected {}, received {}",
+                                #field_count,
+                                received_field_count,
+                            ),
+                        ));
+                    }
                     #(#ordered_deserialize)*
                     Ok(Self { #(#all_field_names),* })
                 })();
@@ -104,6 +160,14 @@ pub fn generate_deserialize(data: &Data, is_zero_copy: bool) -> proc_macro2::Tok
         }
         Fields::Unnamed(fields) => {
             let len = fields.unnamed.len();
+            let field_count = match u8::try_from(len) {
+                Ok(field_count) => field_count,
+                Err(_) => {
+                    return quote! {
+                        compile_error!("MemoryPack objects cannot contain more than 255 serialized fields");
+                    };
+                }
+            };
             let field_vars: Vec<_> = (0..len)
                 .map(|i| syn::Ident::new(&format!("field_{}", i), proc_macro2::Span::call_site()))
                 .collect();
@@ -115,7 +179,16 @@ pub fn generate_deserialize(data: &Data, is_zero_copy: bool) -> proc_macro2::Tok
             quote! {
                 reader.enter_object()?;
                 let result = (|| {
-                    let _header = reader.read_u8()?;
+                    let received_field_count = reader.read_u8()?;
+                    if received_field_count != #field_count {
+                        return Err(catga_codec_memorypack::MemoryPackError::DeserializationError(
+                            format!(
+                                "MemoryPack object field count mismatch: expected {}, received {}",
+                                #field_count,
+                                received_field_count,
+                            ),
+                        ));
+                    }
                     #(#deserialize_stmts)*
                     Ok(Self(#(#field_vars),*))
                 })();
