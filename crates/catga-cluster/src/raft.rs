@@ -15,9 +15,11 @@ use raft::{
     eraftpb::{ConfState, Entry, EntryType, Message},
 };
 use slog::Logger;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
-use crate::{ClusterCoordinator, RaftTiming, metrics::RaftMetrics, storage::RaftStorage};
+use crate::{
+    ClusterCoordinator, LeadershipSnapshot, RaftTiming, metrics::RaftMetrics, storage::RaftStorage,
+};
 
 const DEFAULT_PENDING_COMMIT_CAPACITY: usize = 1_024;
 
@@ -174,6 +176,7 @@ struct RaftCoordinatorState {
 
 struct RaftCoordinatorInner {
     state: ArcSwap<RaftCoordinatorState>,
+    leadership: watch::Sender<LeadershipSnapshot>,
     changed: Notify,
 }
 
@@ -201,6 +204,10 @@ impl ClusterCoordinator for RaftClusterNode {
             .iter()
             .find(|member| member.id == leader_id)
             .map(|member| Arc::clone(&member.endpoint))
+    }
+
+    fn subscribe_leadership(&self) -> watch::Receiver<LeadershipSnapshot> {
+        self.inner.leadership.subscribe()
     }
 
     fn member_endpoints(&self) -> Arc<[Arc<str>]> {
@@ -390,9 +397,15 @@ impl RaftNode {
         };
         let logger = Logger::root(slog::Discard, slog::o!());
         let raw = RawNode::new(&config, storage.clone(), &logger)?;
+        let (leadership, _) = watch::channel(LeadershipSnapshot {
+            epoch: 0,
+            leader_node_id: None,
+            leader_endpoint: None,
+        });
         let coordinator = Arc::new(RaftClusterNode {
             inner: Arc::new(RaftCoordinatorInner {
                 state: ArcSwap::from_pointee(RaftCoordinatorState { leader_id: None }),
+                leadership,
                 changed: Notify::new(),
             }),
             member_id: id,
@@ -697,6 +710,23 @@ impl RaftNode {
                 .inner
                 .state
                 .store(Arc::new(RaftCoordinatorState { leader_id }));
+            let previous = self.coordinator.inner.leadership.borrow().clone();
+            let leader_node_id = leader_id.map(|id| Arc::<str>::from(id.to_string()));
+            let leader_endpoint = leader_id.and_then(|id| {
+                self.coordinator
+                    .members
+                    .iter()
+                    .find(|member| member.id == id)
+                    .map(|member| Arc::clone(&member.endpoint))
+            });
+            self.coordinator
+                .inner
+                .leadership
+                .send_replace(LeadershipSnapshot {
+                    epoch: previous.epoch.saturating_add(1),
+                    leader_node_id,
+                    leader_endpoint,
+                });
             self.coordinator.inner.changed.notify_waiters();
         }
     }

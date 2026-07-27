@@ -7,7 +7,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 mod config;
 mod execution;
@@ -36,6 +36,21 @@ pub use singleton_task::SingletonTaskRunner;
 pub use state_machine::{RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError};
 pub use state_machine_runtime::{RaftStateMachineRuntime, RaftStateMachineRuntimeError};
 
+/// The latest known elected-leader state.
+///
+/// A subscription receiver observes the most recently published value. Receivers may coalesce
+/// intermediate epochs when publication outpaces consumption, and publication never waits for
+/// receivers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LeadershipSnapshot {
+    /// Monotonically increasing version for leadership changes observed by this coordinator.
+    pub epoch: u64,
+    /// The elected leader's stable identifier when one is known.
+    pub leader_node_id: Option<Arc<str>>,
+    /// The elected leader's externally reachable endpoint when one is known.
+    pub leader_endpoint: Option<Arc<str>>,
+}
+
 /// Read-only cluster-coordination operations available to an individual node.
 pub trait ClusterCoordinator: Send + Sync {
     /// Returns this node's stable identifier.
@@ -44,6 +59,11 @@ pub trait ClusterCoordinator: Send + Sync {
     fn is_leader(&self) -> bool;
     /// Returns the endpoint of the elected leader when it is known.
     fn leader_endpoint(&self) -> Option<Arc<str>>;
+    /// Subscribes to the latest known leadership state.
+    ///
+    /// Receivers can coalesce intermediate epochs when they are slower than publication. State
+    /// publication never waits for receivers and retains only the latest snapshot.
+    fn subscribe_leadership(&self) -> watch::Receiver<LeadershipSnapshot>;
     /// Returns a compact snapshot of known member endpoints.
     fn member_endpoints(&self) -> Arc<[Arc<str>]>;
     /// Waits until this node is leader or the timeout expires.
@@ -70,6 +90,7 @@ pub struct MemoryCluster {
 
 struct MemoryClusterInner {
     topology: ArcSwap<Topology>,
+    leadership: watch::Sender<LeadershipSnapshot>,
     changed: Notify,
 }
 
@@ -92,15 +113,24 @@ impl MemoryCluster {
         I: IntoIterator<Item = E>,
         E: Into<Box<str>>,
     {
+        let leader = Arc::<str>::from(leader.into());
+        let endpoints: Arc<[Arc<str>]> = endpoints
+            .into_iter()
+            .map(|endpoint| Arc::from(endpoint.into()))
+            .collect();
+        let leader_endpoint = endpoints
+            .iter()
+            .find(|endpoint| endpoint_node_id(endpoint) == leader.as_ref())
+            .map(Arc::clone);
+        let (leadership, _) = watch::channel(LeadershipSnapshot {
+            epoch: 0,
+            leader_node_id: Some(Arc::clone(&leader)),
+            leader_endpoint,
+        });
         Self {
             inner: Arc::new(MemoryClusterInner {
-                topology: ArcSwap::from_pointee(Topology {
-                    leader: Arc::from(leader.into()),
-                    endpoints: endpoints
-                        .into_iter()
-                        .map(|endpoint| Arc::from(endpoint.into()))
-                        .collect(),
-                }),
+                topology: ArcSwap::from_pointee(Topology { leader, endpoints }),
+                leadership,
                 changed: Notify::new(),
             }),
         }
@@ -124,20 +154,27 @@ impl MemoryCluster {
     /// Publishes an atomic leadership change for an existing member.
     pub fn elect(&self, leader: &str) -> Option<()> {
         let current = self.inner.topology.load_full();
-        if !current
+        let leader_endpoint = current
             .endpoints
             .iter()
-            .any(|endpoint| endpoint_node_id(endpoint) == leader)
-        {
-            return None;
-        }
+            .find(|endpoint| endpoint_node_id(endpoint) == leader)
+            .map(Arc::clone)?;
         if current.leader.as_ref() == leader {
             return Some(());
         }
+        let leader: Arc<str> = Arc::from(leader);
         self.inner.topology.store(Arc::new(Topology {
-            leader: leader.into(),
+            leader: Arc::clone(&leader),
             endpoints: Arc::clone(&current.endpoints),
         }));
+        let previous = self.inner.leadership.borrow().clone();
+        if previous.leader_node_id.as_deref() != Some(leader.as_ref()) {
+            self.inner.leadership.send_replace(LeadershipSnapshot {
+                epoch: previous.epoch.saturating_add(1),
+                leader_node_id: Some(leader),
+                leader_endpoint: Some(leader_endpoint),
+            });
+        }
         self.inner.changed.notify_waiters();
         Some(())
     }
@@ -174,6 +211,10 @@ impl ClusterCoordinator for MemoryClusterNode {
             .iter()
             .find(|endpoint| endpoint_node_id(endpoint) == topology.leader.as_ref())
             .map(Arc::clone)
+    }
+
+    fn subscribe_leadership(&self) -> watch::Receiver<LeadershipSnapshot> {
+        self.inner.leadership.subscribe()
     }
 
     fn member_endpoints(&self) -> Arc<[Arc<str>]> {

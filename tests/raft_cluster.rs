@@ -35,6 +35,28 @@ fn relay(nodes: &mut [RaftNode]) {
 }
 
 #[test]
+fn raft_leadership_subscription_publishes_the_campaign_winner() {
+    let mut node = RaftNode::new(
+        1,
+        "http://node-1",
+        vec![RaftMember::new(1, "http://node-1")],
+    )
+    .expect("valid single-node Raft configuration");
+    let coordinator = node.coordinator();
+    let receiver = coordinator.subscribe_leadership();
+
+    assert_eq!(receiver.borrow().leader_node_id, None);
+    node.campaign().expect("single node can campaign");
+
+    assert_eq!(receiver.borrow().epoch, 1);
+    assert_eq!(receiver.borrow().leader_node_id.as_deref(), Some("1"));
+    assert_eq!(
+        receiver.borrow().leader_endpoint.as_deref(),
+        Some("http://node-1")
+    );
+}
+
+#[test]
 fn raft_node_elects_and_commits_a_single_node_proposal() {
     let mut node = RaftNode::new(
         1,

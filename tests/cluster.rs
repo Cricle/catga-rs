@@ -12,6 +12,28 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn leadership_subscription_coalesces_changes_without_blocking_other_receivers() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let node_a = cluster.node("node-a").expect("configured node-a");
+    let node_b = cluster.node("node-b").expect("configured node-b");
+    let mut first = node_a.subscribe_leadership();
+    let mut second = node_b.subscribe_leadership();
+
+    assert_eq!(first.borrow().epoch, 0);
+    cluster.elect("node-b").expect("configured node-b");
+    cluster.elect("node-a").expect("configured node-a");
+
+    first.changed().await.expect("cluster remains alive");
+    second.changed().await.expect("cluster remains alive");
+    assert_eq!(first.borrow().epoch, 2);
+    assert_eq!(first.borrow().leader_node_id.as_deref(), Some("node-a"));
+    assert_eq!(
+        second.borrow().leader_endpoint.as_deref(),
+        Some("http://node-a")
+    );
+}
+
+#[tokio::test]
 async fn cluster_publishes_leadership_changes_without_polling_or_global_locks() {
     let cluster = Arc::new(MemoryCluster::new(
         "node-a",
