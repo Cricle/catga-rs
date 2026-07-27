@@ -1028,6 +1028,32 @@ async fn jetstream_round_trip_and_ack() {
     );
 }
 
+#[tokio::test]
+async fn durable_nats_transport_rejects_at_most_once_publications() {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("at-most-once-{}", std::process::id());
+    let transport = NatsTransport::connect(NatsConfig {
+        server: server.url().into(),
+        stream: format!("CATGA_{suffix}").into(),
+        subject: format!("catga.{suffix}").into(),
+        consumer: format!("catga_{suffix}").into(),
+    })
+    .await
+    .expect("JetStream transport initializes");
+
+    let error = transport
+        .publish(Envelope::new(
+            9,
+            "order.ephemeral",
+            vec![],
+            MessageMetadata::new(9, None).with_quality_of_service(QualityOfService::AtMostOnce),
+        ))
+        .await
+        .expect_err("durable JetStream transport must not accept ephemeral delivery");
+
+    assert_eq!(error.code(), ErrorCode::Unsupported);
+}
+
 /// A custom envelope codec must frame both the configured subject and provisioned destinations.
 ///
 /// This uses the real JetStream service supplied by `nats_e2e`, so it catches accidental fallback

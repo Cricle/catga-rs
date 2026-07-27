@@ -21,18 +21,19 @@ use crate::{NatsConfig, NatsDestinationConfig, acknowledgement::NatsAcknowledger
 /// Counter incremented when JetStream confirms that it suppressed an ExactlyOnce duplicate.
 const NATS_DEDUP_DROPS: &str = "catga.nats.dedup.drops";
 
-/// NATS transport that maps Catga QoS to Core NATS or JetStream delivery semantics.
+/// NATS transport that maps durable Catga QoS to JetStream delivery semantics.
 ///
-/// `AtMostOnce` uses Core NATS, `AtLeastOnce` waits for a JetStream publish acknowledgement, and
-/// `ExactlyOnce` additionally supplies the envelope message ID to JetStream's deduplication
-/// window. Received JetStream deliveries always expose explicit acknowledgement through
+/// `AtLeastOnce` waits for a JetStream publish acknowledgement, and `ExactlyOnce` additionally
+/// supplies the envelope message ID to JetStream's deduplication window. `AtMostOnce` is
+/// rejected because Core NATS publication to a subject captured by this transport's JetStream
+/// stream would be retained and redeliverable. Use [`crate::NatsPubSubTransport`] for genuinely
+/// ephemeral publication. Received JetStream deliveries always expose explicit acknowledgement through
 /// [`MessageTransport::ack`]. The default [`MemoryPackCodec`] preserves the original wire format;
 /// applications with another envelope format can select it through a `*_with_codec` constructor.
 pub struct NatsTransport<C = MemoryPackCodec>
 where
     C: EnvelopeCodec,
 {
-    client: async_nats::Client,
     context: jetstream::Context,
     subject: Box<str>,
     codec: C,
@@ -159,7 +160,6 @@ where
             .await
             .map_err(map_error)?;
         Ok(Self {
-            client,
             context,
             subject: config.subject,
             codec,
@@ -305,17 +305,11 @@ where
         let mode = publish_mode(envelope.metadata().quality_of_service());
         match mode {
             NatsPublishMode::Core => {
-                telemetry::record_message_publish("nats", "core", async {
-                    self.acceptance.ensure_accepting()?;
-                    self.client
-                        .publish(
-                            self.subject.to_string(),
-                            encode_envelope(&self.codec, &envelope)?.into(),
-                        )
-                        .await
-                        .map_err(map_error)
-                })
-                .await
+                let _ = envelope;
+                Err(CatgaError::new(
+                    ErrorCode::Unsupported,
+                    "durable NATS transport does not support AtMostOnce; use NatsPubSubTransport",
+                ))
             }
             NatsPublishMode::JetStream => {
                 telemetry::record_message_publish("nats", "jetstream", async {
