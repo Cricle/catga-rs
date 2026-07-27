@@ -52,6 +52,73 @@ pub trait Command: Message {}
 /// A message delivered to zero or more subscribers.
 pub trait Event: Message + Clone {}
 
+/// A message that declares when its durable outbox delivery may begin.
+///
+/// [`Self::scheduled_at`] takes precedence over [`Self::delay`], matching the source contract.
+/// The declaration alone never creates a timer, sleeps, or changes direct transport delivery.
+/// Call a durable scheduled-outbox API to persist the resolved deadline and make recovery across
+/// process restarts possible.
+pub trait DelayedMessage: Message {
+    /// Returns the absolute delivery boundary when one is declared.
+    fn scheduled_at(&self) -> Option<SystemTime> {
+        None
+    }
+
+    /// Returns the relative delivery delay when no absolute boundary is declared.
+    fn delay(&self) -> Option<Duration> {
+        None
+    }
+
+    /// Resolves this message's portable durable delivery boundary against `now`.
+    ///
+    /// An absolute boundary wins over a relative delay. The result must fit Catga's UTC
+    /// epoch-millisecond outbox representation; otherwise this returns [`ErrorCode::Validation`]
+    /// before payload serialization or store I/O.
+    fn deliver_at(&self, now: SystemTime) -> CatgaResult<SystemTime> {
+        let deliver_at = match self.scheduled_at() {
+            Some(scheduled_at) => scheduled_at,
+            None => match self.delay() {
+                Some(delay) => now.checked_add(delay).ok_or_else(|| {
+                    CatgaError::new(
+                        ErrorCode::Validation,
+                        "delayed message deadline exceeds the system time range",
+                    )
+                })?,
+                None => now,
+            },
+        };
+        let elapsed = deliver_at.duration_since(UNIX_EPOCH).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "delayed message deadline precedes the Unix epoch",
+            )
+        })?;
+        u64::try_from(elapsed.as_millis()).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "delayed message deadline exceeds the supported millisecond range",
+            )
+        })?;
+        Ok(deliver_at)
+    }
+}
+
+/// A typed request that also declares a durable delivery boundary.
+///
+/// Every value implementing both [`Request`] and [`DelayedMessage`] receives this marker
+/// automatically; applications do not write a second implementation.
+pub trait DelayedRequest: Request + DelayedMessage {}
+
+impl<T> DelayedRequest for T where T: Request + DelayedMessage {}
+
+/// An event that also declares a durable delivery boundary.
+///
+/// Every value implementing both [`Event`] and [`DelayedMessage`] receives this marker
+/// automatically; applications do not write a second implementation.
+pub trait DelayedEvent: Event + DelayedMessage {}
+
+impl<T> DelayedEvent for T where T: Event + DelayedMessage {}
+
 /// Supplies an optional stable shard key for automatic request batching.
 ///
 /// Returning `None` places the request in the behavior's default shard.

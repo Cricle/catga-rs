@@ -96,6 +96,13 @@ no machine-dependent timing threshold.
   scheduled outbox applies the same explicit ordinary-event-reliable-event QoS
   policy before durable insertion and preserves `Message::schema_version()` so
   delayed versioned messages remain upgradeable after persistence.
+* Source `IDelayedMessage`, `IDelayedRequest`, and `IDelayedEvent` map to the
+  runtime-neutral `DelayedMessage`, `DelayedRequest`, and `DelayedEvent` traits.
+  A message may declare an absolute deadline or relative delay, with the absolute
+  deadline taking precedence. `MemoryPackScheduledOutbox` resolves that declaration
+  once and persists the existing `not_before` boundary; direct transport send and
+  publish deliberately do not promise broker-specific delay and no `x-delay` header,
+  timer, or hidden worker is introduced.
 * Runtime-neutral traits live in `catga-core`; broker crates depend on core,
   never the reverse.
 * The source competing subscription's single-event operation maps to

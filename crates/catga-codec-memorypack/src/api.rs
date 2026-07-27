@@ -7,10 +7,10 @@ use std::{
 };
 
 use catga_core::{
-    CatgaError, CatgaResult, DistributedIdGenerator, Envelope, EnvelopeRequestClient, ErrorCode,
-    Message, MessageMetadata, MessagePriority, OutboxMessage, OutboxStore, QualityOfService,
-    RemoteRequest, Request, RequestClient, RequestTransport, SnapshotCodec, TransportContext,
-    current_correlation_id, current_transport_context,
+    CatgaError, CatgaResult, DelayedMessage, DistributedIdGenerator, Envelope,
+    EnvelopeRequestClient, ErrorCode, Message, MessageMetadata, MessagePriority, OutboxMessage,
+    OutboxStore, QualityOfService, RemoteRequest, Request, RequestClient, RequestTransport,
+    SnapshotCodec, TransportContext, current_correlation_id, current_transport_context,
 };
 
 use crate::{
@@ -133,12 +133,34 @@ where
             .await
     }
 
+    /// Resolves and persists a message-declared durable delivery boundary.
+    ///
+    /// [`DelayedMessage::scheduled_at`] takes precedence over its relative delay. The resolution
+    /// happens exactly once immediately before persistence; this method creates no timer or
+    /// background task. Use [`Self::schedule_at`] when scheduling policy belongs at the call site.
+    pub async fn schedule_delayed<M>(&self, message: &M) -> CatgaResult<u64>
+    where
+        M: DelayedMessage + MemoryPackSerialize,
+    {
+        self.schedule_at(message, message.deliver_at(SystemTime::now())?)
+            .await
+    }
+
     /// Serializes and persists an event with at-most-once delivery metadata.
     pub async fn schedule_event_at<E>(&self, event: &E, not_before: SystemTime) -> CatgaResult<u64>
     where
         E: catga_core::Event + MemoryPackSerialize,
     {
         self.schedule_with_quality_of_service(event, not_before, QualityOfService::AtMostOnce)
+            .await
+    }
+
+    /// Resolves and persists a message-declared event delivery boundary with at-most-once QoS.
+    pub async fn schedule_delayed_event<E>(&self, event: &E) -> CatgaResult<u64>
+    where
+        E: catga_core::Event + DelayedMessage + MemoryPackSerialize,
+    {
+        self.schedule_event_at(event, event.deliver_at(SystemTime::now())?)
             .await
     }
 
@@ -152,6 +174,15 @@ where
         E: catga_core::Event + MemoryPackSerialize,
     {
         self.schedule_with_quality_of_service(event, not_before, QualityOfService::AtLeastOnce)
+            .await
+    }
+
+    /// Resolves and persists a message-declared event delivery boundary with at-least-once QoS.
+    pub async fn schedule_delayed_reliable_event<E>(&self, event: &E) -> CatgaResult<u64>
+    where
+        E: catga_core::Event + DelayedMessage + MemoryPackSerialize,
+    {
+        self.schedule_reliable_event_at(event, event.deliver_at(SystemTime::now())?)
             .await
     }
 

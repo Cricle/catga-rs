@@ -96,8 +96,8 @@ pub use lifecycle::{
 };
 pub use mediator::{MAX_MEDIATOR_BATCH_SIZE, Mediator, MediatorHandle};
 pub use message::{
-    BatchKeyProvider, BatchOptionsProvider, Command, DeliveryMode, Event, Message, MessageMetadata,
-    MessagePriority, QualityOfService, Request,
+    BatchKeyProvider, BatchOptionsProvider, Command, DelayedEvent, DelayedMessage, DelayedRequest,
+    DeliveryMode, Event, Message, MessageMetadata, MessagePriority, QualityOfService, Request,
 };
 pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;

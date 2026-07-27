@@ -7,9 +7,9 @@ use std::{
 
 use catga_codec_memorypack::{MemoryPackScheduledOutbox, MemoryPackable};
 use catga_core::{
-    DistributedIdGenerator, Envelope, EnvelopeHeaders, Event, Message, MessageMetadata,
-    MessagePriority, OutboxMessage, OutboxStore, QualityOfService, SnowflakeIdGenerator,
-    SnowflakeLayout, scope_transport_context,
+    DelayedMessage, DistributedIdGenerator, Envelope, EnvelopeHeaders, Event, Message,
+    MessageMetadata, MessagePriority, OutboxMessage, OutboxStore, QualityOfService,
+    SnowflakeIdGenerator, SnowflakeLayout, scope_transport_context,
 };
 use catga_memory::MemoryOutbox;
 
@@ -22,6 +22,22 @@ struct ShipOrder {
 #[catga(version = 3, priority = high)]
 struct VersionedShipOrder {
     order_id: u64,
+}
+
+#[derive(MemoryPackable, catga_core::Message)]
+struct DeclaredDelayedShipOrder {
+    order_id: u64,
+    scheduled_at_unix_ms: u64,
+}
+
+impl DelayedMessage for DeclaredDelayedShipOrder {
+    fn scheduled_at(&self) -> Option<SystemTime> {
+        Some(SystemTime::UNIX_EPOCH + Duration::from_millis(self.scheduled_at_unix_ms))
+    }
+
+    fn delay(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
 }
 
 #[derive(Clone, MemoryPackable)]
@@ -103,6 +119,39 @@ async fn memorypack_scheduler_persists_a_typed_message_until_its_deadline() {
             .is_empty()
     );
     assert!(scheduler.cancel(id).await.expect("cancel succeeds"));
+}
+
+#[tokio::test]
+async fn memorypack_scheduler_uses_a_message_declared_deadline() {
+    let store = Arc::new(MemoryOutbox::default());
+    let ids: Arc<dyn DistributedIdGenerator> = Arc::new(
+        SnowflakeIdGenerator::new(3, SnowflakeLayout::default())
+            .expect("valid Snowflake configuration"),
+    );
+    let scheduler = MemoryPackScheduledOutbox::new(Arc::clone(&store), ids);
+
+    scheduler
+        .schedule_delayed(&DeclaredDelayedShipOrder {
+            order_id: 51,
+            scheduled_at_unix_ms: u64::try_from(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("test clock is after the Unix epoch")
+                    .as_millis(),
+            )
+            .expect("test deadline fits u64 milliseconds")
+                + 60_000,
+        })
+        .await
+        .expect("message declared delay is persisted durably");
+
+    assert!(
+        store
+            .claim("worker", 1)
+            .await
+            .expect("claim succeeds")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
