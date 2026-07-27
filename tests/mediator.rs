@@ -7,8 +7,8 @@ use std::sync::{
 
 use async_trait::async_trait;
 use catga_core::{
-    Behavior, CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler, Handler,
-    Mediator, MediatorHandle, Next, Pipeline, Registry, Request, current_cancellation,
+    Behavior, CatgaError, CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler,
+    Handler, Mediator, MediatorHandle, Next, Pipeline, Registry, Request, current_cancellation,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -90,17 +90,26 @@ async fn mediator_cancellation_rejects_pre_cancelled_requests_and_scopes_the_tok
         observed_scope: Arc::clone(&observed_scope),
         started: Arc::clone(&started),
     })?;
-    let mediator = Mediator::new(registry);
+    let mediator = Arc::new(Mediator::new(registry));
     let cancellation = CancellationToken::new();
     let waiting_for_handler = started.notified();
 
-    let dispatch = mediator.send_with_cancellation(Double(1), cancellation.clone());
-    tokio::pin!(dispatch);
+    let dispatch = {
+        let mediator = Arc::clone(&mediator);
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move {
+            mediator
+                .send_with_cancellation(Double(1), cancellation)
+                .await
+        })
+    };
     waiting_for_handler.await;
     assert_eq!(observed_scope.load(Ordering::Acquire), 1);
     cancellation.cancel();
     assert!(matches!(
-        dispatch.await,
+        dispatch
+            .await
+            .map_err(|error| CatgaError::new(ErrorCode::Internal, error.to_string()))?,
         Err(error) if error.code() == ErrorCode::Cancelled
     ));
 

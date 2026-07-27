@@ -179,10 +179,15 @@ impl TransportBatchRunner {
                         () = sleep_until(deadline) => {},
                     }
                 }
-                None => match self.receiver.recv().await {
-                    Some(queued) => pending.push_back(queued),
-                    None => break,
-                },
+                None => {
+                    tokio::select! {
+                        _ = shutdown.cancelled() => break,
+                        queued = self.receiver.recv() => match queued {
+                            Some(queued) => pending.push_back(queued),
+                            None => break,
+                        },
+                    }
+                }
             }
         }
 
