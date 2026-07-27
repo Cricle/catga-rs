@@ -314,7 +314,7 @@ no machine-dependent timing threshold.
   stronger, avoids a no-op nested builder, and remains in-process only; durable
   concurrency ownership belongs to `FlowRuntime` and its lease-aware stores.
 * The source's internal `ArrayPool`-backed buffer writer maps to explicit
-  caller-owned Rust buffers. `PostcardCodec::encode_into` and
+  caller-owned Rust buffers. `MemoryPackCodec::encode_into` and
   `encode_value_into` clear and reuse a supplied `Vec<u8>` without replacing
   its capacity; fixed-output compression APIs cover callers that need a hard
   allocation ceiling. This retains the pool's allocation benefit without a
