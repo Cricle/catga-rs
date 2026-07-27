@@ -13,11 +13,11 @@ use catga_core::{
     CachedResultCodec, CatgaError, CatgaResult, Correlated, CorrelationBehavior,
     DeadLetterBehavior, DeadLetterEnvelope, DeadLetterStore, DistributedLockBehavior,
     DistributedLockKey, Envelope, ErrorCode, Handler, IdempotencyBehavior, IdempotencyKey,
-    InboxBehavior, InboxKey, Mediator, MessageMetadata, Pipeline, Registry, Request, RetryBehavior,
-    TimeoutBehavior, current_correlation_id,
+    InboxBehavior, InboxKey, LeaseStore, Mediator, MessageMetadata, Pipeline, Registry, Request,
+    RetryBehavior, TimeoutBehavior, current_correlation_id,
 };
 use catga_memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox, MemoryLeases};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 
 #[derive(Clone, Debug)]
 struct Work;
@@ -398,6 +398,61 @@ impl DistributedLockKey for LockedWork {
     }
 }
 
+struct VirtualLeaseState {
+    owner: Option<Box<str>>,
+    expires_at: tokio::time::Instant,
+}
+
+struct VirtualLeases {
+    state: Mutex<VirtualLeaseState>,
+    renewals: AtomicUsize,
+}
+
+impl VirtualLeases {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(VirtualLeaseState {
+                owner: None,
+                expires_at: tokio::time::Instant::now(),
+            }),
+            renewals: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl LeaseStore for VirtualLeases {
+    async fn try_acquire(&self, _: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
+        let mut state = self.state.lock().await;
+        if state.owner.is_none() || state.expires_at <= tokio::time::Instant::now() {
+            state.owner = Some(owner.into());
+            state.expires_at = tokio::time::Instant::now() + ttl;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    async fn renew(&self, _: &str, owner: &str, ttl: Duration) -> CatgaResult<bool> {
+        let mut state = self.state.lock().await;
+        if state.owner.as_deref() != Some(owner) || state.expires_at <= tokio::time::Instant::now()
+        {
+            return Ok(false);
+        }
+        state.expires_at = tokio::time::Instant::now() + ttl;
+        self.renewals.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    }
+
+    async fn release(&self, _: &str, owner: &str) -> CatgaResult<bool> {
+        let mut state = self.state.lock().await;
+        if state.owner.as_deref() != Some(owner) {
+            return Ok(false);
+        }
+        state.owner = None;
+        Ok(true)
+    }
+}
+
 struct BlockingLockHandler {
     executions: Arc<AtomicUsize>,
     started: Arc<Notify>,
@@ -462,6 +517,59 @@ async fn distributed_lock_behavior_excludes_concurrent_requests_and_releases_aft
     started_again.await;
     release.notify_one();
     assert_eq!(third.await.unwrap().unwrap(), 7);
+}
+
+#[tokio::test(start_paused = true)]
+async fn distributed_lock_behavior_renews_while_a_handler_exceeds_its_initial_lease() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let leases = Arc::new(VirtualLeases::new());
+    let mut registry = Registry::new();
+    registry
+        .register_request::<LockedWork, _>(BlockingLockHandler {
+            executions: Arc::clone(&executions),
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        })
+        .expect("blocking lock handler registers");
+    let mediator = Arc::new(Mediator::new(registry));
+    let pipeline = Arc::new(Pipeline::new().with(DistributedLockBehavior::new(
+        Arc::clone(&leases) as Arc<dyn LeaseStore>,
+        "node-a",
+        Duration::from_millis(10),
+    )));
+
+    let first = tokio::spawn({
+        let mediator = Arc::clone(&mediator);
+        let pipeline = Arc::clone(&pipeline);
+        async move { mediator.send_with(LockedWork, pipeline.as_ref()).await }
+    });
+    started.notified().await;
+
+    tokio::time::advance(Duration::from_millis(6)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(leases.renewals.load(Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_millis(4)).await;
+
+    assert_eq!(
+        mediator
+            .send_with(LockedWork, pipeline.as_ref())
+            .await
+            .expect_err("renewed lease excludes a later request")
+            .code(),
+        ErrorCode::Conflict
+    );
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+
+    release.notify_one();
+    assert_eq!(
+        first
+            .await
+            .expect("first task does not panic")
+            .expect("first lock holder completes"),
+        7
+    );
 }
 
 #[tokio::test]
