@@ -15,11 +15,11 @@ macro_rules! define_server_suspended {
             let key = flow_key(continuation.state().id());
             let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.updated_at())?;
             let insert = if $postgres {
-                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING"
+                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING"
             } else {
-                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE flow_key = flow_key"
+                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE flow_key = flow_key"
             };
-            let result = sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(encode_continuation(&continuation)?)
+            let result = sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(wait_correlation(&continuation)).bind(wait_correlation_key(&continuation).map(|key| key.to_vec())).bind(encode_continuation(&continuation)?)
                 .execute(pool).await.map_err(|error| database_error(concat!("create ", $label, " continuation"), error))?;
             if result.rows_affected() == 1 { return Ok(true); }
             let row = sqlx::query(statement("SELECT flow_id FROM catga_flow_continuations WHERE flow_key = ?", $postgres)).bind(key.as_slice()).fetch_optional(pool).await.map_err(|error| database_error(concat!("read conflicting ", $label, " continuation"), error))?;
@@ -30,6 +30,17 @@ macro_rules! define_server_suspended {
 
         /// Loads one validated continuation.
         pub(crate) async fn get(pool: &$pool, flow_id: &str) -> CatgaResult<Option<FlowContinuation>> { load(pool, flow_id).await.map(|value| value.map(|value| value.continuation)) }
+
+        /// Loads exactly one continuation by its indexed active wait correlation.
+        pub(crate) async fn get_by_wait_correlation(pool: &$pool, correlation_id: &str) -> CatgaResult<Option<FlowContinuation>> {
+            let correlation_key = flow_key(correlation_id); let rows = sqlx::query(statement("SELECT payload FROM catga_flow_continuations WHERE wait_correlation_key = ? AND wait_correlation = ? ORDER BY flow_key ASC LIMIT 2", $postgres)).bind(correlation_key.as_slice()).bind(correlation_id).fetch_all(pool).await.map_err(|error| database_error(concat!("read ", $label, " wait correlation"), error))?;
+            if rows.len() > 1 { return Err(CatgaError::new(ErrorCode::Conflict, "flow wait correlation identifies multiple active flows")); }
+            rows.into_iter().next().map(|row| {
+                let frame: Vec<u8> = row.try_get("payload").map_err(|error| database_error(concat!("decode ", $label, " wait correlation frame"), error))?;
+                let continuation = decode_continuation(&frame)?;
+                if continuation.wait().is_some_and(|wait| wait.correlation_id() == correlation_id) { Ok(continuation) } else { Err(CatgaError::new(ErrorCode::Internal, concat!($label, " wait correlation index does not match its continuation frame"))) }
+            }).transpose()
+        }
 
         /// Scans no more than the caller-requested number of compact summary rows.
         pub(crate) async fn query(pool: &$pool, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
@@ -97,10 +108,13 @@ macro_rules! define_server_suspended {
         }
 
         async fn replace(pool: &$pool, current: &StoredContinuation, next: &FlowContinuation) -> CatgaResult<bool> {
-            let key = flow_key(next.state().id()); let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?; let result = sqlx::query(statement("UPDATE catga_flow_continuations SET flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL WHERE flow_key = ? AND flow_id = ? AND revision = ?", $postgres))
-                .bind(next.state().flow_type()).bind(status_code(next.state().status())).bind(next.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(next)?).bind(encode_continuation(next)?).bind(key.as_slice()).bind(next.state().id()).bind(current.revision).execute(pool).await.map_err(|error| database_error(concat!("replace ", $label, " continuation"), error))?;
+            let key = flow_key(next.state().id()); let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?; let result = sqlx::query(statement("UPDATE catga_flow_continuations SET flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, wait_correlation = ?, wait_correlation_key = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL WHERE flow_key = ? AND flow_id = ? AND revision = ?", $postgres))
+                .bind(next.state().flow_type()).bind(status_code(next.state().status())).bind(next.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(next)?).bind(wait_correlation(next)).bind(wait_correlation_key(next).map(|key| key.to_vec())).bind(encode_continuation(next)?).bind(key.as_slice()).bind(next.state().id()).bind(current.revision).execute(pool).await.map_err(|error| database_error(concat!("replace ", $label, " continuation"), error))?;
             Ok(result.rows_affected() == 1)
         }
+
+        fn wait_correlation(continuation: &FlowContinuation) -> Option<&str> { continuation.wait().map(|wait| wait.correlation_id()) }
+        fn wait_correlation_key(continuation: &FlowContinuation) -> Option<[u8; 32]> { wait_correlation(continuation).map(flow_key) }
     };
 }
 

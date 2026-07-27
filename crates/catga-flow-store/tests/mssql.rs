@@ -48,6 +48,17 @@ async fn mssql_flow_and_continuation_contracts() -> CatgaResult<()> {
         ),
     );
     assert!(store.create(continuation).await?);
+    let correlation = format!("{id}/wait");
+    let waiting = store
+        .get_by_wait_correlation(&correlation)
+        .await?
+        .ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "SQL Server continuation correlation lookup returned no continuation",
+            )
+        })?;
+    assert_eq!(waiting.state().id(), format!("{id}-wait"));
     let receipts = store
         .poll_timed_out(&TimedOutFlowPoll::new(now, 1, 4)?)
         .await?;

@@ -59,3 +59,80 @@ async fn postgres_flow_and_continuation_contracts() -> CatgaResult<()> {
     store.release_timed_out(receipt).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn postgres_suspended_store_looks_up_indexed_wait_correlations() -> CatgaResult<()> {
+    let Ok(url) = env::var("CATGA_POSTGRES_URL") else {
+        return Ok(());
+    };
+    let store = SqlSuspendedFlowStore::connect_postgres(&url).await?;
+    store.migrate().await?;
+    let id = format!("postgres-correlation-{}", uuid::Uuid::new_v4());
+    let correlation = format!("{id}/one");
+    let waiting = FlowContinuation::waiting(
+        FlowState::new(format!("{id}-one"), "postgres-contract", [], "node-a").suspended(),
+        "finish",
+        WaitCondition::new(
+            correlation.as_str(),
+            WaitPolicy::All,
+            1,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        ),
+    );
+    assert!(store.create(waiting.clone()).await?);
+    let found = store
+        .get_by_wait_correlation(correlation.as_str())
+        .await?
+        .ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "PostgreSQL indexed wait was not found")
+        })?;
+    assert_eq!(found.state().id(), waiting.state().id());
+    assert!(
+        store
+            .get_by_wait_correlation("postgres-correlation/missing")
+            .await?
+            .is_none()
+    );
+
+    let ready = waiting
+        .clone()
+        .ready()
+        .with_state(waiting.state().clone().next_version());
+    assert!(store.update(0, ready).await?);
+    assert!(
+        store
+            .get_by_wait_correlation(correlation.as_str())
+            .await?
+            .is_none()
+    );
+
+    let shared = format!("{id}/shared");
+    for suffix in ["two", "three"] {
+        assert!(
+            store
+                .create(FlowContinuation::waiting(
+                    FlowState::new(format!("{id}-{suffix}"), "postgres-contract", [], "node-a")
+                        .suspended(),
+                    "finish",
+                    WaitCondition::new(
+                        shared.as_str(),
+                        WaitPolicy::All,
+                        1,
+                        SystemTime::now(),
+                        Duration::from_secs(30),
+                    ),
+                ))
+                .await?
+        );
+    }
+    assert_eq!(
+        store
+            .get_by_wait_correlation(shared.as_str())
+            .await
+            .expect_err("ambiguous PostgreSQL correlation must not select a continuation")
+            .code(),
+        ErrorCode::Conflict
+    );
+    Ok(())
+}

@@ -38,14 +38,17 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
                flow_type NVARCHAR(MAX) NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, \
                created_at_ms BIGINT NOT NULL, created_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
                updated_at_ms BIGINT NOT NULL DEFAULT 0, updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0, \
-               deadline_ms BIGINT NULL, revision BIGINT NOT NULL, \
+               deadline_ms BIGINT NULL, wait_correlation NVARCHAR(MAX) NULL, \
+               wait_correlation_key BINARY(32) NULL, revision BIGINT NOT NULL, \
                due_token BINARY(16) NULL, lease_until_ms BIGINT NULL, payload VARBINARY(MAX) NOT NULL); \
              CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
                (status, created_at_ms, flow_key); \
              CREATE INDEX catga_flow_continuations_order_idx ON dbo.catga_flow_continuations \
                (created_at_ms, created_at_subsec_ns, flow_key); \
              CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
-               (deadline_ms, lease_until_ms, flow_key); END; \
+               (deadline_ms, lease_until_ms, flow_key); \
+             CREATE INDEX catga_flow_continuations_wait_correlation_idx ON dbo.catga_flow_continuations \
+               (wait_correlation_key, flow_key); END; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'created_at_subsec_ns') IS NULL \
                ALTER TABLE dbo.catga_flow_continuations ADD created_at_subsec_ns BIGINT NOT NULL DEFAULT 0; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'updated_at_ms') IS NULL BEGIN \
@@ -74,6 +77,10 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
                ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_id NVARCHAR(MAX) NOT NULL; \
              IF COL_LENGTH(N'dbo.catga_flow_continuations', N'flow_type') <> -1 \
                ALTER TABLE dbo.catga_flow_continuations ALTER COLUMN flow_type NVARCHAR(MAX) NOT NULL; \
+             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'wait_correlation') IS NULL \
+               ALTER TABLE dbo.catga_flow_continuations ADD wait_correlation NVARCHAR(MAX) NULL; \
+             IF COL_LENGTH(N'dbo.catga_flow_continuations', N'wait_correlation_key') IS NULL \
+               ALTER TABLE dbo.catga_flow_continuations ADD wait_correlation_key BINARY(32) NULL; \
              IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
                AND name = N'catga_flow_continuations_query_idx') \
                CREATE INDEX catga_flow_continuations_query_idx ON dbo.catga_flow_continuations \
@@ -81,7 +88,11 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
              IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
                AND name = N'catga_flow_continuations_due_idx') \
                CREATE INDEX catga_flow_continuations_due_idx ON dbo.catga_flow_continuations \
-                 (deadline_ms, lease_until_ms, flow_key);",
+                 (deadline_ms, lease_until_ms, flow_key); \
+             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_continuations') \
+               AND name = N'catga_flow_continuations_wait_correlation_idx') \
+               CREATE INDEX catga_flow_continuations_wait_correlation_idx ON dbo.catga_flow_continuations \
+                 (wait_correlation_key, flow_key);",
             &[],
         )
         .await
@@ -103,8 +114,8 @@ pub(crate) async fn create(pool: &MssqlPool, continuation: FlowContinuation) -> 
            WHERE flow_key = @P1) BEGIN \
            INSERT INTO dbo.catga_flow_continuations \
              (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, \
-              revision, payload) \
-           VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, @P9, @P10, 0, @P11); \
+              wait_correlation, wait_correlation_key, revision, payload) \
+           VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8, @P9, @P10, @P11, @P12, 0, @P13); \
            SELECT CAST(1 AS BIGINT) AS inserted; END \
          ELSE SELECT CAST(0 AS BIGINT) AS inserted;",
     );
@@ -118,6 +129,8 @@ pub(crate) async fn create(pool: &MssqlPool, continuation: FlowContinuation) -> 
     query.bind(updated_at_ms);
     query.bind(updated_at_subsec_ns);
     query.bind(deadline);
+    query.bind(wait_correlation(&continuation));
+    query.bind(wait_correlation_key(&continuation).map(|key| key.to_vec()));
     query.bind(frame.as_slice());
     let mut connection = pool
         .get()
@@ -172,6 +185,56 @@ pub(crate) async fn get(pool: &MssqlPool, flow_id: &str) -> CatgaResult<Option<F
     load(pool, flow_id)
         .await
         .map(|value| value.map(|value| value.continuation))
+}
+
+/// Loads exactly one continuation by its indexed active wait correlation.
+pub(crate) async fn get_by_wait_correlation(
+    pool: &MssqlPool,
+    correlation_id: &str,
+) -> CatgaResult<Option<FlowContinuation>> {
+    let correlation_key = flow_key(correlation_id);
+    let mut query = Query::new(
+        "SELECT TOP (2) payload FROM dbo.catga_flow_continuations \
+         WHERE wait_correlation_key = @P1 AND wait_correlation = @P2 \
+         ORDER BY flow_key ASC",
+    );
+    query.bind(correlation_key.as_slice());
+    query.bind(correlation_id);
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server wait correlation read", error))?;
+    let rows = query
+        .query(&mut connection)
+        .await
+        .map_err(|error| database_error("read SQL Server wait correlation", error))?
+        .into_first_result()
+        .await
+        .map_err(|error| database_error("read SQL Server wait correlation rows", error))?;
+    if rows.len() > 1 {
+        return Err(CatgaError::new(
+            ErrorCode::Conflict,
+            "flow wait correlation identifies multiple active flows",
+        ));
+    }
+    rows.into_iter()
+        .next()
+        .map(|row| {
+            let frame = required_bytes(&row, "payload", "SQL Server wait correlation frame")?;
+            let continuation = decode_continuation(frame)?;
+            if continuation
+                .wait()
+                .is_some_and(|wait| wait.correlation_id() == correlation_id)
+            {
+                Ok(continuation)
+            } else {
+                Err(CatgaError::new(
+                    ErrorCode::Internal,
+                    "SQL Server wait correlation index does not match its continuation frame",
+                ))
+            }
+        })
+        .transpose()
 }
 
 /// Returns matching summaries after fetching at most the configured scan bound.
@@ -457,9 +520,10 @@ async fn replace(
     let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?;
     let mut query = Query::new(
         "UPDATE dbo.catga_flow_continuations SET flow_type = @P1, status = @P2, \
-           version = @P3, created_at_ms = @P4, created_at_subsec_ns = @P5, updated_at_ms = @P6, updated_at_subsec_ns = @P7, deadline_ms = @P8, payload = @P9, \
+           version = @P3, created_at_ms = @P4, created_at_subsec_ns = @P5, updated_at_ms = @P6, updated_at_subsec_ns = @P7, deadline_ms = @P8, \
+           wait_correlation = @P9, wait_correlation_key = @P10, payload = @P11, \
            revision = revision + 1, due_token = NULL, lease_until_ms = NULL \
-         WHERE flow_key = @P10 AND flow_id = @P11 AND revision = @P12",
+         WHERE flow_key = @P12 AND flow_id = @P13 AND revision = @P14",
     );
     query.bind(next.state().flow_type());
     query.bind(status_code(next.state().status()));
@@ -469,6 +533,8 @@ async fn replace(
     query.bind(updated_at_ms);
     query.bind(updated_at_subsec_ns);
     query.bind(deadline);
+    query.bind(wait_correlation(next));
+    query.bind(wait_correlation_key(next).map(|key| key.to_vec()));
     query.bind(frame.as_slice());
     query.bind(key.as_slice());
     query.bind(next.state().id());
@@ -482,4 +548,12 @@ async fn replace(
         .await
         .map(|result| result.total() == 1)
         .map_err(|error| database_error("replace SQL Server continuation", error))
+}
+
+fn wait_correlation(continuation: &FlowContinuation) -> Option<&str> {
+    continuation.wait().map(|wait| wait.correlation_id())
+}
+
+fn wait_correlation_key(continuation: &FlowContinuation) -> Option<[u8; 32]> {
+    wait_correlation(continuation).map(flow_key)
 }
