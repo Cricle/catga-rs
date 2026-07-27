@@ -17,3 +17,6 @@ catga-flow = { path = "../catga-flow" }
 dashmap = "6"
 tokio = { version = "1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

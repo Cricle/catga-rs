@@ -1,5 +1,51 @@
 #![forbid(unsafe_code)]
-//! Core contracts for the Catga CQRS runtime.
+//! Core contracts for Catga's explicit, typed CQRS runtime.
+//!
+//! Applications construct a [`Registry`] once at startup, then dispatch values through a
+//! [`Mediator`]. The core owns no adapter configuration or background worker; callers choose
+//! bounded stores, transports, and policies from the companion crates.
+//!
+//! # Deterministic policy checks
+//!
+//! Retry policies can be tested without waiting for a timer. Production constructors use full
+//! jitter; a fixed policy is useful when a deterministic integration test needs an exact delay.
+//!
+//! ```
+//! use std::time::Duration;
+//! use catga_core::RetryJitter;
+//!
+//! let policy = RetryJitter::fixed(Duration::from_millis(5));
+//! assert_eq!(policy.delay_for_sample(Duration::from_secs(1), 0), Duration::from_millis(5));
+//! ```
+//!
+//! # Mediator composition
+//!
+//! A mediator remains an explicit startup object. This longer example is `no_run` because an
+//! application supplies its own Tokio runtime and `async-trait` dependency.
+//!
+//! ```no_run
+//! use async_trait::async_trait;
+//! use catga_core::{CatgaResult, Handler, Mediator, Registry, Request};
+//!
+//! struct Double(u64);
+//! impl catga_core::Message for Double {}
+//! impl Request for Double { type Response = u64; }
+//!
+//! struct DoubleHandler;
+//! #[async_trait]
+//! impl Handler<Double> for DoubleHandler {
+//!     async fn handle(&self, message: Double) -> CatgaResult<u64> {
+//!         Ok(message.0 * 2)
+//!     }
+//! }
+//!
+//! # async fn run() -> CatgaResult<()> {
+//! let mut registry = Registry::new();
+//! registry.register_request::<Double, _>(DoubleHandler)?;
+//! assert_eq!(Mediator::new(registry).send(Double(21)).await?, 42);
+//! # Ok(())
+//! # }
+//! ```
 
 mod aggregate;
 mod auto_snapshot;

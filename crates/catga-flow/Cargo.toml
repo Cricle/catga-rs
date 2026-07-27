@@ -21,3 +21,6 @@ serde = { version = "1", features = ["derive", "rc"] }
 tracing = "0.1"
 tokio = { version = "1", features = ["sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

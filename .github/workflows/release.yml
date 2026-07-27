@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test -n "$CARGO_REGISTRY_TOKEN"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: cargo test --doc --workspace --all-features
+      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+      - run: |
+          for package in catga-core catga-codec-memorypack catga-codec-bincode catga-macros catga-flow catga-memory catga-flow-store catga-scheduler-tokio-cron catga-redis catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
+            cargo publish --dry-run -p "$package"
+            cargo publish -p "$package" || cargo search "$package" --limit 1
+          done

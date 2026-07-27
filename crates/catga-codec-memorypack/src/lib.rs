@@ -5,6 +5,16 @@
 //! [`MemoryPackDecodeLimits`] before decoding untrusted frames and requires that every frame is
 //! fully consumed. The upstream static traits and derive macro are re-exported from this crate,
 //! so application models do not depend on a second `memorypack` package.
+//!
+//! ```
+//! use catga_codec_memorypack::MemoryPackCodec;
+//!
+//! let codec = MemoryPackCodec::default();
+//! let frame = codec.encode_value(&42_u64)?;
+//! let value: u64 = codec.decode_value(&frame)?;
+//! assert_eq!(value, 42);
+//! # Ok::<(), catga_core::CatgaError>(())
+//! ```
 
 extern crate self as catga_codec_memorypack;
 

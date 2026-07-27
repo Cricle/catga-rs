@@ -1,5 +1,19 @@
 #![forbid(unsafe_code)]
-//! In-memory implementations of Catga contracts.
+//! Bounded in-memory implementations of Catga contracts.
+//!
+//! This crate is useful for deterministic local composition and integration tests. Each adapter
+//! keeps its own explicit capacity and uses the same public traits as a production backend, so
+//! replacing it does not require a service locator or a global runtime.
+//!
+//! ```
+//! use catga_core::ErrorCode;
+//! use catga_memory::MemoryTransport;
+//!
+//! assert!(matches!(
+//!     MemoryTransport::new(0),
+//!     Err(error) if error.code() == ErrorCode::Validation
+//! ));
+//! ```
 
 mod capacity;
 mod claim;

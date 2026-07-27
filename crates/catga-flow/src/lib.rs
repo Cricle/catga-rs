@@ -1,5 +1,35 @@
 #![forbid(unsafe_code)]
 //! Durable and compensating flow primitives for Catga.
+//!
+//! Use [`Flow`] for a small in-process sequence with reverse-order compensation. Use
+//! [`FlowDefinition`] with a caller-owned [`FlowStore`] when work must survive a restart. Flow
+//! runtimes never create hidden schedulers: callers explicitly poll [`DueFlowScheduler`] and
+//! compose any transport through [`FlowCompletionAdapter`].
+//!
+//! # Deterministic delayed transition
+//!
+//! A zero delay advances immediately and therefore does not allocate a timer or persist a
+//! needless scheduled wake-up:
+//!
+//! ```
+//! use std::time::Duration;
+//! use catga_flow::FlowStepOutcome;
+//!
+//! assert!(matches!(FlowStepOutcome::delay(Duration::ZERO)?, FlowStepOutcome::Advance));
+//! # Ok::<(), catga_core::CatgaError>(())
+//! ```
+//!
+//! # Durable composition
+//!
+//! ```no_run
+//! use catga_flow::{FlowDefinition, FlowStepOutcome};
+//!
+//! let checkout = FlowDefinition::new("checkout")
+//!     .step("reserve", |_| async { Ok(FlowStepOutcome::Advance) })
+//!     .step("charge", |_| async { Ok(FlowStepOutcome::complete()) });
+//! assert_eq!(checkout.name(), "checkout");
+//! # Ok::<(), catga_core::CatgaError>(())
+//! ```
 
 mod child_launch;
 mod completion;

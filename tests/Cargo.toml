@@ -42,6 +42,14 @@ name = "result"
 path = "result.rs"
 
 [[test]]
+name = "documentation"
+path = "documentation.rs"
+
+[[test]]
+name = "examples"
+path = "examples.rs"
+
+[[test]]
 name = "message"
 path = "message.rs"
 
