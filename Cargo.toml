@@ -11,6 +11,7 @@ members = [
     "crates/catga-nats",
     "crates/catga-redis",
     "crates/catga-robustmq",
+    "crates/catga-scheduler-tokio-cron",
     "crates/catga-testing",
     "tests",
 ]

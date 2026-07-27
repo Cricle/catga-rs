@@ -14,6 +14,7 @@ queue growth.
 | `catga-memory` | Bounded in-memory transport and persistence implementations. |
 | `catga-codec-memorypack` | Bounded MemoryPack envelope, request/reply, snapshot, and scheduled-outbox codecs. |
 | `catga-flow` | Durable Flow DSL, state machines, suspension, and scheduling. |
+| `catga-scheduler-tokio-cron` | Opt-in `tokio-cron-scheduler` adapter for explicit, bounded durable-flow due sweeps. |
 | `catga-redis` | Redis Streams transport and Redis-backed persistence. |
 | `catga-nats` | JetStream transport and NATS-backed persistence. |
 | `catga-axum` | Typed Axum routes and cluster forwarding. |
