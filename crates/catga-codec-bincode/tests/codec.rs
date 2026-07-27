@@ -35,3 +35,11 @@ fn rejects_oversized_frames_before_decode() {
 
     assert!(<BincodeCodec as PayloadDecoder<Payment>>::decode_payload(&codec, &oversized).is_err());
 }
+
+#[test]
+fn rejects_oversized_values_before_encoding() {
+    let codec = BincodeCodec;
+    let oversized = vec![0_u8; MAX_BINCODE_FRAME_BYTES + 1];
+
+    assert!(<BincodeCodec as PayloadEncoder<Vec<u8>>>::encode_payload(&codec, &oversized).is_err());
+}

@@ -265,17 +265,17 @@ async fn dead_letters_round_trip_diagnostics_and_read_legacy_records() -> CatgaR
     );
     legacy.extend_from_slice(reason);
     legacy.extend_from_slice(&payload);
-    let legacy_publisher = async_nats::connect(server.url())
-        .await
-        .map_err(|error| test_error("connect legacy dead-letter publisher", error))?;
+    let legacy_publisher = jetstream::new(
+        async_nats::connect(server.url())
+            .await
+            .map_err(|error| test_error("connect legacy dead-letter publisher", error))?,
+    );
     legacy_publisher
         .publish(format!("{subject}.legacy"), legacy.into())
         .await
-        .map_err(|error| test_error("publish legacy dead-letter record", error))?;
-    legacy_publisher
-        .flush()
+        .map_err(|error| test_error("begin legacy dead-letter publish", error))?
         .await
-        .map_err(|error| test_error("flush legacy dead-letter record", error))?;
+        .map_err(|error| test_error("confirm legacy dead-letter publish", error))?;
 
     let listed = letters.list(10).await?;
     assert_eq!(listed[0], current);

@@ -15,7 +15,11 @@ use crate::transport::map_error;
 
 const SCHEDULE: &str = r#"
 local existing=redis.call('HGET', KEYS[3], ARGV[1])
-if existing then return existing end
+if existing then
+  local existing_target=redis.call('HGET', ARGV[6]..existing, 'target')
+  if existing_target == ARGV[1] then return existing end
+  redis.call('HDEL', KEYS[3], ARGV[1])
+end
 redis.call('HSET', KEYS[3], ARGV[1], ARGV[2])
 redis.call('HSET', KEYS[1], 'flow_id', ARGV[3], 'state_id', ARGV[4], 'due_at', ARGV[5], 'target', ARGV[1], 'owner', '', 'lease_until', '0')
 redis.call('ZADD', KEYS[2], ARGV[5], ARGV[2])
@@ -165,6 +169,7 @@ impl FlowScheduler for RedisFlowScheduler {
             .arg(flow_id)
             .arg(state_id)
             .arg(due_at)
+            .arg(self.record_prefix())
             .invoke_async(&mut connection)
             .await
             .map_err(map_error)?;

@@ -15,7 +15,7 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 | NATS persistence and transport (24 C# files) | `catga-nats` | `tests/{nats,nats_request}.rs` | Migrated; real Core NATS and JetStream regressions include explicit QoS separation and native redelivery-attempt reporting |
 | Redis persistence and transport (26 C# files) | `catga-redis` | `tests/redis.rs`, `tests/state_machine_persistence.rs` | Migrated; real Redis regression covers Streams queues, ephemeral Pub/Sub broadcasts, stores, historical enhanced snapshots, durable DSL step progress, native redelivery-attempt reporting, and bounded group-wide idle-delivery recovery |
 | External job schedulers (6 C# files) | `FlowDueService`, `DueFlowScheduler`, Memory/SQL/Redis/NATS schedulers, `catga-scheduler-tokio-cron` | `tests/flow`, `crates/catga-flow-store/tests/{sqlite,mssql}.rs`, `tests/{redis,nats}.rs`, `crates/catga-scheduler-tokio-cron/tests/cron_runtime.rs` | Replaced with lease-aware pure-Rust scheduling. `SqlFlowScheduler` provides feature-gated SQLite, MySQL, PostgreSQL, and SQL Server persistence with target uniqueness, indexed bounded lease claims, and no worker. The NATS scheduler uses JetStream KV CAS, generation-fenced schedule identities, and a 32-entry paged discovery bound. `FlowDueService` remains caller-owned; the opt-in `CronRuntime` only drives explicitly registered cron callbacks, and `flow_due_job` runs one bounded `check_at` sweep per callback. |
-| Binary serialization (4 C# files) | `catga-codec-memorypack` | `tests/{codec,memorypack}.rs`, codec crate tests | Replaced with bounded MemoryPack framing, reusable direct encode buffers, and Core `TypedTransport`/`TypedDelivery` generic transport contracts; application payloads use explicit static MemoryPack schemas rather than runtime reflection |
+| Binary serialization (4 C# files) | `catga-codec-memorypack`, `catga-codec-bincode` | `tests/{codec,memorypack}.rs`, codec crate tests | Replaced with bounded MemoryPack framing, reusable direct encode buffers, and Core `TypedTransport`/`TypedDelivery` generic transport contracts; application payloads use explicit static MemoryPack schemas rather than runtime reflection. `catga-codec-bincode` is the opt-in native `bincode-next` payload codec, with pre-allocation frame bounds and exact decode consumption. |
 | Source generation (15 C# files) | `catga-macros` | `tests/macros.rs`, `docs/source-generator-mapping.md` | Replaced with proc macros, trait bounds, and compile-time handler validation |
 | Testing helpers (5 C# files) | `catga-testing` | `tests/testing/{helpers,harness,aggregate,flow}.rs` | Migrated; spies cover concrete handlers, async actions, explicit missing-handler failures, ordered captures, and assertion helpers, while typed aggregate scenarios and Flow contexts use real bounded in-memory dependencies |
 | In-memory transport (3 C# files) | `catga-memory::{MemoryTransport, MemoryPubSubTransport}` | `tests/{memory_transport,delivery_ack,observability}.rs` | Migrated with distinct bounded queue and broadcast adapters plus drain tracking; real queue and Pub/Sub publications emit bounded producer metrics |
@@ -28,12 +28,20 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 ## Verification Boundaries
 
 The workspace's deterministic tests, formatting, Clippy, and Rustdoc gates run
-without services. `cargo test -p catga-tests --test nats --test nats_request`
+without services; CI-quality local commands use `--all-features` so every SQL
+dialect, Redis Flow-store adapter, and Redis `streams-rpc` implementation is
+compiled. `cargo test -p catga-tests --test nats --test nats_request`
 starts one isolated JetStream container per test when `CATGA_NATS_URL` is
 absent, waits for it to be removed before returning, and uses a configured URL
 without deleting that external service. Redis and RobustMQ integration tests remain ignored by
 default and require `CATGA_REDIS_URL` or `CATGA_ROBUSTMQ_URL`; run them
 explicitly with `cargo test -- --ignored` when those services are available.
+The MySQL, PostgreSQL, and SQL Server Flow-store contract targets require
+`CATGA_MYSQL_URL`, `CATGA_POSTGRES_URL`, and `CATGA_MSSQL_URL` respectively;
+they compile but intentionally skip live operations when their URL is absent.
+Run `cargo test -p catga-flow-store --all-features` with the relevant URL set
+to exercise each service. Redis scheduler and Streams RPC contracts likewise
+require `CATGA_REDIS_URL` and run with `cargo test -p catga-redis --all-features`.
 The optional mailbox-protocol request/server test intentionally requires
 `CATGA_ROBUSTMQ_URL`, because a plain NATS server does not implement the
 protocol's mailbox-control endpoint. Manual, host-neutral performance baselines
@@ -57,8 +65,11 @@ no machine-dependent timing threshold.
   input aliases. MemoryPack RPC errors preserve the supported fields and every
   decode consumes one exact bounded frame; legacy binary layouts are rejected
   instead of remaining a runtime dependency.
-* Public API documentation is compiled with warnings denied, so broken links and
-  documentation warnings fail the quality gate instead of reaching consumers.
+* Catga-authored public APIs are compiled with documentation warnings denied, so
+  broken links and documentation warnings fail the quality gate instead of
+  reaching consumers. The copied upstream-compatible MemoryPack surface retains
+  its upstream item names and is documented at the crate and module boundary;
+  Catga's bounded codec API remains fully documented.
 * EventStore has no whole-history or whole-catalog read API. Consumers follow
   validated event, metadata, and lexical stream-ID cursors, applying a page before
   requesting the next one. Redis uses bounded stream ranges and a sorted index;

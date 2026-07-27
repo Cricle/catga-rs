@@ -1,4 +1,7 @@
-use bincode_next::{Decode, Encode, config};
+use bincode_next::{
+    Decode, Encode, config,
+    enc::{EncoderImpl, write::SizeWriter},
+};
 use catga_core::{CatgaError, CatgaResult, ErrorCode, PayloadDecoder, PayloadEncoder};
 
 /// Maximum complete Bincode frame accepted or emitted by [`BincodeCodec`].
@@ -8,7 +11,8 @@ pub const MAX_BINCODE_FRAME_BYTES: usize = 8 * 1024 * 1024;
 ///
 /// The codec uses Bincode's native derive contracts rather than its optional Serde compatibility
 /// layer. It rejects oversized input before decoding and requires the decoder to consume exactly
-/// the supplied frame, preventing trailing bytes from being silently accepted.
+/// the supplied frame, preventing trailing bytes from being silently accepted. Encoding first
+/// counts the wire frame without allocating, then allocates the exact bounded output buffer.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BincodeCodec;
 
@@ -17,11 +21,21 @@ where
     T: Encode,
 {
     fn encode_payload(&self, value: &T) -> CatgaResult<Vec<u8>> {
-        bincode_next::encode_to_vec(
-            value,
-            config::standard().with_limit::<MAX_BINCODE_FRAME_BYTES>(),
-        )
-        .map_err(map_bincode_error)
+        let mut size_encoder = EncoderImpl::new(SizeWriter::default(), config::standard());
+        value.encode(&mut size_encoder).map_err(map_bincode_error)?;
+        let size = size_encoder.into_writer().bytes_written;
+        if size > MAX_BINCODE_FRAME_BYTES {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "Bincode payload exceeds the configured frame limit",
+            ));
+        }
+
+        let mut encoded = vec![0_u8; size];
+        let written = bincode_next::encode_into_slice(value, &mut encoded, config::standard())
+            .map_err(map_bincode_error)?;
+        encoded.truncate(written);
+        Ok(encoded)
     }
 }
 
