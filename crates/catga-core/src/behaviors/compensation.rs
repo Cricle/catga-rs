@@ -1,6 +1,7 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, panic::AssertUnwindSafe, sync::Arc};
 
 use async_trait::async_trait;
+use futures::FutureExt;
 
 use crate::{
     Behavior, CatgaError, CatgaResult, Command, CommandBehavior, CommandNext, Event, Mediator,
@@ -69,6 +70,19 @@ impl<P: ?Sized> CompensationBehavior<P> {
     pub fn new(publisher: Arc<P>) -> Self {
         Self { publisher }
     }
+
+    async fn next_result<T>(
+        &self,
+        operation: impl std::future::Future<Output = CatgaResult<T>>,
+    ) -> CatgaResult<T> {
+        match AssertUnwindSafe(operation).catch_unwind().await {
+            Ok(result) => result,
+            Err(_) => Err(CatgaError::new(
+                crate::ErrorCode::Internal,
+                "compensation pipeline processing panicked",
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -79,7 +93,7 @@ where
 {
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         let original = message.clone();
-        match next.run(message).await {
+        match self.next_result(next.run(message)).await {
             Err(error) => {
                 let _ = self.publisher.publish(&original, &error).await;
                 Err(error)
@@ -97,7 +111,7 @@ where
 {
     async fn handle(&self, command: C, next: CommandNext<C>) -> CatgaResult<()> {
         let original = command.clone();
-        match next.run(command).await {
+        match self.next_result(next.run(command)).await {
             Err(error) => {
                 let _ = self.publisher.publish(&original, &error).await;
                 Err(error)
