@@ -10,11 +10,12 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CachedResultCodec, CatgaError, CatgaResult, Correlated, CorrelationBehavior,
-    DeadLetterBehavior, DeadLetterEnvelope, DeadLetterStore, DistributedLockBehavior,
-    DistributedLockKey, Envelope, ErrorCode, Handler, IdempotencyBehavior, IdempotencyKey,
-    InboxBehavior, InboxKey, LeaseStore, Mediator, MessageMetadata, Pipeline, Registry, Request,
-    RetryBehavior, TimeoutBehavior, current_correlation_id,
+    CachedResultCodec, CatgaError, CatgaResult, Command, CommandHandler, CommandPipeline,
+    Correlated, CorrelationBehavior, DeadLetter, DeadLetterBehavior, DeadLetterEnvelope,
+    DeadLetterStore, DistributedLockBehavior, DistributedLockKey, Envelope, ErrorCode, Handler,
+    IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey, LeaseStore, Mediator,
+    MessageMetadata, Pipeline, Registry, Request, RetryBehavior, TimeoutBehavior,
+    current_correlation_id,
 };
 use catga_memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox, MemoryLeases};
 use tokio::sync::{Mutex, Notify};
@@ -212,6 +213,42 @@ struct DeadHandler;
 impl Handler<DeadWork> for DeadHandler {
     async fn handle(&self, _: DeadWork) -> CatgaResult<()> {
         Err(CatgaError::new(ErrorCode::Validation, "fatal"))
+    }
+}
+
+struct DeadCommand;
+
+impl catga_core::Message for DeadCommand {}
+impl Command for DeadCommand {}
+
+impl DeadLetterEnvelope for DeadCommand {
+    fn dead_letter_envelope(&self) -> Envelope {
+        Envelope::new(89, "dead.command", vec![9], MessageMetadata::new(89, None))
+    }
+}
+
+struct DeadCommandHandler;
+
+#[async_trait]
+impl CommandHandler<DeadCommand> for DeadCommandHandler {
+    async fn handle(&self, _: DeadCommand) -> CatgaResult<()> {
+        Err(CatgaError::new(ErrorCode::Validation, "command fatal"))
+    }
+}
+
+struct FailingDeadLetters;
+
+#[async_trait]
+impl DeadLetterStore for FailingDeadLetters {
+    async fn enqueue(&self, _: DeadLetter) -> CatgaResult<()> {
+        Err(CatgaError::new(
+            ErrorCode::Unavailable,
+            "dead letter store is unavailable",
+        ))
+    }
+
+    async fn list(&self, _: usize) -> CatgaResult<Vec<DeadLetter>> {
+        Ok(Vec::new())
     }
 }
 
@@ -700,4 +737,45 @@ async fn dead_letter_behavior_records_terminal_failures_only() {
     let letters = store.list(1).await.unwrap();
     assert_eq!(letters[0].envelope().id(), 88);
     assert_eq!(letters[0].reason(), "fatal");
+}
+
+#[tokio::test]
+async fn dead_letter_behavior_records_terminal_command_failures_without_cloning() {
+    let mut registry = Registry::new();
+    registry
+        .register_command::<DeadCommand, _>(DeadCommandHandler)
+        .expect("command handler registers");
+    let mediator = Mediator::new(registry);
+    let store = Arc::new(MemoryDeadLetters::new(1).expect("dead letter capacity is valid"));
+    let pipeline = CommandPipeline::new().with(DeadLetterBehavior::new(Arc::clone(&store), 2));
+
+    let error = mediator
+        .send_command_with(DeadCommand, &pipeline)
+        .await
+        .expect_err("terminal command failure is preserved");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    let letters = store.list(1).await.expect("dead letter list succeeds");
+    assert_eq!(letters.len(), 1);
+    assert_eq!(letters[0].envelope().id(), 89);
+    assert_eq!(letters[0].reason(), "command fatal");
+    assert_eq!(letters[0].attempts(), 2);
+}
+
+#[tokio::test]
+async fn dead_letter_storage_failure_never_masks_the_original_handler_error() {
+    let mut registry = Registry::new();
+    registry
+        .register_request::<DeadWork, _>(DeadHandler)
+        .expect("request handler registers");
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(DeadLetterBehavior::new(Arc::new(FailingDeadLetters), 1));
+
+    let error = mediator
+        .send_with(DeadWork, &pipeline)
+        .await
+        .expect_err("the handler error is preserved when dead-letter storage is unavailable");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(error.message(), "fatal");
 }

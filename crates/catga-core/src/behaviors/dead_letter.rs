@@ -3,7 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
-    Behavior, CatgaResult, DeadLetter, DeadLetterStore, Envelope, ErrorCode, Next, Request,
+    Behavior, CatgaResult, Command, CommandBehavior, CommandNext, DeadLetter, DeadLetterStore,
+    Envelope, ErrorCode, Next, Request,
 };
 
 /// Converts a typed request into the durable envelope retained on terminal failure.
@@ -26,25 +27,56 @@ impl DeadLetterBehavior {
     {
         Self { store, attempts }
     }
+
+    async fn record_failure(&self, envelope: Envelope, error: &crate::CatgaError) {
+        let letter =
+            DeadLetter::from_failure(envelope, error, self.attempts, "behavior.dead_letter");
+        match letter {
+            Ok(letter) => {
+                if let Err(write_error) = self.store.enqueue(letter).await {
+                    tracing::warn!(
+                        target: crate::TRACING_TARGET,
+                        error = %write_error.message(),
+                        "dead-letter persistence failed while preserving the original pipeline error"
+                    );
+                }
+            }
+            Err(build_error) => tracing::warn!(
+                target: crate::TRACING_TARGET,
+                error = %build_error.message(),
+                "dead-letter construction failed while preserving the original pipeline error"
+            ),
+        }
+    }
 }
 
 #[async_trait]
 impl<M> Behavior<M> for DeadLetterBehavior
 where
-    M: Request + Clone + DeadLetterEnvelope,
+    M: Request + DeadLetterEnvelope,
 {
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
-        let original = message.clone();
+        let envelope = message.dead_letter_envelope();
         match next.run(message).await {
             Err(error) if error.code() != ErrorCode::Transient => {
-                self.store
-                    .enqueue(DeadLetter::from_failure(
-                        original.dead_letter_envelope(),
-                        &error,
-                        self.attempts,
-                        "behavior.dead_letter",
-                    )?)
-                    .await?;
+                self.record_failure(envelope, &error).await;
+                Err(error)
+            }
+            result => result,
+        }
+    }
+}
+
+#[async_trait]
+impl<C> CommandBehavior<C> for DeadLetterBehavior
+where
+    C: Command + DeadLetterEnvelope,
+{
+    async fn handle(&self, command: C, next: CommandNext<C>) -> CatgaResult<()> {
+        let envelope = command.dead_letter_envelope();
+        match next.run(command).await {
+            Err(error) if error.code() != ErrorCode::Transient => {
+                self.record_failure(envelope, &error).await;
                 Err(error)
             }
             result => result,
