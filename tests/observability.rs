@@ -1,7 +1,7 @@
 //! Tracing behavior integration tests.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     io,
     sync::{
         Arc, Mutex,
@@ -16,11 +16,13 @@ use catga_cluster::{
     RaftStateMachineDriver, RaftStateMachineRuntime, RaftStateMachineRuntimeError, RaftTransport,
 };
 use catga_core::{
-    CachedResultCodec, CatgaError, CatgaResult, CircuitBreakerBehavior, DistributedLockBehavior,
-    DistributedLockKey, Envelope, ErrorCode, EventStore, Handler, IdempotencyStore, InboxBehavior,
-    InboxKey, InboxStore, LeaseStore, LoggingBehavior, Mediator, MessageMetadata, MessageTransport,
-    OutboxMessage, OutboxProcessor, OutboxStore, Pipeline, QualityOfService, Registry, Request,
-    RetryBehavior, TracingBehavior, current_correlation_id, scope_correlation_id,
+    CachedResultCodec, CatgaError, CatgaResult, CircuitBreakerBehavior, Command, CommandBehavior,
+    CommandHandler, CommandNext, CommandPipeline, DistributedLockBehavior, DistributedLockKey,
+    Envelope, ErrorCode, EventStore, Handler, IdempotencyStore, InboxBehavior, InboxKey,
+    InboxStore, LeaseStore, LoggingBehavior, MAX_PIPELINE_DEPTH, Mediator, MessageMetadata,
+    MessageTransport, OutboxMessage, OutboxProcessor, OutboxStore, Pipeline, QualityOfService,
+    Registry, Request, RetryBehavior, TracingBehavior, current_correlation_id,
+    scope_correlation_id,
 };
 use catga_flow::{FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler};
 use catga_memory::{
@@ -63,6 +65,88 @@ struct RejectReconcile;
 impl Handler<ReconcileStock> for RejectReconcile {
     async fn handle(&self, _: ReconcileStock) -> CatgaResult<u64> {
         Err(CatgaError::new(ErrorCode::Validation, "stock is invalid"))
+    }
+}
+
+struct RebuildInventory;
+
+impl catga_core::Message for RebuildInventory {}
+impl Command for RebuildInventory {}
+
+struct RebuildInventoryHandler;
+
+#[async_trait]
+impl CommandHandler<RebuildInventory> for RebuildInventoryHandler {
+    async fn handle(&self, _: RebuildInventory) -> CatgaResult<()> {
+        Ok(())
+    }
+}
+
+struct CountingReconcileHandler(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Handler<ReconcileStock> for CountingReconcileHandler {
+    async fn handle(&self, _: ReconcileStock) -> CatgaResult<u64> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(0)
+    }
+}
+
+struct CountingRebuildInventoryHandler(Arc<AtomicUsize>);
+
+#[async_trait]
+impl CommandHandler<RebuildInventory> for CountingRebuildInventoryHandler {
+    async fn handle(&self, _: RebuildInventory) -> CatgaResult<()> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+struct CommandPassThrough;
+
+#[async_trait]
+impl CommandBehavior<RebuildInventory> for CommandPassThrough {
+    async fn handle(
+        &self,
+        command: RebuildInventory,
+        next: CommandNext<RebuildInventory>,
+    ) -> CatgaResult<()> {
+        next.run(command).await
+    }
+}
+
+struct WaitForCancellation;
+
+impl catga_core::Message for WaitForCancellation {}
+
+impl Request for WaitForCancellation {
+    type Response = ();
+}
+
+struct WaitForCancellationHandler(Arc<tokio::sync::Notify>);
+
+#[async_trait]
+impl Handler<WaitForCancellation> for WaitForCancellationHandler {
+    async fn handle(&self, _: WaitForCancellation) -> CatgaResult<()> {
+        self.0.notify_one();
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
+struct WaitForCommandCancellation;
+
+impl catga_core::Message for WaitForCommandCancellation {}
+impl Command for WaitForCommandCancellation {}
+
+struct WaitForCommandCancellationHandler(Arc<tokio::sync::Notify>);
+
+#[async_trait]
+impl CommandHandler<WaitForCommandCancellation> for WaitForCommandCancellationHandler {
+    async fn handle(&self, _: WaitForCommandCancellation) -> CatgaResult<()> {
+        self.0.notify_one();
+        std::future::pending::<()>().await;
+        Ok(())
     }
 }
 
@@ -278,7 +362,7 @@ async fn observe_distributed_lock(
 struct MetricRecorder {
     counters: Arc<Mutex<HashMap<String, u64>>>,
     gauges: Arc<Mutex<HashMap<String, f64>>>,
-    histograms: Arc<Mutex<HashMap<String, usize>>>,
+    histograms: Arc<Mutex<HashMap<String, Vec<f64>>>>,
 }
 
 impl MetricRecorder {
@@ -296,8 +380,37 @@ impl MetricRecorder {
             .lock()
             .expect("metric recorder lock")
             .get(key)
-            .copied()
+            .map_or(0, Vec::len)
+    }
+
+    fn histogram_values(&self, key: &str) -> Vec<f64> {
+        self.histograms
+            .lock()
+            .expect("metric recorder lock")
+            .get(key)
+            .cloned()
             .unwrap_or_default()
+    }
+
+    fn pipeline_metric_keys(&self) -> BTreeSet<String> {
+        let mut keys = BTreeSet::new();
+        keys.extend(
+            self.counters
+                .lock()
+                .expect("metric recorder lock")
+                .keys()
+                .filter(|key| key.starts_with("catga.pipeline."))
+                .cloned(),
+        );
+        keys.extend(
+            self.histograms
+                .lock()
+                .expect("metric recorder lock")
+                .keys()
+                .filter(|key| key.starts_with("catga.pipeline."))
+                .cloned(),
+        );
+        keys
     }
 
     fn gauge(&self, key: &str) -> f64 {
@@ -367,17 +480,17 @@ impl GaugeFn for RecordedGauge {
 
 struct RecordedHistogram {
     key: String,
-    histograms: Arc<Mutex<HashMap<String, usize>>>,
+    histograms: Arc<Mutex<HashMap<String, Vec<f64>>>>,
 }
 
 impl HistogramFn for RecordedHistogram {
-    fn record(&self, _: f64) {
-        *self
-            .histograms
+    fn record(&self, value: f64) {
+        self.histograms
             .lock()
             .expect("metric recorder lock")
             .entry(self.key.clone())
-            .or_default() += 1;
+            .or_default()
+            .push(value);
     }
 }
 
@@ -417,6 +530,26 @@ fn metric_key(key: &Key) -> String {
         .collect();
     labels.sort_unstable();
     format!("{}|{}", key.name(), labels.join(","))
+}
+
+fn assert_pipeline_metrics(
+    recorder: &MetricRecorder,
+    kind: &str,
+    outcome: &str,
+    behavior_count: f64,
+) {
+    let labels = format!("kind={kind},outcome={outcome}");
+    assert_eq!(
+        recorder.counter(&format!("catga.pipeline.executed|{labels}")),
+        1
+    );
+    assert_eq!(
+        recorder.histogram_values(&format!("catga.pipeline.behavior_count|{labels}")),
+        vec![behavior_count]
+    );
+    let durations = recorder.histogram_values(&format!("catga.pipeline.duration|{labels}"));
+    assert_eq!(durations.len(), 1);
+    assert!(durations[0] >= 0.0);
 }
 
 #[test]
@@ -678,6 +811,228 @@ async fn tracing_behavior_keeps_the_original_handler_error() {
 
     assert_eq!(error.code(), ErrorCode::Validation);
     assert_eq!(error.message(), "stock is invalid");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mediator_pipeline_emits_bounded_metrics_without_message_type_labels() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let mediator = mediator(CorrelationHandler);
+    let pipeline = Pipeline::new().with(TracingBehavior);
+
+    let response = scope_correlation_id(19, mediator.send_with(ReconcileStock, &pipeline))
+        .await
+        .expect("pipeline dispatch succeeds");
+
+    assert_eq!(response, 19);
+    assert_pipeline_metrics(&recorder, "request", "success", 1.0);
+    assert!(
+        recorder
+            .pipeline_metric_keys()
+            .iter()
+            .all(|key| !key.contains("message_type=")),
+        "pipeline metrics must not contain dynamic message type labels"
+    );
+    assert_eq!(
+        recorder.counter("catga.requests.executed|outcome=success"),
+        1
+    );
+    assert_eq!(
+        recorder.counter("catga.commands.executed|outcome=success"),
+        0
+    );
+    assert_eq!(
+        recorder.histogram_samples("catga.request.duration|outcome=success"),
+        1
+    );
+    assert_eq!(
+        recorder.histogram_samples("catga.command.duration|outcome=success"),
+        0
+    );
+    drop(guard);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn command_pipeline_emits_one_bounded_success_metric_set() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let mut registry = Registry::new();
+    registry
+        .register_command::<RebuildInventory, _>(RebuildInventoryHandler)
+        .expect("command handler registers");
+    let mediator = Mediator::new(registry);
+    let pipeline = CommandPipeline::new();
+
+    mediator
+        .send_command_with(RebuildInventory, &pipeline)
+        .await
+        .expect("command pipeline dispatch succeeds");
+
+    assert_pipeline_metrics(&recorder, "command", "success", 0.0);
+    assert_eq!(
+        recorder.counter("catga.commands.executed|outcome=success"),
+        1
+    );
+    drop(guard);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_pipeline_failure_emits_one_bounded_failure_metric_set() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let mediator = mediator(RejectReconcile);
+    let pipeline = Pipeline::new();
+
+    let error = mediator
+        .send_with(ReconcileStock, &pipeline)
+        .await
+        .expect_err("handler fails");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_pipeline_metrics(&recorder, "request", "failure", 0.0);
+    drop(guard);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_request_pipeline_emits_one_failure_metric_set_without_invoking_its_handler() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let mediator = mediator(CountingReconcileHandler(Arc::clone(&handler_calls)));
+    let mut pipeline = Pipeline::new();
+    for _ in 0..=MAX_PIPELINE_DEPTH {
+        pipeline = pipeline.with(TracingBehavior);
+    }
+
+    let error = mediator
+        .send_with(ReconcileStock, &pipeline)
+        .await
+        .expect_err("an oversized request pipeline is rejected");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(handler_calls.load(Ordering::Relaxed), 0);
+    assert_pipeline_metrics(
+        &recorder,
+        "request",
+        "failure",
+        (MAX_PIPELINE_DEPTH + 1) as f64,
+    );
+    drop(guard);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_command_pipeline_emits_one_failure_metric_set_without_invoking_its_handler() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+        .register_command::<RebuildInventory, _>(CountingRebuildInventoryHandler(Arc::clone(
+            &handler_calls,
+        )))
+        .expect("command handler registers");
+    let mediator = Mediator::new(registry);
+    let mut pipeline = CommandPipeline::new();
+    for _ in 0..=MAX_PIPELINE_DEPTH {
+        pipeline = pipeline.with(CommandPassThrough);
+    }
+
+    let error = mediator
+        .send_command_with(RebuildInventory, &pipeline)
+        .await
+        .expect_err("an oversized command pipeline is rejected");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(handler_calls.load(Ordering::Relaxed), 0);
+    assert_pipeline_metrics(
+        &recorder,
+        "command",
+        "failure",
+        (MAX_PIPELINE_DEPTH + 1) as f64,
+    );
+    drop(guard);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_request_and_command_pipelines_emit_one_aborted_metric_set_each() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let request_started = Arc::new(tokio::sync::Notify::new());
+    let mut request_registry = Registry::new();
+    request_registry
+        .register_request::<WaitForCancellation, _>(WaitForCancellationHandler(Arc::clone(
+            &request_started,
+        )))
+        .expect("request handler registers");
+    let request_mediator = Mediator::new(request_registry);
+    let request_pipeline = Pipeline::new().with(TracingBehavior);
+    let request_cancellation = tokio_util::sync::CancellationToken::new();
+    let request_canceller = request_cancellation.clone();
+    let request_cancel_task = tokio::spawn(async move {
+        request_started.notified().await;
+        request_canceller.cancel();
+    });
+
+    let request_error = request_mediator
+        .send_with_cancellation_and_pipeline(
+            WaitForCancellation,
+            &request_pipeline,
+            request_cancellation,
+        )
+        .await
+        .expect_err("in-flight request is aborted");
+    request_cancel_task
+        .await
+        .expect("request cancellation task joins");
+
+    let command_started = Arc::new(tokio::sync::Notify::new());
+    let mut registry = Registry::new();
+    registry
+        .register_command::<WaitForCommandCancellation, _>(WaitForCommandCancellationHandler(
+            Arc::clone(&command_started),
+        ))
+        .expect("command handler registers");
+    let command_mediator = Mediator::new(registry);
+    let command_pipeline = CommandPipeline::new();
+    let command_cancellation = tokio_util::sync::CancellationToken::new();
+    let command_canceller = command_cancellation.clone();
+    let command_cancel_task = tokio::spawn(async move {
+        command_started.notified().await;
+        command_canceller.cancel();
+    });
+    let command_error = command_mediator
+        .send_command_with_cancellation_and_pipeline(
+            WaitForCommandCancellation,
+            &command_pipeline,
+            command_cancellation,
+        )
+        .await
+        .expect_err("in-flight command is aborted");
+    command_cancel_task
+        .await
+        .expect("command cancellation task joins");
+
+    assert_eq!(request_error.code(), ErrorCode::Cancelled);
+    assert_eq!(command_error.code(), ErrorCode::Cancelled);
+    assert_pipeline_metrics(&recorder, "request", "aborted", 1.0);
+    assert_pipeline_metrics(&recorder, "command", "aborted", 0.0);
+    drop(guard);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multiple_tracing_behaviors_do_not_duplicate_pipeline_metrics() {
+    let recorder = MetricRecorder::default();
+    let guard = metrics::set_default_local_recorder(&recorder);
+    let mediator = mediator(CorrelationHandler);
+    let pipeline = Pipeline::new().with(TracingBehavior).with(TracingBehavior);
+
+    let response = scope_correlation_id(19, mediator.send_with(ReconcileStock, &pipeline))
+        .await
+        .expect("pipeline dispatch succeeds");
+
+    assert_eq!(response, 19);
+    assert_pipeline_metrics(&recorder, "request", "success", 2.0);
+    drop(guard);
 }
 
 #[tokio::test]

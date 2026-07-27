@@ -23,7 +23,13 @@
 //! `DueFlowOptions::batch_size` bound. Failures are logged and left for the next scheduled sweep;
 //! applications that need different supervision can create their own [`Job`].
 
-use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
+use std::{
+    collections::HashSet,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex, MutexGuard},
+    time::SystemTime,
+};
 
 use async_trait::async_trait;
 use catga_core::{
@@ -46,6 +52,13 @@ pub type JobId = uuid::Uuid;
 /// scheduler directly when cron job persistence is required.
 pub struct CronRuntime {
     scheduler: JobScheduler,
+    task_registration: Mutex<TaskRegistration>,
+}
+
+#[derive(Default)]
+struct TaskRegistration {
+    core_task_ids: HashSet<JobId>,
+    removing_task_ids: HashSet<JobId>,
 }
 
 impl CronRuntime {
@@ -55,7 +68,10 @@ impl CronRuntime {
     pub async fn new() -> CatgaResult<Self> {
         JobScheduler::new()
             .await
-            .map(|scheduler| Self { scheduler })
+            .map(|scheduler| Self {
+                scheduler,
+                task_registration: Mutex::new(TaskRegistration::default()),
+            })
             .map_err(map_scheduler_error)
     }
 
@@ -86,12 +102,10 @@ impl CronRuntime {
     /// Removes a previously registered cron job by its [`JobId`].
     ///
     /// Removing a job does not stop the runtime. The remaining registered jobs continue only
-    /// after [`Self::start`] has been explicitly called.
+    /// after [`Self::start`] has been explicitly called. If the job was registered through the
+    /// Core [`TaskScheduler`] contract, this also invalidates its [`ScheduledTaskId`].
     pub async fn remove(&self, job_id: &JobId) -> CatgaResult<()> {
-        self.scheduler
-            .remove(job_id)
-            .await
-            .map_err(map_scheduler_error)
+        self.remove_registered_job(job_id, false).await
     }
 
     /// Explicitly starts the upstream scheduler.
@@ -107,6 +121,56 @@ impl CronRuntime {
     /// shutdown visible to the application.
     pub async fn shutdown(&mut self) -> CatgaResult<()> {
         self.scheduler.shutdown().await.map_err(map_scheduler_error)
+    }
+
+    fn task_registration(&self) -> CatgaResult<MutexGuard<'_, TaskRegistration>> {
+        self.task_registration.lock().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "tokio cron scheduled task identity tracking lock is poisoned",
+            )
+        })
+    }
+
+    fn begin_removal(&self, job_id: JobId, require_core_task: bool) -> CatgaResult<()> {
+        let mut registration = self.task_registration()?;
+        if require_core_task && !registration.core_task_ids.contains(&job_id) {
+            return Err(CatgaError::new(
+                ErrorCode::NotFound,
+                "scheduled task identifier is not registered by this scheduler",
+            ));
+        }
+        if !registration.removing_task_ids.insert(job_id) {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "scheduled task removal is already in progress",
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish_removal(&self, job_id: JobId, removed: bool) -> CatgaResult<()> {
+        let mut registration = self.task_registration()?;
+        registration.removing_task_ids.remove(&job_id);
+        if removed {
+            registration.core_task_ids.remove(&job_id);
+        }
+        Ok(())
+    }
+
+    async fn remove_registered_job(
+        &self,
+        job_id: &JobId,
+        require_core_task: bool,
+    ) -> CatgaResult<()> {
+        self.begin_removal(*job_id, require_core_task)?;
+        let result = self
+            .scheduler
+            .remove(job_id)
+            .await
+            .map_err(map_scheduler_error);
+        self.finish_removal(*job_id, result.is_ok())?;
+        result
     }
 }
 
@@ -126,6 +190,7 @@ impl TaskScheduler for CronRuntime {
             })
         })?;
         let job_id = self.add(job).await?;
+        self.task_registration()?.core_task_ids.insert(job_id);
         ScheduledTaskId::new(job_id.to_string())
     }
 
@@ -136,7 +201,7 @@ impl TaskScheduler for CronRuntime {
                 format!("invalid tokio cron scheduled task identifier: {error}"),
             )
         })?;
-        self.remove(&job_id).await
+        self.remove_registered_job(&job_id, true).await
     }
 }
 

@@ -83,8 +83,8 @@ pub(crate) fn record_request<T>(
     result: &CatgaResult<T>,
 ) {
     record_result(
-        "catga.commands.executed",
-        "catga.command.duration",
+        "catga.requests.executed",
+        "catga.request.duration",
         span,
         request_type,
         elapsed,
@@ -132,19 +132,12 @@ pub(crate) fn record_pipeline<T>(
     result: &CatgaResult<T>,
 ) {
     let duration_ms = elapsed.as_secs_f64() * 1_000.0;
-    metrics::histogram!("catga.pipeline.behavior_count", "kind" => kind)
+    let outcome = outcome(result);
+    metrics::histogram!("catga.pipeline.behavior_count", "kind" => kind, "outcome" => outcome)
         .record(behavior_count as f64);
-    metrics::histogram!("catga.pipeline.duration", "kind" => kind).record(duration_ms);
-    match result {
-        Ok(_) => {
-            metrics::counter!("catga.pipeline.executed", "kind" => kind, "outcome" => "success")
-                .increment(1);
-        }
-        Err(_) => {
-            metrics::counter!("catga.pipeline.executed", "kind" => kind, "outcome" => "failure")
-                .increment(1);
-        }
-    }
+    metrics::histogram!("catga.pipeline.duration", "kind" => kind, "outcome" => outcome)
+        .record(duration_ms);
+    metrics::counter!("catga.pipeline.executed", "kind" => kind, "outcome" => outcome).increment(1);
     span.record("duration_ms", duration_ms);
 }
 
@@ -178,22 +171,29 @@ fn record_result<T>(
     result: &CatgaResult<T>,
 ) {
     let duration_ms = elapsed.as_secs_f64() * 1_000.0;
-    metrics::histogram!(histogram, "message_type" => message_type).record(duration_ms);
+    let outcome = outcome(result);
+    metrics::histogram!(histogram, "outcome" => outcome).record(duration_ms);
     match result {
         Ok(_) => {
             span.record("success", true);
             span.record("duration_ms", duration_ms);
-            metrics::counter!(counter, "message_type" => message_type, "success" => "true")
-                .increment(1);
+            metrics::counter!(counter, "outcome" => outcome).increment(1);
             tracing::debug!(target: TRACING_TARGET, message_type, duration_ms, "catga operation completed");
         }
         Err(error) => {
             span.record("success", false);
             span.record("error", error.message());
             span.record("duration_ms", duration_ms);
-            metrics::counter!(counter, "message_type" => message_type, "success" => "false")
-                .increment(1);
+            metrics::counter!(counter, "outcome" => outcome).increment(1);
             tracing::warn!(target: TRACING_TARGET, message_type, duration_ms, error = error.message(), "catga operation failed");
         }
+    }
+}
+
+fn outcome<T>(result: &CatgaResult<T>) -> &'static str {
+    match result {
+        Ok(_) => "success",
+        Err(error) if error.code() == crate::ErrorCode::Cancelled => "aborted",
+        Err(_) => "failure",
     }
 }

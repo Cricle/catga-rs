@@ -278,6 +278,10 @@ name = "memory_reliability"
 path = "memory_reliability.rs"
 
 [[test]]
+name = "inbox_conformance"
+path = "inbox_conformance.rs"
+
+[[test]]
 name = "macros"
 path = "macros.rs"
 

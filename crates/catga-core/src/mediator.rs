@@ -196,37 +196,8 @@ impl Mediator {
         command: C,
         pipeline: &CommandPipeline<C>,
     ) -> CatgaResult<()> {
-        if pipeline.len() > MAX_PIPELINE_DEPTH {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "pipeline depth exceeds the supported maximum",
-            ));
-        }
-        let registry = Arc::clone(&self.registry);
-        let terminal = CommandNext::new(move |command| {
-            let registry = Arc::clone(&registry);
-            Box::pin(async move { Self::dispatch_command(&registry, command).await })
-        });
-        let command_type = std::any::type_name::<C>();
-        let span = observability::command_span(command_type);
-        observability::record_message_tags(&span, &command);
-        let started = Instant::now();
-        let result = isolate_mediator_panic(
-            pipeline
-                .wrap(terminal)
-                .run(command)
-                .instrument(span.clone()),
-        )
-        .await;
-        observability::record_command(&span, command_type, started.elapsed(), &result);
-        observability::record_pipeline(
-            &span,
-            "command",
-            pipeline.len(),
-            started.elapsed(),
-            &result,
-        );
-        result
+        self.dispatch_command_pipeline(command, pipeline, None)
+            .await
     }
 
     /// Routes a command through `pipeline` with explicit cooperative cancellation.
@@ -236,11 +207,55 @@ impl Mediator {
         pipeline: &CommandPipeline<C>,
         cancellation: CancellationToken,
     ) -> CatgaResult<()> {
-        let operation = scope_cancellation(
-            cancellation.clone(),
-            self.send_command_with(command, pipeline),
+        self.dispatch_command_pipeline(command, pipeline, Some(cancellation))
+            .await
+    }
+
+    async fn dispatch_command_pipeline<C: Command>(
+        &self,
+        command: C,
+        pipeline: &CommandPipeline<C>,
+        cancellation: Option<CancellationToken>,
+    ) -> CatgaResult<()> {
+        let command_type = std::any::type_name::<C>();
+        let span = observability::command_span(command_type);
+        observability::record_message_tags(&span, &command);
+        let started = Instant::now();
+        if pipeline.len() > MAX_PIPELINE_DEPTH {
+            let result = Err(CatgaError::new(
+                ErrorCode::Validation,
+                "pipeline depth exceeds the supported maximum",
+            ));
+            let elapsed = started.elapsed();
+            observability::record_command(&span, command_type, elapsed, &result);
+            observability::record_pipeline(&span, "command", pipeline.len(), elapsed, &result);
+            return result;
+        }
+        let registry = Arc::clone(&self.registry);
+        let terminal = CommandNext::new(move |command| {
+            let registry = Arc::clone(&registry);
+            Box::pin(async move { Self::dispatch_command(&registry, command).await })
+        });
+        let operation = isolate_mediator_panic(
+            pipeline
+                .wrap(terminal)
+                .run(command)
+                .instrument(span.clone()),
         );
-        until_cancelled(cancellation, operation).await
+        let result = match cancellation {
+            Some(cancellation) => {
+                scope_cancellation(
+                    cancellation.clone(),
+                    until_cancelled(cancellation, operation),
+                )
+                .await
+            }
+            None => operation.await,
+        };
+        let elapsed = started.elapsed();
+        observability::record_command(&span, command_type, elapsed, &result);
+        observability::record_pipeline(&span, "command", pipeline.len(), elapsed, &result);
+        result
     }
 
     /// Routes a request through a typed pipeline before its registered handler.
@@ -253,38 +268,8 @@ impl Mediator {
         message: M,
         pipeline: &Pipeline<M>,
     ) -> CatgaResult<M::Response> {
-        if pipeline.len() > MAX_PIPELINE_DEPTH {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "pipeline depth exceeds the supported maximum",
-            ));
-        }
-        let registry = Arc::clone(&self.registry);
-        let terminal = Next::new(move |message| {
-            let registry = Arc::clone(&registry);
-            Box::pin(async move { Self::dispatch(&registry, message).await })
-        });
-
-        let request_type = std::any::type_name::<M>();
-        let span = observability::request_span(request_type);
-        observability::record_message_tags(&span, &message);
-        let started = Instant::now();
-        let result = isolate_mediator_panic(
-            pipeline
-                .wrap(terminal)
-                .run(message)
-                .instrument(span.clone()),
-        )
-        .await;
-        observability::record_request(&span, request_type, started.elapsed(), &result);
-        observability::record_pipeline(
-            &span,
-            "request",
-            pipeline.len(),
-            started.elapsed(),
-            &result,
-        );
-        result
+        self.dispatch_request_pipeline(message, pipeline, None)
+            .await
     }
 
     /// Routes a request through `pipeline` with explicit cooperative cancellation.
@@ -297,8 +282,55 @@ impl Mediator {
         pipeline: &Pipeline<M>,
         cancellation: CancellationToken,
     ) -> CatgaResult<M::Response> {
-        let operation = scope_cancellation(cancellation.clone(), self.send_with(message, pipeline));
-        until_cancelled(cancellation, operation).await
+        self.dispatch_request_pipeline(message, pipeline, Some(cancellation))
+            .await
+    }
+
+    async fn dispatch_request_pipeline<M: Request>(
+        &self,
+        message: M,
+        pipeline: &Pipeline<M>,
+        cancellation: Option<CancellationToken>,
+    ) -> CatgaResult<M::Response> {
+        let request_type = std::any::type_name::<M>();
+        let span = observability::request_span(request_type);
+        observability::record_message_tags(&span, &message);
+        let started = Instant::now();
+        if pipeline.len() > MAX_PIPELINE_DEPTH {
+            let result = Err(CatgaError::new(
+                ErrorCode::Validation,
+                "pipeline depth exceeds the supported maximum",
+            ));
+            let elapsed = started.elapsed();
+            observability::record_request(&span, request_type, elapsed, &result);
+            observability::record_pipeline(&span, "request", pipeline.len(), elapsed, &result);
+            return result;
+        }
+        let registry = Arc::clone(&self.registry);
+        let terminal = Next::new(move |message| {
+            let registry = Arc::clone(&registry);
+            Box::pin(async move { Self::dispatch(&registry, message).await })
+        });
+        let operation = isolate_mediator_panic(
+            pipeline
+                .wrap(terminal)
+                .run(message)
+                .instrument(span.clone()),
+        );
+        let result = match cancellation {
+            Some(cancellation) => {
+                scope_cancellation(
+                    cancellation.clone(),
+                    until_cancelled(cancellation, operation),
+                )
+                .await
+            }
+            None => operation.await,
+        };
+        let elapsed = started.elapsed();
+        observability::record_request(&span, request_type, elapsed, &result);
+        observability::record_pipeline(&span, "request", pipeline.len(), elapsed, &result);
+        result
     }
 
     async fn dispatch<M: Request>(registry: &Registry, message: M) -> CatgaResult<M::Response> {

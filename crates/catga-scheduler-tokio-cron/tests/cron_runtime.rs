@@ -1,11 +1,16 @@
 #![allow(missing_docs)]
 
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
-use catga_core::{CatgaResult, ErrorCode, ScheduledTask, TaskSchedule, TaskScheduler};
+use catga_core::{
+    CatgaError, CatgaResult, ErrorCode, ScheduledTask, ScheduledTaskId, TaskSchedule, TaskScheduler,
+};
 use catga_flow::{
     FlowDefinition, FlowDueService, FlowRuntime, FlowState, FlowStepOutcome, MemoryFlowScheduler,
     SuspendedFlowStore,
@@ -20,6 +25,32 @@ struct NotifyTask(Arc<Notify>);
 impl ScheduledTask for NotifyTask {
     async fn execute(&self) -> CatgaResult<()> {
         self.0.notify_one();
+        Ok(())
+    }
+}
+
+struct FailingTask;
+
+#[async_trait::async_trait]
+impl ScheduledTask for FailingTask {
+    async fn execute(&self) -> CatgaResult<()> {
+        Err(CatgaError::new(
+            ErrorCode::Internal,
+            "intentional task failure",
+        ))
+    }
+}
+
+struct CountingTask {
+    ticks: Arc<AtomicUsize>,
+    notified: Arc<Notify>,
+}
+
+#[async_trait::async_trait]
+impl ScheduledTask for CountingTask {
+    async fn execute(&self) -> CatgaResult<()> {
+        self.ticks.fetch_add(1, Ordering::Relaxed);
+        self.notified.notify_one();
         Ok(())
     }
 }
@@ -71,6 +102,243 @@ async fn invalid_cron_job_is_a_catga_validation_error_before_registration() {
 
     assert_eq!(error.code(), ErrorCode::Validation);
     drop(runtime);
+}
+
+#[tokio::test]
+async fn core_schedule_rejects_invalid_cron_syntax_before_registration() {
+    let runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+
+    let error = TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("this is not cron").expect("Core validates only shared invariants"),
+        Arc::new(NotifyTask(Arc::new(Notify::new()))),
+    )
+    .await
+    .expect_err("adapter rejects invalid cron syntax");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+}
+
+#[tokio::test]
+async fn core_cancel_rejects_an_invalid_task_identifier() {
+    let runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let invalid_id = ScheduledTaskId::new("not-a-uuid").expect("opaque Core ID is nonempty");
+
+    let error = TaskScheduler::cancel(&runtime, &invalid_id)
+        .await
+        .expect_err("cron adapter requires a UUID task identifier");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+}
+
+#[tokio::test]
+async fn core_cancel_reports_not_found_for_an_unknown_task_identifier() {
+    let runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let missing_id = ScheduledTaskId::new("00000000-0000-0000-0000-000000000001")
+        .expect("valid UUID is a valid opaque Core ID");
+
+    let error = TaskScheduler::cancel(&runtime, &missing_id)
+        .await
+        .expect_err("unknown scheduled task must report the Core not-found contract");
+
+    assert_eq!(error.code(), ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn a_core_task_identifier_cannot_be_cancelled_twice() {
+    let runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let task_id = TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression"),
+        Arc::new(NotifyTask(Arc::new(Notify::new()))),
+    )
+    .await
+    .expect("task registers");
+
+    TaskScheduler::cancel(&runtime, &task_id)
+        .await
+        .expect("first cancellation succeeds");
+    let error = TaskScheduler::cancel(&runtime, &task_id)
+        .await
+        .expect_err("a cancelled Core task identifier is no longer known");
+
+    assert_eq!(error.code(), ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn concurrent_core_cancellations_do_not_both_succeed() {
+    let runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let task_id = TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression"),
+        Arc::new(NotifyTask(Arc::new(Notify::new()))),
+    )
+    .await
+    .expect("task registers");
+
+    let (first, second) = tokio::join!(
+        TaskScheduler::cancel(&runtime, &task_id),
+        TaskScheduler::cancel(&runtime, &task_id),
+    );
+
+    assert!(
+        first.is_ok() ^ second.is_ok(),
+        "exactly one concurrent cancellation may succeed"
+    );
+    let error = first
+        .err()
+        .or_else(|| second.err())
+        .expect("one cancellation must fail");
+    assert!(
+        matches!(error.code(), ErrorCode::Conflict | ErrorCode::NotFound),
+        "losing cancellation reports that the task is being removed or has been removed"
+    );
+}
+
+#[tokio::test]
+async fn raw_remove_makes_a_core_task_identifier_unknown() {
+    let runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let task_id = TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression"),
+        Arc::new(NotifyTask(Arc::new(Notify::new()))),
+    )
+    .await
+    .expect("task registers");
+    let job_id = uuid::Uuid::parse_str(task_id.as_str()).expect("Core cron ID is a UUID");
+
+    runtime
+        .remove(&job_id)
+        .await
+        .expect("raw job removal succeeds");
+    let error = TaskScheduler::cancel(&runtime, &task_id)
+        .await
+        .expect_err("raw removal clears the Core cancellation identity");
+
+    assert_eq!(error.code(), ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn cancelling_a_started_core_task_stops_future_cron_ticks() {
+    let mut runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let notified = Arc::new(Notify::new());
+    let task_id = TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression"),
+        Arc::new(CountingTask {
+            ticks: Arc::clone(&ticks),
+            notified: Arc::clone(&notified),
+        }),
+    )
+    .await
+    .expect("task registers");
+
+    let first_tick = notified.notified();
+    runtime
+        .start()
+        .await
+        .expect("explicit scheduler start succeeds");
+    tokio::time::timeout(Duration::from_secs(4), first_tick)
+        .await
+        .expect("started task receives its first cron tick");
+    TaskScheduler::cancel(&runtime, &task_id)
+        .await
+        .expect("started task cancels");
+    let ticks_after_cancel = ticks.load(Ordering::Relaxed);
+
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), notified.notified())
+            .await
+            .is_err(),
+        "cancelled task must not receive a later cron tick"
+    );
+    assert_eq!(ticks.load(Ordering::Relaxed), ticks_after_cancel);
+    runtime
+        .shutdown()
+        .await
+        .expect("explicit scheduler shutdown succeeds");
+}
+
+#[tokio::test]
+async fn core_schedule_assigns_unique_task_identifiers() {
+    let runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let schedule = TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression");
+
+    let first = TaskScheduler::schedule(
+        &runtime,
+        schedule.clone(),
+        Arc::new(NotifyTask(Arc::new(Notify::new()))),
+    )
+    .await
+    .expect("first task registers");
+    let second = TaskScheduler::schedule(
+        &runtime,
+        schedule,
+        Arc::new(NotifyTask(Arc::new(Notify::new()))),
+    )
+    .await
+    .expect("second task registers");
+
+    assert_ne!(first, second);
+    TaskScheduler::cancel(&runtime, &first)
+        .await
+        .expect("first task cancels");
+    TaskScheduler::cancel(&runtime, &second)
+        .await
+        .expect("second task cancels");
+}
+
+#[tokio::test]
+async fn a_failing_core_task_does_not_stop_an_unrelated_task() {
+    let mut runtime = CronRuntime::new()
+        .await
+        .expect("scheduler construction succeeds");
+    let ran = Arc::new(Notify::new());
+
+    TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression"),
+        Arc::new(FailingTask),
+    )
+    .await
+    .expect("failing task registers");
+    TaskScheduler::schedule(
+        &runtime,
+        TaskSchedule::cron("* * * * * *").expect("valid nonempty cron expression"),
+        Arc::new(NotifyTask(Arc::clone(&ran))),
+    )
+    .await
+    .expect("unrelated task registers");
+
+    let ran_once = ran.notified();
+    runtime
+        .start()
+        .await
+        .expect("explicit scheduler start succeeds");
+    tokio::time::timeout(Duration::from_secs(4), ran_once)
+        .await
+        .expect("unrelated task still runs after another task returns an error");
+    runtime
+        .shutdown()
+        .await
+        .expect("explicit scheduler shutdown succeeds");
 }
 
 #[tokio::test]
