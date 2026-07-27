@@ -1,3 +1,14 @@
+//! Derive support for Catga's bounded MemoryPack wire format.
+//!
+//! This proc-macro crate is the implementation behind
+//! `catga_codec_memorypack::MemoryPackable`. It generates static
+//! `catga_codec_memorypack::MemoryPackSerialize` and
+//! `catga_codec_memorypack::MemoryPackDeserialize` implementations without
+//! reflection or runtime registration. Supported forms are ordinary structs,
+//! C-like `#[repr(i32)]` enums, tagged unions, transparent `i32` wrappers, and
+//! the documented zero-copy forms. Circular and version-tolerant layouts are
+//! rejected because Catga's receive limits require bounded decoding.
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, parse_macro_input};
@@ -17,6 +28,13 @@ use helpers::is_single_field_i32;
 use regular::{generate_deserialize, generate_serialize};
 use unions::{generate_union_deserialize, generate_union_serialize};
 
+/// Derives Catga's static MemoryPack serialization traits for a type.
+///
+/// The generated implementation writes and consumes exactly one value using
+/// `catga_codec_memorypack` readers and writers. Apply `#[repr(i32)]` to a
+/// C-like enum unless it assigns explicit discriminants. The `memorypack`
+/// and `tag` helper attributes select supported layout forms; unsupported
+/// circular and version-tolerant layouts are rejected at compile time.
 #[proc_macro_derive(MemoryPackable, attributes(memorypack, tag))]
 pub fn derive_memorypack(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
