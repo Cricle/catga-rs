@@ -58,7 +58,7 @@ async fn sqlite_state_machine_storage_lifecycle_benchmark() -> CatgaResult<()> {
         let terminal = initial.next_version(BenchmarkStateMachine {
             completed: true,
             payload: terminal_payload.clone(),
-        });
+        })?;
 
         assert!(store.create(initial.clone()).await?);
         assert_eq!(store.get(&instance_id).await?, Some(initial.clone()));
@@ -91,7 +91,7 @@ async fn warm_up(
     let terminal = initial.next_version(BenchmarkStateMachine {
         completed: true,
         payload: terminal_payload.to_vec(),
-    });
+    })?;
 
     assert!(store.create(initial.clone()).await?);
     assert_eq!(

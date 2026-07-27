@@ -2,13 +2,14 @@
 
 #[cfg(feature = "mysql")]
 #[test]
-fn mysql_continuation_migration_backfills_the_due_index() {
+fn mysql_continuation_schema_declares_the_due_index() {
     let migration = include_str!("../src/mysql_suspended.rs");
 
-    assert!(migration.contains(
-        "CREATE INDEX IF NOT EXISTS catga_flow_continuations_due_idx \\
-         ON catga_flow_continuations(deadline_ms, lease_until_ms, flow_key)"
-    ));
+    assert!(
+        migration.contains(
+            "INDEX catga_flow_continuations_due_idx(deadline_ms, lease_until_ms, flow_key)"
+        )
+    );
 }
 
 #[cfg(feature = "mssql")]

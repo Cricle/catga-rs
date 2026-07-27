@@ -21,7 +21,10 @@ struct StoredState {
     revision: i64,
 }
 
-/// Creates the MySQL 8 flow-state table and its stale-claim covering index.
+/// Creates the current MySQL 8 flow-state table and its stale-claim covering index.
+///
+/// Catga Rust has no historical schema compatibility requirement, so this migration deliberately
+/// creates the current format without destructive legacy-column or index rewrites.
 pub(crate) async fn migrate(pool: &MySqlPool) -> CatgaResult<()> {
     sqlx::query(statement(
         "CREATE TABLE IF NOT EXISTS catga_flow_states (\
@@ -32,34 +35,9 @@ pub(crate) async fn migrate(pool: &MySqlPool) -> CatgaResult<()> {
          INDEX catga_flow_states_stale_idx(flow_type_key, status, heartbeat_ms, flow_key)) ENGINE=InnoDB",
         false,
     ))
-    .execute(pool).await.map_err(|error| database_error("create MySQL FlowStore table", error))?;
-    sqlx::query(
-        "ALTER TABLE catga_flow_states \
-         DROP INDEX IF EXISTS catga_flow_states_stale_idx, \
-         DROP INDEX IF EXISTS flow_id, \
-         MODIFY COLUMN flow_id LONGTEXT NOT NULL, \
-         MODIFY COLUMN flow_type LONGTEXT NOT NULL, \
-         ADD COLUMN IF NOT EXISTS flow_type_key BINARY(32) NULL",
-    )
     .execute(pool)
     .await
-    .map_err(|error| database_error("widen MySQL FlowStore identities", error))?;
-    sqlx::query(
-        "UPDATE catga_flow_states \
-         SET flow_type_key = UNHEX(SHA2(flow_type, 256)) \
-         WHERE flow_type_key IS NULL",
-    )
-    .execute(pool)
-    .await
-    .map_err(|error| database_error("backfill MySQL FlowStore type keys", error))?;
-    sqlx::query(
-        "ALTER TABLE catga_flow_states \
-         MODIFY COLUMN flow_type_key BINARY(32) NOT NULL, \
-         ADD INDEX catga_flow_states_stale_idx(flow_type_key, status, heartbeat_ms, flow_key)",
-    )
-    .execute(pool)
-    .await
-    .map_err(|error| database_error("create MySQL FlowStore type-key index", error))?;
+    .map_err(|error| database_error("create MySQL FlowStore table", error))?;
     Ok(())
 }
 

@@ -163,7 +163,7 @@ async fn sqlite_state_machine_store_preserves_snapshots_and_version_cas() -> Cat
     let next = initial.next_version(PersistedStateMachine {
         quantity: 3,
         paid: true,
-    });
+    })?;
     assert!(store.update(initial.version(), next.clone()).await?);
     assert!(!store.update(initial.version(), next.clone()).await?);
     assert_eq!(store.get("order-7").await?, Some(next));
@@ -176,21 +176,17 @@ async fn sqlite_state_machine_store_preserves_snapshots_and_version_cas() -> Cat
         },
     );
     assert!(store.create(racing.clone()).await?);
+    let first_next = racing.next_version(PersistedStateMachine {
+        quantity: 2,
+        paid: true,
+    })?;
+    let second_next = racing.next_version(PersistedStateMachine {
+        quantity: 3,
+        paid: true,
+    })?;
     let (first, second) = tokio::join!(
-        store.update(
-            racing.version(),
-            racing.next_version(PersistedStateMachine {
-                quantity: 2,
-                paid: true,
-            }),
-        ),
-        store.update(
-            racing.version(),
-            racing.next_version(PersistedStateMachine {
-                quantity: 3,
-                paid: true,
-            }),
-        ),
+        store.update(racing.version(), first_next),
+        store.update(racing.version(), second_next),
     );
     assert_eq!(usize::from(first?) + usize::from(second?), 1);
     Ok(())
@@ -229,7 +225,7 @@ async fn sqlite_dsl_progress_store_preserves_versioned_step_progress() -> CatgaR
         Some(initial.clone())
     );
 
-    let next = initial.clone().next_version(b"next".as_slice());
+    let next = initial.clone().next_version(b"next".as_slice())?;
     assert!(store.update(initial.version(), next.clone()).await?);
     assert!(!store.update(initial.version(), initial).await?);
     assert_eq!(store.get("sql-dsl-progress", 4).await?, Some(next));

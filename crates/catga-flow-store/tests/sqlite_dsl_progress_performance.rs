@@ -46,7 +46,7 @@ async fn sqlite_dsl_progress_lifecycle_benchmark() -> CatgaResult<()> {
         let flow_id = initial.flow_id().to_owned();
         let step_index = initial.step_index();
         let expected_version = initial.version();
-        let next = initial.clone().next_version(updated_payload.clone());
+        let next = initial.clone().next_version(updated_payload.clone())?;
 
         assert!(store.create(initial.clone()).await?);
         assert!(!store.create(initial).await?);
@@ -71,7 +71,7 @@ async fn warm_up(
     updated_payload: &[u8],
 ) -> CatgaResult<()> {
     let initial = DslStepProgress::new("sqlite-dsl-progress-benchmark-warmup", 0, initial_payload);
-    let next = initial.clone().next_version(updated_payload);
+    let next = initial.clone().next_version(updated_payload)?;
 
     assert!(store.create(initial.clone()).await?);
     assert!(store.update(initial.version(), next.clone()).await?);
