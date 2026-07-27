@@ -9,7 +9,6 @@ use catga_flow::{
     TimedOutFlowReceipt, TimedOutFlowStore, decode_continuation, encode_continuation,
     flow_timeout_deadline_unix_ms,
 };
-use futures::StreamExt;
 use redis::{
     AsyncCommands, Script,
     aio::{ConnectionManager, ConnectionManagerConfig},
@@ -58,6 +57,10 @@ impl RedisSuspendedFlows {
         format!("{}.__timeout_{suffix}", self.prefix)
     }
 
+    fn records_key(&self) -> String {
+        format!("{}.__records", self.prefix)
+    }
+
     fn wait_correlation_key(&self, correlation_id: &str) -> String {
         format!("{}.__wait_correlation:{correlation_id}", self.prefix)
     }
@@ -84,6 +87,7 @@ impl RedisSuspendedFlows {
             .key(self.timeout_key("receipts"))
             .key(self.wait_correlation_key(correlations.previous.unwrap_or_default()))
             .key(self.wait_correlation_key(correlations.next.unwrap_or_default()))
+            .key(self.records_key())
             .arg(expected)
             .arg(next)
             .arg(flow_id)
@@ -110,6 +114,7 @@ impl RedisSuspendedFlows {
             .key(self.timeout_key("inflight"))
             .key(self.timeout_key("receipts"))
             .key(self.wait_correlation_key(correlation.unwrap_or_default()))
+            .key(self.records_key())
             .arg(expected)
             .arg(flow_id)
             .arg(i64::from(correlation.is_some()))
@@ -174,6 +179,7 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
                 .key(self.wait_correlation_key(
                     continuation.wait().map_or("", |wait| wait.correlation_id()),
                 ))
+                .key(self.records_key())
                 .arg(encode_continuation(&continuation)?)
                 .arg(continuation.state().id())
                 .arg(
@@ -221,20 +227,34 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
 
     async fn query(&self, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
         let mut connection = self.connection.clone();
-        let pattern = format!("{}:*", redis_glob_literal(&self.prefix));
-        let mut keys = connection
-            .scan_match::<_, String>(pattern)
+        let stop = isize::try_from(query.max_scan().saturating_sub(1)).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "Redis continuation query scan limit exceeds isize",
+            )
+        })?;
+        let flow_ids: Vec<String> = connection
+            .zrange(self.records_key(), 0, stop)
+            .await
+            .map_err(map_error)?;
+        if flow_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys = flow_ids
+            .iter()
+            .map(|flow_id| self.key(flow_id))
+            .collect::<Vec<_>>();
+        let raws: Vec<Option<Vec<u8>>> = redis::cmd("MGET")
+            .arg(keys)
+            .query_async(&mut connection)
             .await
             .map_err(map_error)?;
         let mut summaries = Vec::with_capacity(query.max_results());
-        let mut scanned = 0;
-        while scanned < query.max_scan() && summaries.len() < query.max_results() {
-            let Some(key) = keys.next().await else {
+        for raw in raws {
+            if summaries.len() == query.max_results() {
                 break;
-            };
-            scanned = scanned.saturating_add(1);
-            let key = key.map_err(map_error)?;
-            let Some(raw) = self.load_raw(&key).await? else {
+            }
+            let Some(raw) = raw else {
                 continue;
             };
             let continuation = decode_continuation(&raw)?;
@@ -456,15 +476,4 @@ fn system_time_unix_ms(time: SystemTime) -> CatgaResult<u64> {
             "Redis timeout poll exceeds the supported millisecond range",
         )
     })
-}
-
-fn redis_glob_literal(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        if matches!(character, '*' | '?' | '[' | ']' | '\\') {
-            escaped.push('\\');
-        }
-        escaped.push(character);
-    }
-    escaped
 }

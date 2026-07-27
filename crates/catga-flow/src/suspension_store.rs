@@ -183,6 +183,21 @@ impl FlowQuery {
     pub const fn max_scan(&self) -> usize {
         self.max_scan
     }
+
+    /// Returns the optional lifecycle-status filter.
+    pub const fn status(&self) -> Option<FlowStatus> {
+        self.status
+    }
+
+    /// Returns the optional registered-flow-type filter.
+    pub fn flow_type(&self) -> Option<&str> {
+        self.flow_type.as_deref()
+    }
+
+    /// Returns the optional half-open creation-time range.
+    pub const fn created_at_range(&self) -> Option<(SystemTime, SystemTime)> {
+        self.created_at
+    }
 }
 
 /// Persists suspended flow continuations with optimistic concurrency.

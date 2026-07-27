@@ -7,7 +7,7 @@ use catga_flow::{
     FlowContinuation, FlowQuery, FlowStatus, FlowSummary, decode_continuation, encode_continuation,
     flow_timeout_deadline_unix_ms,
 };
-use sqlx::{Row, SqlitePool};
+use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 use crate::sql_common::{
     status_from_code, system_time_from_unix_millis_and_subsec_nanos, unix_millis_and_subsec_nanos,
@@ -241,15 +241,44 @@ pub(crate) async fn query(pool: &SqlitePool, query: &FlowQuery) -> CatgaResult<V
             "continuation query scan limit exceeds i64",
         )
     })?;
-    let rows = sqlx::query(
+    let mut statement = QueryBuilder::<Sqlite>::new(
         "SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns \
-         FROM catga_flow_continuations \
-         ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ?",
-    )
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .map_err(|error| database_error("query SQLite continuations", error))?;
+         FROM catga_flow_continuations WHERE 1 = 1",
+    );
+    if let Some(status) = query.status() {
+        statement
+            .push(" AND status = ")
+            .push_bind(status_code(status));
+    }
+    if let Some(flow_type) = query.flow_type() {
+        statement.push(" AND flow_type = ").push_bind(flow_type);
+    }
+    if let Some((start, end)) = query.created_at_range() {
+        let (start_ms, start_subsec_ns) = unix_millis_and_subsec_nanos(start)?;
+        let (end_ms, end_subsec_ns) = unix_millis_and_subsec_nanos(end)?;
+        statement
+            .push(" AND (created_at_ms > ")
+            .push_bind(start_ms)
+            .push(" OR (created_at_ms = ")
+            .push_bind(start_ms)
+            .push(" AND created_at_subsec_ns >= ")
+            .push_bind(start_subsec_ns)
+            .push(")) AND (created_at_ms < ")
+            .push_bind(end_ms)
+            .push(" OR (created_at_ms = ")
+            .push_bind(end_ms)
+            .push(" AND created_at_subsec_ns < ")
+            .push_bind(end_subsec_ns)
+            .push("))");
+    }
+    statement
+        .push(" ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ")
+        .push_bind(limit);
+    let rows = statement
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(|error| database_error("query SQLite continuations", error))?;
     let mut summaries = Vec::with_capacity(query.max_results());
     for row in rows {
         let id: String = row

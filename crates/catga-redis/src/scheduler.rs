@@ -14,18 +14,23 @@ use uuid::Uuid;
 use crate::transport::map_error;
 
 const SCHEDULE: &str = r#"
-if redis.call('HEXISTS', KEYS[3], ARGV[1]) == 1 then return 0 end
+local existing=redis.call('HGET', KEYS[3], ARGV[1])
+if existing then return existing end
 redis.call('HSET', KEYS[3], ARGV[1], ARGV[2])
 redis.call('HSET', KEYS[1], 'flow_id', ARGV[3], 'state_id', ARGV[4], 'due_at', ARGV[5], 'target', ARGV[1], 'owner', '', 'lease_until', '0')
 redis.call('ZADD', KEYS[2], ARGV[5], ARGV[2])
-return 1
+return ARGV[2]
 "#;
 const CANCEL: &str = r#"
-if redis.call('HGET', KEYS[1], 'owner') ~= '' then return 0 end
 if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+local owner=redis.call('HGET', KEYS[1], 'owner')
+local lease_until=tonumber(redis.call('HGET', KEYS[1], 'lease_until') or '0')
+if owner ~= '' and lease_until > tonumber(ARGV[2]) then return 0 end
+local target=redis.call('HGET', KEYS[1], 'target')
 redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[2], ARGV[1])
-if redis.call('HGET', KEYS[3], ARGV[2]) == ARGV[1] then redis.call('HDEL', KEYS[3], ARGV[2]) end
+redis.call('ZREM', KEYS[3], ARGV[1])
+if target and redis.call('HGET', KEYS[4], target) == ARGV[1] then redis.call('HDEL', KEYS[4], target) end
 return 1
 "#;
 const CLAIM: &str = r#"
@@ -82,8 +87,9 @@ return 1
 "#;
 const RENEW: &str = r#"
 if redis.call('HGET', KEYS[1], 'owner') ~= ARGV[1] then return 0 end
-redis.call('HSET', KEYS[1], 'lease_until', ARGV[3])
-redis.call('ZADD', KEYS[2], ARGV[3], ARGV[2])
+if tonumber(redis.call('HGET', KEYS[1], 'lease_until') or '0') <= tonumber(ARGV[3]) then return 0 end
+redis.call('HSET', KEYS[1], 'lease_until', ARGV[4])
+redis.call('ZADD', KEYS[2], ARGV[4], ARGV[2])
 return 1
 "#;
 
@@ -150,7 +156,7 @@ impl FlowScheduler for RedisFlowScheduler {
         let target = target_key(flow_id, state_id)?;
         let schedule_id: Box<str> = Uuid::new_v4().to_string().into();
         let mut connection = self.connection.clone();
-        let inserted: i64 = Script::new(SCHEDULE)
+        let existing_or_new: String = Script::new(SCHEDULE)
             .key(self.record_key(&schedule_id))
             .key(self.due_key())
             .key(self.targets_key())
@@ -162,33 +168,20 @@ impl FlowScheduler for RedisFlowScheduler {
             .invoke_async(&mut connection)
             .await
             .map_err(map_error)?;
-        if inserted == 1 {
-            Ok(schedule_id)
-        } else {
-            Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "a resume is already scheduled for this flow state",
-            ))
-        }
+        Ok(existing_or_new.into_boxed_str())
     }
 
     async fn cancel_resume(&self, schedule_id: &str) -> CatgaResult<bool> {
         let key = self.record_key(schedule_id);
-        let target: Option<Vec<u8>> = {
-            use redis::AsyncCommands;
-            let mut connection = self.connection.clone();
-            connection.hget(&key, "target").await.map_err(map_error)?
-        };
-        let Some(target) = target else {
-            return Ok(false);
-        };
+        let now = unix_millis(SystemTime::now())?;
         let mut connection = self.connection.clone();
         let cancelled: i64 = Script::new(CANCEL)
             .key(key)
             .key(self.due_key())
+            .key(self.leased_key())
             .key(self.targets_key())
             .arg(schedule_id)
-            .arg(target)
+            .arg(now)
             .invoke_async(&mut connection)
             .await
             .map_err(map_error)?;
@@ -309,6 +302,7 @@ impl DueFlowScheduler for RedisFlowScheduler {
             .key(self.leased_key())
             .arg(owner)
             .arg(schedule_id)
+            .arg(unix_millis(now)?)
             .arg(lease_until)
             .invoke_async(&mut connection)
             .await

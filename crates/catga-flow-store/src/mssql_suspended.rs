@@ -245,12 +245,53 @@ pub(crate) async fn query(pool: &MssqlPool, query: &FlowQuery) -> CatgaResult<Ve
             "SQL Server continuation scan limit exceeds i64",
         )
     })?;
-    let mut statement = Query::new(
+    let mut next_parameter: usize = 2;
+    let mut template = String::from(
         "SELECT TOP (@P1) flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns \
-         FROM dbo.catga_flow_continuations \
-         ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC",
+         FROM dbo.catga_flow_continuations WHERE 1 = 1",
     );
+    if query.status().is_some() {
+        template.push_str(&format!(" AND status = @P{next_parameter}"));
+        next_parameter = next_parameter.saturating_add(1);
+    }
+    if query.flow_type().is_some() {
+        template.push_str(&format!(" AND flow_type = @P{next_parameter}"));
+        next_parameter = next_parameter.saturating_add(1);
+    }
+    let created_range = query
+        .created_at_range()
+        .map(|(start, end)| {
+            Ok::<_, CatgaError>((
+                unix_millis_and_subsec_nanos(start)?,
+                unix_millis_and_subsec_nanos(end)?,
+            ))
+        })
+        .transpose()?;
+    if created_range.is_some() {
+        let start_ms = next_parameter;
+        let start_subsec_ns = next_parameter.saturating_add(1);
+        let end_ms = next_parameter.saturating_add(2);
+        let end_subsec_ns = next_parameter.saturating_add(3);
+        template.push_str(&format!(
+            " AND (created_at_ms > @P{start_ms} OR (created_at_ms = @P{start_ms} AND created_at_subsec_ns >= @P{start_subsec_ns})) \
+             AND (created_at_ms < @P{end_ms} OR (created_at_ms = @P{end_ms} AND created_at_subsec_ns < @P{end_subsec_ns}))"
+        ));
+    }
+    template.push_str(" ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC");
+    let mut statement = Query::new(template);
     statement.bind(limit);
+    if let Some(status) = query.status() {
+        statement.bind(status_code(status));
+    }
+    if let Some(flow_type) = query.flow_type() {
+        statement.bind(flow_type);
+    }
+    if let Some(((start_ms, start_subsec_ns), (end_ms, end_subsec_ns))) = created_range {
+        statement.bind(start_ms);
+        statement.bind(start_subsec_ns);
+        statement.bind(end_ms);
+        statement.bind(end_subsec_ns);
+    }
     let mut connection = pool
         .get()
         .await

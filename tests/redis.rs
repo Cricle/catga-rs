@@ -618,6 +618,50 @@ async fn redis_suspended_flows_page_bounded_timeout_queries() -> CatgaResult<()>
 
 #[tokio::test]
 #[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_suspended_flow_query_ignores_auxiliary_hashes() -> CatgaResult<()> {
+    let config = redis_config();
+    let prefix = format!(
+        "{}:query-index:{}",
+        config.stream,
+        TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let store = RedisSuspendedFlows::connect(&config.server, prefix.clone()).await?;
+    assert!(
+        store
+            .create(waiting_continuation("redis-query-index"))
+            .await?
+    );
+
+    let client = redis::Client::open(config.server.as_ref()).map_err(|error| {
+        CatgaError::new(ErrorCode::Transient, "connect Redis query auxiliary key")
+            .with_details(error.to_string())
+    })?;
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Transient,
+                "open Redis query auxiliary connection",
+            )
+            .with_details(error.to_string())
+        })?;
+    let _: () = connection
+        .hset(format!("{prefix}:auxiliary"), "field", "value")
+        .await
+        .map_err(|error| {
+            CatgaError::new(ErrorCode::Transient, "write Redis query auxiliary hash")
+                .with_details(error.to_string())
+        })?;
+
+    let summaries = store.query(&catga_flow::FlowQuery::new(2, 2)?).await?;
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id(), "redis-query-index");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
 async fn redis_flow_scheduler_claims_recovers_and_releases_target_indexes() {
     let config = redis_config();
     let scheduler =
@@ -629,6 +673,14 @@ async fn redis_flow_scheduler_claims_recovers_and_releases_target_indexes() {
         .schedule_resume("redis-payment", "charge", now)
         .await
         .unwrap();
+    assert_eq!(
+        scheduler
+            .schedule_resume("redis-payment", "charge", now + Duration::from_secs(60))
+            .await
+            .unwrap(),
+        id,
+        "a duplicate target keeps its original schedule identity and due time"
+    );
 
     assert_eq!(
         scheduler
@@ -672,6 +724,48 @@ async fn redis_flow_scheduler_claims_recovers_and_releases_target_indexes() {
         .await
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::Validation);
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_REDIS_URL"]
+async fn redis_flow_scheduler_does_not_renew_or_keep_expired_leases() -> CatgaResult<()> {
+    let config = redis_config();
+    let scheduler = RedisFlowScheduler::connect(
+        &config.server,
+        format!(
+            "{}:expired-schedule:{}",
+            config.stream,
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ),
+    )
+    .await?;
+    let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+    let schedule_id = scheduler
+        .schedule_resume("expired-schedule-flow", "resume", epoch)
+        .await?;
+    assert_eq!(
+        scheduler
+            .claim_due("worker-a", epoch, Duration::from_secs(1), 1)
+            .await?
+            .len(),
+        1
+    );
+    assert!(
+        !scheduler
+            .renew_due(
+                "worker-a",
+                &schedule_id,
+                epoch + Duration::from_secs(2),
+                Duration::from_secs(30),
+            )
+            .await?,
+        "an expired owner must not revive its lease"
+    );
+    assert!(
+        scheduler.cancel_resume(&schedule_id).await?,
+        "cancelling an expired lease must remove the schedule"
+    );
+    Ok(())
 }
 
 fn waiting_continuation(id: &str) -> FlowContinuation {

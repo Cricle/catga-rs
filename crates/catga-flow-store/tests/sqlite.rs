@@ -7,7 +7,7 @@ use catga_codec_memorypack::MemoryPackable;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowQuery,
-    FlowScheduler, FlowState, FlowStore, StateMachineSnapshot, StateMachineStore,
+    FlowScheduler, FlowState, FlowStatus, FlowStore, StateMachineSnapshot, StateMachineStore,
     SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
     WaitPolicy,
 };
@@ -18,6 +18,42 @@ use catga_flow_store::{
 
 #[path = "../../../tests/flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
+
+#[tokio::test]
+async fn sqlite_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("filtered-suspended.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new("old-unrelated", "unrelated", [], "node-a"),
+                "finish",
+            ))
+            .await?
+    );
+
+    let range_start = SystemTime::now();
+    let matching = FlowContinuation::new(
+        FlowState::new("matching-suspended", "payment", [], "node-a").suspended(),
+        "finish",
+    );
+    assert!(store.create(matching).await?);
+    let range_end = SystemTime::now() + Duration::from_secs(1);
+
+    let query = FlowQuery::new(1, 1)?
+        .with_status(FlowStatus::Suspended)
+        .with_flow_type("payment")
+        .created_between(range_start, range_end)?;
+    let summaries = store.query(&query).await?;
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id(), "matching-suspended");
+    Ok(())
+}
 
 #[tokio::test]
 async fn sqlite_flow_scheduler_is_idempotent_bounded_and_lease_fenced() -> CatgaResult<()> {

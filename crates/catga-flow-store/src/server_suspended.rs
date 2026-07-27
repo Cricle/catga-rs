@@ -45,7 +45,17 @@ macro_rules! define_server_suspended {
         /// Scans no more than the caller-requested number of compact summary rows.
         pub(crate) async fn query(pool: &$pool, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
             let limit = i64::try_from(query.max_scan()).map_err(|_| CatgaError::new(ErrorCode::Validation, "continuation query scan limit exceeds i64"))?;
-            let rows = sqlx::query(statement("SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns FROM catga_flow_continuations ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ?", $postgres)).bind(limit).fetch_all(pool).await.map_err(|error| database_error(concat!("query ", $label, " continuations"), error))?;
+            let created_range = query.created_at_range().map(|(start, end)| {
+                Ok::<_, CatgaError>((unix_millis_and_subsec_nanos(start)?, unix_millis_and_subsec_nanos(end)?))
+            }).transpose()?;
+            let ((start_ms, start_subsec_ns), (end_ms, end_subsec_ns)) = created_range.unwrap_or(((0, 0), (0, 0)));
+            let status = query.status(); let flow_type = query.flow_type();
+            let rows = sqlx::query(statement("SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns FROM catga_flow_continuations WHERE (? = 0 OR status = ?) AND (? = 0 OR flow_type = ?) AND (? = 0 OR (created_at_ms > ? OR (created_at_ms = ? AND created_at_subsec_ns >= ?))) AND (? = 0 OR (created_at_ms < ? OR (created_at_ms = ? AND created_at_subsec_ns < ?))) ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ?", $postgres))
+                .bind(i64::from(status.is_some())).bind(status.map(status_code).unwrap_or_default())
+                .bind(i64::from(flow_type.is_some())).bind(flow_type.unwrap_or_default())
+                .bind(i64::from(created_range.is_some())).bind(start_ms).bind(start_ms).bind(start_subsec_ns)
+                .bind(i64::from(created_range.is_some())).bind(end_ms).bind(end_ms).bind(end_subsec_ns)
+                .bind(limit).fetch_all(pool).await.map_err(|error| database_error(concat!("query ", $label, " continuations"), error))?;
             let mut summaries = Vec::with_capacity(query.max_results());
             for row in rows {
                 let id: String = row.try_get("flow_id").map_err(|error| database_error(concat!("decode ", $label, " summary identity"), error))?;
