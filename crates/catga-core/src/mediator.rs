@@ -394,6 +394,10 @@ impl Mediator {
     }
 
     /// Delivers an event to every registered handler in registration order.
+    ///
+    /// Every handler receives the event even when an earlier handler fails. The first observed
+    /// failure is returned after fan-out completes. This sequential path moves the final event
+    /// instance into its handler, avoiding an unnecessary clone for the common small fan-out.
     pub async fn publish<E: Event>(&self, event: E) -> CatgaResult<()> {
         let event_type = std::any::type_name::<E>();
         let handler_count = self
@@ -409,14 +413,26 @@ impl Mediator {
                 let Some((last_handler, preceding_handlers)) = handlers.split_last() else {
                     return Ok(());
                 };
+                let mut first_error = None;
                 for handler in preceding_handlers {
-                    handler
+                    if let Err(error) = handler
                         .handle(Box::new(event.clone()) as Box<dyn Any + Send>)
-                        .await?;
+                        .await
+                        && first_error.is_none()
+                    {
+                        first_error = Some(error);
+                    }
                 }
-                last_handler
+                if let Err(error) = last_handler
                     .handle(Box::new(event) as Box<dyn Any + Send>)
-                    .await?;
+                    .await
+                    && first_error.is_none()
+                {
+                    first_error = Some(error);
+                }
+                if let Some(error) = first_error {
+                    return Err(error);
+                }
             }
             Ok(())
         }

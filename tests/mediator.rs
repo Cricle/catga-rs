@@ -302,6 +302,8 @@ struct NotifyCustomer {
     count: Arc<AtomicUsize>,
 }
 
+struct FailingAudit;
+
 #[async_trait]
 impl EventHandler<OrderCreated> for AuditOrder {
     async fn handle(&self, _: OrderCreated) -> CatgaResult<()> {
@@ -315,6 +317,16 @@ impl EventHandler<OrderCreated> for NotifyCustomer {
     async fn handle(&self, _: OrderCreated) -> CatgaResult<()> {
         self.count.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl EventHandler<OrderCreated> for FailingAudit {
+    async fn handle(&self, _: OrderCreated) -> CatgaResult<()> {
+        Err(CatgaError::new(
+            ErrorCode::Transient,
+            "audit backend is unavailable",
+        ))
     }
 }
 
@@ -337,6 +349,26 @@ async fn request_routes_to_one_handler_and_event_fans_out() -> CatgaResult<()> {
     mediator.publish(OrderCreated).await?;
     assert_eq!(audit_count.load(Ordering::Relaxed), 1);
     assert_eq!(notify_count.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn event_fan_out_finishes_later_handlers_after_an_earlier_failure() -> CatgaResult<()> {
+    let notified = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry.register_event::<OrderCreated, _>(FailingAudit);
+    registry.register_event::<OrderCreated, _>(NotifyCustomer {
+        count: Arc::clone(&notified),
+    });
+    let mediator = Mediator::new(registry);
+
+    let error = mediator
+        .publish(OrderCreated)
+        .await
+        .expect_err("the first handler error is returned after fan-out");
+
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(notified.load(Ordering::Relaxed), 1);
     Ok(())
 }
 

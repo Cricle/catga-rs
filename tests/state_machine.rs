@@ -212,6 +212,7 @@ async fn memory_store_uses_versions_and_executor_persists_handled_events() {
 
 #[test]
 fn restored_state_machine_snapshots_reject_negative_versions() {
+    let now = std::time::SystemTime::now();
     let error = StateMachineSnapshot::restore(
         "invalid-order",
         Order {
@@ -220,6 +221,8 @@ fn restored_state_machine_snapshots_reject_negative_versions() {
             trace: Vec::new(),
         },
         -1,
+        now,
+        now,
     )
     .expect_err("negative persisted version must fail");
 

@@ -5,6 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use catga_codec_memorypack::{MemoryPackError, MemoryPackable};
 use catga_core::{CatgaError, ErrorCode};
 
+pub(crate) const TIME_WIRE_BYTES: usize = 13;
+
 #[derive(Default, MemoryPackable)]
 pub(crate) struct TimeWire {
     before_epoch: bool,
@@ -39,6 +41,11 @@ pub(crate) fn encode_time(value: SystemTime) -> TimeWire {
 }
 
 pub(crate) fn decode_time(value: TimeWire) -> Result<SystemTime, MemoryPackError> {
+    if value.nanoseconds >= 1_000_000_000 {
+        return Err(MemoryPackError::DeserializationError(
+            "flow timestamp nanoseconds are out of range".into(),
+        ));
+    }
     let duration = Duration::new(value.seconds, value.nanoseconds);
     if value.before_epoch {
         UNIX_EPOCH.checked_sub(duration).ok_or_else(|| {
@@ -49,6 +56,41 @@ pub(crate) fn decode_time(value: TimeWire) -> Result<SystemTime, MemoryPackError
             MemoryPackError::DeserializationError("flow timestamp is out of range".into())
         })
     }
+}
+
+pub(crate) fn encode_time_wire(value: SystemTime, output: &mut Vec<u8>) {
+    let wire = encode_time(value);
+    output.push(u8::from(wire.before_epoch));
+    output.extend_from_slice(&wire.seconds.to_be_bytes());
+    output.extend_from_slice(&wire.nanoseconds.to_be_bytes());
+}
+
+pub(crate) fn decode_time_wire(value: &[u8]) -> Result<SystemTime, MemoryPackError> {
+    if value.len() != TIME_WIRE_BYTES {
+        return Err(MemoryPackError::DeserializationError(
+            "flow timestamp wire size is invalid".into(),
+        ));
+    }
+    let before_epoch = match value[0] {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(MemoryPackError::DeserializationError(
+                "flow timestamp epoch flag is invalid".into(),
+            ));
+        }
+    };
+    let seconds = u64::from_be_bytes(value[1..9].try_into().map_err(|_| {
+        MemoryPackError::DeserializationError("flow timestamp seconds are malformed".into())
+    })?);
+    let nanoseconds = u32::from_be_bytes(value[9..TIME_WIRE_BYTES].try_into().map_err(|_| {
+        MemoryPackError::DeserializationError("flow timestamp nanoseconds are malformed".into())
+    })?);
+    decode_time(TimeWire {
+        before_epoch,
+        seconds,
+        nanoseconds,
+    })
 }
 
 pub(crate) fn encode_duration(value: Duration) -> DurationWire {

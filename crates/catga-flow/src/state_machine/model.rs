@@ -1,5 +1,7 @@
 //! State-machine values that may be persisted independently of configuration.
 
+use std::time::SystemTime;
+
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
 /// Mutable state held by a state-machine instance.
@@ -64,30 +66,49 @@ pub struct StateMachineSnapshot<S> {
     instance_id: Box<str>,
     state: S,
     version: i64,
+    created_at: SystemTime,
+    updated_at: SystemTime,
 }
 
 impl<S> StateMachineSnapshot<S> {
     /// Creates the first version of an instance snapshot.
     pub fn new(instance_id: impl Into<Box<str>>, state: S) -> Self {
+        let now = SystemTime::now();
         Self {
             instance_id: instance_id.into(),
             state,
             version: 0,
+            created_at: now,
+            updated_at: now,
         }
     }
 
-    /// Restores a snapshot loaded from a durable store.
-    pub fn restore(instance_id: impl Into<Box<str>>, state: S, version: i64) -> CatgaResult<Self> {
+    /// Restores a snapshot with its persisted creation and update timestamps.
+    pub fn restore(
+        instance_id: impl Into<Box<str>>,
+        state: S,
+        version: i64,
+        created_at: SystemTime,
+        updated_at: SystemTime,
+    ) -> CatgaResult<Self> {
         if version < 0 {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
                 "state-machine snapshot version cannot be negative",
             ));
         }
+        if updated_at < created_at {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "state-machine snapshot update time cannot precede creation time",
+            ));
+        }
         Ok(Self {
             instance_id: instance_id.into(),
             state,
             version,
+            created_at,
+            updated_at,
         })
     }
 
@@ -106,12 +127,25 @@ impl<S> StateMachineSnapshot<S> {
         self.version
     }
 
+    /// Returns when this instance snapshot was first persisted.
+    pub const fn created_at(&self) -> SystemTime {
+        self.created_at
+    }
+
+    /// Returns when this state was last successfully persisted.
+    pub const fn updated_at(&self) -> SystemTime {
+        self.updated_at
+    }
+
     /// Produces the next version with an updated state payload.
     pub fn next_version(&self, state: S) -> Self {
+        let now = SystemTime::now();
         Self {
             instance_id: self.instance_id.clone(),
             state,
             version: self.version.saturating_add(1),
+            created_at: self.created_at,
+            updated_at: now.max(self.updated_at),
         }
     }
 }
