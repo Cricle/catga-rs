@@ -327,11 +327,13 @@ impl OutboxStore for NatsOutbox {
             })?;
             let now = current_unix_ms()?;
             let mut keys = self.store.keys().await.map_err(map_error)?;
+            let mut inspected = 0;
             let mut removed = 0;
-            while removed < limit {
+            while inspected < limit {
                 let Some(key) = keys.try_next().await.map_err(map_error)? else {
                     break;
                 };
+                inspected += 1;
                 let Some(entry) = self.store.entry(&key).await.map_err(map_error)? else {
                     continue;
                 };

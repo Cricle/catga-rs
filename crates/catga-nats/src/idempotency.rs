@@ -26,15 +26,16 @@ pub struct NatsIdempotency {
 }
 
 impl NatsIdempotency {
-    /// Connects and provisions a one-history KV bucket using the default completed-record TTL.
+    /// Connects and provisions a one-history KV bucket using the default completed-record policy.
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
         Self::with_retention(server, bucket, DEFAULT_IDEMPOTENCY_RETENTION).await
     }
 
-    /// Connects and provisions a one-history KV bucket whose records expire after `retention`.
+    /// Connects and provisions a one-history KV bucket with a completed-record retention policy.
     ///
-    /// Existing buckets are updated to the requested JetStream maximum age. The same duration
-    /// controls explicit bounded cleanup through [`IdempotencyStore::cleanup_completed`].
+    /// The duration controls explicit bounded cleanup through
+    /// [`IdempotencyStore::cleanup_completed`]. The bucket has no maximum age:
+    /// claimed and failed records must not expire before their state transition.
     pub async fn with_retention(
         server: &str,
         bucket: impl Into<Box<str>>,
@@ -49,7 +50,6 @@ impl NatsIdempotency {
                 .create_key_value(kv::Config {
                     bucket: bucket.to_string(),
                     history: 1,
-                    max_age: retention,
                     ..Default::default()
                 })
                 .await
@@ -61,12 +61,6 @@ impl NatsIdempotency {
                     .map_err(map_error)?,
             },
         };
-        let status = store.status().await.map_err(map_error)?;
-        if status.max_age() != retention {
-            let mut config = status.info.config.clone();
-            config.max_age = retention;
-            context.update_stream(config).await.map_err(map_error)?;
-        }
         Ok(Self { store, retention })
     }
 

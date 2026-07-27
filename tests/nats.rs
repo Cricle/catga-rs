@@ -1439,7 +1439,8 @@ async fn nats_idempotency_concurrent_claims_have_exactly_one_owner() {
 }
 
 #[tokio::test]
-async fn nats_idempotency_honors_configured_retention_and_bounds_cleanup() -> CatgaResult<()> {
+async fn nats_idempotency_retains_claimed_and_failed_records_until_explicit_cleanup()
+-> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let store = NatsIdempotency::with_retention(
         &server,
@@ -1447,8 +1448,26 @@ async fn nats_idempotency_honors_configured_retention_and_bounds_cleanup() -> Ca
         Duration::from_millis(100),
     )
     .await?;
-    assert!(store.try_claim("retained-key").await?);
-    store.complete("retained-key", None).await?;
+    assert!(store.try_claim("claimed-key").await?);
+    assert!(store.try_claim("failed-key").await?);
+    store.fail("failed-key").await?;
+    assert!(store.try_claim("completed-key").await?);
+    store.complete("completed-key", None).await?;
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    assert_eq!(
+        store.state("claimed-key").await?,
+        Some(ProcessingState::Claimed)
+    );
+    assert_eq!(
+        store.state("failed-key").await?,
+        Some(ProcessingState::Failed)
+    );
+    assert_eq!(
+        store.state("completed-key").await?,
+        Some(ProcessingState::Completed)
+    );
 
     assert!(matches!(
         store
@@ -1456,15 +1475,8 @@ async fn nats_idempotency_honors_configured_retention_and_bounds_cleanup() -> Ca
             .await,
         Err(error) if error.code() == ErrorCode::Validation
     ));
-    assert_eq!(store.cleanup_completed(1).await?, 0);
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while store.state("retained-key").await?.is_some() {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        Ok::<(), catga_core::CatgaError>(())
-    })
-    .await
-    .expect("JetStream removes records after the configured retention")?;
+    assert_eq!(store.cleanup_completed(3).await?, 1);
+    assert_eq!(store.state("completed-key").await?, None);
     Ok(())
 }
 
@@ -1774,8 +1786,43 @@ async fn nats_outbox_retains_published_records_until_bounded_cleanup() -> CatgaR
             .await,
         Err(error) if error.code() == ErrorCode::Validation
     ));
-    assert_eq!(outbox.cleanup_published(Duration::ZERO, 1).await?, 1);
+    assert_eq!(outbox.cleanup_published(Duration::ZERO, 2).await?, 1);
     assert!(outbox.list_published(1).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn nats_outbox_cleanup_caps_key_inspections_at_limit() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let outbox = NatsOutbox::connect(
+        &server,
+        format!("CATGA_OUTBOX_CLEANUP_BOUND_{}", std::process::id()),
+    )
+    .await?;
+    outbox
+        .enqueue(OutboxMessage::new(Envelope::new(
+            86,
+            "order.pending",
+            vec![0],
+            MessageMetadata::new(86, None),
+        )))
+        .await?;
+    outbox
+        .enqueue(OutboxMessage::new(Envelope::new(
+            87,
+            "order.published",
+            vec![1],
+            MessageMetadata::new(87, None),
+        )))
+        .await?;
+    let claimed = outbox.claim("worker-a", 2).await?;
+    let published_claim = claimed.iter().find(|message| message.id() == 87).unwrap();
+    outbox
+        .ack("worker-a", 87, published_claim.claim_token().unwrap())
+        .await?;
+
+    assert_eq!(outbox.cleanup_published(Duration::ZERO, 1).await?, 0);
+    assert_eq!(outbox.list_published(1).await?.len(), 1);
     Ok(())
 }
 
