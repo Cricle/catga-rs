@@ -3,6 +3,7 @@ use crate::limits::MemoryPackDecodeLimits;
 use crate::reader::MemoryPackReader;
 use crate::traits::{MemoryPackDeserialize, MemoryPackSerialize};
 use crate::writer::MemoryPackWriter;
+use std::mem;
 
 /// MemoryPack serializer
 pub struct MemoryPackSerializer;
@@ -14,6 +15,25 @@ impl MemoryPackSerializer {
         let mut writer = MemoryPackWriter::with_capacity(64);
         value.serialize(&mut writer)?;
         Ok(writer.into_bytes())
+    }
+
+    /// Serializes a value directly into `output`, retaining its allocation for later frames.
+    ///
+    /// On failure `output` is empty but keeps the reusable allocation. This makes error paths
+    /// deterministic and prevents a partial frame from being sent accidentally.
+    #[inline]
+    pub fn serialize_into<T: MemoryPackSerialize>(
+        value: &T,
+        output: &mut Vec<u8>,
+    ) -> Result<(), MemoryPackError> {
+        let reusable = mem::take(output);
+        let mut writer = MemoryPackWriter::from_reusable_buffer(reusable);
+        let result = value.serialize(&mut writer);
+        if result.is_err() {
+            writer.buffer.clear();
+        }
+        *output = writer.into_bytes();
+        result
     }
 
     /// Serialize a value to an existing writer

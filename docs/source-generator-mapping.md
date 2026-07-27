@@ -9,8 +9,8 @@ place of Roslyn analyzers, reflection discovery, and module initializers.
 | `ActivityTagProviderGenerator.cs` | `#[derive(Message)]` with `#[catga(trace_tag)]` fields emits `Message::visit_trace_tags`. | `tests/macros.rs`, `tests/observability.rs` |
 | `Analyzers/BlockingCallAnalyzer.cs` | Tokio async APIs plus Clippy and workspace review reject blocking runtime paths; Catga public methods are async. | `cargo clippy --workspace --all-targets -D warnings` |
 | `Analyzers/CatgaAnalyzerRules.cs` | Stable `CatgaResult`/`ErrorCode` contracts and Rust lint configuration in root `Cargo.toml`. | workspace Clippy and Rustdoc gates |
-| `Analyzers/MissingMemoryPackableAttributeAnalyzer.cs` | `Serialize`/`DeserializeOwned` bounds are required at the concrete Postcard API boundary. | `tests/codec.rs` |
-| `Analyzers/MissingSerializerRegistrationAnalyzer.cs` | Codec availability is a compile-time generic bound; no reflection registration exists. | `catga-codec-postcard` Rustdoc and tests |
+| `Analyzers/MissingMemoryPackableAttributeAnalyzer.cs` | `MemoryPackSerialize`/`MemoryPackDeserialize` bounds are required at the concrete MemoryPack API boundary. | `tests/memorypack.rs`, `tests/codec.rs` |
+| `Analyzers/MissingSerializerRegistrationAnalyzer.cs` | Codec availability is a compile-time generic bound; no reflection registration exists. | `catga-core` codec traits and `catga-codec-memorypack` tests |
 | `Analyzers/MultipleHandlersAnalyzer.cs` | `catga_handlers!` rejects duplicate request registrations at macro expansion. | `crates/catga-macros/src/handlers.rs` tests |
 | `Analyzers/NamingConventionAnalyzer.cs` | Rust item naming is enforced by compiler and Clippy lints rather than a framework-specific analyzer. | workspace Clippy gate |
 | `Analyzers/ScopedLifetimeMismatchAnalyzer.cs` | `Arc` ownership and `Send + Sync + 'static` trait bounds express runtime sharing without DI lifetimes. | crate public trait bounds |

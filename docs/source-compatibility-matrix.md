@@ -6,7 +6,7 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 
 | Upstream area | Rust replacement | Evidence | Status |
 | --- | --- | --- | --- |
-| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-postcard` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel,event_store}` | Migrated; public Rustdoc is checked with warnings denied, event-store reads use validated cursor pages of at most 1,024 records, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience with rolling failure-ratio circuits and atomic full jitter, and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
+| Core CQRS, pipeline, reliability, event sourcing (144 C# files) | `catga-core`, `catga-macros`, `catga-codec-memorypack` | `tests/{mediator,pipeline,resilience,reliability_contracts,event_sourcing,projections,transport,distributed_id,time_travel,event_store}` | Migrated; public Rustdoc is checked with warnings denied, event-store reads use validated cursor pages of at most 1,024 records, Snowflake IDs support zero-allocation caller-buffer formatting, `ResilienceExecutor` provides bounded reusable transport/persistence resilience with rolling failure-ratio circuits and atomic full jitter, and `SnapshotTimeTravelService` reconstructs historical aggregates from immutable version-matched snapshots plus only later events |
 | HTTP integration (11 C# files) | `catga-axum` | `tests/axum.rs` | Migrated with typed and arbitrary-signature static Axum routes instead of reflection discovery; leader forwarding and the opt-in `CorrelationHttpClient` retain ambient correlation and W3C trace context across HTTP hops without a global client wrapper, `EndpointValidation` maps input errors to the stable Catga validation result, `IntoCatgaHttpResponse` replaces overlapping mutable C# result builders with one allocation-conscious result-to-response trait, and opt-in `endpoint_panic_middleware` replaces endpoint exception handling without exposing panic payloads |
 | Cluster coordination (10 C# files) | `catga-cluster`, Axum raft transport | `tests/{cluster,raft_cluster,raft_runtime,raft_state_machine_runtime}.rs` | Migrated; committed application entries use a bounded in-memory page and resume from durable Raft storage without discarding overflow |
 | Flow and state machines (67 C# files) | `catga-flow`, Memory/Redis/NATS flow stores | `tests/flow`, `tests/state_machine*.rs`, `tests/observability.rs` | Migrated; durable DSL recovery uses bounded nested conditional paths, explicitly replayable ForEach item snapshots, branch-local parallel cursors, and a persisted `when_any` winner. Durable child fan-out first persists up to 1,024 caller-supplied stable child identities, then uses expiring CAS launch claims and an application-owned idempotent launcher; it retains no child task, no unbounded result list, and no result payload larger than 64 KiB. Tagged durable steps select caller-owned timeouts and bounded retries only for typed `Transient` errors; no detached timer or retry task is created, and every durable transition remains persisted regardless of a source-style persist marker. Discovery summaries expose both exact creation and last-successful-update timestamps; legacy continuation frames recover the latter as creation time. Async step lifecycle hooks are serial, caller-owned, and emitted before ordinary checkpoint persistence, preserving at-least-once replay. `FlowSucceeded` is emitted only after an atomically created bounded terminal state, so later invocations restore the terminal state without replaying steps or that success hook. The same recovery contract is exercised in memory and compiled through explicit Redis/NATS service-gated tests |
@@ -15,14 +15,13 @@ pure-Rust workspace.  It records Rust replacements rather than preserving
 | NATS persistence and transport (24 C# files) | `catga-nats` | `tests/{nats,nats_request}.rs` | Migrated; real Core NATS and JetStream regressions include explicit QoS separation and native redelivery-attempt reporting |
 | Redis persistence and transport (26 C# files) | `catga-redis` | `tests/redis.rs`, `tests/state_machine_persistence.rs` | Migrated; real Redis regression covers Streams queues, ephemeral Pub/Sub broadcasts, stores, historical enhanced snapshots, durable DSL step progress, native redelivery-attempt reporting, and bounded group-wide idle-delivery recovery |
 | External job schedulers (6 C# files) | `FlowDueService`, `DueFlowScheduler`, Memory/Redis/NATS schedulers | `tests/flow`, `tests/redis.rs`, `tests/nats.rs` | Replaced with lease-aware pure-Rust scheduling. The NATS scheduler uses JetStream KV CAS, generation-fenced schedule identities, and a 32-entry paged discovery bound; `FlowDueService` remains the caller-owned poller and no scheduler worker is created. |
-| Binary serialization (4 C# files) | `catga-codec-postcard` | `tests/codec.rs` | Replaced with compact Postcard codec, reusable encode buffers, and `PostcardTransport` typed publication, destination delivery, bounded batches, acknowledgement-owning decoded deliveries, and caller-owned one-delivery processing |
-| Catga-owned MemoryPack persistence records | `catga-codec-memorypack` | immutable `tests/fixtures/memorypack/v1`, `tests/memorypack.rs` | Migrated for the seven fixed Catga formatter layouts with strict bounded decoding and golden byte round trips; application-owned values use explicit `MemoryPackValueCodec` schemas rather than C# reflection |
+| Binary serialization (4 C# files) | `catga-codec-memorypack` | `tests/{codec,memorypack}.rs`, codec crate tests | Replaced with bounded MemoryPack framing, reusable direct encode buffers, and Core `TypedTransport`/`TypedDelivery` generic transport contracts; application payloads use explicit static MemoryPack schemas rather than runtime reflection |
 | Source generation (15 C# files) | `catga-macros` | `tests/macros.rs`, `docs/source-generator-mapping.md` | Replaced with proc macros, trait bounds, and compile-time handler validation |
 | Testing helpers (5 C# files) | `catga-testing` | `tests/testing/{helpers,harness,aggregate,flow}.rs` | Migrated; spies cover concrete handlers, async actions, explicit missing-handler failures, ordered captures, and assertion helpers, while typed aggregate scenarios and Flow contexts use real bounded in-memory dependencies |
 | In-memory transport (3 C# files) | `catga-memory::{MemoryTransport, MemoryPubSubTransport}` | `tests/{memory_transport,delivery_ack,observability}.rs` | Migrated with distinct bounded queue and broadcast adapters plus drain tracking; real queue and Pub/Sub publications emit bounded producer metrics |
 | Destination send/subscribe transport contract | `DestinationTransport` plus Memory/Redis/NATS adapters | `tests/transport/destination.rs`, `tests/{redis,nats}.rs` | Migrated; Memory, Redis, and JetStream paths verified |
-| Transport-context metadata and header destination routing | `catga-core::{EnvelopeHeaders, MessageRouter}` and `catga-codec-postcard` | `tests/{message,codec,routing}.rs` | Migrated with bounded immutable headers, allocation-free routing, and backward-compatible Postcard propagation |
-| Cross-service request client factory | `PostcardRequestClientFactory` | `tests/transport/request_client.rs` | Migrated with `Arc` sharing, typed default destinations, and timeout validation |
+| Transport-context metadata and header destination routing | `catga-core::{EnvelopeHeaders, MessageRouter}` and `catga-codec-memorypack` | `tests/{message,codec,routing}.rs` | Migrated with bounded immutable headers, allocation-free routing, and strict MemoryPack propagation |
+| Cross-service request client factory | `MemoryPackRequestClientFactory` | `tests/transport/request_client.rs` | Migrated with `Arc` sharing, typed default destinations, timeout validation, and codec-independent Core request traits |
 | RabbitMQ/AMQP broker adapter | None by project constraint | workspace dependency and source audit | Intentionally excluded; no RabbitMQ, AMQP, `lapin`, or `amqprs` dependency is present |
 | ASP.NET HTTP health routes | None by project constraint | route and source audit | Intentionally excluded; internal Rust lifecycle probes are not HTTP health-check endpoints |
 
@@ -55,11 +54,9 @@ no machine-dependent timing threshold.
   diagnostic details (at most 1 KiB without splitting UTF-8), and explicit
   retryability. `Transient`, `Timeout`, and `Unavailable` derive retryability;
   source `TRANSPORT_FAILED` and `SERIALIZATION_FAILED` are accepted as typed
-  input aliases. New Postcard RPC errors preserve these fields. The two-field
-  historical RPC error layout is accepted only through an exact, full-frame
-  fallback after a current decode reaches end-of-frame; generic error decoding
-  remains strict so truncated or malformed current frames cannot masquerade as
-  legacy traffic.
+  input aliases. MemoryPack RPC errors preserve the supported fields and every
+  decode consumes one exact bounded frame; legacy binary layouts are rejected
+  instead of remaining a runtime dependency.
 * Public API documentation is compiled with warnings denied, so broken links and
   documentation warnings fail the quality gate instead of reaching consumers.
 * EventStore has no whole-history or whole-catalog read API. Consumers follow
@@ -77,7 +74,8 @@ no machine-dependent timing threshold.
   nesting, and trailing-input checks without runtime type lookup or reflection.
 * Transport operations consume caller-owned envelopes and use bounded futures
   or queues rather than task collections sized by input batches.
-* Source generic transport calls map to `PostcardTransport`: ordinary messages
+* Source generic transport calls map to Core `TypedTransport` with an explicit
+  payload codec: ordinary messages
   use `AtLeastOnce`, while explicit `publish_event`/`send_event_to` operations
   use the source event default of `AtMostOnce` and reliable-event operations
   select `AtLeastOnce`. `#[catga(version = N)]` implements `Message::schema_version`
@@ -90,7 +88,7 @@ no machine-dependent timing threshold.
   encode priority as the source's untyped `x-priority` header. Scoped inbound
   transport context carries the received `Copy` priority through nested typed
   publication, scheduling, and requests ahead of a nested message's default.
-  Typed receive methods return `PostcardDelivery<T>`,
+  Typed receive methods return `TypedDelivery<T>`,
   which retains the original owned acknowledgement token; decode failures
   request redelivery before returning a structured error. Typed batches lazily
   retain only the configured number of encoded messages and pending futures;
@@ -132,9 +130,11 @@ no machine-dependent timing threshold.
   boundaries: `#[derive(Message)]` emits message identity, authorization,
   batch and trace-tag metadata; `catga_handlers!` emits typed request/event
   registration; `catga_routes!` emits static Catga routes and `axum_routes!`
-  emits static native Axum-handler routes; and Postcard bounds make serializer
+  emits static native Axum-handler routes; and payload codec bounds make serializer
   availability a compile-time requirement. This replaces
-  reflection-based registration analyzers without runtime scanning.
+  reflection-based registration analyzers without runtime scanning. MemoryPack
+  bounds stay in `catga-codec-memorypack`; Core payload and request traits are
+  format-independent so future codecs do not require a Core dependency change.
 * The source hosted transport lifecycle maps to owning
   `TransportLifecycle<T>`. It initializes in the caller's task, permanently
   stops accepting work, waits for one bounded drain future, and consumes the
@@ -263,21 +263,19 @@ no machine-dependent timing threshold.
 * Source `TransportContext.Metadata` dictionaries map to optional immutable
   `EnvelopeHeaders`. Header-free envelopes retain no header allocation; a
   nonempty header set uses one shared `Arc` slice with bounded, validated
-  key/value bytes and unique keys. `PostcardDelivery::with_transport_context`
+  key/value bytes and unique keys. `TypedDelivery::with_transport_context`
   explicitly scopes a received envelope's correlation, `Copy` priority, and
   shared headers while Rust owns the delivery; nested typed publication, typed
   request/reply, and delayed outbox insertion inherit them without a payload
   copy or background task. Explicit typed headers override matching scoped
   keys and retain other scoped keys, using the same bounded merge validation.
   `MessageRouter::resolve_envelope_headers` retains first-match routing without
-  rebuilding a map, and the defaulted Postcard header field carries the context
-  through codec-backed adapters while an exact legacy decoder retains pre-header
-  payload compatibility.
+  rebuilding a map, and the envelope header field carries the context
+  through codec-backed adapters with strict bounded MemoryPack frames.
 * Source `TransportContext.SentAt` maps to optional UTC epoch milliseconds on
   `Envelope`. New Rust envelopes capture the wall clock without coupling to a
-  Snowflake ID, callers can supply an exact replay time, and Postcard preserves
-  it across codec-backed adapters. Header-bearing and original legacy Postcard
-  layouts decode with an unknown `None` timestamp instead of a forged value.
+  Snowflake ID, callers can supply an exact replay time, and MemoryPack preserves
+  it across codec-backed adapters.
 * Source outbox `RetryCount`, `MaxRetries`, `LastError`, and terminal `Failed`
   status map to per-message Rust state with a default three-failure limit.
   Failure text is UTF-8-safe and capped at 1 KiB. Memory uses an entry-local
@@ -295,7 +293,7 @@ no machine-dependent timing threshold.
   per Lua invocation, so a large due backlog cannot expand script memory or
   runtime proportionally to every due record.
 * RobustMQ mailbox requests and replies consume `Envelope` priority rather
-  than an adapter-local default. Typed Postcard replies preserve the request
+  than an adapter-local default. Typed MemoryPack replies preserve the request
   priority while keeping response QoS, delivery mode, and scheduling metadata
   independent. RobustMQ has only low, normal, and high broker levels, so both
   Catga `High` and `Critical` intentionally map to its high level without a

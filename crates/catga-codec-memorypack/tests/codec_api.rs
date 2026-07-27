@@ -3,8 +3,8 @@
 use std::{sync::Arc, time::Duration};
 
 use catga_codec_memorypack::{
-    MemoryPackCodec, MemoryPackRequestClient, MemoryPackRpcResponse, MemoryPackSnapshotCodec,
-    MemoryPackable,
+    MemoryPackCodec, MemoryPackRequestClient, MemoryPackRpcResponse, MemoryPackSerializer,
+    MemoryPackSnapshotCodec, MemoryPackable,
 };
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, MessageMetadata, Request, RequestClient,
@@ -62,6 +62,25 @@ fn value_helpers_round_trip_and_reuse_the_caller_buffer() {
     );
     assert_eq!(
         codec.decode_value::<Value>(&output).expect("value decodes"),
+        value
+    );
+}
+
+#[test]
+fn serializer_writes_directly_into_a_reusable_buffer() {
+    let value = Value {
+        id: 7,
+        name: "direct-write".into(),
+    };
+    let mut output = Vec::with_capacity(128);
+    let allocation = output.as_ptr();
+
+    MemoryPackSerializer::serialize_into(&value, &mut output)
+        .expect("the reusable buffer serializes");
+
+    assert_eq!(output.as_ptr(), allocation);
+    assert_eq!(
+        MemoryPackSerializer::deserialize::<Value>(&output).expect("the direct frame decodes"),
         value
     );
 }

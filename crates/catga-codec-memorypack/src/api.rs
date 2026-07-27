@@ -537,9 +537,11 @@ impl MemoryPackCodec {
         value: &T,
         output: &mut Vec<u8>,
     ) -> CatgaResult<()> {
-        let bytes = self.encode_value(value)?;
-        output.clear();
-        output.extend_from_slice(&bytes);
+        MemoryPackSerializer::serialize_into(value, output).map_err(map_memorypack_error)?;
+        if let Err(error) = self.check_outbound_frame(output) {
+            output.clear();
+            return Err(error);
+        }
         Ok(())
     }
 

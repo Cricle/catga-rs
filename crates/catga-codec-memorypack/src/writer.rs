@@ -29,6 +29,20 @@ impl MemoryPackWriter {
         }
     }
 
+    /// Reuses an application-owned allocation for a fresh serialization frame.
+    ///
+    /// The input vector is cleared before use and returned to the caller by consuming this
+    /// writer with [`Self::into_bytes`]. This avoids a second frame allocation and copy in hot
+    /// transport paths that retain an output buffer between sends.
+    #[inline]
+    pub fn from_reusable_buffer(mut buffer: Vec<u8>) -> Self {
+        buffer.clear();
+        Self {
+            buffer,
+            optional_state: None,
+        }
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.buffer.len()
