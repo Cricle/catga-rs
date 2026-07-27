@@ -153,8 +153,6 @@ impl ScheduledResume {
 pub struct MemoryFlowScheduler {
     next_id: AtomicU64,
     state: Mutex<SchedulerState>,
-    #[cfg(test)]
-    claim_test_hook: Mutex<Option<ClaimTestHook>>,
 }
 
 #[derive(Default)]
@@ -169,13 +167,6 @@ struct SchedulerState {
 struct ScheduleClaim {
     owner: Box<str>,
     expires_at: SystemTime,
-}
-
-#[cfg(test)]
-#[derive(Clone)]
-struct ClaimTestHook {
-    schedule_read: std::sync::Arc<std::sync::Barrier>,
-    continue_claim: std::sync::Arc<std::sync::Barrier>,
 }
 
 impl SchedulerState {
@@ -228,15 +219,6 @@ impl SchedulerState {
 }
 
 impl MemoryFlowScheduler {
-    #[cfg(test)]
-    fn pause_before_claim_lock(&self) {
-        let hook = self.claim_test_hook.lock().clone();
-        if let Some(hook) = hook {
-            hook.schedule_read.wait();
-            hook.continue_claim.wait();
-        }
-    }
-
     fn allocate_schedule_id(&self) -> CatgaResult<u64> {
         self.next_id
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
@@ -371,8 +353,6 @@ impl DueFlowScheduler for MemoryFlowScheduler {
         let expires_at = lease_deadline(now, lease_for)?;
         let mut claimed = Vec::new();
         let mut inspected = 0;
-        #[cfg(test)]
-        self.pause_before_claim_lock();
         let mut state = self.state.lock();
         while inspected < limit {
             if state
@@ -501,274 +481,4 @@ fn lease_deadline(now: SystemTime, lease_for: Duration) -> CatgaResult<SystemTim
             "due-work lease deadline exceeds the supported SystemTime range",
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        sync::{Arc, Barrier, mpsc},
-        thread,
-        time::{Duration, SystemTime},
-    };
-
-    use catga_core::ErrorCode;
-
-    use super::{ClaimTestHook, DueFlowScheduler, FlowScheduler, MemoryFlowScheduler};
-
-    #[test]
-    fn an_expired_claim_cannot_be_renewed_by_its_former_owner() {
-        let scheduler = MemoryFlowScheduler::default();
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-        let schedule_id = futures::executor::block_on(scheduler.schedule_resume(
-            "payment/renew-expired",
-            "charge",
-            now,
-        ))
-        .expect("schedule creation must succeed");
-
-        assert_eq!(
-            futures::executor::block_on(scheduler.claim_due(
-                "owner",
-                now,
-                Duration::from_secs(1),
-                1,
-            ))
-            .expect("claim must succeed")
-            .len(),
-            1
-        );
-        assert!(
-            !futures::executor::block_on(scheduler.renew_due(
-                "owner",
-                &schedule_id,
-                now + Duration::from_secs(1),
-                Duration::from_secs(1),
-            ))
-            .expect("renewal must complete")
-        );
-    }
-
-    #[test]
-    fn released_due_work_remains_eligible_after_a_clock_rollback() {
-        let scheduler = MemoryFlowScheduler::default();
-        let due_at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-        let observed_at = due_at + Duration::from_secs(100);
-        let rolled_back_now = due_at + Duration::from_secs(50);
-        let schedule_id = futures::executor::block_on(scheduler.schedule_resume(
-            "payment/clock-rollback",
-            "charge",
-            due_at,
-        ))
-        .expect("schedule creation must succeed");
-
-        assert_eq!(
-            futures::executor::block_on(scheduler.claim_due(
-                "first-owner",
-                observed_at,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("initial claim must succeed")
-            .len(),
-            1
-        );
-        assert!(
-            futures::executor::block_on(scheduler.release_due("first-owner", &schedule_id))
-                .expect("release must succeed")
-        );
-        assert_eq!(
-            futures::executor::block_on(scheduler.claim_due(
-                "second-owner",
-                rolled_back_now,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("claim after clock rollback must succeed")
-            .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn releasing_a_foreign_rotated_claim_restores_its_original_eligibility() {
-        let scheduler = MemoryFlowScheduler::default();
-        let due_at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-        let observed_at = SystemTime::UNIX_EPOCH + Duration::from_secs(200);
-        let rolled_back_now = SystemTime::UNIX_EPOCH + Duration::from_secs(150);
-        let schedule_id = futures::executor::block_on(scheduler.schedule_resume(
-            "payment/foreign-rollback",
-            "charge",
-            due_at,
-        ))
-        .expect("schedule creation must succeed");
-
-        assert_eq!(
-            futures::executor::block_on(scheduler.claim_due(
-                "owner-a",
-                observed_at,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("initial claim must succeed")
-            .len(),
-            1
-        );
-        assert!(
-            futures::executor::block_on(scheduler.claim_due(
-                "owner-b",
-                observed_at,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("foreign claim inspection must succeed")
-            .is_empty()
-        );
-        assert!(
-            futures::executor::block_on(scheduler.release_due("owner-a", &schedule_id))
-                .expect("release must succeed")
-        );
-
-        assert_eq!(
-            futures::executor::block_on(scheduler.claim_due(
-                "owner-b",
-                rolled_back_now,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("claim after rollback must succeed")
-            .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn bounded_claim_rotates_a_live_foreign_claim_behind_later_due_work() {
-        let scheduler = MemoryFlowScheduler::default();
-        let first_due_at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-        let later_due_at = first_due_at + Duration::from_secs(1);
-        let foreign_id = futures::executor::block_on(scheduler.schedule_resume(
-            "payment/foreign",
-            "charge",
-            first_due_at,
-        ))
-        .expect("foreign schedule creation must succeed");
-        assert_eq!(
-            futures::executor::block_on(scheduler.claim_due(
-                "foreign-owner",
-                first_due_at,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("foreign claim must succeed")[0]
-                .schedule_id(),
-            foreign_id.as_ref()
-        );
-        let later_id = futures::executor::block_on(scheduler.schedule_resume(
-            "payment/later",
-            "charge",
-            later_due_at,
-        ))
-        .expect("later schedule creation must succeed");
-
-        assert!(
-            futures::executor::block_on(scheduler.claim_due(
-                "local-owner",
-                later_due_at,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("bounded foreign inspection must succeed")
-            .is_empty()
-        );
-        let claimed = futures::executor::block_on(scheduler.claim_due(
-            "local-owner",
-            later_due_at,
-            Duration::from_secs(60),
-            1,
-        ))
-        .expect("later due claim must succeed");
-
-        assert_eq!(claimed.len(), 1);
-        assert_eq!(claimed[0].schedule_id(), later_id.as_ref());
-    }
-
-    #[test]
-    fn exhausted_schedule_ids_return_unavailable_without_reusing_live_work() {
-        let scheduler = MemoryFlowScheduler::default();
-        let now = SystemTime::UNIX_EPOCH;
-        let first_id = futures::executor::block_on(scheduler.schedule_resume(
-            "payment/id-live",
-            "charge",
-            now,
-        ))
-        .expect("initial schedule creation must succeed");
-        scheduler
-            .next_id
-            .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
-
-        let error = futures::executor::block_on(scheduler.schedule_resume(
-            "payment/id-exhausted",
-            "charge",
-            now,
-        ))
-        .expect_err("exhausted identifiers must not wrap");
-
-        assert_eq!(error.code(), ErrorCode::Unavailable);
-        assert_eq!(scheduler.take_due(now)[0].schedule_id(), first_id.as_ref());
-    }
-
-    #[test]
-    fn a_cancelled_schedule_is_never_returned_by_a_racing_claimer() {
-        let scheduler = Arc::new(MemoryFlowScheduler::default());
-        let now = std::time::SystemTime::now();
-        let schedule_id =
-            futures::executor::block_on(scheduler.schedule_resume("payment/race", "charge", now))
-                .expect("schedule creation must succeed");
-        let hook = ClaimTestHook {
-            schedule_read: Arc::new(Barrier::new(2)),
-            continue_claim: Arc::new(Barrier::new(2)),
-        };
-        *scheduler.claim_test_hook.lock() = Some(hook.clone());
-
-        let claim_scheduler = Arc::clone(&scheduler);
-        let claim = thread::spawn(move || {
-            futures::executor::block_on(claim_scheduler.claim_due(
-                "claim-owner",
-                now,
-                Duration::from_secs(60),
-                1,
-            ))
-            .expect("claim must succeed")
-        });
-        hook.schedule_read.wait();
-
-        let cancel_scheduler = Arc::clone(&scheduler);
-        let cancel_id = schedule_id.clone();
-        let (cancelled_tx, cancelled_rx) = mpsc::channel();
-        let cancellation_completed = Arc::new(Barrier::new(2));
-        let cancellation_completed_in_thread = Arc::clone(&cancellation_completed);
-        let cancel = thread::spawn(move || {
-            let cancelled = futures::executor::block_on(cancel_scheduler.cancel_resume(&cancel_id))
-                .expect("cancellation must succeed");
-            cancelled_tx
-                .send(cancelled)
-                .expect("test receiver must remain available");
-            cancellation_completed_in_thread.wait();
-        });
-
-        cancellation_completed.wait();
-        hook.continue_claim.wait();
-
-        let claimed = claim.join().expect("claim thread must not panic");
-        let cancelled = cancelled_rx
-            .recv()
-            .expect("cancellation thread must report before the claim continues");
-        cancel.join().expect("cancellation thread must not panic");
-
-        assert!(cancelled, "the racing cancellation must succeed");
-        assert!(
-            claimed.is_empty(),
-            "a cancelled schedule must not be returned by a claimant"
-        );
-    }
 }

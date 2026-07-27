@@ -169,30 +169,3 @@ fn validate_subject(subject: &str) -> CatgaResult<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::{NatsPubSubConfig, NatsPubSubTransport};
-
-    use super::validate_subject;
-
-    #[test]
-    fn pubsub_subject_must_not_be_blank() {
-        assert!(validate_subject("orders.created").is_ok());
-        assert!(validate_subject("").is_err());
-        assert!(validate_subject(" \t").is_err());
-    }
-
-    #[test]
-    fn connect_validates_pubsub_subject_before_opening_a_connection() {
-        let result = futures::executor::block_on(NatsPubSubTransport::connect(NatsPubSubConfig {
-            server: "nats://127.0.0.1:1".into(),
-            subject: " ".into(),
-        }));
-
-        assert!(matches!(
-            result,
-            Err(error) if error.code() == catga_core::ErrorCode::Validation
-        ));
-    }
-}

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 //! Public client-injection constructor coverage.
 
 use catga_redis::{

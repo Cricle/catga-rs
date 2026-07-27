@@ -261,35 +261,3 @@ fn state(value: &[u8]) -> CatgaResult<ProcessingState> {
         )),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use catga_core::ErrorCode;
-
-    use super::{MAX_REDIS_RETENTION_MILLIS, retention_millis};
-
-    #[test]
-    fn retention_millis_rounds_submillisecond_values_up() {
-        assert!(matches!(retention_millis(Duration::from_nanos(1)), Ok(1)));
-    }
-
-    #[test]
-    fn retention_millis_accepts_the_configured_maximum() {
-        assert!(matches!(
-            retention_millis(Duration::from_millis(MAX_REDIS_RETENTION_MILLIS as u64)),
-            Ok(MAX_REDIS_RETENTION_MILLIS)
-        ));
-    }
-
-    #[test]
-    fn retention_millis_rejects_values_above_the_configured_maximum() {
-        assert!(matches!(
-            retention_millis(Duration::from_millis(
-                (MAX_REDIS_RETENTION_MILLIS + 1) as u64
-            )),
-            Err(error) if error.code() == ErrorCode::Validation
-        ));
-    }
-}

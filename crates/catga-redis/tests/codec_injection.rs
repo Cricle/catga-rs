@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 //! Contract coverage for Redis Streams envelope codec injection.
 
 use std::{

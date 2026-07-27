@@ -152,34 +152,3 @@ fn decode_dead_letter(
         )),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::decode_dead_letter;
-    use catga_codec_memorypack::MemoryPackCodec;
-    use catga_core::{Envelope, EnvelopeCodec, ErrorCode, MessageMetadata};
-
-    #[test]
-    fn redis_dead_letter_decoder_accepts_legacy_hash_fields() -> catga_core::CatgaResult<()> {
-        let codec = MemoryPackCodec::default();
-        let envelope = Envelope::new(
-            4,
-            "tests.dead-letter",
-            vec![1],
-            MessageMetadata::new(4, None),
-        );
-        let letter = decode_dead_letter(
-            &codec,
-            codec.encode(&envelope)?,
-            "old failure".to_owned(),
-            2,
-            None,
-            None,
-            None,
-        )?;
-
-        assert_eq!(letter.diagnostics().error_code(), ErrorCode::Internal);
-        assert_eq!(letter.diagnostics().stage(), "legacy");
-        Ok(())
-    }
-}

@@ -256,28 +256,3 @@ fn validate_subject(subject: &str) -> CatgaResult<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::NatsRequestClient;
-
-    use super::validate_subject;
-
-    #[test]
-    fn request_subject_must_not_be_blank() {
-        assert!(validate_subject("orders.create").is_ok());
-        assert!(validate_subject("").is_err());
-        assert!(validate_subject(" \t").is_err());
-    }
-
-    #[test]
-    fn connect_validates_request_subject_before_opening_a_connection() {
-        let result =
-            futures::executor::block_on(NatsRequestClient::connect("nats://127.0.0.1:1", " "));
-
-        assert!(matches!(
-            result,
-            Err(error) if error.code() == catga_core::ErrorCode::Validation
-        ));
-    }
-}

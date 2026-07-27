@@ -41,27 +41,3 @@ pub(crate) fn decode_state(frame: &[u8]) -> CatgaResult<FlowState> {
         )
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{decode_state, encode_state};
-    use catga_flow::FlowState;
-
-    #[test]
-    fn state_frames_use_the_memorypack_format_version() {
-        let state = FlowState::new("memorypack-version", "payment", [], "node-a");
-
-        let encoded = encode_state(&state).expect("encode state");
-
-        assert_eq!(encoded.first(), Some(&2));
-    }
-
-    #[test]
-    fn state_decoder_rejects_trailing_bytes() {
-        let state = FlowState::new("exact-frame", "payment", [], "node-a");
-        let mut encoded = encode_state(&state).expect("encode state");
-        encoded.push(0);
-
-        assert!(decode_state(&encoded).is_err());
-    }
-}

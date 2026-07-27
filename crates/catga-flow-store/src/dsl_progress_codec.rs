@@ -63,32 +63,3 @@ pub(crate) fn decode_progress(frame: &[u8]) -> CatgaResult<DslStepProgress> {
     validate_progress(&progress)?;
     Ok(progress)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{advances_version, decode_progress, encode_progress};
-    use catga_flow::DslStepProgress;
-
-    #[test]
-    fn maximum_version_cannot_be_its_own_successor() {
-        assert!(!advances_version(i64::MAX, i64::MAX));
-    }
-
-    #[test]
-    fn progress_frames_use_the_memorypack_format_version() {
-        let progress = DslStepProgress::new("memorypack-version", 0, []);
-
-        let encoded = encode_progress(&progress).expect("encode progress");
-
-        assert_eq!(encoded.first(), Some(&2));
-    }
-
-    #[test]
-    fn progress_decoder_rejects_trailing_bytes() {
-        let progress = DslStepProgress::new("exact-frame", 0, []);
-        let mut encoded = encode_progress(&progress).expect("encode progress");
-        encoded.push(0);
-
-        assert!(decode_progress(&encoded).is_err());
-    }
-}

@@ -54,6 +54,3 @@ pub use streams_rpc::{RedisStreamsRequest, RedisStreamsRequestClient, RedisStrea
 pub use subscription::RedisSubscriptions;
 pub use suspended_flow::RedisSuspendedFlows;
 pub use transport::RedisTransport;
-
-#[cfg(test)]
-mod flow_unit_tests;

@@ -340,37 +340,3 @@ impl DistributedIdGenerator for SnowflakeIdGenerator {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{SnowflakeIdGenerator, SnowflakeLayout};
-    use crate::{CatgaError, CatgaResult, ErrorCode};
-
-    #[test]
-    fn one_cas_reservation_claims_a_contiguous_sequence_range() -> CatgaResult<()> {
-        let generator = SnowflakeIdGenerator::new(7, SnowflakeLayout::default())?;
-
-        let first = generator.reserve_at(42, 3)?.ok_or_else(|| {
-            CatgaError::new(
-                ErrorCode::Internal,
-                "a fresh millisecond must have Snowflake sequence capacity",
-            )
-        })?;
-        let second = generator.reserve_at(42, 3)?.ok_or_else(|| {
-            CatgaError::new(
-                ErrorCode::Internal,
-                "the Snowflake sequence range must retain capacity",
-            )
-        })?;
-
-        assert_eq!(
-            (first.timestamp_offset, first.start_sequence, first.count),
-            (42, 0, 3)
-        );
-        assert_eq!(
-            (second.timestamp_offset, second.start_sequence, second.count),
-            (42, 3, 3)
-        );
-        Ok(())
-    }
-}

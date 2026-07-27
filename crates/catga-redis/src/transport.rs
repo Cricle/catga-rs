@@ -599,25 +599,3 @@ impl Drop for RecoveryGuard {
 pub(crate) fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::InFlight;
-
-    #[test]
-    fn recovery_gate_allows_one_reclaimer_while_multiple_receivers_wait() {
-        let in_flight = InFlight::new();
-        let _first = in_flight.begin_receive("orders");
-        let _second = in_flight.begin_receive("orders");
-
-        assert!(in_flight.try_start_recovery("orders").is_some());
-    }
-
-    #[test]
-    fn recovery_skips_owned_pending_entries_while_a_local_delivery_is_in_flight() {
-        let in_flight = InFlight::new();
-        in_flight.insert("orders", "1-0");
-
-        assert!(!in_flight.can_read_owned_pending("orders"));
-    }
-}

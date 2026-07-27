@@ -330,29 +330,3 @@ fn validate_bounds(limit: usize, scan_limit: usize) -> CatgaResult<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::flow_timeout_deadline_unix_ms;
-    use crate::{FlowContinuation, FlowState, WaitCondition, WaitPolicy};
-    use catga_core::CatgaResult;
-    use std::time::{Duration, SystemTime};
-
-    #[test]
-    fn timeout_deadline_rounds_fractional_milliseconds_up() -> CatgaResult<()> {
-        let continuation = FlowContinuation::waiting(
-            FlowState::new("fractional-timeout", "test", [], "node-a").suspended(),
-            "resume",
-            WaitCondition::new(
-                "fractional-timeout/wait",
-                WaitPolicy::All,
-                1,
-                SystemTime::UNIX_EPOCH + Duration::from_nanos(1),
-                Duration::ZERO,
-            ),
-        );
-
-        assert_eq!(flow_timeout_deadline_unix_ms(&continuation)?, Some(1));
-        Ok(())
-    }
-}

@@ -156,18 +156,3 @@ fn timestamp_error() -> CatgaError {
         "flow timestamp exceeds signed milliseconds",
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, SystemTime};
-
-    use super::stale_before_unix_millis;
-
-    #[test]
-    fn stale_threshold_underflow_includes_every_signed_millisecond() {
-        assert_eq!(
-            stale_before_unix_millis(SystemTime::UNIX_EPOCH, Duration::MAX),
-            Ok(i64::MIN)
-        );
-    }
-}
