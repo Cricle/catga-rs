@@ -13,6 +13,10 @@ enum Registration {
         message: Path,
         handler: Expr,
     },
+    Command {
+        message: Path,
+        handler: Expr,
+    },
     Event {
         message: Path,
         handlers: Punctuated<Expr, Token![,]>,
@@ -29,6 +33,10 @@ impl Parse for Registration {
                 message,
                 handler: input.parse()?,
             }),
+            "command" => Ok(Self::Command {
+                message,
+                handler: input.parse()?,
+            }),
             "event" => {
                 let content;
                 bracketed!(content in input);
@@ -39,7 +47,7 @@ impl Parse for Registration {
             }
             _ => Err(syn::Error::new(
                 kind.span(),
-                "expected `request` or `event`",
+                "expected `request`, `command`, or `event`",
             )),
         }
     }
@@ -56,6 +64,7 @@ impl Parse for Registrations {
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let Registrations(registrations) = syn::parse2(input)?;
     let mut request_messages = HashSet::with_capacity(registrations.len());
+    let mut command_messages = HashSet::with_capacity(registrations.len());
     for registration in &registrations {
         match registration {
             Registration::Request { message, .. } => {
@@ -63,6 +72,14 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
                     return Err(syn::Error::new_spanned(
                         message,
                         "duplicate request handler registration",
+                    ));
+                }
+            }
+            Registration::Command { message, .. } => {
+                if !command_messages.insert(quote!(#message).to_string()) {
+                    return Err(syn::Error::new_spanned(
+                        message,
+                        "duplicate command handler registration",
                     ));
                 }
             }
@@ -78,6 +95,9 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let entries = registrations.iter().map(|registration| match registration {
         Registration::Request { message, handler } => quote! {
             registry.register_request::<#message, _>(#handler)?;
+        },
+        Registration::Command { message, handler } => quote! {
+            registry.register_command::<#message, _>(#handler)?;
         },
         Registration::Event { message, handlers } => {
             let registrations = handlers.iter().map(|handler| {
@@ -115,6 +135,21 @@ mod tests {
             error
                 .to_string()
                 .contains("duplicate request handler registration")
+        );
+    }
+
+    #[test]
+    fn duplicate_command_registration_is_rejected_during_macro_expansion() {
+        let error = expand(quote! {
+            command RebuildIndex => RebuildIndexHandler;
+            command RebuildIndex => ReplayIndexHandler;
+        })
+        .expect_err("duplicate command registrations must not defer to startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate command handler registration")
         );
     }
 

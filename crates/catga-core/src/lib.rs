@@ -201,3 +201,21 @@ macro_rules! catga_pipeline {
         })()
     }};
 }
+
+/// Builds a typed, bounded [`CommandPipeline`] during application startup.
+///
+/// This is the no-response command counterpart to [`catga_pipeline!`]. It accepts existing
+/// [`CommandBehavior`] values, returns validation errors for excessive depth, and creates no
+/// global or background state.
+#[macro_export]
+macro_rules! catga_command_pipeline {
+    ($command:ty; $($behavior:expr),* $(,)?) => {{
+        (|| -> $crate::CatgaResult<$crate::CommandPipeline<$command>> {
+            let pipeline = $crate::CommandPipeline::<$command>::new();
+            $(
+                let pipeline = pipeline.try_with($behavior)?;
+            )*
+            Ok(pipeline)
+        })()
+    }};
+}

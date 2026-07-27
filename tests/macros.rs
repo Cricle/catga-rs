@@ -5,8 +5,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use catga_core::{
     AuthorizedRequest, AutoBatchingBehavior, BatchKeyProvider, BatchOptionsProvider, CatgaResult,
-    Event, EventHandler, Handler, Mediator, Message, MessagePriority, Pipeline, Request,
-    RetryBehavior, TimeoutBehavior,
+    Command, CommandHandler, CommandPipeline, Event, EventHandler, Handler, Mediator, Message,
+    MessagePriority, Pipeline, Request, RetryBehavior, TimeoutBehavior,
 };
 use catga_flow::{FlowDefinition, FlowStepOutcome};
 
@@ -107,6 +107,20 @@ impl Handler<Ping> for PingHandler {
     }
 }
 
+#[derive(catga_core::Message)]
+struct RebuildIndex;
+
+impl Command for RebuildIndex {}
+
+struct RebuildIndexHandler;
+
+#[async_trait]
+impl CommandHandler<RebuildIndex> for RebuildIndexHandler {
+    async fn handle(&self, _: RebuildIndex) -> CatgaResult<()> {
+        Ok(())
+    }
+}
+
 struct ConfiguredPingHandler {
     response: &'static str,
 }
@@ -157,6 +171,23 @@ async fn registration_macro_accepts_a_configured_handler_expression() {
         Mediator::new(registry).send(Ping).await.unwrap(),
         "configured"
     );
+}
+
+#[tokio::test]
+async fn registration_and_pipeline_macros_cover_no_response_commands() {
+    let registry = catga_core::catga_handlers! {
+        command RebuildIndex => RebuildIndexHandler;
+    }
+    .expect("command registration builds a registry");
+    let mediator = Mediator::new(registry);
+    let pipeline: CommandPipeline<RebuildIndex> =
+        catga_core::catga_command_pipeline!(RebuildIndex;)
+            .expect("an empty command pipeline is valid");
+
+    mediator
+        .send_command_with(RebuildIndex, &pipeline)
+        .await
+        .expect("registered command reaches its handler");
 }
 
 #[test]

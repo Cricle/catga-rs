@@ -11,7 +11,7 @@ place of Roslyn analyzers, reflection discovery, and module initializers.
 | `Analyzers/CatgaAnalyzerRules.cs` | Stable `CatgaResult`/`ErrorCode` contracts and Rust lint configuration in root `Cargo.toml`. | workspace Clippy and Rustdoc gates |
 | `Analyzers/MissingMemoryPackableAttributeAnalyzer.cs` | `MemoryPackSerialize`/`MemoryPackDeserialize` bounds are required at the concrete MemoryPack API boundary. | `tests/memorypack.rs`, `tests/codec.rs` |
 | `Analyzers/MissingSerializerRegistrationAnalyzer.cs` | Codec availability is a compile-time generic bound; no reflection registration exists. | `catga-core` codec traits and `catga-codec-memorypack` tests |
-| `Analyzers/MultipleHandlersAnalyzer.cs` | `catga_handlers!` rejects duplicate request registrations at macro expansion. | `crates/catga-macros/src/handlers.rs` tests |
+| `Analyzers/MultipleHandlersAnalyzer.cs` | `catga_handlers!` rejects duplicate request and no-response command registrations at macro expansion. | `crates/catga-macros/src/handlers.rs` tests |
 | `Analyzers/NamingConventionAnalyzer.cs` | Rust item naming is enforced by compiler and Clippy lints rather than a framework-specific analyzer. | workspace Clippy gate |
 | `Analyzers/ScopedLifetimeMismatchAnalyzer.cs` | `Arc` ownership and `Send + Sync + 'static` trait bounds express runtime sharing without DI lifetimes. | crate public trait bounds |
 | `EndpointRegistrationGenerator.cs` | `catga_routes!` emits explicit typed Axum route registrations. | `tests/axum.rs` |
