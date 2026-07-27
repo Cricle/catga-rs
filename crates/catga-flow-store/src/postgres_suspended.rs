@@ -5,11 +5,25 @@ use crate::{
 };
 use sqlx::PgPool;
 
+/// Stable PostgreSQL advisory-lock namespace for continuation schema migration.
+///
+/// PostgreSQL's `CREATE TABLE IF NOT EXISTS` still permits a concurrent initial DDL race, so
+/// every continuation-store migrator serializes that initial transaction with this key. The lock
+/// is transaction-scoped and is released automatically by commit or rollback.
+const CONTINUATION_MIGRATION_ADVISORY_LOCK: i64 = 4_928_346_905_119_623_496;
+
 /// Creates the PostgreSQL continuation table and bounded discovery indexes.
 pub(crate) async fn migrate(pool: &PgPool) -> catga_core::CatgaResult<()> {
     let mut tx = pool.begin().await.map_err(|error| {
         crate::error::database_error("begin PostgreSQL continuation migration", error)
     })?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(CONTINUATION_MIGRATION_ADVISORY_LOCK)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            crate::error::database_error("acquire PostgreSQL continuation migration lock", error)
+        })?;
     for sql in [
         "CREATE TABLE IF NOT EXISTS catga_flow_continuations (flow_key BYTEA PRIMARY KEY NOT NULL, flow_id TEXT NOT NULL UNIQUE, flow_type TEXT NOT NULL, flow_type_key BYTEA NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, created_at_ms BIGINT NOT NULL, created_at_subsec_ns BIGINT NOT NULL DEFAULT 0, updated_at_ms BIGINT NOT NULL DEFAULT 0, updated_at_subsec_ns BIGINT NOT NULL DEFAULT 0, deadline_ms BIGINT NULL, wait_correlation TEXT NULL, wait_correlation_key BYTEA NULL, revision BIGINT NOT NULL, due_token BYTEA NULL, lease_until_ms BIGINT NULL, payload BYTEA NOT NULL)",
         "ALTER TABLE catga_flow_continuations ADD COLUMN IF NOT EXISTS flow_type_key BYTEA NULL",

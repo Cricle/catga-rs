@@ -24,13 +24,18 @@ const FAILED: u8 = 4;
 
 const CLAIM: &str = r#"
 local value = redis.call('GET', KEYS[1])
-local state = value == false and 0 or string.byte(value, 1)
-local expiry, generation = value == false and 0 or string.match(string.sub(value, 2), '^(%d+):(%d+):')
-expiry = tonumber(expiry) or 0
-generation = tonumber(generation) or 0
+local state = 0
+local expiry = 0
+local generation = 0
+if value ~= false then
+    state = string.byte(value, 1)
+    local stored_expiry, stored_generation = string.match(string.sub(value, 2), '^(%d+):(%d+):')
+    expiry = tonumber(stored_expiry) or 0
+    generation = tonumber(stored_generation) or 0
+end
 if value == false or state == 4 or (state == 1 and expiry <= tonumber(ARGV[1])) then
     generation = generation + 1
-    redis.call('SET', KEYS[1], string.char(1) .. ARGV[1] .. ':' .. generation .. ':')
+    redis.call('SET', KEYS[1], string.char(1) .. ARGV[2] .. ':' .. generation .. ':')
     return generation
 end
 return 0
@@ -142,9 +147,11 @@ impl InboxStore for RedisInbox {
     ) -> CatgaResult<Option<InboxClaim>> {
         telemetry::record_persistence_optional_claim("redis", "inbox", "try_claim", async {
             let expires_at = inbox_claim_expires_at(lease)?;
+            let now = current_unix_ms()?;
             let mut connection = self.connection.clone();
             let generation = Script::new(CLAIM)
                 .key(self.key(message_id))
+                .arg(now)
                 .arg(expires_at)
                 .invoke_async::<i64>(&mut connection)
                 .await
