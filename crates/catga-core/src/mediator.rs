@@ -141,6 +141,7 @@ impl Mediator {
             Self::dispatch(&self.registry, message).instrument(span.clone()),
         )
         .await;
+        observability::record_response_tags::<M>(&span, &result);
         observability::record_request(&span, request_type, started.elapsed(), &result);
         result
     }
@@ -328,6 +329,7 @@ impl Mediator {
             None => operation.await,
         };
         let elapsed = started.elapsed();
+        observability::record_response_tags::<M>(&span, &result);
         observability::record_request(&span, request_type, elapsed, &result);
         observability::record_pipeline(&span, "request", pipeline.len(), elapsed, &result);
         result

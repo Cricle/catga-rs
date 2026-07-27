@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::{CatgaResult, Message, current_correlation_id};
+use crate::{CatgaResult, Message, Request, current_correlation_id};
 
 /// The tracing target used by every Catga framework event and span.
 pub const TRACING_TARGET: &str = "catga";
@@ -158,6 +158,33 @@ pub(crate) fn record_message_tags<M: Message>(span: &tracing::Span, message: &M)
             catga_trace_tag = name,
             catga_trace_value = %value,
             "catga message trace tag"
+        );
+    });
+}
+
+/// Adds a successful request response's opted-in trace tags as structured events below `span`.
+///
+/// The tracing-enabled check is deliberately before inspecting `result`: applications that do
+/// not enable Catga debug tracing do not visit response values, allocate tag collections, or
+/// expose response data. Response values never flow into `metrics` labels.
+pub(crate) fn record_response_tags<M: Request>(
+    span: &tracing::Span,
+    result: &CatgaResult<M::Response>,
+) {
+    if !tracing::enabled!(target: TRACING_TARGET, tracing::Level::DEBUG) {
+        return;
+    }
+    let Ok(response) = result else {
+        return;
+    };
+    M::visit_response_trace_tags(response, &mut |name, value| {
+        tracing::debug!(
+            target: TRACING_TARGET,
+            parent: span,
+            catga_trace_source = "response",
+            catga_trace_tag = name,
+            catga_trace_value = %value,
+            "catga response trace tag"
         );
     });
 }

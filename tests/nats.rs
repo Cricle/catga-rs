@@ -1604,6 +1604,59 @@ async fn nats_inbox_fences_a_reclaimed_claim_owner() {
 }
 
 #[tokio::test]
+async fn nats_inbox_fences_a_failed_claim_owner_after_reclaim() {
+    let server = nats_e2e::server_url().await;
+    let bucket = format!(
+        "CATGA_INBOX_FAILED_FENCE_{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock is after the Unix epoch")
+            .as_nanos()
+    );
+    let inbox = NatsInbox::connect(&server, bucket).await.unwrap();
+    let first = inbox
+        .try_claim(93)
+        .await
+        .unwrap()
+        .expect("first owner acquires the inbox claim");
+    assert_ne!(first.generation(), 0);
+
+    inbox.fail(first).await.unwrap();
+    let second = inbox
+        .try_claim(93)
+        .await
+        .unwrap()
+        .expect("second owner reclaims the failed inbox claim");
+    assert!(second.generation() > first.generation());
+    assert_eq!(
+        inbox.state(93).await.unwrap(),
+        Some(ProcessingState::Claimed)
+    );
+    assert!(inbox.result(93).await.unwrap().is_none());
+
+    assert!(matches!(
+        inbox.complete(first, Some(Arc::from([1_u8]))).await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    assert!(matches!(
+        inbox.fail(first).await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    assert_eq!(
+        inbox.state(93).await.unwrap(),
+        Some(ProcessingState::Claimed)
+    );
+    assert!(inbox.result(93).await.unwrap().is_none());
+
+    inbox
+        .complete(second, Some(Arc::from([2_u8])))
+        .await
+        .unwrap();
+    assert_eq!(inbox.result(93).await.unwrap().as_deref(), Some(&[2][..]));
+}
+
+#[tokio::test]
 async fn nats_inbox_removes_completed_records_with_a_bounded_scan() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(

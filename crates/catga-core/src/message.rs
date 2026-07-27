@@ -44,6 +44,23 @@ pub trait Message: Send + Sync + 'static {
 pub trait Request: Message {
     /// The value returned by the matching request handler.
     type Response: Send + 'static;
+
+    /// Visits explicitly opted-in values from a successful response for structured tracing.
+    ///
+    /// The default implementation exports no response data. Override this method to expose only
+    /// stable, non-sensitive values that are useful when diagnosing a request, for example a
+    /// version or a bounded business status. Catga invokes it only after a successful dispatch
+    /// and only while debug tracing for [`crate::TRACING_TARGET`] is enabled. Values are emitted
+    /// as structured tracing events, never as metrics labels.
+    ///
+    /// Unlike [`Message::visit_trace_tags`], response tagging is declared on the request because
+    /// the response type is an associated type of [`Request`]. This keeps the opt-in local to the
+    /// request/response contract and lets ordinary response types remain dependency-free.
+    fn visit_response_trace_tags(
+        _: &Self::Response,
+        _: &mut dyn FnMut(&str, &dyn std::fmt::Display),
+    ) {
+    }
 }
 
 /// A message that has no response value.

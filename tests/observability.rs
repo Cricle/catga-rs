@@ -198,6 +198,38 @@ impl Handler<TaggedReconcile> for TaggedHandler {
     }
 }
 
+struct ResponseTaggedReconcile;
+
+impl catga_core::Message for ResponseTaggedReconcile {}
+
+struct ReconciledStock {
+    available: u64,
+    internal_note: &'static str,
+}
+
+impl Request for ResponseTaggedReconcile {
+    type Response = ReconciledStock;
+
+    fn visit_response_trace_tags(
+        response: &Self::Response,
+        visit: &mut dyn FnMut(&str, &dyn std::fmt::Display),
+    ) {
+        visit("inventory.available", &response.available);
+    }
+}
+
+struct ResponseTaggedHandler;
+
+#[async_trait]
+impl Handler<ResponseTaggedReconcile> for ResponseTaggedHandler {
+    async fn handle(&self, _: ResponseTaggedReconcile) -> CatgaResult<ReconciledStock> {
+        Ok(ReconciledStock {
+            available: 12,
+            internal_note: "do not expose",
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RetryReconcile;
 
@@ -1077,6 +1109,42 @@ async fn mediator_records_opted_in_message_tags_as_structured_tracing_events() {
     assert_eq!(
         *tags.lock().expect("trace tag collector lock"),
         [("inventory.sku".to_owned(), "sku-42".to_owned())]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mediator_records_only_opted_in_successful_response_tags_as_structured_tracing_events() {
+    let recorder = MetricRecorder::default();
+    let metrics_guard = metrics::set_default_local_recorder(&recorder);
+    let tags = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(TraceTagLayer(Arc::clone(&tags)));
+    let guard = tracing::subscriber::set_default(subscriber);
+    let mut registry = Registry::new();
+    registry
+        .register_request::<ResponseTaggedReconcile, _>(ResponseTaggedHandler)
+        .expect("one typed handler can be registered");
+    let mediator = Mediator::new(registry);
+
+    let response = mediator
+        .send(ResponseTaggedReconcile)
+        .await
+        .expect("tagged response request succeeds");
+    drop(guard);
+    drop(metrics_guard);
+
+    assert_eq!(response.available, 12);
+    assert_eq!(response.internal_note, "do not expose");
+    assert_eq!(
+        *tags.lock().expect("trace tag collector lock"),
+        [("inventory.available".to_owned(), "12".to_owned())]
+    );
+    assert_eq!(
+        recorder.counter("catga.requests.executed|outcome=success"),
+        1
+    );
+    assert!(
+        recorder.counter("catga.requests.executed|inventory.available=12,outcome=success") == 0,
+        "response values must never become metrics labels"
     );
 }
 
