@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{panic::AssertUnwindSafe, sync::Arc};
 
 use async_trait::async_trait;
+use futures::FutureExt;
 
 use crate::{
     Behavior, CachedResultCodec, CatgaError, CatgaResult, ErrorCode, IdempotencyStore, Next,
@@ -24,6 +25,30 @@ impl<C> IdempotencyBehavior<C> {
     pub fn new(store: Arc<dyn IdempotencyStore>, codec: C) -> Self {
         Self { store, codec }
     }
+
+    async fn fail_claim(&self, key: &str, original_error: &CatgaError) {
+        if let Err(cleanup_error) = self.store.fail(key).await {
+            tracing::warn!(
+                target: crate::TRACING_TARGET,
+                error = %cleanup_error.message(),
+                original_error = %original_error.message(),
+                "idempotency claim cleanup failed while preserving the original pipeline error"
+            );
+        }
+    }
+
+    async fn next_result<T>(
+        &self,
+        operation: impl std::future::Future<Output = CatgaResult<T>>,
+    ) -> CatgaResult<T> {
+        match AssertUnwindSafe(operation).catch_unwind().await {
+            Ok(result) => result,
+            Err(_) => Err(CatgaError::new(
+                ErrorCode::Internal,
+                "idempotency pipeline processing panicked",
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -46,14 +71,20 @@ where
                 });
         }
 
-        match next.run(message).await {
+        match self.next_result(next.run(message)).await {
             Ok(response) => {
-                let cached = self.codec.encode(&response)?;
+                let cached = match self.codec.encode(&response) {
+                    Ok(cached) => cached,
+                    Err(error) => {
+                        self.fail_claim(&key, &error).await;
+                        return Err(error);
+                    }
+                };
                 self.store.complete(&key, Some(cached)).await?;
                 Ok(response)
             }
             Err(error) => {
-                self.store.fail(&key).await?;
+                self.fail_claim(&key, &error).await;
                 Err(error)
             }
         }

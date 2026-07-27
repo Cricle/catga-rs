@@ -30,6 +30,15 @@ impl Handler<Double> for DoubleHandler {
     }
 }
 
+struct ReplacementDoubleHandler;
+
+#[async_trait]
+impl Handler<Double> for ReplacementDoubleHandler {
+    async fn handle(&self, message: Double) -> CatgaResult<u64> {
+        Ok(message.0 * 3)
+    }
+}
+
 struct PanickingDoubleHandler;
 
 #[async_trait]
@@ -287,6 +296,21 @@ async fn command_registration_rejects_duplicates_without_replacing_the_handler()
 }
 
 #[tokio::test]
+async fn request_registration_rejects_duplicates_without_replacing_the_handler() -> CatgaResult<()>
+{
+    let mut registry = Registry::new();
+    registry.register_request::<Double, _>(DoubleHandler)?;
+
+    assert!(matches!(
+        registry.register_request::<Double, _>(ReplacementDoubleHandler),
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+
+    assert_eq!(Mediator::new(registry).send(Double(42)).await?, 84);
+    Ok(())
+}
+
+#[tokio::test]
 async fn command_dispatch_reports_missing_handler_and_unbound_handle() -> CatgaResult<()> {
     let handle = MediatorHandle::new();
 
@@ -328,6 +352,8 @@ struct NotifyCustomer {
 
 struct FailingAudit;
 
+struct PanickingAudit;
+
 #[async_trait]
 impl EventHandler<OrderCreated> for AuditOrder {
     async fn handle(&self, _: OrderCreated) -> CatgaResult<()> {
@@ -351,6 +377,13 @@ impl EventHandler<OrderCreated> for FailingAudit {
             ErrorCode::Transient,
             "audit backend is unavailable",
         ))
+    }
+}
+
+#[async_trait]
+impl EventHandler<OrderCreated> for PanickingAudit {
+    async fn handle(&self, _: OrderCreated) -> CatgaResult<()> {
+        panic!("event handler panic must not escape fan-out");
     }
 }
 
@@ -393,6 +426,40 @@ async fn event_fan_out_finishes_later_handlers_after_an_earlier_failure() -> Cat
 
     assert_eq!(error.code(), ErrorCode::Transient);
     assert_eq!(notified.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn event_fan_out_converts_panics_and_still_invokes_healthy_handlers() -> CatgaResult<()> {
+    let sequential_count = Arc::new(AtomicUsize::new(0));
+    let mut sequential_registry = Registry::new();
+    sequential_registry.register_event::<OrderCreated, _>(PanickingAudit);
+    sequential_registry.register_event::<OrderCreated, _>(NotifyCustomer {
+        count: Arc::clone(&sequential_count),
+    });
+    let sequential_mediator = Mediator::new(sequential_registry);
+
+    assert!(matches!(
+        sequential_mediator.publish(OrderCreated).await,
+        Err(error) if error.code() == ErrorCode::Internal
+    ));
+    assert_eq!(sequential_count.load(Ordering::Relaxed), 1);
+
+    let concurrent_count = Arc::new(AtomicUsize::new(0));
+    let mut concurrent_registry = Registry::new();
+    concurrent_registry.register_event::<OrderCreated, _>(PanickingAudit);
+    concurrent_registry.register_event::<OrderCreated, _>(NotifyCustomer {
+        count: Arc::clone(&concurrent_count),
+    });
+    let concurrent_mediator = Mediator::new(concurrent_registry);
+
+    assert!(matches!(
+        concurrent_mediator
+            .publish_with_concurrency(OrderCreated, 2)
+            .await,
+        Err(error) if error.code() == ErrorCode::Internal
+    ));
+    assert_eq!(concurrent_count.load(Ordering::Relaxed), 1);
     Ok(())
 }
 

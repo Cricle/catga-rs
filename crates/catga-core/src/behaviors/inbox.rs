@@ -1,6 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use futures::FutureExt;
 
 use crate::{
     Behavior, CachedResultCodec, CatgaError, CatgaResult, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode,
@@ -50,6 +51,30 @@ impl<C> InboxBehavior<C> {
     pub const fn claim_lease(&self) -> Duration {
         self.claim_lease
     }
+
+    async fn fail_claim(&self, claim: crate::InboxClaim, original_error: &CatgaError) {
+        if let Err(cleanup_error) = self.store.fail(claim).await {
+            tracing::warn!(
+                target: crate::TRACING_TARGET,
+                error = %cleanup_error.message(),
+                original_error = %original_error.message(),
+                "inbox claim cleanup failed while preserving the original pipeline error"
+            );
+        }
+    }
+
+    async fn next_result<T>(
+        &self,
+        operation: impl std::future::Future<Output = CatgaResult<T>>,
+    ) -> CatgaResult<T> {
+        match AssertUnwindSafe(operation).catch_unwind().await {
+            Ok(result) => result,
+            Err(_) => Err(CatgaError::new(
+                ErrorCode::Internal,
+                "inbox pipeline processing panicked",
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -61,7 +86,7 @@ where
     async fn handle(&self, message: M, next: Next<M>) -> CatgaResult<M::Response> {
         let message_id = message.inbox_message_id();
         if message_id == 0 {
-            let result = next.run(message).await;
+            let result = self.next_result(next.run(message)).await;
             crate::telemetry::record_inbox_outcome(if result.is_ok() {
                 "bypassed"
             } else {
@@ -96,11 +121,12 @@ where
             return result;
         };
 
-        match next.run(message).await {
+        match self.next_result(next.run(message)).await {
             Ok(response) => {
                 let cached = match self.codec.encode(&response) {
                     Ok(cached) => cached,
                     Err(error) => {
+                        self.fail_claim(claim, &error).await;
                         crate::telemetry::record_inbox_outcome("failure");
                         return Err(error);
                     }
@@ -113,10 +139,7 @@ where
                 Ok(response)
             }
             Err(error) => {
-                if let Err(store_error) = self.store.fail(claim).await {
-                    crate::telemetry::record_inbox_outcome("failure");
-                    return Err(store_error);
-                }
+                self.fail_claim(claim, &error).await;
                 crate::telemetry::record_inbox_outcome("failure");
                 Err(error)
             }

@@ -113,24 +113,27 @@ impl Registry {
     }
 
     /// Registers the sole handler for a request type.
+    ///
+    /// Registering another handler for the same request returns
+    /// [`ErrorCode::Conflict`] and preserves the original handler.
     pub fn register_request<M, H>(&mut self, handler: H) -> CatgaResult<()>
     where
         M: Request,
         H: Handler<M> + 'static,
     {
-        let previous = self.requests.insert(
+        if self.requests.contains_key(&TypeId::of::<M>()) {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "request handler is already registered",
+            ));
+        }
+        self.requests.insert(
             TypeId::of::<M>(),
             Arc::new(RequestHandlerAdapter::<M, H> {
                 handler,
                 marker: PhantomData,
             }),
         );
-        if previous.is_some() {
-            return Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "request handler is already registered",
-            ));
-        }
         Ok(())
     }
 

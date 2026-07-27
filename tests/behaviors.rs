@@ -13,9 +13,9 @@ use catga_core::{
     CachedResultCodec, CatgaError, CatgaResult, Command, CommandHandler, CommandPipeline,
     Correlated, CorrelationBehavior, DeadLetter, DeadLetterBehavior, DeadLetterEnvelope,
     DeadLetterStore, DistributedLockBehavior, DistributedLockKey, Envelope, ErrorCode, Handler,
-    IdempotencyBehavior, IdempotencyKey, InboxBehavior, InboxKey, LeaseStore, Mediator,
-    MessageMetadata, Pipeline, Registry, Request, RetryBehavior, TimeoutBehavior,
-    current_correlation_id,
+    IdempotencyBehavior, IdempotencyKey, IdempotencyStore, InboxBehavior, InboxKey, InboxStore,
+    LeaseStore, Mediator, MessageMetadata, Pipeline, Registry, Request, RetryBehavior,
+    TimeoutBehavior, current_correlation_id,
 };
 use catga_memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox, MemoryLeases};
 use tokio::sync::{Mutex, Notify};
@@ -131,6 +131,27 @@ impl Handler<IdempotentWork> for CountingHandler {
     }
 }
 
+struct PanickingIdempotentHandler;
+
+#[async_trait]
+impl Handler<IdempotentWork> for PanickingIdempotentHandler {
+    async fn handle(&self, _: IdempotentWork) -> CatgaResult<u64> {
+        panic!("idempotent handler panic");
+    }
+}
+
+struct FailingIdempotentHandler;
+
+#[async_trait]
+impl Handler<IdempotentWork> for FailingIdempotentHandler {
+    async fn handle(&self, _: IdempotentWork) -> CatgaResult<u64> {
+        Err(CatgaError::new(
+            ErrorCode::Validation,
+            "idempotent handler failed",
+        ))
+    }
+}
+
 struct U64Codec;
 
 impl CachedResultCodec<u64> for U64Codec {
@@ -143,6 +164,21 @@ impl CachedResultCodec<u64> for U64Codec {
             .try_into()
             .map(u64::from_le_bytes)
             .map_err(|_| CatgaError::new(ErrorCode::Internal, "invalid cached u64"))
+    }
+}
+
+struct EncodingFailureCodec;
+
+impl CachedResultCodec<u64> for EncodingFailureCodec {
+    fn encode(&self, _: &u64) -> CatgaResult<Arc<[u8]>> {
+        Err(CatgaError::new(
+            ErrorCode::Internal,
+            "cache encoding failed",
+        ))
+    }
+
+    fn decode(&self, bytes: &[u8]) -> CatgaResult<u64> {
+        U64Codec.decode(bytes)
     }
 }
 
@@ -166,6 +202,96 @@ impl Handler<InboxWork> for CountingHandler {
     async fn handle(&self, _: InboxWork) -> CatgaResult<u64> {
         self.0.fetch_add(1, Ordering::Relaxed);
         Ok(21)
+    }
+}
+
+struct PanickingInboxHandler;
+
+#[async_trait]
+impl Handler<InboxWork> for PanickingInboxHandler {
+    async fn handle(&self, _: InboxWork) -> CatgaResult<u64> {
+        panic!("inbox handler panic");
+    }
+}
+
+struct FailingInboxHandler;
+
+#[async_trait]
+impl Handler<InboxWork> for FailingInboxHandler {
+    async fn handle(&self, _: InboxWork) -> CatgaResult<u64> {
+        Err(CatgaError::new(
+            ErrorCode::Validation,
+            "inbox handler failed",
+        ))
+    }
+}
+
+struct FailingIdempotencyCleanup {
+    fail_calls: AtomicUsize,
+}
+
+#[async_trait]
+impl IdempotencyStore for FailingIdempotencyCleanup {
+    async fn try_claim(&self, _: &str) -> CatgaResult<bool> {
+        Ok(true)
+    }
+
+    async fn complete(&self, _: &str, _: Option<Arc<[u8]>>) -> CatgaResult<()> {
+        Ok(())
+    }
+
+    async fn fail(&self, _: &str) -> CatgaResult<()> {
+        self.fail_calls.fetch_add(1, Ordering::Relaxed);
+        Err(CatgaError::new(
+            ErrorCode::Unavailable,
+            "idempotency cleanup failed",
+        ))
+    }
+
+    async fn state(&self, _: &str) -> CatgaResult<Option<catga_core::ProcessingState>> {
+        Ok(None)
+    }
+
+    async fn result(&self, _: &str) -> CatgaResult<Option<Arc<[u8]>>> {
+        Ok(None)
+    }
+}
+
+struct FailingInboxCleanup {
+    fail_calls: AtomicUsize,
+    fail_complete: bool,
+}
+
+#[async_trait]
+impl InboxStore for FailingInboxCleanup {
+    async fn try_claim(&self, message_id: u64) -> CatgaResult<Option<catga_core::InboxClaim>> {
+        Ok(catga_core::InboxClaim::new(message_id, 1))
+    }
+
+    async fn complete(&self, _: catga_core::InboxClaim, _: Option<Arc<[u8]>>) -> CatgaResult<()> {
+        if self.fail_complete {
+            return Err(CatgaError::new(
+                ErrorCode::Unavailable,
+                "inbox completion failed",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn fail(&self, _: catga_core::InboxClaim) -> CatgaResult<()> {
+        self.fail_calls.fetch_add(1, Ordering::Relaxed);
+        Err(CatgaError::new(
+            ErrorCode::Unavailable,
+            "inbox cleanup failed",
+        ))
+    }
+
+    async fn state(&self, _: u64) -> CatgaResult<Option<catga_core::ProcessingState>> {
+        Ok(None)
+    }
+
+    async fn result(&self, _: u64) -> CatgaResult<Option<Arc<[u8]>>> {
+        Ok(None)
     }
 }
 
@@ -429,6 +555,68 @@ async fn idempotency_behavior_returns_a_cached_result_without_reinvoking_the_han
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
 }
 
+#[tokio::test]
+async fn idempotency_behavior_releases_claims_after_panics_and_encoding_failures() {
+    let panic_store = Arc::new(MemoryIdempotency::default());
+    let mut panic_registry = Registry::new();
+    panic_registry
+        .register_request::<IdempotentWork, _>(PanickingIdempotentHandler)
+        .expect("panicking handler registers");
+    let panic_mediator = Mediator::new(panic_registry);
+    let panic_pipeline =
+        Pipeline::new().with(IdempotencyBehavior::new(panic_store.clone(), U64Codec));
+
+    assert!(matches!(
+        panic_mediator.send_with(IdempotentWork, &panic_pipeline).await,
+        Err(error) if error.code() == ErrorCode::Internal
+    ));
+    assert_eq!(
+        panic_store.state("idempotent-work").await.unwrap(),
+        Some(catga_core::ProcessingState::Failed)
+    );
+
+    let encoding_store = Arc::new(MemoryIdempotency::default());
+    let mut encoding_registry = Registry::new();
+    encoding_registry
+        .register_request::<IdempotentWork, _>(CountingHandler(Arc::new(AtomicUsize::new(0))))
+        .expect("counting handler registers");
+    let encoding_mediator = Mediator::new(encoding_registry);
+    let encoding_pipeline = Pipeline::new().with(IdempotencyBehavior::new(
+        encoding_store.clone(),
+        EncodingFailureCodec,
+    ));
+
+    assert!(matches!(
+        encoding_mediator
+            .send_with(IdempotentWork, &encoding_pipeline)
+            .await,
+        Err(error) if error.message() == "cache encoding failed"
+    ));
+    assert_eq!(
+        encoding_store.state("idempotent-work").await.unwrap(),
+        Some(catga_core::ProcessingState::Failed)
+    );
+}
+
+#[tokio::test]
+async fn idempotency_behavior_preserves_handler_errors_when_cleanup_fails() {
+    let store = Arc::new(FailingIdempotencyCleanup {
+        fail_calls: AtomicUsize::new(0),
+    });
+    let mut registry = Registry::new();
+    registry
+        .register_request::<IdempotentWork, _>(FailingIdempotentHandler)
+        .expect("failing handler registers");
+    let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new().with(IdempotencyBehavior::new(store.clone(), U64Codec));
+
+    assert!(matches!(
+        mediator.send_with(IdempotentWork, &pipeline).await,
+        Err(error) if error.message() == "idempotent handler failed"
+    ));
+    assert_eq!(store.fail_calls.load(Ordering::Relaxed), 1);
+}
+
 #[derive(Debug)]
 struct LockedWork;
 
@@ -680,6 +868,87 @@ async fn inbox_behavior_returns_a_cached_result_without_reinvoking_the_handler()
     assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
     assert_eq!(mediator.send_with(InboxWork, &pipeline).await.unwrap(), 21);
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn inbox_behavior_releases_claims_after_panics_and_encoding_failures() {
+    let panic_store = Arc::new(MemoryInbox::default());
+    let mut panic_registry = Registry::new();
+    panic_registry
+        .register_request::<InboxWork, _>(PanickingInboxHandler)
+        .expect("panicking handler registers");
+    let panic_mediator = Mediator::new(panic_registry);
+    let panic_pipeline = Pipeline::new().with(InboxBehavior::new(panic_store.clone(), U64Codec));
+
+    assert!(matches!(
+        panic_mediator.send_with(InboxWork, &panic_pipeline).await,
+        Err(error) if error.code() == ErrorCode::Internal
+    ));
+    assert_eq!(
+        panic_store.state(404).await.unwrap(),
+        Some(catga_core::ProcessingState::Failed)
+    );
+
+    let encoding_store = Arc::new(MemoryInbox::default());
+    let mut encoding_registry = Registry::new();
+    encoding_registry
+        .register_request::<InboxWork, _>(CountingHandler(Arc::new(AtomicUsize::new(0))))
+        .expect("counting handler registers");
+    let encoding_mediator = Mediator::new(encoding_registry);
+    let encoding_pipeline = Pipeline::new().with(InboxBehavior::new(
+        encoding_store.clone(),
+        EncodingFailureCodec,
+    ));
+
+    assert!(matches!(
+        encoding_mediator.send_with(InboxWork, &encoding_pipeline).await,
+        Err(error) if error.message() == "cache encoding failed"
+    ));
+    assert_eq!(
+        encoding_store.state(404).await.unwrap(),
+        Some(catga_core::ProcessingState::Failed)
+    );
+}
+
+#[tokio::test]
+async fn inbox_behavior_preserves_handler_errors_and_does_not_fail_after_completion_errors() {
+    let cleanup_store = Arc::new(FailingInboxCleanup {
+        fail_calls: AtomicUsize::new(0),
+        fail_complete: false,
+    });
+    let mut cleanup_registry = Registry::new();
+    cleanup_registry
+        .register_request::<InboxWork, _>(FailingInboxHandler)
+        .expect("failing handler registers");
+    let cleanup_mediator = Mediator::new(cleanup_registry);
+    let cleanup_pipeline =
+        Pipeline::new().with(InboxBehavior::new(cleanup_store.clone(), U64Codec));
+
+    assert!(matches!(
+        cleanup_mediator.send_with(InboxWork, &cleanup_pipeline).await,
+        Err(error) if error.message() == "inbox handler failed"
+    ));
+    assert_eq!(cleanup_store.fail_calls.load(Ordering::Relaxed), 1);
+
+    let completion_store = Arc::new(FailingInboxCleanup {
+        fail_calls: AtomicUsize::new(0),
+        fail_complete: true,
+    });
+    let mut completion_registry = Registry::new();
+    completion_registry
+        .register_request::<InboxWork, _>(CountingHandler(Arc::new(AtomicUsize::new(0))))
+        .expect("counting handler registers");
+    let completion_mediator = Mediator::new(completion_registry);
+    let completion_pipeline =
+        Pipeline::new().with(InboxBehavior::new(completion_store.clone(), U64Codec));
+
+    assert!(matches!(
+        completion_mediator
+            .send_with(InboxWork, &completion_pipeline)
+            .await,
+        Err(error) if error.message() == "inbox completion failed"
+    ));
+    assert_eq!(completion_store.fail_calls.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

@@ -478,7 +478,11 @@ impl Mediator {
                 return Ok(());
             };
             let mut deliveries = stream::iter(handlers.iter())
-                .map(|handler| handler.handle(Box::new(event.clone()) as Box<dyn Any + Send>))
+                .map(|handler| {
+                    isolate_mediator_panic(
+                        handler.handle(Box::new(event.clone()) as Box<dyn Any + Send>),
+                    )
+                })
                 .buffer_unordered(concurrency_limit);
             let mut first_error = None;
             while let Some(result) = deliveries.next().await {
@@ -518,17 +522,19 @@ impl Mediator {
                 };
                 let mut first_error = None;
                 for handler in preceding_handlers {
-                    if let Err(error) = handler
-                        .handle(Box::new(event.clone()) as Box<dyn Any + Send>)
-                        .await
+                    if let Err(error) = isolate_mediator_panic(
+                        handler.handle(Box::new(event.clone()) as Box<dyn Any + Send>),
+                    )
+                    .await
                         && first_error.is_none()
                     {
                         first_error = Some(error);
                     }
                 }
-                if let Err(error) = last_handler
-                    .handle(Box::new(event) as Box<dyn Any + Send>)
-                    .await
+                if let Err(error) = isolate_mediator_panic(
+                    last_handler.handle(Box::new(event) as Box<dyn Any + Send>),
+                )
+                .await
                     && first_error.is_none()
                 {
                     first_error = Some(error);

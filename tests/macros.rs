@@ -20,6 +20,16 @@ struct VersionedPing;
 #[derive(catga_core::Message)]
 struct GenericPing<T>(T);
 
+mod first_message_identity {
+    #[derive(catga_core::Message)]
+    pub struct NamedMessage;
+}
+
+mod second_message_identity {
+    #[derive(catga_core::Message)]
+    pub struct NamedMessage;
+}
+
 impl Request for Ping {
     type Response = &'static str;
 }
@@ -131,7 +141,7 @@ async fn derive_and_registration_macros_keep_setup_explicit_and_short() {
     .expect("unique registrations must build a registry");
     let mediator = Mediator::new(registry);
 
-    assert_eq!(Ping.message_type(), "Ping");
+    assert_eq!(Ping.message_type(), std::any::type_name::<Ping>());
     assert_eq!(mediator.send(Ping).await.unwrap(), "pong");
     mediator.publish(Notified).await.unwrap();
 }
@@ -151,9 +161,31 @@ async fn registration_macro_accepts_a_configured_handler_expression() {
 
 #[test]
 fn message_derive_supports_send_sync_static_generic_payloads() {
-    assert_eq!(GenericPing(7_u64).message_type(), "GenericPing");
+    assert_eq!(
+        GenericPing(7_u64).message_type(),
+        std::any::type_name::<GenericPing<u64>>()
+    );
     assert_eq!(VersionedPing.schema_version(), 2);
     assert_eq!(VersionedPing.priority(), MessagePriority::High);
+}
+
+#[test]
+fn message_derive_uses_distinct_full_type_identities() {
+    let first = first_message_identity::NamedMessage;
+    let second = second_message_identity::NamedMessage;
+    let unsigned = GenericPing(7_u8);
+    let signed = GenericPing(7_i8);
+
+    assert_eq!(
+        first.message_type(),
+        std::any::type_name::<first_message_identity::NamedMessage>()
+    );
+    assert_eq!(
+        second.message_type(),
+        std::any::type_name::<second_message_identity::NamedMessage>()
+    );
+    assert_ne!(first.message_type(), second.message_type());
+    assert_ne!(unsigned.message_type(), signed.message_type());
 }
 
 #[test]

@@ -336,7 +336,7 @@ impl<'a> ProbeGuard<'a> {
     fn complete<T>(&mut self, result: Result<&T, &CatgaError>) {
         match result {
             Ok(_) => self.breaker.record_success(self.probe),
-            Err(error) if error.code() == ErrorCode::Transient => {
+            Err(error) if error.code() != ErrorCode::Cancelled && error.is_retryable() => {
                 self.breaker.record_failure(self.probe);
             }
             Err(_) if self.probe => self.breaker.record_success(true),

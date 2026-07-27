@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Procedural macros for Catga.
+//! Procedural macros for Catga, including message derives with stable Rust type identities.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -12,7 +12,10 @@ use syn::{
 
 mod handlers;
 
-/// Implements `catga_core::Message` with the item's short Rust type name.
+/// Implements `catga_core::Message` with the fully qualified, monomorphized Rust type name.
+///
+/// The generated `message_type` is identical to the default implementation:
+/// `std::any::type_name::<Self>()`.
 ///
 /// `#[catga(authorize, roles("role"), policy("name"))]` additionally emits
 /// an `catga_core::AuthorizedRequest` implementation for request types.
@@ -59,7 +62,7 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
     quote! {
         impl #impl_generics ::catga_core::Message for #name #ty_generics #where_clause {
             fn message_type(&self) -> &'static str {
-                stringify!(#name)
+                ::std::any::type_name::<Self>()
             }
 
             fn schema_version(&self) -> u32 { #schema_version }

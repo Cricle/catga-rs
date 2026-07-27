@@ -46,6 +46,11 @@ struct ValidationThenTransientHandler {
     calls: Arc<AtomicUsize>,
 }
 
+struct FixedErrorHandler {
+    calls: Arc<AtomicUsize>,
+    error: CatgaError,
+}
+
 #[async_trait]
 impl Handler<RemoteCall> for RatioHandler {
     async fn handle(&self, _: RemoteCall) -> CatgaResult<()> {
@@ -75,6 +80,14 @@ impl Handler<RemoteCall> for ValidationThenTransientHandler {
             return Err(CatgaError::new(ErrorCode::Validation, "invalid request"));
         }
         Err(CatgaError::new(ErrorCode::Transient, "backend overloaded"))
+    }
+}
+
+#[async_trait]
+impl Handler<RemoteCall> for FixedErrorHandler {
+    async fn handle(&self, _: RemoteCall) -> CatgaResult<()> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Err(self.error.clone())
     }
 }
 
@@ -317,4 +330,75 @@ async fn circuit_does_not_count_validation_errors_as_recoverable_failures() {
         .expect_err("validation did not open the circuit before a transient failure");
     assert_eq!(transient.code(), ErrorCode::Transient);
     assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn circuit_uses_retryability_and_never_counts_cancelled_errors() {
+    for error in [
+        CatgaError::new(ErrorCode::Timeout, "request timed out"),
+        CatgaError::new(ErrorCode::Unavailable, "service unavailable"),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut registry = Registry::new();
+        registry
+            .register_request::<RemoteCall, _>(FixedErrorHandler {
+                calls: Arc::clone(&calls),
+                error,
+            })
+            .expect("test registry accepts one handler");
+        let mediator = Mediator::new(registry);
+        let pipeline = Pipeline::new().with(
+            CircuitBreakerBehavior::new(1, Duration::from_secs(1))
+                .expect("valid compatibility circuit configuration"),
+        );
+
+        mediator
+            .send_with(RemoteCall, &pipeline)
+            .await
+            .expect_err("retryable failure is returned before opening the circuit");
+        assert!(matches!(
+            mediator.send_with(RemoteCall, &pipeline).await,
+            Err(error) if error.message() == "circuit breaker is open"
+        ));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    for error in [
+        serde_json::from_value(serde_json::json!({
+            "code": ErrorCode::Transient,
+            "message": "explicitly non-retryable",
+            "retryable": false,
+        }))
+        .expect("a CatgaError retryability override is valid"),
+        serde_json::from_value(serde_json::json!({
+            "code": ErrorCode::Cancelled,
+            "message": "cancelled but incorrectly marked retryable",
+            "retryable": true,
+        }))
+        .expect("a CatgaError retryability override is valid"),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut registry = Registry::new();
+        registry
+            .register_request::<RemoteCall, _>(FixedErrorHandler {
+                calls: Arc::clone(&calls),
+                error,
+            })
+            .expect("test registry accepts one handler");
+        let mediator = Mediator::new(registry);
+        let pipeline = Pipeline::new().with(
+            CircuitBreakerBehavior::new(1, Duration::from_secs(1))
+                .expect("valid compatibility circuit configuration"),
+        );
+
+        mediator
+            .send_with(RemoteCall, &pipeline)
+            .await
+            .expect_err("non-counted error is returned");
+        mediator
+            .send_with(RemoteCall, &pipeline)
+            .await
+            .expect_err("non-counted error does not open the circuit");
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
 }
