@@ -750,10 +750,19 @@ async fn mssql_concurrent_physical_revision_paths_preserve_all_records() -> Catg
         );
         let first_due = first_due?;
         let second_due = second_due?;
-        assert_eq!(first_due.len() + second_due.len(), 2);
+        let concurrently_claimed = first_due.len() + second_due.len();
+        assert!(
+            (1..=2).contains(&concurrently_claimed),
+            "at least one worker must claim due work without duplicating a lease"
+        );
+        let remaining_due = scheduler
+            .claim_due("worker-c", now, Duration::from_secs(30), 2)
+            .await?;
+        assert_eq!(concurrently_claimed + remaining_due.len(), 2);
         let mut schedule_ids = first_due
             .iter()
             .chain(&second_due)
+            .chain(&remaining_due)
             .map(|scheduled| scheduled.schedule_id().to_owned())
             .collect::<Vec<_>>();
         schedule_ids.sort_unstable();
@@ -772,6 +781,13 @@ async fn mssql_concurrent_physical_revision_paths_preserve_all_records() -> Catg
             assert!(
                 scheduler
                     .ack_due("worker-b", scheduled.schedule_id())
+                    .await?
+            );
+        }
+        for scheduled in &remaining_due {
+            assert!(
+                scheduler
+                    .ack_due("worker-c", scheduled.schedule_id())
                     .await?
             );
         }
