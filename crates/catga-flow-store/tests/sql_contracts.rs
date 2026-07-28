@@ -48,6 +48,7 @@ pub async fn state_machine_contract<S>(store: &S, prefix: &str) -> CatgaResult<(
 where
     S: StateMachineStore<ContractState> + Sync,
 {
+    let prefix = isolated_prefix(prefix);
     let id = format!("{prefix}/snapshot");
     let initial = StateMachineSnapshot::new(
         id.as_str(),
@@ -98,6 +99,7 @@ pub async fn dsl_progress_contract<S>(store: &S, prefix: &str) -> CatgaResult<()
 where
     S: DslStepProgressStore + Sync,
 {
+    let prefix = isolated_prefix(prefix);
     let flow_id = format!("{prefix}/dsl-progress");
     let initial = DslStepProgress::new(flow_id.as_str(), 4, b"initial".as_slice());
     assert!(store.create(initial.clone()).await?);
@@ -119,6 +121,7 @@ pub async fn scheduler_contract<S>(scheduler: &S, prefix: &str) -> CatgaResult<(
 where
     S: DueFlowScheduler + Sync,
 {
+    let prefix = isolated_prefix(prefix);
     let flow_id = format!("{prefix}/scheduler-flow");
     let due = SystemTime::now() + Duration::from_secs(10);
     let (first, second) = tokio::join!(
@@ -200,4 +203,14 @@ where
 
 fn required<'a, T>(value: Option<&'a T>, message: &'static str) -> CatgaResult<&'a T> {
     value.ok_or_else(|| CatgaError::new(ErrorCode::Internal, message))
+}
+
+/// Creates an ID namespace unique to one concurrently executing SQL contract.
+///
+/// All real-service tests share one database per backend in CI. Test functions
+/// are scheduled concurrently, so a stable prefix would turn the second
+/// `create` assertion into a cross-test collision rather than an idempotency
+/// check of the store under test.
+fn isolated_prefix(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4())
 }
