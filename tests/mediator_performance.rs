@@ -16,7 +16,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, Handler, Mediator, Registry, Request};
+use catga_core::{CatgaResult, Handler, MAX_MEDIATOR_BATCH_SIZE, Mediator, Registry, Request};
 
 const MESSAGE_COUNT: usize = 4_096;
 const CONCURRENCY_LIMIT: usize = 32;
@@ -73,9 +73,18 @@ async fn mediator_batch_scheduler_throughput_benchmark() -> CatgaResult<()> {
     let mediator = Mediator::new(registry);
 
     let started = Instant::now();
-    let responses = mediator
-        .send_batch((0..MESSAGE_COUNT).map(ScheduledWork), CONCURRENCY_LIMIT)
-        .await?;
+    let mut responses = Vec::with_capacity(MESSAGE_COUNT);
+    for batch_start in (0..MESSAGE_COUNT).step_by(MAX_MEDIATOR_BATCH_SIZE) {
+        let batch_end = (batch_start + MAX_MEDIATOR_BATCH_SIZE).min(MESSAGE_COUNT);
+        responses.extend(
+            mediator
+                .send_batch(
+                    (batch_start..batch_end).map(ScheduledWork),
+                    CONCURRENCY_LIMIT,
+                )
+                .await?,
+        );
+    }
     let elapsed = started.elapsed();
 
     assert_eq!(responses.len(), MESSAGE_COUNT);

@@ -150,12 +150,34 @@ fi
 set_connection_environment
 export CATGA_PERFORMANCE_RESULTS="$output_directory/performance.json"
 set +e
+cargo test -p catga-tests --all-features \
+    --test critical_path_performance \
+    --test mediator_performance \
+    --test flow_performance \
+    -- --ignored --nocapture \
+    2>&1 | tee "$output_directory/in-process-performance.log"
+in_process_exit_code=${PIPESTATUS[0]}
+set -e
+if (( in_process_exit_code != 0 )); then
+    die "in-process performance test failed with exit code $in_process_exit_code"
+fi
+
+set +e
+cargo test -p catga-tests --all-features --test nats_performance -- --ignored --nocapture \
+    2>&1 | tee "$output_directory/nats-performance.log"
+nats_exit_code=${PIPESTATUS[0]}
+set -e
+if (( nats_exit_code != 0 )); then
+    die "NATS JetStream performance test failed with exit code $nats_exit_code"
+fi
+
+set +e
 cargo test -p catga-tests --all-features --test e2e_performance -- --ignored --nocapture \
     2>&1 | tee "$output_directory/e2e-performance.log"
-performance_exit_code=${PIPESTATUS[0]}
+e2e_performance_exit_code=${PIPESTATUS[0]}
 set -e
-if (( performance_exit_code != 0 )); then
-    die "Docker E2E performance test failed with exit code $performance_exit_code"
+if (( e2e_performance_exit_code != 0 )); then
+    die "Docker E2E performance test failed with exit code $e2e_performance_exit_code"
 fi
 
 jq -r '
@@ -166,4 +188,8 @@ jq -r '
   "", "Functional Docker E2E timings", "",
   (.scenarios[] | "\(.id): succeeded=\(.succeeded), duration_ms=\(.durationMilliseconds)")
 ' "$output_directory/functional-e2e-results.json" >>"$output_directory/summary.txt"
+printf '\nIn-process and JetStream benchmark timings\n\n' >>"$output_directory/summary.txt"
+grep -hE '^(critical_application_path|mediator_batch_scheduler_throughput|local_(dsl_)?flow_execution_throughput|nats_jetstream_publish_receive_ack):' \
+    "$output_directory/in-process-performance.log" \
+    "$output_directory/nats-performance.log" >>"$output_directory/summary.txt" || true
 printf 'Docker E2E performance suite passed; results: %s\n' "$output_directory"

@@ -1,0 +1,36 @@
+name: Performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Docker service profile to benchmark
+        required: true
+        default: full
+        type: choice
+        options: [core, sql, full]
+
+permissions:
+  contents: read
+
+jobs:
+  complete-performance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - name: Run complete performance suite
+        run: >-
+          bash scripts/performance.sh --profile "${{ inputs.profile }}"
+          --output-directory target/manual-performance
+      - name: Upload complete performance diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-${{ inputs.profile }}-${{ github.run_id }}
+          path: target/manual-performance
+          if-no-files-found: warn
+          retention-days: 90
