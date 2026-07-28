@@ -438,12 +438,40 @@ macro_rules! __catga_endpoint_method {
 /// expand directly to [`mediator_route`] and [`event_route`] calls, with no reflection, service
 /// lookup, or dynamic route discovery. At least one request or event route is required.
 ///
-/// ```ignore
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use async_trait::async_trait;
+/// # use catga_core::{CatgaResult, Event, EventHandler, Handler, Mediator, Message, Request, catga_handlers};
+/// # struct CreateOrder;
+/// # impl Message for CreateOrder {}
+/// # impl Request for CreateOrder { type Response = (); }
+/// # struct CreateOrderHandler;
+/// # #[async_trait]
+/// # impl Handler<CreateOrder> for CreateOrderHandler {
+/// #     async fn handle(&self, _: CreateOrder) -> CatgaResult<()> { Ok(()) }
+/// # }
+/// # #[derive(Clone)]
+/// # struct OrderCreated;
+/// # impl Message for OrderCreated {}
+/// # impl Event for OrderCreated {}
+/// # struct OrderCreatedHandler;
+/// # #[async_trait]
+/// # impl EventHandler<OrderCreated> for OrderCreatedHandler {
+/// #     async fn handle(&self, _: OrderCreated) -> CatgaResult<()> { Ok(()) }
+/// # }
+/// # fn build_routes() -> CatgaResult<axum::Router> {
+/// # let registry = catga_handlers! {
+/// #     request CreateOrder => CreateOrderHandler;
+/// #     event OrderCreated => [OrderCreatedHandler];
+/// # }?;
+/// # let mediator = Arc::new(Mediator::new(registry));
 /// let routes = catga_axum::catga_routes! {
 ///     mediator = mediator;
 ///     requests { @post "/orders" => CreateOrder }
 ///     events { @post "/orders/created" => OrderCreated }
 /// }?;
+/// # Ok(routes)
+/// # }
 /// ```
 #[macro_export]
 macro_rules! catga_routes {

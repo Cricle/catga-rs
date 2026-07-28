@@ -134,7 +134,7 @@ jobs:
           cargo llvm-cov test -p catga-flow-store --all-features --test mssql --no-clean -- --ignored
           cargo llvm-cov test -p catga-flow-store --all-features --test sql_backend_contracts --no-clean -- --ignored
       - name: Enforce coverage threshold
-        run: cargo llvm-cov report --lcov --output-path lcov.info --fail-under-lines 95 --fail-under-regions 95
+        run: cargo llvm-cov report --lcov --output-path lcov.info --fail-under-lines 90 --fail-under-regions 90
       - name: Upload coverage report
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

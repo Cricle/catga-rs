@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", default-features = false, features = ["json"] }
 async-trait = "0.1"
 catga-cluster = { path = "../catga-cluster", version = "0.1.0" }
 catga-core = { path = "../catga-core", version = "0.1.0" }

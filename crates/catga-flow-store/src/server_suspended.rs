@@ -16,7 +16,7 @@ macro_rules! define_server_suspended {
             let key = flow_key(continuation.state().id());
             let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.updated_at())?;
             let insert = if $postgres {
-                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING"
+                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT DO NOTHING"
             } else {
                 "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"
             };

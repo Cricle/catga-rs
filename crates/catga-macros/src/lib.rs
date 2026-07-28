@@ -709,16 +709,35 @@ fn batch_key_impl(input: &DeriveInput, generics: &Generics) -> Result<Option<Tok
 ///
 /// # Example
 ///
-/// The macro emits a registration function for the selected `catga_core::Mediator`. The
-/// handler types must implement the corresponding Catga handler traits, so this short form is
-/// marked `no_run` and is intended to be completed with application dependencies.
+/// The macro emits a registration function for the selected `catga_core::Mediator`. Handler
+/// types remain ordinary, explicit Rust values; the hidden setup below is only the minimal event
+/// and handler definition needed to compile the visible registration.
 ///
-/// ```ignore
+/// ```no_run
+/// # use async_trait::async_trait;
+/// # use catga_core::{CatgaError, CatgaResult, Event, EventHandler, Message};
 /// use catga_macros::catga_handlers;
 ///
+/// # #[derive(Clone)]
+/// # struct InventoryRebuilt;
+/// # impl Message for InventoryRebuilt {}
+/// # impl Event for InventoryRebuilt {}
+/// # struct RefreshReadModel;
+/// # #[async_trait]
+/// # impl EventHandler<InventoryRebuilt> for RefreshReadModel {
+/// #     async fn handle(&self, _: InventoryRebuilt) -> CatgaResult<()> { Ok(()) }
+/// # }
+/// # struct PublishAuditEvent;
+/// # #[async_trait]
+/// # impl EventHandler<InventoryRebuilt> for PublishAuditEvent {
+/// #     async fn handle(&self, _: InventoryRebuilt) -> CatgaResult<()> { Ok(()) }
+/// # }
+/// # fn register() -> Result<(), CatgaError> {
 /// catga_handlers! {
 ///     event InventoryRebuilt => [RefreshReadModel, PublishAuditEvent]
-/// }
+/// }?;
+/// # Ok(())
+/// # }
 /// ```
 #[proc_macro]
 pub fn catga_handlers(input: TokenStream) -> TokenStream {
