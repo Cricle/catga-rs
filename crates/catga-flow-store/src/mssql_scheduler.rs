@@ -21,18 +21,31 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
     })?;
     connection
         .execute(
-            "IF OBJECT_ID(N'dbo.catga_flow_schedules', N'U') IS NULL BEGIN \
-             CREATE TABLE dbo.catga_flow_schedules (\
-               schedule_id NVARCHAR(36) NOT NULL PRIMARY KEY, target_key BINARY(32) NOT NULL UNIQUE, \
-               flow_id NVARCHAR(MAX) NOT NULL, state_id NVARCHAR(MAX) NOT NULL, \
-               due_at_ms BIGINT NOT NULL, due_at_subsec_ns BIGINT NOT NULL, \
-               lease_owner NVARCHAR(MAX) NULL, lease_until_ms BIGINT NULL); \
-             CREATE INDEX catga_flow_schedules_due_idx ON dbo.catga_flow_schedules \
-               (due_at_ms, due_at_subsec_ns, lease_until_ms, schedule_id); END; \
-             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_schedules') \
-               AND name = N'catga_flow_schedules_due_idx') \
-               CREATE INDEX catga_flow_schedules_due_idx ON dbo.catga_flow_schedules \
-                 (due_at_ms, due_at_subsec_ns, lease_until_ms, schedule_id);",
+            "BEGIN TRY \
+               BEGIN TRANSACTION; \
+               DECLARE @result INT; \
+               EXEC @result = sys.sp_getapplock @Resource = N'catga_flow_schedules_schema', \
+                 @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 5000; \
+               IF @result < 0 THROW 50000, 'could not acquire the Catga scheduler schema lock', 1; \
+               IF OBJECT_ID(N'dbo.catga_flow_schedules', N'U') IS NULL BEGIN \
+                 CREATE TABLE dbo.catga_flow_schedules (\
+                   schedule_id NVARCHAR(36) NOT NULL PRIMARY KEY, target_key BINARY(32) NOT NULL UNIQUE, \
+                   flow_id NVARCHAR(MAX) NOT NULL, state_id NVARCHAR(MAX) NOT NULL, \
+                   due_at_ms BIGINT NOT NULL, due_at_subsec_ns BIGINT NOT NULL, \
+                   lease_owner NVARCHAR(MAX) NULL, lease_until_ms BIGINT NULL); \
+                 CREATE INDEX catga_flow_schedules_due_idx ON dbo.catga_flow_schedules \
+                   (due_at_ms, due_at_subsec_ns, lease_until_ms, schedule_id); \
+               END; \
+               IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_schedules') \
+                 AND name = N'catga_flow_schedules_due_idx') \
+                 CREATE INDEX catga_flow_schedules_due_idx ON dbo.catga_flow_schedules \
+                   (due_at_ms, due_at_subsec_ns, lease_until_ms, schedule_id); \
+               COMMIT TRANSACTION; \
+             END TRY \
+             BEGIN CATCH \
+               IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION; \
+               THROW; \
+             END CATCH;",
             &[],
         )
         .await

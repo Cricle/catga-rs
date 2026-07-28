@@ -13,8 +13,8 @@ use std::{
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowState, SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowStore,
-    WaitCondition, WaitPolicy,
+    FlowContinuation, FlowState, FlowStore, SuspendedFlowStore, TimedOutFlowPoll,
+    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
 
@@ -104,6 +104,177 @@ where
     Ok(())
 }
 
+/// Exercises the public plain-flow rejection and owner-fencing boundaries.
+///
+/// The records use a test-unique namespace because MySQL and PostgreSQL E2E tests share a
+/// long-lived service database and run concurrently. The plain FlowStore API intentionally has
+/// no deletion operation, so these rows remain harmlessly isolated rather than risking broad
+/// cleanup against another test's data.
+async fn flow_store_rejection_and_heartbeat_contract<S>(store: &S, backend: &str) -> CatgaResult<()>
+where
+    S: FlowStore + Sync,
+{
+    let prefix = format!("{backend}-flow-boundary-{}", uuid::Uuid::new_v4());
+    let missing_id = format!("{prefix}/missing");
+    let flow_id = format!("{prefix}/flow");
+    let flow_type = format!("{prefix}/type");
+    let initial = FlowState::new(flow_id.as_str(), flow_type.as_str(), [], "node-a");
+
+    assert!(store.get(missing_id.as_str()).await?.is_none());
+    assert!(store.create(initial.clone()).await?);
+    assert!(!store.create(initial.clone()).await?);
+    assert!(!store.update(initial.version(), initial.clone()).await?);
+    assert!(
+        !store
+            .update(
+                0,
+                FlowState::new(missing_id.as_str(), flow_type.as_str(), [], "node-a")
+                    .next_version()?,
+            )
+            .await?
+    );
+
+    let progressed = initial.clone().next_version()?;
+    assert!(store.update(initial.version(), progressed.clone()).await?);
+    assert!(!store.update(initial.version(), progressed).await?);
+
+    let fresh_id = format!("{prefix}/fresh");
+    assert!(
+        store
+            .create(FlowState::new(
+                fresh_id.as_str(),
+                flow_type.as_str(),
+                [],
+                "node-a",
+            ))
+            .await?
+    );
+    assert!(
+        store
+            .try_claim(flow_type.as_str(), "worker-a", Duration::from_secs(1))
+            .await?
+            .is_none()
+    );
+
+    let stale_id = format!("{prefix}/stale");
+    assert!(
+        store
+            .create(
+                FlowState::new(stale_id.as_str(), flow_type.as_str(), [], "node-a")
+                    .heartbeated_at(SystemTime::UNIX_EPOCH),
+            )
+            .await?
+    );
+    assert!(
+        store
+            .try_claim("other-flow-type", "worker-a", Duration::from_secs(1))
+            .await?
+            .is_none()
+    );
+    let claimed = store
+        .try_claim(flow_type.as_str(), "worker-a", Duration::from_secs(1))
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "stale flow was not claimed"))?;
+    assert_eq!(claimed.id(), stale_id);
+    assert_eq!(claimed.owner(), Some("worker-a"));
+    assert!(
+        !store
+            .heartbeat(stale_id.as_str(), "worker-b", claimed.version())
+            .await?
+    );
+    assert!(
+        !store
+            .heartbeat(stale_id.as_str(), "worker-a", claimed.version() + 1)
+            .await?
+    );
+    assert!(
+        store
+            .heartbeat(stale_id.as_str(), "worker-a", claimed.version())
+            .await?
+    );
+    assert!(
+        !store
+            .heartbeat(missing_id.as_str(), "worker-a", claimed.version())
+            .await?
+    );
+    let heartbeated = store
+        .get(stale_id.as_str())
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "claimed flow disappeared"))?;
+    assert_eq!(heartbeated.version(), claimed.version());
+    assert_eq!(heartbeated.owner(), Some("worker-a"));
+    assert!(
+        store
+            .try_claim(flow_type.as_str(), "worker-b", Duration::from_secs(1))
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+/// Exercises timeout receipt fencing, release recovery, and acknowledgement through public APIs.
+async fn timeout_receipt_recovery_contract<S>(store: &S, backend: &str) -> CatgaResult<()>
+where
+    S: SuspendedFlowStore + TimedOutFlowStore + Sync,
+{
+    let prefix = format!("{backend}-timeout-boundary-{}", uuid::Uuid::new_v4());
+    let flow_id = format!("{prefix}/waiting");
+    // Use the earliest valid timeout instant. Other E2E cases use later fixed deadlines, so this
+    // bounded global due-index poll cannot lease their records in the shared service database.
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+    let continuation = FlowContinuation::waiting(
+        FlowState::new(flow_id.as_str(), "timeout-boundary", [], "node-a").suspended(),
+        "resume",
+        WaitCondition::new(
+            format!("{prefix}/correlation"),
+            WaitPolicy::All,
+            1,
+            SystemTime::UNIX_EPOCH,
+            Duration::from_secs(1),
+        ),
+    );
+    assert!(store.create(continuation).await?);
+
+    let poll = TimedOutFlowPoll::new(now, 1, 1)?;
+    let receipts = store.poll_timed_out(&poll).await?;
+    assert_eq!(receipts.len(), 1);
+    let receipt = receipts
+        .into_iter()
+        .next()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "expired flow was not leased"))?;
+    assert_eq!(receipt.flow_id(), flow_id);
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
+
+    let invalid = TimedOutFlowReceipt::new(receipt.flow_id(), []);
+    assert_eq!(
+        store
+            .release_timed_out(&invalid)
+            .await
+            .expect_err("malformed timeout receipt must be rejected")
+            .code(),
+        ErrorCode::Validation
+    );
+    let forged = TimedOutFlowReceipt::new(receipt.flow_id(), [0_u8; 16]);
+    store.ack_timed_out(&forged).await?;
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
+
+    store.release_timed_out(&receipt).await?;
+    let recovered = store
+        .poll_timed_out(&poll)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "released receipt was not recovered")
+        })?;
+    assert_eq!(recovered.flow_id(), flow_id);
+    assert_ne!(recovered.token(), receipt.token());
+    store.ack_timed_out(&recovered).await?;
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
+    assert!(store.delete(flow_id.as_str(), 0).await?);
+    Ok(())
+}
+
 #[cfg(feature = "mysql")]
 #[tokio::test]
 async fn mysql_rejects_a_malformed_url_before_network_io() {
@@ -149,6 +320,31 @@ async fn mysql_e2e_preserves_null_deadlines_and_concurrent_cas() -> CatgaResult<
     suspended_null_and_cas_contract(&store, "mysql").await
 }
 
+#[cfg(feature = "mysql")]
+#[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
+async fn mysql_e2e_rejects_stale_flow_transitions_and_fences_heartbeats() -> CatgaResult<()> {
+    let Some(url) = external_url("CATGA_MYSQL_URL")? else {
+        return Ok(());
+    };
+    let store = SqlFlowStore::connect_mysql(url.as_ref()).await?;
+    store.migrate().await?;
+    flow_store_rejection_and_heartbeat_contract(&store, "mysql").await
+}
+
+#[cfg(feature = "mysql")]
+#[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
+async fn mysql_e2e_recovers_released_timeout_receipts_and_fences_acknowledgements()
+-> CatgaResult<()> {
+    let Some(url) = external_url("CATGA_MYSQL_URL")? else {
+        return Ok(());
+    };
+    let store = SqlSuspendedFlowStore::connect_mysql(url.as_ref()).await?;
+    store.migrate().await?;
+    timeout_receipt_recovery_contract(&store, "mysql").await
+}
+
 #[cfg(feature = "postgres")]
 #[tokio::test]
 #[ignore = "requires CATGA_POSTGRES_URL"]
@@ -159,6 +355,31 @@ async fn postgres_e2e_preserves_null_deadlines_and_concurrent_cas() -> CatgaResu
     let store = SqlSuspendedFlowStore::connect_postgres(url.as_ref()).await?;
     store.migrate().await?;
     suspended_null_and_cas_contract(&store, "postgres").await
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
+async fn postgres_e2e_rejects_stale_flow_transitions_and_fences_heartbeats() -> CatgaResult<()> {
+    let Some(url) = external_url("CATGA_POSTGRES_URL")? else {
+        return Ok(());
+    };
+    let store = SqlFlowStore::connect_postgres(url.as_ref()).await?;
+    store.migrate().await?;
+    flow_store_rejection_and_heartbeat_contract(&store, "postgres").await
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
+async fn postgres_e2e_recovers_released_timeout_receipts_and_fences_acknowledgements()
+-> CatgaResult<()> {
+    let Some(url) = external_url("CATGA_POSTGRES_URL")? else {
+        return Ok(());
+    };
+    let store = SqlSuspendedFlowStore::connect_postgres(url.as_ref()).await?;
+    store.migrate().await?;
+    timeout_receipt_recovery_contract(&store, "postgres").await
 }
 
 #[cfg(feature = "mssql")]

@@ -28,11 +28,24 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
     })?;
     connection
         .execute(
-            "IF OBJECT_ID(N'dbo.catga_state_machine_snapshots', N'U') IS NULL BEGIN \
-             CREATE TABLE dbo.catga_state_machine_snapshots (\
-             instance_key BINARY(32) NOT NULL, instance_id NVARCHAR(MAX) NOT NULL, \
-             version BIGINT NOT NULL, revision BIGINT NOT NULL, payload VARBINARY(MAX) NOT NULL, \
-             CONSTRAINT PK_catga_state_machine_snapshots PRIMARY KEY(instance_key)); END;",
+            "BEGIN TRY \
+               BEGIN TRANSACTION; \
+               DECLARE @result INT; \
+               EXEC @result = sys.sp_getapplock @Resource = N'catga_state_machine_snapshots_schema', \
+                 @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 5000; \
+               IF @result < 0 THROW 50000, 'could not acquire the Catga state-machine schema lock', 1; \
+               IF OBJECT_ID(N'dbo.catga_state_machine_snapshots', N'U') IS NULL BEGIN \
+                 CREATE TABLE dbo.catga_state_machine_snapshots (\
+                 instance_key BINARY(32) NOT NULL, instance_id NVARCHAR(MAX) NOT NULL, \
+                 version BIGINT NOT NULL, revision BIGINT NOT NULL, payload VARBINARY(MAX) NOT NULL, \
+                 CONSTRAINT PK_catga_state_machine_snapshots PRIMARY KEY(instance_key)); \
+               END; \
+               COMMIT TRANSACTION; \
+             END TRY \
+             BEGIN CATCH \
+               IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION; \
+               THROW; \
+             END CATCH;",
             &[],
         )
         .await

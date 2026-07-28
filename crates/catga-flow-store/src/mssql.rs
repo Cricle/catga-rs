@@ -29,52 +29,80 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
         .map_err(|error| database_error("acquire SQL Server migration connection", error))?;
     connection
         .execute(
-            "IF OBJECT_ID(N'dbo.catga_flow_states', N'U') IS NULL BEGIN \
-             CREATE TABLE dbo.catga_flow_states (\
-               flow_key BINARY(32) NOT NULL PRIMARY KEY, flow_id NVARCHAR(MAX) NOT NULL, \
-               flow_type NVARCHAR(MAX) NOT NULL, flow_type_key BINARY(32) NOT NULL, \
-               status BIGINT NOT NULL, version BIGINT NOT NULL, \
-               heartbeat_ms BIGINT NOT NULL, revision BIGINT NOT NULL, payload VARBINARY(MAX) NOT NULL); \
-             CREATE INDEX catga_flow_states_stale_idx ON dbo.catga_flow_states \
-               (flow_type_key, status, heartbeat_ms, flow_key); END; \
-             DECLARE @drop_flow_id_unique nvarchar(max) = N''; \
-             SELECT @drop_flow_id_unique += N'ALTER TABLE dbo.catga_flow_states DROP CONSTRAINT ' \
-               + QUOTENAME(key_constraint.name) + N';' \
-             FROM sys.key_constraints AS key_constraint \
-             INNER JOIN sys.index_columns AS index_column \
-               ON index_column.object_id = key_constraint.parent_object_id \
-               AND index_column.index_id = key_constraint.unique_index_id \
-             WHERE key_constraint.parent_object_id = OBJECT_ID(N'dbo.catga_flow_states') \
-               AND key_constraint.type = N'UQ' \
-               AND COL_NAME(index_column.object_id, index_column.column_id) = N'flow_id'; \
-             IF @drop_flow_id_unique <> N'' EXEC sys.sp_executesql @drop_flow_id_unique; \
-             IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_states') \
-               AND name = N'catga_flow_states_stale_idx') \
-               DROP INDEX catga_flow_states_stale_idx ON dbo.catga_flow_states; \
-             IF COL_LENGTH(N'dbo.catga_flow_states', N'flow_type_key') IS NULL \
-               ALTER TABLE dbo.catga_flow_states ADD flow_type_key BINARY(32) NULL; \
-             IF COL_LENGTH(N'dbo.catga_flow_states', N'flow_id') <> -1 \
-               ALTER TABLE dbo.catga_flow_states ALTER COLUMN flow_id NVARCHAR(MAX) NOT NULL; \
-             IF COL_LENGTH(N'dbo.catga_flow_states', N'flow_type') <> -1 \
-               ALTER TABLE dbo.catga_flow_states ALTER COLUMN flow_type NVARCHAR(MAX) NOT NULL;",
+            "BEGIN TRANSACTION; \
+             DECLARE @result INT; \
+             EXEC @result = sys.sp_getapplock @Resource = N'catga_flow_states_schema', \
+               @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 5000; \
+             IF @result < 0 THROW 50000, 'could not acquire the Catga FlowStore schema lock', 1;",
             &[],
         )
         .await
         .map(|_| ())
-        .map_err(|error| database_error("create SQL Server FlowStore schema", error))?;
-    backfill_flow_type_keys(&mut connection).await?;
-    connection
-        .execute(
-            "ALTER TABLE dbo.catga_flow_states ALTER COLUMN flow_type_key BINARY(32) NOT NULL; \
-             IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_states') \
-               AND name = N'catga_flow_states_stale_idx') \
-               CREATE INDEX catga_flow_states_stale_idx ON dbo.catga_flow_states \
-                 (flow_type_key, status, heartbeat_ms, flow_key);",
-            &[],
-        )
-        .await
-        .map(|_| ())
-        .map_err(|error| database_error("finalize SQL Server FlowStore migration", error))
+        .map_err(|error| database_error("lock SQL Server FlowStore schema migration", error))?;
+    let result = async {
+        connection
+            .execute(
+                "IF OBJECT_ID(N'dbo.catga_flow_states', N'U') IS NULL BEGIN \
+                 CREATE TABLE dbo.catga_flow_states (\
+                   flow_key BINARY(32) NOT NULL PRIMARY KEY, flow_id NVARCHAR(MAX) NOT NULL, \
+                   flow_type NVARCHAR(MAX) NOT NULL, flow_type_key BINARY(32) NOT NULL, \
+                   status BIGINT NOT NULL, version BIGINT NOT NULL, \
+                   heartbeat_ms BIGINT NOT NULL, revision BIGINT NOT NULL, payload VARBINARY(MAX) NOT NULL); \
+                 CREATE INDEX catga_flow_states_stale_idx ON dbo.catga_flow_states \
+                   (flow_type_key, status, heartbeat_ms, flow_key); END; \
+                 DECLARE @drop_flow_id_unique nvarchar(max) = N''; \
+                 SELECT @drop_flow_id_unique += N'ALTER TABLE dbo.catga_flow_states DROP CONSTRAINT ' \
+                   + QUOTENAME(key_constraint.name) + N';' \
+                 FROM sys.key_constraints AS key_constraint \
+                 INNER JOIN sys.index_columns AS index_column \
+                   ON index_column.object_id = key_constraint.parent_object_id \
+                   AND index_column.index_id = key_constraint.unique_index_id \
+                 WHERE key_constraint.parent_object_id = OBJECT_ID(N'dbo.catga_flow_states') \
+                   AND key_constraint.type = N'UQ' \
+                   AND COL_NAME(index_column.object_id, index_column.column_id) = N'flow_id'; \
+                 IF @drop_flow_id_unique <> N'' EXEC sys.sp_executesql @drop_flow_id_unique; \
+                 IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_states') \
+                   AND name = N'catga_flow_states_stale_idx') \
+                   DROP INDEX catga_flow_states_stale_idx ON dbo.catga_flow_states; \
+                 IF COL_LENGTH(N'dbo.catga_flow_states', N'flow_type_key') IS NULL \
+                   ALTER TABLE dbo.catga_flow_states ADD flow_type_key BINARY(32) NULL; \
+                 IF COL_LENGTH(N'dbo.catga_flow_states', N'flow_id') <> -1 \
+                   ALTER TABLE dbo.catga_flow_states ALTER COLUMN flow_id NVARCHAR(MAX) NOT NULL; \
+                 IF COL_LENGTH(N'dbo.catga_flow_states', N'flow_type') <> -1 \
+                   ALTER TABLE dbo.catga_flow_states ALTER COLUMN flow_type NVARCHAR(MAX) NOT NULL;",
+                &[],
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| database_error("create SQL Server FlowStore schema", error))?;
+        backfill_flow_type_keys(&mut connection).await?;
+        connection
+            .execute(
+                "ALTER TABLE dbo.catga_flow_states ALTER COLUMN flow_type_key BINARY(32) NOT NULL; \
+                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.catga_flow_states') \
+                   AND name = N'catga_flow_states_stale_idx') \
+                   CREATE INDEX catga_flow_states_stale_idx ON dbo.catga_flow_states \
+                     (flow_type_key, status, heartbeat_ms, flow_key);",
+                &[],
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| database_error("finalize SQL Server FlowStore migration", error))
+    }
+    .await;
+    match result {
+        Ok(()) => connection
+            .execute("COMMIT TRANSACTION", &[])
+            .await
+            .map(|_| ())
+            .map_err(|error| database_error("commit SQL Server FlowStore schema migration", error)),
+        Err(error) => {
+            let _ = connection
+                .execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", &[])
+                .await;
+            Err(error)
+        }
+    }
 }
 
 /// Inserts one state without using SQL Server `MERGE`.

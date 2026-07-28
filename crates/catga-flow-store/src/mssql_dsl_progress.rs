@@ -26,12 +26,25 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
         .map_err(|error| database_error("acquire SQL Server DSL progress migration", error))?;
     connection
         .execute(
-            "IF OBJECT_ID(N'dbo.catga_dsl_step_progress', N'U') IS NULL BEGIN \
-             CREATE TABLE dbo.catga_dsl_step_progress (\
-             flow_key BINARY(32) NOT NULL, flow_id NVARCHAR(MAX) NOT NULL, \
-             step_index BIGINT NOT NULL, version BIGINT NOT NULL, revision BIGINT NOT NULL, \
-             payload VARBINARY(MAX) NOT NULL, \
-             CONSTRAINT PK_catga_dsl_step_progress PRIMARY KEY(flow_key, step_index)); END;",
+            "BEGIN TRY \
+               BEGIN TRANSACTION; \
+               DECLARE @result INT; \
+               EXEC @result = sys.sp_getapplock @Resource = N'catga_dsl_step_progress_schema', \
+                 @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 5000; \
+               IF @result < 0 THROW 50000, 'could not acquire the Catga DSL progress schema lock', 1; \
+               IF OBJECT_ID(N'dbo.catga_dsl_step_progress', N'U') IS NULL BEGIN \
+                 CREATE TABLE dbo.catga_dsl_step_progress (\
+                 flow_key BINARY(32) NOT NULL, flow_id NVARCHAR(MAX) NOT NULL, \
+                 step_index BIGINT NOT NULL, version BIGINT NOT NULL, revision BIGINT NOT NULL, \
+                 payload VARBINARY(MAX) NOT NULL, \
+                 CONSTRAINT PK_catga_dsl_step_progress PRIMARY KEY(flow_key, step_index)); \
+               END; \
+               COMMIT TRANSACTION; \
+             END TRY \
+             BEGIN CATCH \
+               IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION; \
+               THROW; \
+             END CATCH;",
             &[],
         )
         .await
