@@ -15,6 +15,7 @@ members = [
     "crates/catga-scheduler-tokio-cron",
     "crates/catga-testing",
     "tests",
+    "examples",
 ]
 resolver = "3"
 

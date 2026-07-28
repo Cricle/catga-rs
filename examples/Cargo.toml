@@ -1,0 +1,13 @@
+[package]
+name = "catga-examples"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+catga-core = { path = "../crates/catga-core" }
+catga-flow = { path = "../crates/catga-flow" }
+catga-memory = { path = "../crates/catga-memory" }
+tokio = { version = "1", features = ["macros", "rt"] }

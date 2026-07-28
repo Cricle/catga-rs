@@ -658,6 +658,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "catga-examples"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "catga-core",
+ "catga-flow",
+ "catga-memory",
+ "tokio",
+]
+
+[[package]]
 name = "catga-flow"
 version = "0.1.0"
 dependencies = [

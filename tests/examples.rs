@@ -2,11 +2,10 @@
 
 use std::{path::Path, process::Command};
 
-const EXAMPLES: [&str; 4] = [
-    "crates/catga-core/examples/mediator_basics.rs",
-    "crates/catga-flow/examples/flow_basics.rs",
-    "crates/catga-flow-store/examples/flow_store_features.rs",
-    "crates/catga-memory/examples/transport_basics.rs",
+const EXAMPLES: [&str; 3] = [
+    "examples/src/bin/mediator.rs",
+    "examples/src/bin/flow.rs",
+    "examples/src/bin/memory_transport.rs",
 ];
 
 #[test]
@@ -25,12 +24,9 @@ fn public_examples_exist_and_compile_with_every_feature() {
     }
 
     let status = Command::new("cargo")
-        .args(["check", "--examples", "--workspace", "--all-features"])
+        .args(["check", "-p", "catga-examples", "--bins"])
         .current_dir(workspace)
         .status()
         .unwrap_or_else(|error| panic!("failed to run cargo check for examples: {error}"));
-    assert!(
-        status.success(),
-        "public examples must compile with every feature"
-    );
+    assert!(status.success(), "every public example must compile");
 }

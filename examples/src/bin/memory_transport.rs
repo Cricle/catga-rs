@@ -1,5 +1,3 @@
-//! Publishes and acknowledges one envelope through a bounded local queue.
-
 use catga_core::{CatgaResult, Envelope, MessageMetadata, MessageTransport};
 use catga_memory::MemoryTransport;
 
@@ -14,7 +12,6 @@ async fn main() -> CatgaResult<()> {
             MessageMetadata::new(1, None),
         ))
         .await?;
-
     let delivery = transport.receive().await?;
     assert_eq!(delivery.envelope().message_type(), "order.created");
     transport.ack(delivery).await
