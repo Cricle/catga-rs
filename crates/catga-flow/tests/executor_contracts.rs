@@ -271,3 +271,91 @@ async fn executor_heartbeat_execution_returns_cancellation_without_terminalizing
     );
     Ok(())
 }
+
+#[test]
+fn executor_recovery_and_heartbeat_policies_reject_zero_bounds() {
+    assert!(matches!(
+        FlowHeartbeatOptions::new(Duration::ZERO),
+        Err(error) if error.code() == ErrorCode::Validation
+    ));
+    assert!(matches!(
+        FlowRecoveryOptions::new(0, Duration::from_secs(1)),
+        Err(error) if error.code() == ErrorCode::Validation
+    ));
+    assert!(matches!(
+        FlowRecoveryOptions::new(1, Duration::ZERO),
+        Err(error) if error.code() == ErrorCode::Validation
+    ));
+}
+
+#[tokio::test]
+async fn executor_heartbeat_supervision_renews_ownership_before_persisting_success()
+-> CatgaResult<()> {
+    let store = Arc::new(Store::default());
+    let executor = FlowExecutor::new(
+        Arc::clone(&store),
+        "worker-heartbeat",
+        Duration::from_secs(1),
+    );
+    let cancellation = CancellationToken::new();
+
+    let result = executor
+        .execute_with_heartbeat(
+            "heartbeat-success",
+            "checkout",
+            [],
+            FlowHeartbeatOptions::new(Duration::from_millis(1))?,
+            cancellation,
+            |_| async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                Ok(FlowResult::success(4))
+            },
+        )
+        .await?;
+    assert!(result.is_success());
+    let stored = store
+        .get("heartbeat-success")
+        .await?
+        .expect("heartbeated execution persists a terminal state");
+    assert_eq!(stored.status(), FlowStatus::Done);
+    assert_eq!(stored.step(), 4);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_loop_honors_preexisting_cancellation_without_claiming_work() -> CatgaResult<()> {
+    let store = Arc::new(Store::default());
+    store
+        .insert(FlowState::new("stale-loop", "checkout", [], "old").heartbeated_at(UNIX_EPOCH))
+        .await;
+    let executor = FlowExecutor::new(Arc::clone(&store), "worker-loop", Duration::from_secs(1));
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let work_calls = Arc::clone(&calls);
+
+    executor
+        .run_recovery_loop(
+            "checkout",
+            FlowRecoveryOptions::new(1, Duration::from_millis(1))?,
+            cancellation,
+            move |_| {
+                let work_calls = Arc::clone(&work_calls);
+                async move {
+                    work_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(FlowResult::success(1))
+                }
+            },
+        )
+        .await?;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store
+            .get("stale-loop")
+            .await?
+            .expect("cancelled recovery leaves work untouched")
+            .status(),
+        FlowStatus::Running
+    );
+    Ok(())
+}

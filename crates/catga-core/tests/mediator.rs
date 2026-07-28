@@ -10,8 +10,10 @@ use catga_core::{
     Behavior, CatgaError, CatgaResult, Command, CommandBehavior, CommandHandler, CommandNext,
     CommandPipeline, ErrorCode, Event, EventHandler, Handler, MAX_MEDIATOR_BATCH_SIZE,
     MAX_PIPELINE_DEPTH, Mediator, MediatorHandle, Message, Next, Pipeline, Registry, Request,
+    current_cancellation,
 };
 use futures::StreamExt;
+use tokio::{sync::Notify, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -21,6 +23,15 @@ impl Message for Ping {}
 
 impl Request for Ping {
     type Response = u8;
+}
+
+#[derive(Clone)]
+struct BlockingRequest;
+
+impl Message for BlockingRequest {}
+
+impl Request for BlockingRequest {
+    type Response = ();
 }
 
 #[derive(Clone)]
@@ -178,6 +189,24 @@ impl EventHandler<Notice> for PanicEvent {
     }
 }
 
+struct CancellationAwareRequestHandler {
+    started: Arc<Notify>,
+    observed_cancellation_scope: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Handler<BlockingRequest> for CancellationAwareRequestHandler {
+    async fn handle(&self, _: BlockingRequest) -> CatgaResult<()> {
+        if current_cancellation().is_some() {
+            self.observed_cancellation_scope
+                .fetch_add(1, Ordering::AcqRel);
+        }
+        self.started.notify_one();
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn unbound_handle_rejects_every_dispatch_entrypoint() {
     let handle = MediatorHandle::new();
@@ -301,6 +330,39 @@ async fn cancellation_prevents_dispatch_in_plain_and_pipeline_paths() -> CatgaRe
             .expect("event record mutex poisoned")
             .is_empty()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_flight_request_cancellation_drops_the_handler_and_keeps_the_mediator_usable()
+-> CatgaResult<()> {
+    let started = Arc::new(Notify::new());
+    let observed_cancellation_scope = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry.register_request::<BlockingRequest, _>(CancellationAwareRequestHandler {
+        started: Arc::clone(&started),
+        observed_cancellation_scope: Arc::clone(&observed_cancellation_scope),
+    })?;
+    registry.register_request::<Ping, _>(Double)?;
+    let mediator = Arc::new(Mediator::new(registry));
+    let cancellation = CancellationToken::new();
+    let waiting_for_handler = started.notified();
+    let dispatch_mediator = Arc::clone(&mediator);
+    let dispatch_cancellation = cancellation.clone();
+    let dispatch = tokio::spawn(async move {
+        dispatch_mediator
+            .send_with_cancellation(BlockingRequest, dispatch_cancellation)
+            .await
+    });
+
+    timeout(std::time::Duration::from_secs(1), waiting_for_handler).await??;
+    cancellation.cancel();
+    assert!(matches!(
+        timeout(std::time::Duration::from_secs(1), dispatch).await??,
+        Err(error) if error.code() == ErrorCode::Cancelled
+    ));
+    assert_eq!(observed_cancellation_scope.load(Ordering::Acquire), 1);
+    assert_eq!(mediator.send(Ping(6)).await?, 12);
     Ok(())
 }
 

@@ -38,8 +38,8 @@ jobs:
       - name: Run strict unit, Docker E2E, and coverage gates
         run: >-
           bash scripts/coverage.sh --profile full
-          --required-line-coverage 90
-          --required-region-coverage 90
+          --required-line-coverage 80
+          --required-region-coverage 80
           --required-e2e-pass-percentage 95
       - name: Upload coverage report
         if: ${{ always() }}

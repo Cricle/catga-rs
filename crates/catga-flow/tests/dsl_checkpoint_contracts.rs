@@ -340,6 +340,95 @@ async fn checkpointed_parallel_restores_completed_branches_without_replaying_the
 }
 
 #[tokio::test]
+async fn checkpointed_parallel_recovers_an_interrupted_branch_from_its_local_cursor()
+-> CatgaResult<()> {
+    let first_branch_step_calls = Arc::new(AtomicUsize::new(0));
+    let interrupted_branch_step_calls = Arc::new(AtomicUsize::new(0));
+    let stable_branch_calls = Arc::new(AtomicUsize::new(0));
+    let fail_once = Arc::new(AtomicBool::new(true));
+    let first_step = Arc::clone(&first_branch_step_calls);
+    let interrupted_step = Arc::clone(&interrupted_branch_step_calls);
+    let stable_branch = Arc::clone(&stable_branch_calls);
+    let fails = Arc::clone(&fail_once);
+    let flow = DslFlow::new().parallel(
+        [
+            DslFlow::new()
+                .action(move |state: &mut State| {
+                    let first_step = Arc::clone(&first_step);
+                    Box::pin(async move {
+                        first_step.fetch_add(1, Ordering::SeqCst);
+                        state.total = state.total.saturating_add(2);
+                        Ok(())
+                    })
+                })
+                .action(move |state: &mut State| {
+                    let interrupted_step = Arc::clone(&interrupted_step);
+                    let fails = Arc::clone(&fails);
+                    Box::pin(async move {
+                        interrupted_step.fetch_add(1, Ordering::SeqCst);
+                        if fails.swap(false, Ordering::SeqCst) {
+                            return Err(CatgaError::new(
+                                ErrorCode::Transient,
+                                "branch interrupted after its local checkpoint",
+                            ));
+                        }
+                        state.total = state.total.saturating_add(20);
+                        Ok(())
+                    })
+                }),
+            DslFlow::new().action(move |state: &mut State| {
+                let stable_branch = Arc::clone(&stable_branch);
+                Box::pin(async move {
+                    stable_branch.fetch_add(1, Ordering::SeqCst);
+                    state.total = state.total.saturating_add(100);
+                    Ok(())
+                })
+            }),
+        ],
+        |state, branches| {
+            state.total = branches.into_iter().map(|branch| branch.total).sum();
+            Ok(())
+        },
+    );
+    let progress = ProgressStore::default();
+
+    let first = flow
+        .run_checkpointed(
+            "parallel-local-recovery",
+            State::default(),
+            &progress,
+            &StateCodec,
+        )
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(first_branch_step_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(interrupted_branch_step_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stable_branch_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        progress
+            .get("parallel-local-recovery", 0)
+            .await?
+            .expect("parallel recovery writes one outer checkpoint")
+            .kind(),
+        DslProgressKind::CheckpointFrame
+    );
+
+    let resumed = flow
+        .run_checkpointed(
+            "parallel-local-recovery",
+            State::default(),
+            &progress,
+            &StateCodec,
+        )
+        .await?;
+    assert_eq!(resumed.total, 122);
+    assert_eq!(first_branch_step_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(interrupted_branch_step_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(stable_branch_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn checkpointed_when_any_reuses_its_saved_winner_after_a_later_failure() -> CatgaResult<()> {
     let winner_calls = Arc::new(AtomicUsize::new(0));
     let fail_once = Arc::new(AtomicBool::new(true));

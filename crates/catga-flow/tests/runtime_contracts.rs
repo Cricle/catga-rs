@@ -16,7 +16,7 @@ use catga_flow::{
     FlowState, FlowStatus, FlowStepOutcome, FlowTagPolicy, MemoryFlowScheduler, SuspendedFlowStore,
     WaitCondition, WaitPolicy,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Barrier, Mutex};
 
 #[derive(Default)]
 struct MemoryContinuations {
@@ -192,6 +192,38 @@ struct FailsFirstLaunch {
     attempts: AtomicUsize,
 }
 
+struct ConcurrentLaunchRecorder {
+    barrier: Barrier,
+    launches: Mutex<Vec<ChildLaunch>>,
+}
+
+impl ConcurrentLaunchRecorder {
+    fn new(participants: usize) -> Self {
+        Self {
+            barrier: Barrier::new(participants),
+            launches: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl FlowChildLauncher for ConcurrentLaunchRecorder {
+    async fn launch(
+        &self,
+        parent_flow_id: &str,
+        child_id: &str,
+        correlation_id: &str,
+    ) -> CatgaResult<()> {
+        self.launches.lock().await.push((
+            parent_flow_id.into(),
+            child_id.into(),
+            correlation_id.into(),
+        ));
+        self.barrier.wait().await;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl FlowChildLauncher for FailsFirstLaunch {
     async fn launch(&self, _: &str, _: &str, _: &str) -> CatgaResult<()> {
@@ -282,6 +314,37 @@ async fn runtime_fails_an_all_wait_when_a_child_reports_an_error() -> CatgaResul
         .record_wait_success("checkout-2", "charge", b"ignored".to_vec())
         .await?;
     assert!(terminal.is_failure());
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_any_wait_keeps_waiting_after_a_failure_and_completes_after_a_success()
+-> CatgaResult<()> {
+    let wait = child_wait(WaitPolicy::Any);
+    let definition = FlowDefinition::new("checkout")
+        .step("await-children", move |_| {
+            let wait = wait.clone();
+            async move { Ok(FlowStepOutcome::wait(wait)) }
+        })
+        .step("complete", |_| async { Ok(FlowStepOutcome::complete()) });
+    let (_, _, runtime) = runtime(definition);
+
+    assert!(runtime.start("any-wait-1", []).await?.is_suspended());
+    let pending = runtime
+        .record_wait_failure(
+            "any-wait-1",
+            "reserve",
+            CatgaError::new(ErrorCode::Unavailable, "reserve did not respond"),
+        )
+        .await?;
+    assert!(pending.is_suspended());
+    assert_eq!(pending.state().status(), FlowStatus::Suspended);
+
+    let completed = runtime
+        .record_wait_success("any-wait-1", "charge", b"charged".to_vec())
+        .await?;
+    assert!(completed.is_success());
+    assert_eq!(completed.state().step(), 2);
     Ok(())
 }
 
@@ -522,6 +585,62 @@ async fn runtime_compensates_completed_steps_before_recording_a_later_failure() 
 }
 
 #[tokio::test]
+async fn runtime_recovers_a_compensating_flow_after_a_transient_rollback_error() -> CatgaResult<()>
+{
+    let compensation_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::clone(&compensation_attempts);
+    let definition = FlowDefinition::new("compensating-recovery")
+        .step_with_compensation(
+            "reserve",
+            |_| async { Ok(FlowStepOutcome::Advance) },
+            move |_| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        return Err(CatgaError::new(
+                            ErrorCode::Transient,
+                            "rollback transport unavailable",
+                        ));
+                    }
+                    Ok(())
+                }
+            },
+        )
+        .step("charge", |_| async {
+            Ok(FlowStepOutcome::Fail(CatgaError::new(
+                ErrorCode::Validation,
+                "charge was declined",
+            )))
+        });
+    let (store, _, runtime) = runtime(definition);
+    let runtime = runtime.with_stale_after(Duration::ZERO);
+
+    let first = runtime
+        .start("compensating-recovery-1", [])
+        .await
+        .expect_err("a transient rollback error leaves the flow recoverably compensating");
+    assert_eq!(first.code(), ErrorCode::Transient);
+    assert_eq!(
+        store
+            .get("compensating-recovery-1")
+            .await?
+            .expect("compensating state remains durable")
+            .state()
+            .status(),
+        FlowStatus::Compensating
+    );
+
+    let recovered = runtime.resume("compensating-recovery-1").await?;
+    assert!(recovered.is_failure());
+    assert_eq!(
+        recovered.state().error().map(CatgaError::code),
+        Some(ErrorCode::Validation)
+    );
+    assert_eq!(compensation_attempts.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_launches_each_persisted_child_once_and_marks_the_launch_intent() -> CatgaResult<()>
 {
     let wait = child_wait(WaitPolicy::All);
@@ -563,6 +682,58 @@ async fn runtime_launches_each_persisted_child_once_and_marks_the_launch_intent(
             .child_launches()
             .iter()
             .all(|launch| matches!(launch.state(), FlowChildLaunchState::Launched))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_child_launch_recovery_claims_each_stable_identity_once() -> CatgaResult<()> {
+    let wait = child_wait(WaitPolicy::All);
+    let definition = FlowDefinition::new("checkout")
+        .step("await-children", move |_| {
+            let wait = wait.clone();
+            async move { Ok(FlowStepOutcome::wait(wait)) }
+        })
+        .step("complete", |_| async { Ok(FlowStepOutcome::complete()) });
+    let (_, _, runtime) = runtime(definition);
+    let runtime = Arc::new(runtime);
+    let launcher = Arc::new(ConcurrentLaunchRecorder::new(2));
+
+    assert!(
+        runtime
+            .start("concurrent-launch-1", [])
+            .await?
+            .is_suspended()
+    );
+    let first_runtime = Arc::clone(&runtime);
+    let first_launcher = Arc::clone(&launcher);
+    let first = tokio::spawn(async move {
+        first_runtime
+            .launch_waiting_children("concurrent-launch-1", first_launcher.as_ref())
+            .await
+    });
+    let second_runtime = Arc::clone(&runtime);
+    let second_launcher = Arc::clone(&launcher);
+    let second = tokio::spawn(async move {
+        second_runtime
+            .launch_waiting_children("concurrent-launch-1", second_launcher.as_ref())
+            .await
+    });
+
+    let first_count = first.await.expect("first launcher task joins")?;
+    let second_count = second.await.expect("second launcher task joins")?;
+    assert_eq!(first_count + second_count, 2);
+    let launches = launcher.launches.lock().await;
+    assert_eq!(launches.len(), 2);
+    assert!(
+        launches
+            .iter()
+            .any(|(_, child, _)| child.as_ref() == "reserve")
+    );
+    assert!(
+        launches
+            .iter()
+            .any(|(_, child, _)| child.as_ref() == "charge")
     );
     Ok(())
 }

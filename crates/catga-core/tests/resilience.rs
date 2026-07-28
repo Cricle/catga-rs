@@ -218,3 +218,85 @@ async fn resilience_allows_only_one_half_open_probe_and_closes_after_its_success
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn resilience_admission_rejects_excess_work_and_releases_a_cancelled_waiter()
+-> CatgaResult<()> {
+    let executor = Arc::new(ResilienceExecutor::with_jitter(
+        ResilienceOptions {
+            max_concurrent: 1,
+            max_queued: 1,
+            max_retries: 0,
+            ..options()
+        },
+        RetryJitter::none(),
+    )?);
+    let first_started = Arc::new(Notify::new());
+    let release_first = Arc::new(Notify::new());
+    let started = first_started.notified();
+    let first_executor = Arc::clone(&executor);
+    let first_started_for_operation = Arc::clone(&first_started);
+    let release_first_for_operation = Arc::clone(&release_first);
+    let first = tokio::spawn(async move {
+        first_executor
+            .execute(CancellationToken::new(), move |_| {
+                let first_started = Arc::clone(&first_started_for_operation);
+                let release_first = Arc::clone(&release_first_for_operation);
+                async move {
+                    first_started.notify_one();
+                    release_first.notified().await;
+                    Ok::<(), CatgaError>(())
+                }
+            })
+            .await
+    });
+    started.await;
+
+    let queued_cancellation = CancellationToken::new();
+    let queued_executor = Arc::clone(&executor);
+    let queued_token = queued_cancellation.clone();
+    let queued = tokio::spawn(async move {
+        queued_executor
+            .execute(queued_token, |_| async { Ok::<(), CatgaError>(()) })
+            .await
+    });
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+
+    let rejected_calls = Arc::new(AtomicUsize::new(0));
+    let rejected_counter = Arc::clone(&rejected_calls);
+    assert!(matches!(
+        executor
+            .execute(CancellationToken::new(), move |_| {
+                let rejected_calls = Arc::clone(&rejected_counter);
+                async move {
+                    rejected_calls.fetch_add(1, Ordering::AcqRel);
+                    Ok::<(), CatgaError>(())
+                }
+            })
+            .await,
+        Err(error) if error.code() == ErrorCode::Unavailable
+    ));
+    assert_eq!(rejected_calls.load(Ordering::Acquire), 0);
+
+    queued_cancellation.cancel();
+    assert!(matches!(
+        queued.await.expect("queued resilience task completes"),
+        Err(error) if error.code() == ErrorCode::Cancelled
+    ));
+    release_first.notify_one();
+    assert_eq!(
+        first.await.expect("first resilience task completes"),
+        Ok(())
+    );
+    assert_eq!(
+        executor
+            .execute(CancellationToken::new(), |_| async {
+                Ok::<_, CatgaError>(9_u8)
+            })
+            .await?,
+        9
+    );
+    Ok(())
+}

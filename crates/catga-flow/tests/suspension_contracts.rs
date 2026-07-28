@@ -153,3 +153,25 @@ fn external_waits_bound_distinct_results_and_preserve_failure_diagnostics() {
         Err(error) if error.code() == ErrorCode::Validation
     ));
 }
+
+#[test]
+fn wait_condition_preserves_policy_and_time_metadata_across_immutable_updates() {
+    let created_at = UNIX_EPOCH + Duration::from_secs(12);
+    let timeout = Duration::from_secs(34);
+    let wait = WaitCondition::new("external/metadata", WaitPolicy::Any, 2, created_at, timeout);
+    let updated = wait
+        .record_failure(
+            "first",
+            CatgaError::new(ErrorCode::Unavailable, "first provider unavailable"),
+        )
+        .record_success("second", [1_u8, 2, 3]);
+
+    assert_eq!(updated.correlation_id(), "external/metadata");
+    assert_eq!(updated.policy(), WaitPolicy::Any);
+    assert_eq!(updated.expected_count(), 2);
+    assert_eq!(updated.created_at(), created_at);
+    assert_eq!(updated.timeout(), timeout);
+    assert_eq!(updated.completed_count(), 2);
+    assert!(updated.is_expired_at(created_at + timeout));
+    assert!(updated.validate().is_ok());
+}
