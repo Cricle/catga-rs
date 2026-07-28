@@ -28,17 +28,34 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
         .await
         .map_err(|error| database_error("acquire SQL Server migration connection", error))?;
     connection
-        .execute(
-            "BEGIN TRANSACTION; \
-             DECLARE @result INT; \
-             EXEC @result = sys.sp_getapplock @Resource = N'catga_flow_states_schema', \
-               @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 5000; \
-             IF @result < 0 THROW 50000, 'could not acquire the Catga FlowStore schema lock', 1;",
-            &[],
-        )
+        .simple_query("BEGIN TRANSACTION")
         .await
-        .map(|_| ())
-        .map_err(|error| database_error("lock SQL Server FlowStore schema migration", error))?;
+        .map_err(|error| database_error("begin SQL Server FlowStore schema migration", error))?
+        .into_first_result()
+        .await
+        .map_err(|error| database_error("begin SQL Server FlowStore schema migration", error))?;
+    let lock = async {
+        connection
+            .simple_query(
+                "DECLARE @result INT; \
+                 EXEC @result = sys.sp_getapplock @Resource = N'catga_flow_states_schema', \
+                   @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 5000; \
+                 IF @result < 0 THROW 50000, 'could not acquire the Catga FlowStore schema lock', 1;",
+            )
+            .await?
+            .into_first_result()
+            .await
+    }
+    .await;
+    if let Err(error) = lock {
+        let _ = connection
+            .simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+            .await;
+        return Err(database_error(
+            "lock SQL Server FlowStore schema migration",
+            error,
+        ));
+    }
     let result = async {
         connection
             .execute(

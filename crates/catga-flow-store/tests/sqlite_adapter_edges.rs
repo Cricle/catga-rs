@@ -4,12 +4,15 @@
 //! outside `src` so the production crates have no embedded test modules.
 #![cfg(feature = "sqlite")]
 
-use std::time::{Duration, SystemTime};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    DueFlowScheduler, FlowContinuation, FlowScheduler, FlowState, SuspendedFlowStore,
-    TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
+    DueFlowScheduler, FlowContinuation, FlowScheduler, FlowState, FlowStore, SuspendedFlowStore,
+    TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_flow_store::{
     SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
@@ -71,6 +74,27 @@ async fn sqlite_timeout_store_rejects_malformed_receipt_tokens_before_settlement
             ErrorCode::Validation
         );
     }
+
+    let poll = TimedOutFlowPoll::new(now, 1, 1)?;
+    let first = store
+        .poll_timed_out(&poll)
+        .await?
+        .pop()
+        .expect("expired SQLite continuation must produce a lease receipt");
+    store
+        .ack_timed_out(&TimedOutFlowReceipt::new("invalid-token", [9_u8; 16]))
+        .await?;
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
+    store.release_timed_out(&first).await?;
+    let second = store
+        .poll_timed_out(&poll)
+        .await?
+        .pop()
+        .expect("released SQLite receipt must be reclaimable");
+    assert_ne!(first.token(), second.token());
+    store.ack_timed_out(&first).await?;
+    store.ack_timed_out(&second).await?;
+    assert!(store.poll_timed_out(&poll).await?.is_empty());
     Ok(())
 }
 
@@ -111,6 +135,26 @@ async fn sqlite_scheduler_preserves_pre_epoch_deadlines_and_validates_leases() -
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].schedule_id(), schedule_id.as_ref());
     assert_eq!(claimed[0].due_at(), due_at);
+    assert!(
+        !scheduler
+            .ack_due("other-worker", schedule_id.as_ref())
+            .await?
+    );
+    assert!(
+        !scheduler
+            .release_due("other-worker", schedule_id.as_ref())
+            .await?
+    );
+    assert!(
+        !scheduler
+            .renew_due(
+                "other-worker",
+                schedule_id.as_ref(),
+                SystemTime::UNIX_EPOCH,
+                Duration::from_secs(1),
+            )
+            .await?
+    );
     assert_eq!(
         scheduler
             .renew_due(
@@ -125,6 +169,62 @@ async fn sqlite_scheduler_preserves_pre_epoch_deadlines_and_validates_leases() -
         ErrorCode::Validation
     );
     assert!(scheduler.ack_due("worker", schedule_id.as_ref()).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_flow_store_fences_claims_heartbeats_and_concurrent_transitions() -> CatgaResult<()>
+{
+    let directory = tempfile::tempdir().map_err(temporary_directory_error)?;
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("flow-fences.db").display()
+    );
+    let store = Arc::new(SqlFlowStore::connect_sqlite(&url).await?);
+    store.migrate().await?;
+
+    assert!(store.get("absent").await?.is_none());
+    let absent = FlowState::new("absent", "payment", [], "owner-a")
+        .done(0)
+        .next_version()?;
+    assert!(!store.update(0, absent).await?);
+
+    let stale =
+        FlowState::new("stale", "payment", [], "owner-a").heartbeated_at(SystemTime::UNIX_EPOCH);
+    assert!(store.create(stale).await?);
+    let claimed = store
+        .try_claim("payment", "owner-b", Duration::ZERO)
+        .await?
+        .expect("a stale running flow must be claimable");
+    assert_eq!(claimed.owner(), Some("owner-b"));
+    assert!(
+        store
+            .try_claim("other-flow-type", "owner-c", Duration::ZERO)
+            .await?
+            .is_none()
+    );
+    assert!(
+        !store
+            .heartbeat("stale", "owner-a", claimed.version())
+            .await?
+    );
+    assert!(
+        !store
+            .heartbeat("stale", "owner-b", claimed.version() - 1)
+            .await?
+    );
+    assert!(
+        store
+            .heartbeat("stale", "owner-b", claimed.version())
+            .await?
+    );
+
+    let initial = FlowState::new("concurrent", "payment", [], "owner-a");
+    assert!(store.create(initial.clone()).await?);
+    let first = initial.clone().done(1).next_version()?;
+    let second = initial.done(2).next_version()?;
+    let (first, second) = tokio::join!(store.update(0, first), store.update(0, second));
+    assert_eq!(usize::from(first?) + usize::from(second?), 1);
     Ok(())
 }
 

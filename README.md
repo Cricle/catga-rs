@@ -4,6 +4,23 @@ Catga is a pure-Rust CQRS, event-sourcing, workflow, and distributed-runtime
 workspace. Applications compose typed, bounded components explicitly: there is
 no reflection, service locator, hidden worker, or unbounded queue.
 
+Start with a small in-memory program, then replace only the boundary that needs
+to become durable or distributed. This keeps ordinary application code short
+while leaving transports, stores, codecs, authentication, and scheduling under
+your control.
+
+## Choose a starting point
+
+| If you need to… | Start here | Then add |
+| --- | --- | --- |
+| Send a typed command or query in one process | [`mediator`](examples/src/bin/mediator.rs) | `catga-core` handlers and optional pipelines |
+| Run a compensating sequence of local steps | [`flow`](examples/src/bin/flow.rs) | `catga-flow` and a durable `FlowStore` when restarts matter |
+| Publish and acknowledge messages locally | [`memory_transport`](examples/src/bin/memory_transport.rs) | NATS, Redis, RobustMQ, or an application transport implementation |
+
+Each example is runnable without Docker or credentials. They demonstrate the
+same public traits used in production, so moving from local development to a
+real service does not require changing the application model.
+
 ## Install and run
 
 Start with the crate that owns the contract you need. `catga-core` provides
@@ -194,6 +211,23 @@ Customize behavior at the contracts rather than behind a global runtime:
 This boundary keeps connection management, polling, retry policy, and shutdown
 ownership in the application. Adapters expose operations; they do not create a
 service locator or a background worker on your behalf.
+
+## Production checklist
+
+1. Keep external effects idempotent. Flow retries, transport redelivery, and
+   timeout recovery are deliberately at-least-once boundaries.
+2. Select the smallest Cargo feature set for the services your deployment
+   actually uses; do not enable every adapter by default.
+3. Run store migrations during controlled startup, then run schedulers and
+   receivers in application-owned supervised tasks.
+4. Set finite command timeouts and bounded batch sizes. Redis command adapters
+   use a finite response timeout by default; stream long-polling is isolated.
+5. For Raft HTTP ingress, put mTLS or signed-frame authentication in front of
+   `raft_message_route`, attach the verified `RaftPeerIdentity`, and configure
+   `StaticRaftInboundPolicy` with the local node and its trusted peers.
+
+These choices are explicit because the caller, not a framework global, owns
+availability, credentials, retry budgets, and graceful shutdown.
 
 ## External services and boundaries
 

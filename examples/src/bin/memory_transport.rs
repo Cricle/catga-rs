@@ -16,5 +16,7 @@ async fn main() -> CatgaResult<()> {
         .await?;
     let delivery = transport.receive().await?;
     assert_eq!(delivery.envelope().message_type(), "order.created");
-    transport.ack(delivery).await
+    transport.ack(delivery).await?;
+    println!("received and acknowledged order.created");
+    Ok(())
 }

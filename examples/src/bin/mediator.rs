@@ -19,6 +19,8 @@ impl Handler<Double> for DoubleHandler {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {
     let mediator = Mediator::new(catga_handlers! { request Double => DoubleHandler }?);
-    assert_eq!(mediator.send(Double(21)).await?, 42);
+    let result = mediator.send(Double(21)).await?;
+    assert_eq!(result, 42);
+    println!("21 doubled is {result}");
     Ok(())
 }
