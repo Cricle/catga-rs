@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,

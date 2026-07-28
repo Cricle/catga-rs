@@ -142,19 +142,25 @@ macro_rules! flow_definition {
 /// The async block remains explicit, so callback errors continue to use the result type required
 /// by the receiving API (for example, [`catga_core::CatgaResult`]).
 ///
-/// ```ignore
-/// let callback = catga_flow::flow_async!(|state: &mut State, event: Event| async move {
-///     state.apply(event)?;
-///     Ok(())
+/// ```
+/// use catga_core::CatgaError;
+///
+/// let callback = catga_flow::flow_async!(|value: u32| async move {
+///     Ok::<_, CatgaError>(value + 1)
 /// });
+/// let _future = callback(41);
 /// ```
 ///
 /// A `move` closure is also supported when the callback needs to own captured values:
 ///
-/// ```ignore
-/// let callback = catga_flow::flow_async!(move |request: Request| async move {
-///     service.handle(request).await
+/// ```
+/// use catga_core::CatgaError;
+///
+/// let suffix = String::from("!");
+/// let callback = catga_flow::flow_async!(move |request: String| async move {
+///     Ok::<_, CatgaError>(format!("{request}{suffix}"))
 /// });
+/// let _future = callback(String::from("done"));
 /// ```
 #[macro_export]
 macro_rules! flow_async {
@@ -168,8 +174,15 @@ macro_rules! flow_async {
 
 /// Converts a natural async state action into a [`DslFlow`] action closure.
 ///
-/// ```ignore
-/// .action(dsl_action!(|state: &mut State| async move { Ok(()) }))
+/// ```
+/// use catga_core::CatgaError;
+/// use catga_flow::DslFlow;
+///
+/// struct State(u32);
+/// let _flow = DslFlow::new().action(catga_flow::dsl_action!(|state: &mut State| async move {
+///     state.0 += 1;
+///     Ok::<_, CatgaError>(())
+/// }));
 /// ```
 #[macro_export]
 macro_rules! dsl_action {
@@ -180,10 +193,15 @@ macro_rules! dsl_action {
 
 /// Converts a natural async item action into a [`DslFlow::for_each`] action closure.
 ///
-/// ```ignore
-/// .for_each(|state| state.items.clone(), dsl_each_action!(|state: &mut State, item: Item| async move {
-///     Ok(())
-/// }))
+/// ```
+/// use catga_core::CatgaError;
+/// use catga_flow::DslFlow;
+///
+/// struct State(u32);
+/// let _flow = DslFlow::new().for_each(|state: &State| vec![state.0], catga_flow::dsl_each_action!(|state: &mut State, item: u32| async move {
+///     state.0 += item;
+///     Ok::<_, CatgaError>(())
+/// }));
 /// ```
 #[macro_export]
 macro_rules! dsl_each_action {

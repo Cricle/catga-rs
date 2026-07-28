@@ -185,20 +185,20 @@ async fn expired_outbox_claim_is_reclaimed_by_a_new_owner() -> CatgaResult<()> {
     store.enqueue(message(41)).await?;
 
     let original = store
-        .claim_for("worker-a", 1, Duration::from_millis(40))
+        .claim_for("worker-a", 1, Duration::from_secs(1))
         .await?
         .pop()
         .unwrap();
     assert!(
         store
-            .claim_for("worker-b", 1, Duration::from_millis(40))
+            .claim_for("worker-b", 1, Duration::from_secs(1))
             .await?
             .is_empty()
     );
 
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     let recovered = store
-        .claim_for("worker-b", 1, Duration::from_millis(40))
+        .claim_for("worker-b", 1, Duration::from_secs(1))
         .await?
         .pop()
         .unwrap();

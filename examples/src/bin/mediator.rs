@@ -1,3 +1,5 @@
+//! Registers a request handler with the mediator macro and sends a typed request.
+
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Handler, Mediator, Request, catga_handlers};
 

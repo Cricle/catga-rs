@@ -19,6 +19,22 @@
 //! optimistic-concurrency retries, bounded discovery scans, and receipt fencing. Dialect-specific
 //! modules retain native parameter binding, skip-locked claims, and indexed time ordering without
 //! duplicating the public store contract. No adapter creates a worker or background task.
+//!
+//! # SQLite startup
+//!
+//! Construct and migrate stores at an application-owned startup boundary.
+//! The migration is idempotent, but flow processing should start only after it
+//! has completed successfully.
+//!
+//! ```no_run
+//! use catga_flow_store::SqlFlowStore;
+//!
+//! # async fn connect() -> Result<(), catga_core::CatgaError> {
+//! let store = SqlFlowStore::connect_sqlite("sqlite:catga.db").await?;
+//! store.migrate().await?;
+//! # Ok(())
+//! # }
+//! ```
 
 mod backend;
 #[cfg(any(

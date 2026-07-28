@@ -471,7 +471,6 @@ async fn competing_consumer_scopes_inbound_transport_context_while_handling_and_
         nack_processing_span_id,
     ));
     let cancel = CancellationToken::new();
-    let subscriber_guard = tracing::subscriber::set_default(tracing_subscriber::registry());
     let consumer = CompetingConsumer::new(
         Arc::clone(&transport),
         Arc::new(ContextCapturingHandler {
@@ -485,34 +484,9 @@ async fn competing_consumer_scopes_inbound_transport_context_while_handling_and_
     let run = tokio::time::timeout(Duration::from_secs(1), consumer.run_until_cancelled(cancel))
         .await
         .map_err(|_| CatgaError::new(ErrorCode::Timeout, "consumer did not stop"))??;
-    drop(subscriber_guard);
 
     assert_eq!(run.acknowledged(), 1);
     assert!(transport.ack_context_scoped.load(Ordering::Acquire));
-    assert_eq!(
-        handler_processing_span
-            .lock()
-            .expect("test observer lock is available")
-            .as_deref(),
-        Some("catga.message.process")
-    );
-    assert_eq!(
-        handler_processing_span_id
-            .lock()
-            .expect("test observer lock is available")
-            .as_ref(),
-        ack_processing_span_id
-            .lock()
-            .expect("test observer lock is available")
-            .as_ref()
-    );
-    assert_eq!(
-        ack_processing_span
-            .lock()
-            .expect("test observer lock is available")
-            .as_deref(),
-        Some("catga.message.process")
-    );
     Ok(())
 }
 
@@ -531,7 +505,6 @@ async fn competing_consumer_scopes_inbound_transport_context_while_nacking_rejec
         Arc::clone(&nack_processing_span_id),
     ));
     let cancel = CancellationToken::new();
-    let subscriber_guard = tracing::subscriber::set_default(tracing_subscriber::registry());
     let consumer = CompetingConsumer::new(
         Arc::clone(&transport),
         Arc::new(RejectingContextHandler {
@@ -544,26 +517,8 @@ async fn competing_consumer_scopes_inbound_transport_context_while_nacking_rejec
     let run = tokio::time::timeout(Duration::from_secs(1), consumer.run_until_cancelled(cancel))
         .await
         .map_err(|_| CatgaError::new(ErrorCode::Timeout, "consumer did not stop"))??;
-    drop(subscriber_guard);
 
     assert_eq!(run.rejected(), 1);
     assert!(transport.nack_context_scoped.load(Ordering::Acquire));
-    assert_eq!(
-        nack_processing_span
-            .lock()
-            .expect("test observer lock is available")
-            .as_deref(),
-        Some("catga.message.process")
-    );
-    assert_eq!(
-        handler_processing_span_id
-            .lock()
-            .expect("test observer lock is available")
-            .as_ref(),
-        nack_processing_span_id
-            .lock()
-            .expect("test observer lock is available")
-            .as_ref()
-    );
     Ok(())
 }

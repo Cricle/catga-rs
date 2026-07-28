@@ -92,6 +92,19 @@ impl CompressionStats {
 }
 
 /// Compresses a payload into a freshly allocated vector.
+///
+/// The output is self-describing, so [`decompress`] can select the matching
+/// algorithm without out-of-band metadata. Use [`CompressionAlgorithm::None`]
+/// when a boundary must preserve the frame contract but does not want a codec.
+///
+/// ```
+/// use catga_core::{CompressionAlgorithm, compress, decompress, is_compressed};
+///
+/// let encoded = compress(b"repeat repeat repeat", CompressionAlgorithm::Gzip)?;
+/// assert!(is_compressed(&encoded));
+/// assert_eq!(decompress(&encoded)?, b"repeat repeat repeat");
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
 pub fn compress(data: &[u8], algorithm: CompressionAlgorithm) -> CatgaResult<Vec<u8>> {
     let mut output = Vec::with_capacity(data.len().saturating_add(HEADER_LEN));
     compress_into(data, algorithm, &mut output)?;

@@ -26,6 +26,8 @@ jobs:
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: cargo check --examples --workspace --all-features
       - run: cargo check -p catga-examples --bins
+      - name: Validate Docker Compose E2E runner
+        run: bash scripts/e2e.sh --profile full --validate-only
   coverage:
     runs-on: ubuntu-latest
     services:
@@ -63,13 +65,14 @@ jobs:
           --health-timeout 5s
           --health-retries 30
       mssql:
-        image: mcr.microsoft.com/mssql/server:2025-latest
+        image: mcr.microsoft.com/azure-sql-edge:latest
         env:
-          ACCEPT_EULA: Y
+          ACCEPT_EULA: '1'
           MSSQL_SA_PASSWORD: Catga_e2e_password_2026!
+          MSSQL_PID: Developer
         ports: ['1433:1433']
         options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -C -Q 'SELECT 1'"
+          --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1'"
           --health-interval 5s
           --health-timeout 10s
           --health-retries 30
@@ -129,6 +132,7 @@ jobs:
           cargo llvm-cov test -p catga-flow-store --all-features --test mysql --no-clean -- --ignored
           cargo llvm-cov test -p catga-flow-store --all-features --test postgres --no-clean -- --ignored
           cargo llvm-cov test -p catga-flow-store --all-features --test mssql --no-clean -- --ignored
+          cargo llvm-cov test -p catga-flow-store --all-features --test sql_backend_contracts --no-clean -- --ignored
       - name: Enforce coverage threshold
         run: cargo llvm-cov report --lcov --output-path lcov.info --fail-under-lines 95 --fail-under-regions 95
       - name: Upload coverage report
@@ -176,13 +180,14 @@ jobs:
           --health-timeout 5s
           --health-retries 30
       mssql:
-        image: mcr.microsoft.com/mssql/server:2025-latest
+        image: mcr.microsoft.com/azure-sql-edge:latest
         env:
-          ACCEPT_EULA: Y
+          ACCEPT_EULA: '1'
           MSSQL_SA_PASSWORD: Catga_e2e_password_2026!
+          MSSQL_PID: Developer
         ports: ['1433:1433']
         options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -C -Q 'SELECT 1'"
+          --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1'"
           --health-interval 5s
           --health-timeout 10s
           --health-retries 30
@@ -240,3 +245,4 @@ jobs:
       - run: cargo test -p catga-flow-store --all-features --test mysql -- --ignored
       - run: cargo test -p catga-flow-store --all-features --test postgres -- --ignored
       - run: cargo test -p catga-flow-store --all-features --test mssql -- --ignored
+      - run: cargo test -p catga-flow-store --all-features --test sql_backend_contracts -- --ignored

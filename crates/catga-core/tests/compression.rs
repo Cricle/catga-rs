@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 use catga_core::{
     CatgaResult, CompressionAlgorithm, CompressionStats, ErrorCode, compress, compress_into,
     compress_to_slice, decompress, decompress_limited, is_compressed,

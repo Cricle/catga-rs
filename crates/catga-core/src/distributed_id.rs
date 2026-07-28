@@ -22,6 +22,19 @@ pub struct SnowflakeLayout {
 
 impl SnowflakeLayout {
     /// Creates and validates a custom 63-bit Snowflake layout.
+    ///
+    /// The three bit counts must add up to 63. Reserve enough sequence bits
+    /// for the peak number of IDs one worker creates in a millisecond, then
+    /// use the remaining bits for the deployment's lifetime and worker count.
+    ///
+    /// ```
+    /// use catga_core::SnowflakeLayout;
+    ///
+    /// let layout = SnowflakeLayout::new(44, 8, 11, 1_704_067_200_000)?;
+    /// assert_eq!(layout.max_worker_id(), 255);
+    /// assert_eq!(layout.max_sequence(), 2_047);
+    /// # Ok::<(), catga_core::CatgaError>(())
+    /// ```
     pub fn new(
         timestamp_bits: u8,
         worker_id_bits: u8,
@@ -191,6 +204,22 @@ struct IdReservation {
 
 impl SnowflakeIdGenerator {
     /// Creates a generator for one worker and validated bit layout.
+    ///
+    /// A worker ID must be unique among generators that share a layout and
+    /// epoch. Generated values can later be decoded without storing separate
+    /// metadata.
+    ///
+    /// ```
+    /// use catga_core::{DistributedIdGenerator, SnowflakeIdGenerator, SnowflakeLayout};
+    ///
+    /// let generator = SnowflakeIdGenerator::new(7, SnowflakeLayout::default())?;
+    /// let id = generator.next_id()?;
+    /// let metadata = generator.parse(id);
+    ///
+    /// assert!(id > 0);
+    /// assert_eq!(metadata.worker_id(), 7);
+    /// # Ok::<(), catga_core::CatgaError>(())
+    /// ```
     pub fn new(worker_id: u32, layout: SnowflakeLayout) -> CatgaResult<Self> {
         layout.validate()?;
         if worker_id > layout.max_worker_id() {

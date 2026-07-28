@@ -25,6 +25,22 @@ pub struct HmacMessageSigner {
 
 impl HmacMessageSigner {
     /// Creates a signer from non-empty shared-secret bytes.
+    ///
+    /// Keep the key in a secret manager and rotate it by accepting both the
+    /// active and previous key at the application boundary while messages are
+    /// in flight. The signer itself is cheap to clone for shared transport
+    /// configuration.
+    ///
+    /// ```
+    /// use catga_core::{HmacMessageSigner, MessageSigner};
+    ///
+    /// let signer = HmacMessageSigner::new(b"development-secret")?;
+    /// let signature = signer.sign(b"order:42");
+    ///
+    /// assert!(signer.verify(b"order:42", &signature));
+    /// assert!(!signer.verify(b"order:43", &signature));
+    /// # Ok::<(), catga_core::CatgaError>(())
+    /// ```
     pub fn new(key: impl AsRef<[u8]>) -> CatgaResult<Self> {
         let key = key.as_ref();
         if key.is_empty() {

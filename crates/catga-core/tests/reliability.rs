@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 use catga_core::{
     DeadLetter, DeadLetterDiagnostics, Envelope, ErrorCode, MAX_DEAD_LETTER_DESCRIPTION_BYTES,
     MessageMetadata,

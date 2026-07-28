@@ -11,6 +11,14 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 /// A bounded FIFO transport for local development and deterministic tests.
+///
+/// ```
+/// use catga_memory::MemoryTransport;
+///
+/// let transport = MemoryTransport::new(8)?;
+/// assert!(format!("{transport:?}").contains("MemoryTransport"));
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
 #[derive(Clone, Debug)]
 pub struct MemoryTransport {
     sender: mpsc::Sender<Envelope>,

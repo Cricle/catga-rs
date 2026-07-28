@@ -1,3 +1,5 @@
+//! Builds and runs a two-step in-memory flow.
+
 use catga_core::CatgaResult;
 use catga_flow::Flow;
 

@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! Service-free validation contracts for public NATS constructors.
 
 use catga_core::ErrorCode;

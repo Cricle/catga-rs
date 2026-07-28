@@ -1,6 +1,20 @@
 use std::{collections::HashMap, time::Duration};
 
 /// Immutable timeout, retry, and persistence rules selected by Flow step tags.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_flow::FlowTagPolicy;
+///
+/// let policy = FlowTagPolicy::new(Duration::from_secs(30), 2)
+///     .with_timeout("payment", Duration::from_secs(5))
+///     .with_retries("payment", 4)
+///     .with_persist("payment");
+///
+/// assert_eq!(policy.timeout_for("payment"), Duration::from_secs(5));
+/// assert_eq!(policy.retries_for("other"), 2);
+/// assert!(policy.should_persist("payment"));
+/// ```
 #[derive(Clone, Debug)]
 pub struct FlowTagPolicy {
     default_timeout: Duration,

@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! Service-gated contracts for Redis-backed durable flow scheduling.
 
 use std::time::{Duration, UNIX_EPOCH};

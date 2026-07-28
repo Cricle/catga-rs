@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 use catga_core::{CatgaError, ErrorCode, MAX_SECURITY_CLAIMS, SecurityClaims, SecurityIdentity};
 
 #[test]

@@ -29,6 +29,21 @@ mod handlers;
 /// explicit names. `all_public = false` disables the public-field fallback.
 /// Generic message structs are supported when their type parameters satisfy Catga's required
 /// `Send + Sync + 'static` bounds.
+///
+/// # Example
+///
+/// ```
+/// use catga_core::Message as _;
+/// use catga_macros::Message;
+///
+/// #[derive(Message)]
+/// struct RebuildSearchIndex {
+///     tenant: String,
+/// }
+///
+/// let message = RebuildSearchIndex { tenant: "acme".into() };
+/// assert!(message.message_type().ends_with("RebuildSearchIndex"));
+/// ```
 #[proc_macro_derive(Message, attributes(catga))]
 pub fn derive_message(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -691,6 +706,20 @@ fn batch_key_impl(input: &DeriveInput, generics: &Generics) -> Result<Option<Tok
 /// construct a handler with explicit Rust dependencies, for example
 /// `request CreateOrder => CreateOrderHandler::new(repository)` or
 /// `command RebuildIndex => RebuildIndexHandler::new(repository)`.
+///
+/// # Example
+///
+/// The macro emits a registration function for the selected `catga_core::Mediator`. The
+/// handler types must implement the corresponding Catga handler traits, so this short form is
+/// marked `no_run` and is intended to be completed with application dependencies.
+///
+/// ```ignore
+/// use catga_macros::catga_handlers;
+///
+/// catga_handlers! {
+///     event InventoryRebuilt => [RefreshReadModel, PublishAuditEvent]
+/// }
+/// ```
 #[proc_macro]
 pub fn catga_handlers(input: TokenStream) -> TokenStream {
     handlers::expand(input.into())

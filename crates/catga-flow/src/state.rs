@@ -41,6 +41,21 @@ impl FlowStatus {
 }
 
 /// Immutable, versioned state for one durable flow execution.
+///
+/// State transitions return a new value, so callers can validate and persist the exact revision
+/// selected by their optimistic-concurrency store.
+///
+/// ```
+/// use catga_flow::{FlowState, FlowStatus};
+///
+/// let state = FlowState::new("flow-42", "checkout", Vec::<u8>::new(), "worker-a")
+///     .next_version()?
+///     .done(1);
+///
+/// assert_eq!(state.status(), FlowStatus::Done);
+/// assert_eq!(state.version(), 1);
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FlowState {
     id: Box<str>,

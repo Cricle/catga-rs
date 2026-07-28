@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! Public NATS adapter contracts exercised against an isolated JetStream server.
 
 use std::{
@@ -14,7 +12,7 @@ use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore, Envelope,
     EnvelopeCodec, ErrorCode, EventStore, MessageMetadata, MessageTransport, OutboxMessage,
-    OutboxState, OutboxStore, QualityOfService,
+    OutboxState, OutboxStore, ProjectionCheckpoint, ProjectionCheckpointStore, QualityOfService,
 };
 use catga_flow::{
     DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
@@ -22,7 +20,8 @@ use catga_flow::{
 };
 use catga_nats::{
     NatsConfig, NatsDeadLetters, NatsEventStore, NatsFlowScheduler, NatsFlows, NatsOutbox,
-    NatsPubSubConfig, NatsPubSubTransport, NatsRequestClient, NatsSuspendedFlows, NatsTransport,
+    NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport, NatsRequestClient,
+    NatsSuspendedFlows, NatsTransport,
 };
 use tempfile::TempDir;
 
@@ -783,5 +782,69 @@ async fn outbox_persists_published_messages_and_recovers_legacy_records() -> Cat
     assert_eq!(published.len(), 1);
     assert_eq!(published[0].state(), OutboxState::Published);
     assert!(published[0].published_at_unix_ms().is_some());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn projection_checkpoints_update_delete_and_remain_projection_isolated() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let checkpoints =
+        NatsProjectionCheckpoints::connect(server.url(), unique("CATGA_PROJECTION_CHECKPOINTS"))
+            .await?;
+
+    let first = ProjectionCheckpoint::new("orders/audit", "order-21", 2);
+    checkpoints.save(first).await?;
+    checkpoints
+        .save(ProjectionCheckpoint::new("orders/audit", "order-21", 7))
+        .await?;
+    checkpoints
+        .save(ProjectionCheckpoint::new("orders/audit", "order-22", 3))
+        .await?;
+    checkpoints
+        .save(ProjectionCheckpoint::new("orders/search", "order-21", 5))
+        .await?;
+
+    let updated = checkpoints
+        .load("orders/audit", "order-21")
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "missing updated NATS checkpoint"))?;
+    assert_eq!(updated.version(), 7);
+    assert_eq!(updated.projection_name(), "orders/audit");
+    assert_eq!(updated.stream_id(), "order-21");
+    assert!(updated.updated_at() >= UNIX_EPOCH);
+    assert!(checkpoints.load("orders/audit", "missing").await?.is_none());
+
+    checkpoints.delete("orders/audit", "order-21").await?;
+    checkpoints.delete("orders/audit", "order-21").await?;
+    assert!(
+        checkpoints
+            .load("orders/audit", "order-21")
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        checkpoints
+            .load("orders/audit", "order-22")
+            .await?
+            .map(|checkpoint| checkpoint.version()),
+        Some(3)
+    );
+
+    checkpoints.delete_all("orders/audit").await?;
+    checkpoints.delete_all("orders/audit").await?;
+    assert!(
+        checkpoints
+            .load("orders/audit", "order-22")
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        checkpoints
+            .load("orders/search", "order-21")
+            .await?
+            .map(|checkpoint| checkpoint.version()),
+        Some(5)
+    );
     Ok(())
 }

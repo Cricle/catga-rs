@@ -2,6 +2,14 @@ use catga_core::{Envelope, MessagePriority};
 use robustmq::Priority;
 
 /// Protocol-neutral priority for mq9 mailbox delivery.
+///
+/// ```
+/// use catga_robustmq::MailboxPriority;
+/// use robustmq::Priority;
+///
+/// assert_eq!(MailboxPriority::Critical.as_sdk(), Priority::High);
+/// assert_eq!(MailboxPriority::Low.as_sdk(), Priority::Low);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MailboxPriority {
     /// Time-sensitive delivery.

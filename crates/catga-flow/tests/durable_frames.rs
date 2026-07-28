@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use catga_codec_memorypack::{MemoryPackSerializer, MemoryPackSnapshotCodec, MemoryPackable};
@@ -233,7 +231,7 @@ fn timeout_deadline_rounds_fractional_milliseconds_up() -> CatgaResult<()> {
             "fractional-timeout/wait",
             WaitPolicy::All,
             1,
-            SystemTime::UNIX_EPOCH + Duration::from_nanos(1),
+            SystemTime::UNIX_EPOCH + Duration::from_nanos(100),
             Duration::ZERO,
         ),
     );

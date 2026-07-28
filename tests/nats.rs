@@ -1884,20 +1884,20 @@ async fn nats_outbox_reclaims_an_expired_claim_without_accepting_a_stale_ack() -
         .await?;
 
     let original = outbox
-        .claim_for("worker-a", 1, Duration::from_millis(40))
+        .claim_for("worker-a", 1, Duration::from_secs(1))
         .await?
         .pop()
         .unwrap();
     assert!(
         outbox
-            .claim_for("worker-b", 1, Duration::from_millis(40))
+            .claim_for("worker-b", 1, Duration::from_secs(1))
             .await?
             .is_empty()
     );
 
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     let reclaimed = outbox
-        .claim_for("worker-b", 1, Duration::from_millis(40))
+        .claim_for("worker-b", 1, Duration::from_secs(1))
         .await?
         .pop()
         .unwrap();

@@ -16,6 +16,15 @@ pub const DEFAULT_REDIS_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs
 /// This policy applies to command connections such as stores, schedulers, and stream
 /// publishing. It deliberately does not apply to the separate blocking connection used by
 /// Redis Streams `XREAD`, whose response timeout remains unbounded while it long-polls.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_redis::RedisCommandOptions;
+///
+/// let options = RedisCommandOptions::new(Duration::from_millis(250))?;
+/// assert_eq!(options.response_timeout(), Duration::from_millis(250));
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RedisCommandOptions {
     response_timeout: Duration,
@@ -63,6 +72,15 @@ pub(crate) fn command_connection_manager_config() -> ConnectionManagerConfig {
 /// Every scan examines at most one pending entry and claims at most one eligible entry. The
 /// transport carries Redis's cursor between receive attempts, so a group with many non-idle
 /// entries is traversed incrementally without copying its pending list into process memory.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_redis::RedisPendingReclaimOptions;
+///
+/// let options = RedisPendingReclaimOptions::new(Duration::from_secs(5), 4)?;
+/// assert_eq!(options.max_scans(), 4);
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RedisPendingReclaimOptions {
     minimum_idle: Duration,
@@ -126,6 +144,18 @@ impl Default for RedisPendingReclaimOptions {
 }
 
 /// Redis Streams resources used by one Catga transport instance.
+///
+/// ```
+/// use catga_redis::RedisConfig;
+///
+/// let config = RedisConfig {
+///     server: "redis://127.0.0.1/".into(),
+///     stream: "orders".into(),
+///     group: "workers".into(),
+///     consumer: "worker-a".into(),
+/// };
+/// assert_eq!(&*config.group, "workers");
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RedisConfig {
     /// Redis server URL.
@@ -142,6 +172,16 @@ pub struct RedisConfig {
 ///
 /// Unlike [`RedisConfig`], this configuration is intentionally not backed by a Redis Stream:
 /// messages published while no subscriber is connected are not retained or redelivered.
+///
+/// ```
+/// use catga_redis::RedisPubSubConfig;
+///
+/// let config = RedisPubSubConfig {
+///     server: "redis://127.0.0.1/".into(),
+///     channel: "orders.notifications".into(),
+/// };
+/// assert_eq!(&*config.channel, "orders.notifications");
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RedisPubSubConfig {
     /// Redis server URL.

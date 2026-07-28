@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1"
 catga-core = { path = "../crates/catga-core" }

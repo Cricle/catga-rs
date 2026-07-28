@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 use catga_core::{CatgaResult, DistributedIdGenerator, SnowflakeIdGenerator, SnowflakeLayout};
 
 #[test]

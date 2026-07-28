@@ -21,6 +21,43 @@ struct Counter {
     from_snapshot: bool,
 }
 
+#[derive(Clone, Debug)]
+struct NonAdvancingCounter {
+    id: Box<str>,
+    version: i64,
+}
+
+impl Aggregate for NonAdvancingCounter {
+    fn new(id: &str) -> Self {
+        Self {
+            id: id.into(),
+            version: -1,
+        }
+    }
+
+    fn stream_id(id: &str) -> Box<str> {
+        format!("non-advancing-counter:{id}").into()
+    }
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn version(&self) -> i64 {
+        self.version
+    }
+
+    fn apply(&mut self, _event: &Envelope) -> catga_core::CatgaResult<()> {
+        Ok(())
+    }
+
+    fn pending_events(&self) -> &[Envelope] {
+        &[]
+    }
+
+    fn clear_pending_events(&mut self) {}
+}
+
 impl Aggregate for Counter {
     fn new(id: &str) -> Self {
         Self {
@@ -312,4 +349,84 @@ async fn snapshot_time_travel_does_not_replay_a_terminal_snapshot_event() {
     assert_eq!(state.version(), i64::MAX);
     assert_eq!(state.total, 42);
     assert_eq!(events.read_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn time_travel_handles_negative_versions_and_times_before_a_stream_exists() {
+    let store = MemoryEventStore::default();
+    store
+        .append("counter:one", vec![event(1, 1)], None)
+        .await
+        .unwrap();
+    let service = TimeTravelService::<Counter, _>::new(&store);
+
+    assert!(service.state_at_version("one", -1).await.unwrap().is_none());
+    assert!(
+        service
+            .state_at_time("missing", SystemTime::UNIX_EPOCH)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.compare_versions("one", -1, -2).await.is_err());
+}
+
+#[tokio::test]
+async fn snapshot_time_travel_rebuilds_time_history_and_comparisons_from_a_snapshot() {
+    let events = MemoryEventStore::default();
+    events
+        .append(
+            "counter:one",
+            vec![event(1, 1), event(2, 2), event(3, 3)],
+            None,
+        )
+        .await
+        .unwrap();
+    let snapshots = MemoryEnhancedSnapshots::default();
+    snapshots
+        .save(Snapshot::new(
+            "counter:one",
+            Counter {
+                id: "one".into(),
+                version: 1,
+                total: 3,
+                from_snapshot: true,
+            },
+            1,
+        ))
+        .await
+        .unwrap();
+    let service = SnapshotTimeTravelService::<Counter, _, _>::new(&events, &snapshots);
+
+    let at_time = service
+        .state_at_time("one", SystemTime::now() + Duration::from_secs(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(at_time.version(), 2);
+    assert_eq!(at_time.total, 6);
+    assert!(at_time.from_snapshot);
+
+    let history = service.version_history_page("one", 1, 2).await.unwrap();
+    assert_eq!(history.entries().len(), 2);
+    assert_eq!(history.entries()[0].version(), 1);
+
+    let comparison = service.compare_versions("one", 1, 2).await.unwrap();
+    assert_eq!(comparison.from_state().unwrap().total, 3);
+    assert_eq!(comparison.to_state().unwrap().total, 6);
+    assert_eq!(comparison.events_between().len(), 1);
+    assert_eq!(comparison.events_between()[0].version(), 2);
+}
+
+#[tokio::test]
+async fn time_travel_rejects_an_aggregate_that_does_not_advance_to_the_stored_version() {
+    let store = MemoryEventStore::default();
+    store
+        .append("non-advancing-counter:one", vec![event(1, 1)], None)
+        .await
+        .unwrap();
+    let service = TimeTravelService::<NonAdvancingCounter, _>::new(&store);
+
+    let error = service.state_at_version("one", 0).await.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Validation);
 }

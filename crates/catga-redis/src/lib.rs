@@ -5,6 +5,30 @@
 //! `RedisStreamsRequestClient` and `RedisStreamsRequestServer` APIs. They write request
 //! ingress through a [`catga_core::DestinationTransport`] such as [`RedisTransport`] while using
 //! a private Redis Pub/Sub inbox only for the one correlated reply.
+//!
+//! # Durable transport composition
+//!
+//! A `RedisConfig` names one stream and one consumer group. Give every running
+//! process a distinct `consumer` value; the group coordinates delivery while
+//! [`RedisTransport`] exposes the acknowledgement decision to application code.
+//! Connecting creates only the configured stream/group resources and starts no
+//! receive loop.
+//!
+//! ```no_run
+//! use catga_redis::{RedisConfig, RedisTransport};
+//!
+//! # async fn connect() -> Result<(), catga_core::CatgaError> {
+//! let config = RedisConfig {
+//!     server: "redis://127.0.0.1/".into(),
+//!     stream: "orders".into(),
+//!     group: "order-workers".into(),
+//!     consumer: "order-worker-1".into(),
+//! };
+//! let transport = RedisTransport::connect(config).await?;
+//! # drop(transport);
+//! # Ok(())
+//! # }
+//! ```
 
 mod acknowledgement;
 mod config;

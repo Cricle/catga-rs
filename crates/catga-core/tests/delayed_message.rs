@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use catga_core::{

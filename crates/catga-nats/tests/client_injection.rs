@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! Compile coverage for public NATS client-injection constructors.
 
 use catga_core::{CatgaResult, Envelope, EnvelopeCodec};

@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! Service-gated contract coverage for Redis Streams request/reply.
 
 #![cfg(feature = "streams-rpc")]

@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! Public, deterministic contract coverage for cluster coordination primitives.
 
 use std::time::Duration;

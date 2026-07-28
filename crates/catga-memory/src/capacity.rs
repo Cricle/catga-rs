@@ -5,6 +5,12 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
 /// Default maximum number of records retained by one in-memory durable store.
+///
+/// ```
+/// use catga_memory::DEFAULT_MEMORY_RECORD_CAPACITY;
+///
+/// assert!(DEFAULT_MEMORY_RECORD_CAPACITY > 0);
+/// ```
 pub const DEFAULT_MEMORY_RECORD_CAPACITY: usize = 65_536;
 
 /// Maximum expired records inspected when capacity pressure triggers cleanup.

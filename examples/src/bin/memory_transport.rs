@@ -1,3 +1,5 @@
+//! Publishes, receives, and acknowledges one envelope through the in-memory transport.
+
 use catga_core::{CatgaResult, Envelope, MessageMetadata, MessageTransport};
 use catga_memory::MemoryTransport;
 

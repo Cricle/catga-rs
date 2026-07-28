@@ -10,6 +10,19 @@ use tokio::sync::mpsc;
 use crate::MailboxPriority;
 
 /// Configuration for a single RobustMQ mq9 mailbox.
+///
+/// ```
+/// use catga_robustmq::MailboxConfig;
+///
+/// let config = MailboxConfig {
+///     server: "nats://127.0.0.1:4222".into(),
+///     ttl_seconds: 60,
+///     public: false,
+///     name: "order-replies".into(),
+///     description: "private request replies".into(),
+/// };
+/// assert!(!config.public);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MailboxConfig {
     /// Server URL accepted by the RobustMQ SDK.

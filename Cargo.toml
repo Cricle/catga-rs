@@ -27,6 +27,7 @@ repository = "https://github.com/Cricle/Catga"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# Every workspace member inherits this lint; public APIs must carry Rustdoc.
 missing_docs = "deny"
 
 [workspace.lints.clippy]

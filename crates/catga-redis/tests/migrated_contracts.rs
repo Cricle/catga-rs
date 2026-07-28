@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! Service-gated public-contract coverage migrated from crate-local tests.
 
 use std::time::Duration;

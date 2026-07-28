@@ -35,8 +35,10 @@ use metrics::{
     SharedString, Unit,
 };
 use tokio::sync::oneshot;
-use tracing::{Event, Subscriber, field::Visit};
+use tracing::{Event, Subscriber, field::Visit, subscriber::Interest};
 use tracing_subscriber::{Layer, filter::LevelFilter, layer::SubscriberExt, registry::LookupSpan};
+
+static TRACE_SUBSCRIBER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct ReconcileStock;
 
@@ -766,6 +768,21 @@ impl<S> Layer<S> for TraceTagLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
+    fn register_callsite(&self, _: &'static tracing::Metadata<'static>) -> Interest {
+        // The assertions install a thread-local collector. Explicitly retain
+        // interest in debug events so a concurrent test cannot permanently
+        // cache this callsite as disabled before this collector is installed.
+        Interest::always()
+    }
+
+    fn enabled(
+        &self,
+        _: &tracing::Metadata<'_>,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        true
+    }
+
     fn on_event(&self, event: &Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
         if event.metadata().target() != catga_core::TRACING_TARGET {
             return;
@@ -1083,9 +1100,15 @@ async fn logging_behavior_keeps_the_original_handler_error() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mediator_records_opted_in_message_tags_as_structured_tracing_events() {
+    let _subscriber_lock = TRACE_SUBSCRIBER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let tags = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(TraceTagLayer(Arc::clone(&tags)));
     let guard = tracing::subscriber::set_default(subscriber);
+    // Callsite interest is process-global. A previous parallel test may have
+    // cached this event as disabled under a different subscriber.
+    tracing::callsite::rebuild_interest_cache();
     let mut registry = Registry::new();
     registry
         .register_request::<TaggedReconcile, _>(TaggedHandler)
@@ -1093,12 +1116,13 @@ async fn mediator_records_opted_in_message_tags_as_structured_tracing_events() {
     let mediator = Mediator::new(registry);
 
     let disabled =
-        tracing::subscriber::set_default(tracing_subscriber::registry().with(LevelFilter::OFF));
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(LevelFilter::INFO));
     mediator
         .send(TaggedReconcile { sku: "sku-42" })
         .await
         .expect("tagged request succeeds with tracing disabled");
     drop(disabled);
+    tracing::callsite::rebuild_interest_cache();
 
     mediator
         .send(TaggedReconcile { sku: "sku-42" })
@@ -1114,11 +1138,17 @@ async fn mediator_records_opted_in_message_tags_as_structured_tracing_events() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mediator_records_only_opted_in_successful_response_tags_as_structured_tracing_events() {
+    let _subscriber_lock = TRACE_SUBSCRIBER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let recorder = MetricRecorder::default();
     let metrics_guard = metrics::set_default_local_recorder(&recorder);
     let tags = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(TraceTagLayer(Arc::clone(&tags)));
     let guard = tracing::subscriber::set_default(subscriber);
+    // See the companion request-tag test above: refresh global callsite
+    // interest after installing this test's subscriber.
+    tracing::callsite::rebuild_interest_cache();
     let mut registry = Registry::new();
     registry
         .register_request::<ResponseTaggedReconcile, _>(ResponseTaggedHandler)
@@ -1690,7 +1720,11 @@ async fn cqrs_observability_metrics_record_retry_backlog_and_inbox_hits() {
         .register_request::<RetryReconcile, _>(SucceedsAfterOneRetry(AtomicUsize::new(0)))
         .expect("one retry handler is accepted");
     let retry_mediator = Mediator::new(retry_registry);
-    let retry_pipeline = Pipeline::new().with(RetryBehavior::new(1, Duration::from_millis(50)));
+    let retry_pipeline = Pipeline::new().with(RetryBehavior::with_jitter(
+        1,
+        Duration::from_millis(50),
+        catga_core::RetryJitter::none(),
+    ));
     let mut retry = Box::pin(retry_mediator.send_with(RetryReconcile, &retry_pipeline));
     tokio::select! {
         result = &mut retry => panic!("retry completed before its configured backoff: {result:?}"),

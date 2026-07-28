@@ -9,7 +9,7 @@ use catga_flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowQuery,
     FlowScheduler, FlowState, FlowStatus, FlowStore, StateMachineSnapshot, StateMachineStore,
     SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
-    WaitPolicy,
+    WaitPolicy, encode_continuation,
 };
 use catga_flow_store::{
     SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
@@ -18,6 +18,9 @@ use catga_flow_store::{
 
 #[path = "../../../tests/flow/timeout_store_contract.rs"]
 mod timeout_store_contract;
+
+#[path = "sql_contracts.rs"]
+mod sql_contracts;
 
 #[tokio::test]
 async fn sqlite_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()> {
@@ -667,6 +670,186 @@ async fn sqlite_timeout_poll_is_bounded_and_reconciles_stale_waits() -> CatgaRes
     store.migrate().await?;
 
     timeout_store_contract::run_timeout_store_contract(&store, "sqlite-timeout", false).await
+}
+
+/// Runs the complete cross-provider continuation contract against SQLite too.
+///
+/// SQLite is used by local durable deployments, so its physical-revision CAS semantics must
+/// match the real SQL services rather than relying only on the smaller SQLite-specific checks.
+#[tokio::test]
+async fn sqlite_suspended_store_satisfies_the_cross_provider_contract() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory
+        .path()
+        .join("suspended-cross-provider-contract.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    sql_contracts::suspended_flow_contract(&store, "sqlite-contract").await
+}
+
+/// Corrupt durable rows must be rejected rather than being resumed under the wrong identity or
+/// wait correlation.  These checks exercise the defensive read paths that an operator can hit
+/// after an interrupted manual repair or storage corruption.
+#[tokio::test]
+async fn sqlite_suspended_store_rejects_corrupt_payloads_and_correlation_indexes() -> CatgaResult<()>
+{
+    let directory = temporary_directory()?;
+    let database = directory.path().join("corrupt-suspended-frames.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+    let pool = sqlx::SqlitePool::connect(&url)
+        .await
+        .map_err(|error| test_database_error("connect continuation-frame mutation pool", error))?;
+
+    let corrupted_id = "sql-corrupt-continuation";
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new(corrupted_id, "payment", [], "node-a"),
+                "finish",
+            ))
+            .await?
+    );
+    sqlx::query("UPDATE catga_flow_continuations SET payload = ? WHERE flow_id = ?")
+        .bind(Vec::<u8>::new())
+        .bind(corrupted_id)
+        .execute(&pool)
+        .await
+        .map_err(|error| test_database_error("corrupt continuation payload", error))?;
+    assert_eq!(
+        store
+            .get(corrupted_id)
+            .await
+            .expect_err("empty continuation frames must be rejected")
+            .code(),
+        ErrorCode::Internal
+    );
+
+    let identity_id = "sql-continuation-identity";
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new(identity_id, "payment", [], "node-a"),
+                "finish",
+            ))
+            .await?
+    );
+    let different_identity = FlowContinuation::new(
+        FlowState::new("sql-different-continuation", "payment", [], "node-a"),
+        "finish",
+    );
+    sqlx::query("UPDATE catga_flow_continuations SET payload = ? WHERE flow_id = ?")
+        .bind(encode_continuation(&different_identity)?)
+        .bind(identity_id)
+        .execute(&pool)
+        .await
+        .map_err(|error| test_database_error("replace continuation identity frame", error))?;
+    assert_eq!(
+        store
+            .get(identity_id)
+            .await
+            .expect_err("row identity and frame identity must agree")
+            .code(),
+        ErrorCode::Internal
+    );
+
+    let waiting = FlowContinuation::waiting(
+        FlowState::new("sql-correlation-index", "payment", [], "node-a").suspended(),
+        "finish",
+        WaitCondition::new(
+            "sql-correlation-index/actual",
+            WaitPolicy::All,
+            1,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        ),
+    );
+    assert!(store.create(waiting).await?);
+    sqlx::query("UPDATE catga_flow_continuations SET wait_correlation = ? WHERE flow_id = ?")
+        .bind("sql-correlation-index/corrupt")
+        .bind("sql-correlation-index")
+        .execute(&pool)
+        .await
+        .map_err(|error| test_database_error("corrupt continuation correlation index", error))?;
+    assert_eq!(
+        store
+            .get_by_wait_correlation("sql-correlation-index/corrupt")
+            .await
+            .expect_err("wait index and frame correlation must agree")
+            .code(),
+        ErrorCode::Internal
+    );
+    Ok(())
+}
+
+/// Every persisted lifecycle status must be both encoded and queryable through SQLite's compact
+/// status column.  This keeps administrative discovery correct for terminal and compensation
+/// records, not only the common suspended case.
+#[tokio::test]
+async fn sqlite_suspended_store_round_trips_every_flow_status() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("continuation-statuses.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+
+    let states = [
+        (
+            "running",
+            FlowState::new("sql-status-running", "status-contract", [], "node-a"),
+        ),
+        (
+            "compensating",
+            FlowState::new("sql-status-compensating", "status-contract", [], "node-a")
+                .compensating(),
+        ),
+        (
+            "suspended",
+            FlowState::new("sql-status-suspended", "status-contract", [], "node-a").suspended(),
+        ),
+        (
+            "done",
+            FlowState::new("sql-status-done", "status-contract", [], "node-a").done(1),
+        ),
+        (
+            "failed",
+            FlowState::new("sql-status-failed", "status-contract", [], "node-a")
+                .failed(CatgaError::new(ErrorCode::Validation, "expected failure")),
+        ),
+        (
+            "cancelled",
+            FlowState::new("sql-status-cancelled", "status-contract", [], "node-a").cancelled(),
+        ),
+    ];
+    for (name, state) in states {
+        assert!(
+            store.create(FlowContinuation::new(state, "finish")).await?,
+            "{name} status continuation must be created"
+        );
+    }
+
+    for status in [
+        FlowStatus::Running,
+        FlowStatus::Compensating,
+        FlowStatus::Suspended,
+        FlowStatus::Done,
+        FlowStatus::Failed,
+        FlowStatus::Cancelled,
+    ] {
+        let summaries = store
+            .query(
+                &FlowQuery::new(1, 6)?
+                    .with_status(status)
+                    .with_flow_type("status-contract"),
+            )
+            .await?;
+        assert_eq!(summaries.len(), 1, "{status:?} must have one summary");
+        assert_eq!(summaries[0].status(), status);
+    }
+    Ok(())
 }
 
 fn temporary_directory() -> CatgaResult<tempfile::TempDir> {

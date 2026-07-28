@@ -4,6 +4,8 @@
 //! backend-neutral persistence rules here. Keeping the rules in one place
 //! prevents MySQL, PostgreSQL, and SQL Server coverage from drifting.
 
+#![allow(dead_code)]
+
 use std::{
     env,
     time::{Duration, SystemTime},
@@ -192,12 +194,28 @@ where
             .schedule_resume(flow_id.as_str(), state_id, due)
             .await?;
     }
-    assert_eq!(
+    let bounded_claim = scheduler
+        .claim_due("worker-c", due, Duration::from_secs(30), 2)
+        .await?;
+    assert_eq!(bounded_claim.len(), 2);
+    for scheduled in &bounded_claim {
+        assert!(
+            scheduler
+                .ack_due("worker-c", scheduled.schedule_id())
+                .await?
+        );
+    }
+
+    // The bounded claim deliberately leaves one entry. Consume it too so this
+    // shared real-service database remains isolated across repeated E2E runs.
+    let remainder = scheduler
+        .claim_due("worker-c", due, Duration::from_secs(30), 2)
+        .await?;
+    assert_eq!(remainder.len(), 1);
+    assert!(
         scheduler
-            .claim_due("worker-c", due, Duration::from_secs(30), 2)
+            .ack_due("worker-c", remainder[0].schedule_id())
             .await?
-            .len(),
-        2
     );
     Ok(())
 }

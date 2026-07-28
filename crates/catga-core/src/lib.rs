@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 //! Core contracts for Catga's explicit, typed CQRS runtime.
 //!
 //! Applications construct a [`Registry`] once at startup, then dispatch values through a
@@ -253,6 +254,18 @@ macro_rules! catga_pipeline {
 /// This is the no-response command counterpart to [`catga_pipeline!`]. It accepts existing
 /// [`CommandBehavior`] values, returns validation errors for excessive depth, and creates no
 /// global or background state.
+///
+/// ```
+/// use catga_core::{Command, CommandPipeline, Message, catga_command_pipeline};
+///
+/// struct Archive;
+/// impl Message for Archive {}
+/// impl Command for Archive {}
+///
+/// let pipeline: CommandPipeline<Archive> = catga_command_pipeline!(Archive;)?;
+/// assert!(pipeline.is_empty());
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
 #[macro_export]
 macro_rules! catga_command_pipeline {
     ($command:ty; $($behavior:expr),* $(,)?) => {{

@@ -1,5 +1,28 @@
 #![forbid(unsafe_code)]
 //! NATS JetStream transport for Catga.
+//!
+//! # Durable transport composition
+//!
+//! `NatsTransport` provisions exactly the stream and pull consumer named by
+//! [`NatsConfig`]. Keep those names stable across rolling deployments; make a
+//! new configuration for a destination with a different retention policy.
+//! Construction is explicit and no worker is started by this crate.
+//!
+//! ```no_run
+//! use catga_nats::{NatsConfig, NatsTransport};
+//!
+//! # async fn connect() -> Result<(), catga_core::CatgaError> {
+//! let config = NatsConfig {
+//!     server: "nats://127.0.0.1:4222".into(),
+//!     stream: "orders".into(),
+//!     subject: "orders.created".into(),
+//!     consumer: "orders-worker".into(),
+//! };
+//! let transport = NatsTransport::connect(config).await?;
+//! # drop(transport);
+//! # Ok(())
+//! # }
+//! ```
 
 mod acknowledgement;
 mod config;

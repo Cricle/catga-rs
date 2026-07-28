@@ -32,6 +32,25 @@ impl MessageTypeRegistry {
     }
 
     /// Registers a message's canonical Rust type name and unqualified compatibility name.
+    ///
+    /// Register every persisted message type during startup before a consumer
+    /// begins decoding envelopes. The short final path segment is registered
+    /// as a compatibility name in addition to the canonical Rust type name.
+    ///
+    /// ```
+    /// use catga_core::{Message, MessageTypeRegistry};
+    ///
+    /// #[derive(Message)]
+    /// struct InvoiceIssued;
+    ///
+    /// let registry = MessageTypeRegistry::default();
+    /// registry.register::<InvoiceIssued>()?;
+    /// registry.add_alias::<InvoiceIssued>("billing.invoice-issued.v1")?;
+    ///
+    /// assert!(registry.is_registered::<InvoiceIssued>());
+    /// assert!(registry.resolve("billing.invoice-issued.v1").is_some());
+    /// # Ok::<(), catga_core::CatgaError>(())
+    /// ```
     pub fn register<M: Message>(&self) -> CatgaResult<()> {
         let canonical = Self::canonical_name::<M>();
         let short = canonical.rsplit("::").next().unwrap_or(canonical);

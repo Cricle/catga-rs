@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "nats-transport",
+      "package": "catga-tests",
+      "target": "nats",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "nats-request",
+      "package": "catga-tests",
+      "target": "nats_request",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "nats-contracts",
+      "package": "catga-nats",
+      "target": "nats_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "redis-contracts",
+      "package": "catga-tests",
+      "target": "redis",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "redis-codec-injection",
+      "package": "catga-redis",
+      "target": "codec_injection",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "redis-streams-rpc",
+      "package": "catga-redis",
+      "target": "streams_rpc",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "redis-migrated-contracts",
+      "package": "catga-redis",
+      "target": "migrated_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "redis-scheduler-contracts",
+      "package": "catga-redis",
+      "target": "scheduler_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "robustmq-runtime",
+      "package": "catga-tests",
+      "target": "robustmq",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "robustmq-private-reply-mailbox",
+      "package": "catga-tests",
+      "target": "robustmq",
+      "testFilter": "mailbox_request_server_replies_through_the_private_reply_mailbox",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "robustmq-ignored-contracts",
+      "package": "catga-tests",
+      "target": "robustmq",
+      "profile": "core",
+      "critical": true,
+      "testArguments": [
+        "--ignored",
+        "--skip",
+        "mailbox_request_server_replies_through_the_private_reply_mailbox"
+      ]
+    },
+    {
+      "id": "state-machine-persistence",
+      "package": "catga-tests",
+      "target": "state_machine_persistence",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "mysql-flow-store",
+      "package": "catga-flow-store",
+      "target": "mysql",
+      "profile": "sql",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "postgres-flow-store",
+      "package": "catga-flow-store",
+      "target": "postgres",
+      "profile": "sql",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "mssql-flow-store",
+      "package": "catga-flow-store",
+      "target": "mssql",
+      "profile": "full",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "sql-backend-boundaries",
+      "package": "catga-flow-store",
+      "target": "sql_backend_contracts",
+      "profile": "full",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "cross-backend",
+      "package": "catga-tests",
+      "target": "cross_backend",
+      "profile": "full",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    }
+  ]
+}

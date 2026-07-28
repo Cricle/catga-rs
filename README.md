@@ -123,6 +123,30 @@ broker image does not expose the mq9/NATS protocol. A default local test run
 therefore does not prove an external-service contract beyond its automatic
 NATS container coverage.
 
+### Local Docker E2E
+
+`scripts/e2e.sh` starts the required local services, exports the matching
+`CATGA_*_URL` values with dynamically assigned loopback ports, runs the declared
+scenario matrix, and requires at least 95% of the selected scenarios to pass.
+Every scenario currently marked critical must pass regardless of that percentage.
+
+```bash
+bash scripts/e2e.sh --profile core
+bash scripts/e2e.sh --profile sql
+bash scripts/e2e.sh --profile full
+```
+
+The Docker Compose file is [testing/docker/compose.yaml](testing/docker/compose.yaml).
+Set `CATGA_CONTAINER_IMAGE_PREFIX` to an OCI registry prefix without a trailing
+slash to use an internal registry or domestic mirror. The selected registry
+must mirror the `library/*` Docker Hub paths and the `azure-sql-edge` MCR path.
+Azure SQL Edge keeps the SQL Server-compatible E2E profile small.
+
+```bash
+export CATGA_CONTAINER_IMAGE_PREFIX=registry.example.cn
+bash scripts/e2e.sh --profile full
+```
+
 RabbitMQ/AMQP, Flow hot reload, and an HTTP health endpoint are intentionally
 not part of this Rust workspace. Use OpenTelemetry-compatible tracing and
 metrics from the public crate APIs for observability instead.
