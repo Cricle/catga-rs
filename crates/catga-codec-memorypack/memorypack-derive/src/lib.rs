@@ -90,7 +90,7 @@ pub fn derive_memorypack(input: TokenStream) -> TokenStream {
             }
 
             (
-                generate_enum_serialize(),
+                generate_enum_serialize(data_enum),
                 generate_enum_deserialize_safe(data_enum),
             )
         }

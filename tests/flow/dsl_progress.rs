@@ -171,6 +171,57 @@ async fn checkpointed_dsl_treats_a_legacy_cdf1_payload_as_application_state() {
 }
 
 #[tokio::test]
+async fn checkpointed_dsl_rejects_malformed_internal_checkpoint_frames() {
+    let flow = DslFlow::new().action(|value: &mut u32| {
+        Box::pin(async move {
+            *value += 1;
+            Ok(())
+        })
+    });
+
+    for (flow_id, payload) in [
+        ("payment/checkpoint-truncated", b"CDF1".to_vec()),
+        (
+            "payment/checkpoint-unsupported",
+            b"CDF1\x02\0\0\0\0\0".to_vec(),
+        ),
+        (
+            "payment/checkpoint-not-frame",
+            b"application-state".to_vec(),
+        ),
+    ] {
+        let raw = MemoryPackSerializer::serialize(&RawDslStepProgressWire {
+            flow_id: flow_id.into(),
+            step_index: 0,
+            version: 0,
+            kind: 1,
+            payload,
+            updated_at: RawTimeWire {
+                before_epoch: false,
+                seconds: 0,
+                nanoseconds: 0,
+            },
+        })
+        .expect("encode raw checkpoint progress");
+        let progress = MemoryPackSerializer::deserialize::<DslStepProgress>(&raw)
+            .expect("restore raw checkpoint progress");
+        let store = MemoryDslStepProgress::default();
+        assert!(
+            store
+                .create(progress)
+                .await
+                .expect("store raw checkpoint progress")
+        );
+
+        let error = flow
+            .run_checkpointed(flow_id, 0, &store, &U32Codec)
+            .await
+            .expect_err("malformed internal checkpoint frames must not be treated as state");
+        assert_eq!(error.code(), ErrorCode::Validation);
+    }
+}
+
+#[tokio::test]
 async fn checkpointed_dsl_saves_only_successful_top_level_steps() {
     let store = MemoryDslStepProgress::default();
     let flow = DslFlow::new()

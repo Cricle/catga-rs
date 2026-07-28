@@ -12,8 +12,9 @@ use std::{
 use catga_codec_memorypack::MemoryPackable;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    DslStepProgress, DslStepProgressStore, DueFlowScheduler, StateMachineSnapshot,
-    StateMachineStore,
+    DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowQuery,
+    FlowState, FlowStatus, StateMachineSnapshot, StateMachineStore, SuspendedFlowStore,
+    WaitCondition, WaitPolicy,
 };
 
 /// Returns an explicitly configured service URL.
@@ -197,6 +198,166 @@ where
             .await?
             .len(),
         2
+    );
+    Ok(())
+}
+
+/// Verifies continuation mutation is version-fenced while physical mutations stay idempotent.
+///
+/// The same contract runs against every server SQL implementation. It deliberately checks
+/// stale snapshots after a heartbeat and child-result write: both alter the physical revision
+/// without advancing the business version, which is the race the stores must reject.
+pub async fn suspended_flow_contract<S>(store: &S, prefix: &str) -> CatgaResult<()>
+where
+    S: SuspendedFlowStore + Sync,
+{
+    let prefix = isolated_prefix(prefix);
+    let waiting_id = format!("{prefix}/waiting");
+    let correlation = format!("{prefix}/wait");
+    let waiting = FlowContinuation::waiting(
+        FlowState::new(waiting_id.as_str(), "continuation-contract", [], "node-a").suspended(),
+        "await-children",
+        WaitCondition::new(
+            correlation.as_str(),
+            WaitPolicy::All,
+            2,
+            SystemTime::now(),
+            Duration::from_secs(30),
+        ),
+    );
+    assert!(store.create(waiting.clone()).await?);
+    assert!(!store.create(waiting.clone()).await?);
+    assert!(store.get("missing-continuation").await?.is_none());
+    assert_eq!(store.get(waiting_id.as_str()).await?, Some(waiting.clone()));
+
+    let discovered = store
+        .query(
+            &FlowQuery::new(1, 4)?
+                .with_status(FlowStatus::Suspended)
+                .with_flow_type("continuation-contract")
+                .created_between(
+                    waiting.created_at(),
+                    waiting.created_at() + Duration::from_secs(1),
+                )?,
+        )
+        .await?;
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].id(), waiting_id);
+    assert_eq!(
+        store
+            .get_by_wait_correlation(correlation.as_str())
+            .await?
+            .as_ref()
+            .map(|value| value.state().id()),
+        Some(waiting_id.as_str())
+    );
+    assert!(
+        store
+            .get_by_wait_correlation("missing-continuation-correlation")
+            .await?
+            .is_none()
+    );
+
+    assert!(
+        !store
+            .record_wait_success(waiting_id.as_str(), 1, "child-a", b"stale".to_vec())
+            .await?
+    );
+    assert!(
+        store
+            .record_wait_success(waiting_id.as_str(), 0, "child-a", b"accepted".to_vec())
+            .await?
+    );
+    assert!(
+        store
+            .record_wait_success(waiting_id.as_str(), 0, "child-a", b"duplicate".to_vec())
+            .await?
+    );
+    assert!(
+        store
+            .record_wait_failure(
+                waiting_id.as_str(),
+                0,
+                "child-b",
+                CatgaError::new(ErrorCode::Validation, "child rejected"),
+            )
+            .await?
+    );
+    assert!(
+        store
+            .record_wait_failure(
+                waiting_id.as_str(),
+                0,
+                "child-b",
+                CatgaError::new(ErrorCode::Validation, "duplicate rejection"),
+            )
+            .await?
+    );
+    let persisted = store.get(waiting_id.as_str()).await?;
+    let persisted_wait = required(persisted.as_ref(), "persisted wait")?;
+    let condition = required(persisted_wait.wait(), "persisted wait condition")?;
+    assert_eq!(condition.completed_count(), 2);
+    assert_eq!(condition.results()[0].payload(), Some(&b"accepted"[..]));
+    assert_eq!(
+        condition.results()[1].error().map(CatgaError::code),
+        Some(ErrorCode::Validation)
+    );
+
+    let claim_id = format!("{prefix}/claim");
+    let runnable = FlowContinuation::new(
+        FlowState::new(claim_id.as_str(), "continuation-contract", [], "node-a"),
+        "run",
+    );
+    assert!(store.create(runnable.clone()).await?);
+    assert!(!store.heartbeat(claim_id.as_str(), "wrong-owner", 0).await?);
+    assert!(store.heartbeat(claim_id.as_str(), "node-a", 0).await?);
+    let stale_claim = runnable.clone().with_state(
+        runnable
+            .state()
+            .clone()
+            .claimed_by("node-b")
+            .next_version()?,
+    );
+    assert!(!store.claim(&runnable, stale_claim).await?);
+
+    let stored_current = store.get(claim_id.as_str()).await?;
+    let current = required(stored_current.as_ref(), "heartbeated continuation")?;
+    let claimed = current.clone().with_state(
+        current
+            .state()
+            .clone()
+            .claimed_by("node-b")
+            .next_version()?,
+    );
+    assert!(store.claim(current, claimed.clone()).await?);
+    assert!(
+        !store
+            .update(claimed.state().version() + 1, claimed.clone())
+            .await?
+    );
+    let ready = claimed
+        .clone()
+        .ready()
+        .with_state(claimed.state().clone().suspended().next_version()?);
+    assert!(
+        store
+            .update(claimed.state().version(), ready.clone())
+            .await?
+    );
+    assert!(
+        !store
+            .delete(claim_id.as_str(), claimed.state().version())
+            .await?
+    );
+    assert!(
+        store
+            .delete(claim_id.as_str(), ready.state().version())
+            .await?
+    );
+    assert!(
+        !store
+            .delete(claim_id.as_str(), ready.state().version())
+            .await?
     );
     Ok(())
 }

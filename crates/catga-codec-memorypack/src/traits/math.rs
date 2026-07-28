@@ -122,11 +122,11 @@ impl MemoryPackSerialize for glam::Mat3A {
     fn serialize(&self, writer: &mut MemoryPackWriter) -> Result<(), MemoryPackError> {
         let cols = self.to_cols_array();
         writer.write_f32(cols[0])?;
-        writer.write_f32(cols[3])?;
         writer.write_f32(cols[1])?;
+        writer.write_f32(cols[3])?;
         writer.write_f32(cols[4])?;
-        writer.write_f32(cols[2])?;
-        writer.write_f32(cols[5])
+        writer.write_f32(cols[6])?;
+        writer.write_f32(cols[7])
     }
 }
 

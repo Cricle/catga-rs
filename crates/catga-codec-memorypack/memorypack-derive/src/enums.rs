@@ -1,9 +1,18 @@
 use quote::quote;
 
 #[inline]
-pub fn generate_enum_serialize() -> proc_macro2::TokenStream {
+pub fn generate_enum_serialize(data_enum: &syn::DataEnum) -> proc_macro2::TokenStream {
+    let variants = data_enum.variants.iter().map(|variant| {
+        let variant_name = &variant.ident;
+        quote! {
+            Self::#variant_name => writer.write_i32(Self::#variant_name as i32)?,
+        }
+    });
+
     quote! {
-        writer.write_i32(*self as i32)?;
+        match self {
+            #(#variants)*
+        }
     }
 }
 

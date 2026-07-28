@@ -38,6 +38,7 @@ async fn mysql_flow_and_continuation_contracts() -> CatgaResult<()> {
 
     let store = SqlSuspendedFlowStore::connect_mysql(url.as_ref()).await?;
     store.migrate().await?;
+    sql_contracts::suspended_flow_contract(&store, "mysql-e2e").await?;
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(5_000);
     let continuation = FlowContinuation::waiting(
         FlowState::new(format!("{id}-wait"), "mysql-contract", [], "node-a").suspended(),

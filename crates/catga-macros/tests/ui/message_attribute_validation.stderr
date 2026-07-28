@@ -1,0 +1,101 @@
+error: Catga message version must be declared once and be greater than zero
+ --> tests/ui/message_attribute_validation.rs:4:19
+  |
+4 | #[catga(version = 0)]
+  |                   ^
+
+error: Catga message version must be declared once and be greater than zero
+ --> tests/ui/message_attribute_validation.rs:8:32
+  |
+8 | #[catga(version = 1, version = 2)]
+  |                                ^
+
+error: Catga message version must be a positive integer
+  --> tests/ui/message_attribute_validation.rs:12:9
+   |
+12 | #[catga(version = "one")]
+   |         ^^^^^^^^^^^^^^^
+
+error: Catga message priority must be one of: low, normal, high, critical
+  --> tests/ui/message_attribute_validation.rs:16:9
+   |
+16 | #[catga(priority = "high")]
+   |         ^^^^^^^^^^^^^^^^^
+
+error: Catga message priority must be declared at most once
+  --> tests/ui/message_attribute_validation.rs:20:25
+   |
+20 | #[catga(priority = low, priority = high)]
+   |                         ^^^^^^^^^^^^^^^
+
+error: duplicate Catga authorization policy
+  --> tests/ui/message_attribute_validation.rs:24:26
+   |
+24 | #[catga(policy("first"), policy("second"))]
+   |                          ^^^^^^^^^^^^^^^^
+
+error: expected `authorize`, `roles("...")`, `policy("...")`, `batch_key = "field"`, or `batch(...)`
+  --> tests/ui/message_attribute_validation.rs:28:9
+   |
+28 | #[catga(unknown)]
+   |         ^^^^^^^
+
+error: Catga batch options must be greater than zero
+  --> tests/ui/message_attribute_validation.rs:32:32
+   |
+32 | #[catga(batch(max_batch_size = 0))]
+   |                                ^
+
+error: expected `max_batch_size`, `timeout_ms`, `max_queue_length`, `max_shards`, or `flush_concurrency`
+  --> tests/ui/message_attribute_validation.rs:36:15
+   |
+36 | #[catga(batch(unrecognized = 4))]
+   |               ^^^^^^^^^^^^
+
+error: Catga batch key field does not exist
+  --> tests/ui/message_attribute_validation.rs:40:21
+   |
+40 | #[catga(batch_key = "missing")]
+   |                     ^^^^^^^^^
+
+error: Catga batch key field must not be empty
+  --> tests/ui/message_attribute_validation.rs:46:21
+   |
+46 | #[catga(batch_key = "")]
+   |                     ^^
+
+error: Catga batch key can only reference a named struct field
+  --> tests/ui/message_attribute_validation.rs:53:8
+   |
+53 | struct TupleBatchKey(u64);
+   |        ^^^^^^^^^^^^^
+
+error: Catga bulk trace tag prefix must not be empty
+  --> tests/ui/message_attribute_validation.rs:56:29
+   |
+56 | #[catga(trace_tags(prefix = ""))]
+   |                             ^^
+
+error: Catga bulk trace tag include entries must be strings
+  --> tests/ui/message_attribute_validation.rs:62:31
+   |
+62 | #[catga(trace_tags(include = [1]))]
+   |                               ^
+
+error: Catga trace tag must not be empty
+  --> tests/ui/message_attribute_validation.rs:69:25
+   |
+69 |     #[catga(trace_tag = "")]
+   |                         ^^
+
+error: duplicate Catga trace tag for a field
+  --> tests/ui/message_attribute_validation.rs:75:5
+   |
+75 |     #[catga(trace_tag, trace_tag)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: expected `trace_tag` or `trace_tag = "name"` on a Catga message field
+  --> tests/ui/message_attribute_validation.rs:81:13
+   |
+81 |     #[catga(other)]
+   |             ^^^^^

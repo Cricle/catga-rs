@@ -141,6 +141,90 @@ fn state_machine_frames_preserve_audit_times() -> CatgaResult<()> {
 }
 
 #[test]
+fn state_machine_frames_reject_corrupt_metadata_before_decoding_state() -> CatgaResult<()> {
+    let created_at = UNIX_EPOCH + Duration::from_secs(20);
+    let updated_at = created_at + Duration::from_secs(1);
+    let snapshot = StateMachineSnapshot::restore(
+        "order-corrupt",
+        State { paid: true },
+        4,
+        created_at,
+        updated_at,
+    )?;
+    let codec = MemoryPackSnapshotCodec::<State>::default();
+    let encoded = encode_state_machine_snapshot(&snapshot, &codec)?;
+
+    for mut invalid in [encoded[..34].to_vec(), encoded.clone()] {
+        if invalid.len() == encoded.len() {
+            invalid[0] = 2;
+        }
+        let error = decode_state_machine_snapshot("order-corrupt", &invalid, &codec)
+            .expect_err("incomplete and unknown-version metadata are rejected");
+        assert_eq!(error.code(), ErrorCode::Internal);
+    }
+
+    let mut invalid_timestamp = encoded.clone();
+    invalid_timestamp[18..22].copy_from_slice(&1_000_000_000_u32.to_be_bytes());
+    let error = decode_state_machine_snapshot("order-corrupt", &invalid_timestamp, &codec)
+        .expect_err("timestamps cannot contain more than one billion nanoseconds");
+    assert_eq!(error.code(), ErrorCode::Internal);
+
+    let mut reversed_audit_times = encoded;
+    // The first timestamp starts after the format/version metadata (1 + 8 bytes). The second
+    // starts exactly one 13-byte time wire later; setting it to the epoch precedes `created_at`.
+    reversed_audit_times[22..35].copy_from_slice(&[0; 13]);
+    let error = decode_state_machine_snapshot("order-corrupt", &reversed_audit_times, &codec)
+        .expect_err("updated audit time cannot precede the creation time");
+    assert_eq!(error.code(), ErrorCode::Validation);
+    Ok(())
+}
+
+#[test]
+fn flow_state_memorypack_decoder_rejects_invalid_time_and_error_wires() -> CatgaResult<()> {
+    let invalid_time = MemoryPackSerializer::serialize(&RawFlowStateWire {
+        id: "bad-time".into(),
+        flow_type: "payment".into(),
+        status: 0,
+        step: 0,
+        version: 0,
+        owner: Some("node-a".into()),
+        heartbeat: RawTimeWire {
+            before_epoch: false,
+            seconds: 0,
+            nanoseconds: 1_000_000_000,
+        },
+        data: Vec::new(),
+        error: None,
+    })
+    .map_err(|error| CatgaError::new(ErrorCode::Internal, format!("encode raw time: {error}")))?;
+    assert!(MemoryPackSerializer::deserialize::<FlowState>(&invalid_time).is_err());
+
+    let invalid_error = MemoryPackSerializer::serialize(&RawFlowStateWire {
+        id: "bad-error".into(),
+        flow_type: "payment".into(),
+        status: 0,
+        step: 0,
+        version: 0,
+        owner: Some("node-a".into()),
+        heartbeat: RawTimeWire {
+            before_epoch: false,
+            seconds: 0,
+            nanoseconds: 0,
+        },
+        data: Vec::new(),
+        error: Some(RawErrorWire {
+            code: u8::MAX,
+            message: "unknown error code".into(),
+            details: None,
+            retryable: false,
+        }),
+    })
+    .map_err(|error| CatgaError::new(ErrorCode::Internal, format!("encode raw error: {error}")))?;
+    assert!(MemoryPackSerializer::deserialize::<FlowState>(&invalid_error).is_err());
+    Ok(())
+}
+
+#[test]
 fn timeout_deadline_rounds_fractional_milliseconds_up() -> CatgaResult<()> {
     let continuation = FlowContinuation::waiting(
         FlowState::new("fractional-timeout", "test", [], "node-a").suspended(),

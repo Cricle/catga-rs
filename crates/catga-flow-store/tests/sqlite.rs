@@ -508,6 +508,42 @@ async fn sqlite_flow_store_uses_version_cas_stale_claims_and_owner_heartbeats() 
 }
 
 #[tokio::test]
+async fn sqlite_flow_store_rejects_missing_unknown_and_malformed_state_frames() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("invalid-state-frames.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+    let id = "sql-invalid-state-frame";
+    assert!(
+        store
+            .create(FlowState::new(id, "payment", [], "node-a"))
+            .await?
+    );
+    let pool = sqlx::SqlitePool::connect(&url)
+        .await
+        .map_err(|error| test_database_error("connect state-frame mutation pool", error))?;
+
+    for frame in [Vec::new(), vec![u8::MAX], vec![2, 0]] {
+        sqlx::query("UPDATE catga_flow_states SET payload = ? WHERE flow_id = ?")
+            .bind(frame)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .map_err(|error| test_database_error("replace invalid state frame", error))?;
+        assert_eq!(
+            store
+                .get(id)
+                .await
+                .expect_err("corrupt versioned state frame must be rejected")
+                .code(),
+            ErrorCode::Internal
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_timeout_receipts_are_leased_released_and_token_fenced() -> CatgaResult<()> {
     let directory = temporary_directory()?;
     let database = directory.path().join("timeout-receipts.db");

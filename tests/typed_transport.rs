@@ -8,15 +8,18 @@ use std::sync::{
 use async_trait::async_trait;
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, Delivery, Destination, DestinationTransport,
-    DistributedIdGenerator, Envelope, ErrorCode, Message, MessageDestinationRouter,
-    MessageMetadata, MessageTransport, PayloadDecoder, PayloadEncoder, SnowflakeIdGenerator,
-    SnowflakeLayout, TypedProcessOutcome, TypedTransport,
+    DistributedIdGenerator, Envelope, EnvelopeHeaders, ErrorCode, Event, Message,
+    MessageDestinationRouter, MessageMetadata, MessagePriority, MessageTransport, PayloadDecoder,
+    PayloadEncoder, QualityOfService, SnowflakeIdGenerator, SnowflakeLayout, TypedProcessOutcome,
+    TypedTransport,
 };
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct TestMessage(u8);
 
 impl Message for TestMessage {}
+
+impl Event for TestMessage {}
 
 #[derive(Default)]
 struct AcknowledgementCounts {
@@ -26,6 +29,18 @@ struct AcknowledgementCounts {
 
 struct RecordingAcknowledger {
     counts: Arc<AcknowledgementCounts>,
+}
+
+struct FailingAcknowledger;
+
+#[async_trait]
+impl Acknowledger for FailingAcknowledger {
+    async fn acknowledge(self: Box<Self>) -> CatgaResult<()> {
+        Err(CatgaError::new(
+            ErrorCode::Unavailable,
+            "test acknowledgement backend is unavailable",
+        ))
+    }
 }
 
 #[async_trait]
@@ -107,6 +122,18 @@ impl DeliveryTransport {
                 )
             })
     }
+
+    fn published_envelopes(&self) -> CatgaResult<Vec<Envelope>> {
+        self.published
+            .lock()
+            .map(|published| published.clone())
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "typed transport test publication lock is poisoned",
+                )
+            })
+    }
 }
 
 #[async_trait]
@@ -132,6 +159,56 @@ impl MessageTransport for DeliveryTransport {
 struct DestinationDeliveryTransport {
     delivery: Mutex<Option<Delivery>>,
     sent: Mutex<Vec<Destination>>,
+}
+
+struct FailingPublishTransport {
+    attempted_payloads: Mutex<Vec<u8>>,
+}
+
+impl FailingPublishTransport {
+    fn attempted_payloads(&self) -> CatgaResult<Vec<u8>> {
+        self.attempted_payloads
+            .lock()
+            .map(|payloads| payloads.clone())
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "typed transport test failure recorder lock is poisoned",
+                )
+            })
+    }
+}
+
+#[async_trait]
+impl MessageTransport for FailingPublishTransport {
+    async fn publish(&self, envelope: Envelope) -> CatgaResult<()> {
+        let payload = envelope.payload().first().copied().ok_or_else(|| {
+            CatgaError::new(ErrorCode::Validation, "test envelope payload is empty")
+        })?;
+        self.attempted_payloads
+            .lock()
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "typed transport test failure recorder lock is poisoned",
+                )
+            })?
+            .push(payload);
+        if payload == 2 {
+            return Err(CatgaError::new(
+                ErrorCode::Unavailable,
+                "test transport rejected payload",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn receive(&self) -> CatgaResult<Delivery> {
+        Err(CatgaError::new(
+            ErrorCode::NotFound,
+            "failing publish transport has no deliveries",
+        ))
+    }
 }
 
 impl DestinationDeliveryTransport {
@@ -396,5 +473,118 @@ async fn process_next_from_negative_acknowledges_failed_handlers() -> CatgaResul
     assert_eq!(outcome, TypedProcessOutcome::Rejected(expected_error));
     assert_eq!(counts.acknowledged.load(Ordering::Relaxed), 0);
     assert_eq!(counts.negatively_acknowledged.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_publication_inherits_context_and_merges_explicit_headers() -> CatgaResult<()> {
+    let inherited_headers =
+        EnvelopeHeaders::try_new([("tenant", "north"), ("request", "incoming")])?;
+    let inbound = Delivery::new(
+        Envelope::new(
+            7,
+            "typed.transport.context",
+            vec![0],
+            MessageMetadata::new(7, Some(73)).with_priority(MessagePriority::Critical),
+        )
+        .with_headers(inherited_headers),
+    );
+    let backend = Arc::new(DeliveryTransport::with_delivery(inbound));
+    let transport = TypedTransport::new_with_codec(Arc::clone(&backend), ids()?, TestCodec);
+    let explicit_headers =
+        EnvelopeHeaders::try_new([("request", "outgoing"), ("operation", "charge")])?;
+
+    let delivery = transport.receive::<TestMessage>().await?;
+    delivery
+        .with_transport_context(async {
+            transport
+                .publish_with_headers(&TestMessage(9), &explicit_headers)
+                .await
+        })
+        .await?;
+
+    let published = backend.published_envelopes()?;
+    assert_eq!(published.len(), 1);
+    let envelope = &published[0];
+    assert_eq!(envelope.metadata().correlation_id(), Some(73));
+    assert_eq!(envelope.metadata().priority(), MessagePriority::Critical);
+    assert_eq!(
+        envelope.metadata().quality_of_service(),
+        QualityOfService::AtLeastOnce
+    );
+    assert_eq!(envelope.header("tenant"), Some("north"));
+    assert_eq!(envelope.header("request"), Some("outgoing"));
+    assert_eq!(envelope.header("operation"), Some("charge"));
+    assert!(envelope.sent_at_unix_ms().is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn event_publication_uses_at_most_once_and_reliable_event_uses_at_least_once()
+-> CatgaResult<()> {
+    let backend = Arc::new(DeliveryTransport::without_delivery());
+    let transport = TypedTransport::new_with_codec(Arc::clone(&backend), ids()?, TestCodec);
+
+    transport.publish_event(&TestMessage(1)).await?;
+    transport.publish_reliable_event(&TestMessage(2)).await?;
+
+    let published = backend.published_envelopes()?;
+    assert_eq!(published.len(), 2);
+    assert_eq!(
+        published[0].metadata().quality_of_service(),
+        QualityOfService::AtMostOnce
+    );
+    assert_eq!(
+        published[1].metadata().quality_of_service(),
+        QualityOfService::AtLeastOnce
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_publication_drains_all_inputs_before_returning_the_first_failure() -> CatgaResult<()>
+{
+    let backend = Arc::new(FailingPublishTransport {
+        attempted_payloads: Mutex::new(Vec::new()),
+    });
+    let transport = TypedTransport::new_with_codec(Arc::clone(&backend), ids()?, TestCodec);
+
+    let error = transport
+        .publish_batch_with_concurrency([TestMessage(1), TestMessage(2), TestMessage(3)], 1)
+        .await
+        .expect_err("the rejected payload must fail the drained batch");
+
+    assert_eq!(error.code(), ErrorCode::Unavailable);
+    assert_eq!(backend.attempted_payloads()?, [1, 2, 3]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn handler_acknowledgement_failure_is_not_reclassified_as_handler_failure() -> CatgaResult<()>
+{
+    let delivery = Delivery::with_acknowledger(
+        Envelope::new(
+            1,
+            "typed.transport.ack-failure",
+            vec![4],
+            MessageMetadata::new(1, None),
+        ),
+        Box::new(FailingAcknowledger),
+    );
+    let transport = TypedTransport::new_with_codec(
+        Arc::new(DeliveryTransport::with_delivery(delivery)),
+        ids()?,
+        TestCodec,
+    );
+
+    let error = transport
+        .process_next::<TestMessage, _>(|message| {
+            assert_eq!(message, &TestMessage(4));
+            Box::pin(async { Ok(()) })
+        })
+        .await
+        .expect_err("a failed acknowledgement leaves delivery ownership unresolved");
+
+    assert_eq!(error.code(), ErrorCode::Unavailable);
     Ok(())
 }
