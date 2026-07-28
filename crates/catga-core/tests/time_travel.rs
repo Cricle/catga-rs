@@ -1,3 +1,5 @@
+//! Core time-travel state reconstruction contract tests.
+
 use std::{
     sync::Arc,
     time::{Duration, SystemTime},

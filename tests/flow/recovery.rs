@@ -1,3 +1,5 @@
+//! Flow recovery integration helpers.
+
 use std::{
     sync::{
         Arc, Mutex,

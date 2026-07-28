@@ -22,22 +22,15 @@ const PG: bool = true;
 
 /// Creates the PostgreSQL flow-state table and its stale-claim index.
 pub(crate) async fn migrate(pool: &PgPool) -> CatgaResult<()> {
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|error| database_error("begin PostgreSQL FlowStore migration", error))?;
-    for sql in [
+    crate::postgres_schema::migrate(
+        pool,
+        "create PostgreSQL FlowStore schema",
+        [
         "CREATE TABLE IF NOT EXISTS catga_flow_states (flow_key BYTEA PRIMARY KEY NOT NULL, flow_id TEXT NOT NULL UNIQUE, flow_type TEXT NOT NULL, status BIGINT NOT NULL, version BIGINT NOT NULL, heartbeat_ms BIGINT NOT NULL, revision BIGINT NOT NULL, payload BYTEA NOT NULL)",
         "CREATE INDEX IF NOT EXISTS catga_flow_states_stale_idx ON catga_flow_states(flow_type, status, heartbeat_ms, flow_key)",
-    ] {
-        sqlx::query(statement(sql, PG))
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| database_error("create PostgreSQL FlowStore schema", error))?;
-    }
-    tx.commit()
-        .await
-        .map_err(|error| database_error("commit PostgreSQL FlowStore migration", error))
+        ],
+    )
+    .await
 }
 
 /// Inserts a flow state and checks the raw identifier on hash-key conflict.

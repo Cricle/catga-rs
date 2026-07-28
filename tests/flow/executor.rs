@@ -1,3 +1,5 @@
+//! Shared flow executor integration helpers.
+
 use std::{
     sync::{
         Arc,

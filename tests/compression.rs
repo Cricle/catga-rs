@@ -1,3 +1,5 @@
+//! Workspace compression integration tests.
+
 use catga_core::{
     CompressionAlgorithm, compress, compress_into, compress_to_slice, decompress,
     decompress_limited, is_compressed,

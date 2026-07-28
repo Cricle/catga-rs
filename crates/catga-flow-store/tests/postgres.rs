@@ -10,10 +10,134 @@ use catga_flow_store::{
     SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
     SqlSuspendedFlowStore,
 };
-use std::time::{Duration, SystemTime};
+use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::{
+    borrow::Cow,
+    time::{Duration, SystemTime},
+};
+use url::Url;
 
 #[path = "sql_contracts.rs"]
 mod sql_contracts;
+
+#[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
+async fn postgres_all_store_migrations_serialize_concurrent_initial_ddl() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_POSTGRES_URL")? else {
+        return Ok(());
+    };
+    let database = format!("catga_migration_race_{}", uuid::Uuid::new_v4().simple());
+    let isolated_url = isolated_database_url(url.as_ref(), database.as_str())?;
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url.as_ref())
+        .await
+        .map_err(|error| CatgaError::new(ErrorCode::Unavailable, error.to_string()))?;
+    create_database(&admin, database.as_str()).await?;
+
+    let result = async {
+        migrate_flow_store_pair(isolated_url.as_str()).await?;
+        migrate_suspended_store_pair(isolated_url.as_str()).await?;
+        migrate_state_machine_store_pair(isolated_url.as_str()).await?;
+        migrate_scheduler_pair(isolated_url.as_str()).await?;
+        migrate_dsl_progress_store_pair(isolated_url.as_str()).await
+    }
+    .await;
+    let cleanup = drop_database(&admin, database.as_str()).await;
+    result?;
+    cleanup
+}
+
+fn isolated_database_url(url: &str, database: &str) -> CatgaResult<String> {
+    let mut parsed = Url::parse(url).map_err(|error| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            format!("parse PostgreSQL E2E URL for isolated migration database: {error}"),
+        )
+    })?;
+    parsed.set_path(format!("/{database}").as_str());
+    Ok(parsed.into())
+}
+
+async fn create_database(admin: &PgPool, database: &str) -> CatgaResult<()> {
+    // `database` is generated from a UUID in this test, so it is a valid identifier rather than
+    // externally supplied SQL. PostgreSQL does not allow `CREATE DATABASE` identifiers to bind.
+    let sql = format!("CREATE DATABASE {database}");
+    sqlx::query(sqlx::AssertSqlSafe(Cow::Owned(sql)))
+        .execute(admin)
+        .await
+        .map(|_| ())
+        .map_err(|error| CatgaError::new(ErrorCode::Unavailable, error.to_string()))
+}
+
+async fn drop_database(admin: &PgPool, database: &str) -> CatgaResult<()> {
+    let sql = format!("DROP DATABASE IF EXISTS {database} WITH (FORCE)");
+    sqlx::query(sqlx::AssertSqlSafe(Cow::Owned(sql)))
+        .execute(admin)
+        .await
+        .map(|_| ())
+        .map_err(|error| CatgaError::new(ErrorCode::Unavailable, error.to_string()))
+}
+
+async fn migrate_flow_store_pair(url: &str) -> CatgaResult<()> {
+    let (first, second) = tokio::join!(
+        SqlFlowStore::connect_postgres(url),
+        SqlFlowStore::connect_postgres(url),
+    );
+    let first = first?;
+    let second = second?;
+    let (first, second) = tokio::join!(first.migrate(), second.migrate());
+    first?;
+    second
+}
+
+async fn migrate_suspended_store_pair(url: &str) -> CatgaResult<()> {
+    let (first, second) = tokio::join!(
+        SqlSuspendedFlowStore::connect_postgres(url),
+        SqlSuspendedFlowStore::connect_postgres(url),
+    );
+    let first = first?;
+    let second = second?;
+    let (first, second) = tokio::join!(first.migrate(), second.migrate());
+    first?;
+    second
+}
+
+async fn migrate_state_machine_store_pair(url: &str) -> CatgaResult<()> {
+    let (first, second) = tokio::join!(
+        SqlStateMachineStore::<sql_contracts::ContractState>::connect_postgres(url),
+        SqlStateMachineStore::<sql_contracts::ContractState>::connect_postgres(url),
+    );
+    let first = first?;
+    let second = second?;
+    let (first, second) = tokio::join!(first.migrate(), second.migrate());
+    first?;
+    second
+}
+
+async fn migrate_scheduler_pair(url: &str) -> CatgaResult<()> {
+    let (first, second) = tokio::join!(
+        SqlFlowScheduler::connect_postgres(url),
+        SqlFlowScheduler::connect_postgres(url),
+    );
+    let first = first?;
+    let second = second?;
+    let (first, second) = tokio::join!(first.migrate(), second.migrate());
+    first?;
+    second
+}
+
+async fn migrate_dsl_progress_store_pair(url: &str) -> CatgaResult<()> {
+    let (first, second) = tokio::join!(
+        SqlDslStepProgressStore::connect_postgres(url),
+        SqlDslStepProgressStore::connect_postgres(url),
+    );
+    let first = first?;
+    let second = second?;
+    let (first, second) = tokio::join!(first.migrate(), second.migrate());
+    first?;
+    second
+}
 
 #[tokio::test]
 #[ignore = "requires CATGA_POSTGRES_URL"]

@@ -1,3 +1,5 @@
+//! Shared Docker-backed NATS JetStream fixture support.
+
 use std::{env, ops::Deref, thread};
 
 use testcontainers::{

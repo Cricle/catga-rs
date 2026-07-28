@@ -1,3 +1,5 @@
+//! Shared test-only helper utilities.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

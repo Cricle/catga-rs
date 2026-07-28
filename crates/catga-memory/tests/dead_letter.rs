@@ -1,3 +1,5 @@
+//! In-memory dead-letter persistence contract tests.
+
 use catga_core::{
     DeadLetter, DeadLetterDiagnostics, DeadLetterStore, Envelope, ErrorCode, MessageMetadata,
 };

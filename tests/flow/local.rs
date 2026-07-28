@@ -1,3 +1,5 @@
+//! Local flow execution integration helpers.
+
 use std::{
     collections::HashMap,
     sync::{

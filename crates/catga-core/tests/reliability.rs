@@ -1,3 +1,5 @@
+//! Reliability diagnostic bounds and failure-context contract tests.
+
 use catga_core::{
     DeadLetter, DeadLetterDiagnostics, Envelope, ErrorCode, MAX_DEAD_LETTER_DESCRIPTION_BYTES,
     MessageMetadata,

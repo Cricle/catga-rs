@@ -1,3 +1,5 @@
+//! Scheduler abstraction validation contract tests.
+
 use catga_core::{ErrorCode, TaskSchedule};
 
 #[test]

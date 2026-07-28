@@ -1,3 +1,5 @@
+//! Flow suspension integration helpers.
+
 use std::{
     sync::{
         Arc,

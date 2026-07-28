@@ -1,3 +1,5 @@
+//! Raft transport runtime integration tests.
+
 use std::{
     collections::HashMap,
     io,

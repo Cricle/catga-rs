@@ -1,3 +1,5 @@
+//! Reusable mediator test harness components.
+
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Event, EventHandler, Handler, Request};
 use catga_flow::{FlowDefinition, FlowRuntime, FlowStepOutcome};

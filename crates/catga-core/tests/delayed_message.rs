@@ -1,3 +1,5 @@
+//! Delayed message deadline and marker contract tests.
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use catga_core::{

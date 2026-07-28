@@ -1,3 +1,5 @@
+//! Real-service state-machine persistence integration tests.
+
 use catga_codec_memorypack::MemoryPackable;
 use catga_flow::{StateMachineSnapshot, StateMachineStore};
 use catga_nats::NatsStateMachines;

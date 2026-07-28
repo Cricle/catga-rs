@@ -1,5 +1,32 @@
 #![forbid(unsafe_code)]
 //! Lock-free cluster coordination contracts and deterministic in-memory implementations.
+//!
+//! The public contracts separate application decisions from Raft transport, persistence, and task
+//! ownership. An application drives a [`RaftNode`] or [`RaftRuntime`], supplies a
+//! [`RaftTransport`], and applies committed entries to its own state machine. This crate does not
+//! create a network listener, select durable storage, or make leader-only work safe by itself.
+//!
+//! [`MemoryCluster`] is a deterministic, in-process topology for tests and single-process
+//! composition. Its node views implement [`ClusterCoordinator`] and can exercise leader changes
+//! without background networking:
+//!
+//! ```
+//! use catga_cluster::{ClusterCoordinator, MemoryCluster};
+//!
+//! let cluster = MemoryCluster::new("one", ["http://cluster/one", "http://cluster/two"]);
+//! let node = cluster.node("one").expect("configured member");
+//! assert!(node.is_leader());
+//! assert_eq!(node.leader_endpoint().as_deref(), Some("http://cluster/one"));
+//! ```
+//!
+//! # Leadership and safety
+//!
+//! Leadership is an observation, not a distributed lock. Fence externally visible leader-owned
+//! effects with the relevant Raft term, application version, or storage lease, and make them
+//! idempotent across retries. [`LeadershipSubscription`] coalesces transitions for slow readers;
+//! consumers must compare its epoch and resynchronize rather than assuming every intermediate
+//! election was delivered. Shut down [`RaftRuntime`] before dropping application resources that
+//! its workers can still access.
 
 use std::{
     sync::Arc,

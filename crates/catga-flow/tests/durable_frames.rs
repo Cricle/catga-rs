@@ -1,3 +1,5 @@
+//! Durable flow frame encoding and size-bound contract tests.
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use catga_codec_memorypack::{MemoryPackSerializer, MemoryPackSnapshotCodec, MemoryPackable};

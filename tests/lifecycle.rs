@@ -1,3 +1,5 @@
+//! Application lifecycle coordination integration tests.
+
 use std::{
     sync::{
         Arc,

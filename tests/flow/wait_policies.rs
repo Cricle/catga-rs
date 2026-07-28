@@ -1,3 +1,5 @@
+//! Flow wait-policy integration helpers.
+
 use std::{
     sync::Arc,
     time::{Duration, SystemTime},

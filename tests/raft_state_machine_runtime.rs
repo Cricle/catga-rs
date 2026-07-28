@@ -1,3 +1,5 @@
+//! Raft state-machine runtime integration tests.
+
 use std::{
     collections::HashMap,
     io,

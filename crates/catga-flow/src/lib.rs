@@ -26,6 +26,21 @@
 //! from the stable flow and step identity. [`FlowRuntime::cancel`] fences late state writes but
 //! does not cancel an external system that has already accepted a request.
 //!
+//! # Operating durable flows
+//!
+//! `start` and `resume` are caller-owned futures: construct the runtime during startup, then run
+//! [`FlowDueService::check_at`] or [`FlowDueService::run`] from application supervision. Due work
+//! is acknowledged only after the resume path finishes; a failed or abandoned claim is released
+//! for retry. Store implementations must preserve the version-fenced [`SuspendedFlowStore`]
+//! operations rather than treating a version mismatch as an overwrite.
+//!
+//! A returned [`catga_core::CatgaResult`] reports validation, storage, ownership, and scheduler
+//! errors. A successfully returned [`FlowRuntimeResult`] can instead describe a business failure;
+//! inspect [`FlowRuntimeResult::is_failure`] and [`FlowRuntimeResult::state`] when the caller
+//! needs the terminal error. Keep flow inputs, wait children, and child-result payloads within
+//! [`MAX_FLOW_DATA_BYTES`], [`MAX_WAIT_CHILDREN`], and [`MAX_WAIT_RESULT_BYTES`]. Bounded polling
+//! and discovery APIs similarly require explicit limits.
+//!
 //! # Deterministic delayed transition
 //!
 //! A zero delay advances immediately and therefore does not allocate a timer or persist a
@@ -50,6 +65,29 @@
 //!     "charge" => |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::complete()) };
 //! };
 //! assert_eq!(checkout.name(), "checkout");
+//! ```
+//!
+//! # Bounded child wait
+//!
+//! A wait records stable child identities before launch. Reuse those identities as idempotency
+//! keys in the child launcher, because recovering the parent can launch a child again after a
+//! crash.
+//!
+//! ```
+//! use std::time::{Duration, SystemTime};
+//! use catga_flow::{FlowStepOutcome, WaitCondition, WaitPolicy};
+//!
+//! let wait = WaitCondition::for_children(
+//!     "checkout-42",
+//!     WaitPolicy::All,
+//!     ["reserve-42", "charge-42"],
+//!     SystemTime::UNIX_EPOCH,
+//!     Duration::from_secs(30),
+//! )?;
+//! let outcome = FlowStepOutcome::wait(wait);
+//!
+//! assert!(matches!(outcome, FlowStepOutcome::Wait(_)));
+//! # Ok::<(), catga_core::CatgaError>(())
 //! ```
 
 mod child_launch;

@@ -1,3 +1,5 @@
+//! Axum adapter integration tests.
+
 use std::{
     future::IntoFuture,
     num::NonZeroUsize,

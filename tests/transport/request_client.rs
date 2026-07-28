@@ -1,3 +1,5 @@
+//! Typed request-client transport contract helpers.
+
 use std::{
     sync::{
         Arc, Mutex,

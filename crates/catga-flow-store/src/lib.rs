@@ -91,6 +91,8 @@ mod postgres_dsl_progress;
 #[cfg(feature = "postgres")]
 mod postgres_scheduler;
 #[cfg(feature = "postgres")]
+mod postgres_schema;
+#[cfg(feature = "postgres")]
 mod postgres_state_machine;
 #[cfg(feature = "postgres")]
 mod postgres_suspended;

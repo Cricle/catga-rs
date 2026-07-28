@@ -1,3 +1,5 @@
+//! Raft state-machine driver integration tests.
+
 use catga_cluster::{
     RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftStateMachine, RaftStateMachineDriver,
 };

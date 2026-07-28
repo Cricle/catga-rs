@@ -1,3 +1,5 @@
+//! Cluster coordinator and leadership behavior tests.
+
 use std::{sync::Arc, time::Duration};
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

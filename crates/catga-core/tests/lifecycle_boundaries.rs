@@ -1,3 +1,5 @@
+//! Lifecycle cancellation and boundary integration tests.
+
 use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,

@@ -1,7 +1,7 @@
 //! Shared SQLx server-dialect durable schedule operations.
 
 macro_rules! define_server_scheduler {
-    ($pool:ty, $row:ty, $postgres:expr, $label:literal, $schema:expr, $index:expr) => {
+    ($pool:ty, $row:ty, $postgres:expr, $label:literal, $schema:expr, $index:expr $(, $migrator:path)?) => {
         use std::time::{Duration, SystemTime};
 
         use catga_core::{CatgaError, CatgaResult, ErrorCode};
@@ -17,15 +17,9 @@ macro_rules! define_server_scheduler {
         };
 
         pub(crate) async fn migrate(pool: &$pool) -> CatgaResult<()> {
-            sqlx::query(statement($schema, $postgres))
-                .execute(pool)
-                .await
-                .map_err(|error| database_error(concat!("create ", $label, " scheduler table"), error))?;
-            if !$index.is_empty() {
-                sqlx::query(statement($index, $postgres)).execute(pool).await
-                    .map_err(|error| database_error(concat!("create ", $label, " scheduler due index"), error))?;
-            }
-            Ok(())
+            define_server_scheduler!(
+                @migrate pool, $postgres, $label, $schema, $index $(, $migrator)?
+            )
         }
 
         pub(crate) async fn schedule_resume(
@@ -140,6 +134,22 @@ macro_rules! define_server_scheduler {
             ))
         }
     };
+    (@migrate $pool:expr, $postgres:expr, $label:literal, $schema:expr, $index:expr) => {{
+        sqlx::query(statement($schema, $postgres))
+            .execute($pool)
+            .await
+            .map_err(|error| database_error(concat!("create ", $label, " scheduler table"), error))?;
+        if !$index.is_empty() {
+            sqlx::query(statement($index, $postgres))
+                .execute($pool)
+                .await
+                .map_err(|error| database_error(concat!("create ", $label, " scheduler due index"), error))?;
+        }
+        Ok(())
+    }};
+    (@migrate $pool:expr, $postgres:expr, $label:literal, $schema:expr, $index:expr, $migrator:path) => {{
+        $migrator($pool, $schema, $index).await
+    }};
 }
 
 pub(crate) use define_server_scheduler;

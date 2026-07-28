@@ -1,3 +1,5 @@
+//! Message type registry and naming contract tests.
+
 use std::any::TypeId;
 
 use catga_core::{ErrorCode, Message, MessageTypeRegistry};

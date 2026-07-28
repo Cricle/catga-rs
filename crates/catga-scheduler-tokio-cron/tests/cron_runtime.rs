@@ -1,3 +1,5 @@
+//! Tokio cron scheduler execution and shutdown contract tests.
+
 use std::{
     sync::{
         Arc,

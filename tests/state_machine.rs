@@ -1,3 +1,5 @@
+//! Durable state-machine behavior integration tests.
+
 use std::{
     any::{Any, TypeId},
     sync::Arc,

@@ -1,3 +1,5 @@
+//! Raft configuration validation tests.
+
 use std::time::Duration;
 
 use catga_cluster::{ClusterCoordinator, RaftClusterConfig, RaftClusterConfigError, RaftMember};

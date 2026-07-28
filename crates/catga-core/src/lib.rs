@@ -7,6 +7,20 @@
 //! explicit startup composition. The core owns no adapter configuration or background worker;
 //! callers choose bounded stores, transports, and policies from the companion crates.
 //!
+//! # Lifecycle, errors, and bounds
+//!
+//! Constructing a [`Registry`], [`Mediator`], pipeline, or lifecycle coordinator never starts a
+//! background task. Initialize adapters and supervise polling, recovery, and shutdown from the
+//! application runtime. [`TransportLifecycle`] provides the same explicit pattern for one
+//! transport: initialize it, stop accepting work, then perform a bounded drain.
+//!
+//! Public operations return [`CatgaResult`]. Handle [`ErrorCode::Validation`] and
+//! [`ErrorCode::Conflict`] as caller-visible input or coordination failures, and apply the
+//! application's retry or dead-letter policy to transient delivery and store failures. Bulk and
+//! persistence-facing APIs expose their limits as `MAX_*` constants (for example,
+//! [`MAX_MEDIATOR_BATCH_SIZE`] and [`MAX_EVENT_STORE_PAGE_SIZE`]); select a bounded page or batch
+//! size before accepting untrusted input.
+//!
 //! # Deterministic policy checks
 //!
 //! Retry policies can be tested without waiting for a timer. Production constructors use full
@@ -44,6 +58,70 @@
 //! # async fn run() -> CatgaResult<()> {
 //! let mediator = Mediator::new(catga_handlers! { request Double => DoubleHandler }?);
 //! assert_eq!(mediator.send(Double(21)).await?, 42);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # CQRS message roles
+//!
+//! A request has one handler and returns a typed response; a command has one handler and no
+//! response; an event can have many handlers. Registration rejects duplicate request and command
+//! handlers with [`ErrorCode::Conflict`], so misconfigured startup fails before dispatch.
+//!
+//! ```no_run
+//! use async_trait::async_trait;
+//! use catga_core::{
+//!     CatgaResult, Command, CommandHandler, Event, EventHandler, Handler, Mediator, Message,
+//!     Registry, Request,
+//! };
+//!
+//! struct GetBalance;
+//! impl Message for GetBalance {}
+//! impl Request for GetBalance { type Response = u64; }
+//!
+//! struct Credit;
+//! impl Message for Credit {}
+//! impl Command for Credit {}
+//!
+//! #[derive(Clone)]
+//! struct BalanceChanged;
+//! impl Message for BalanceChanged {}
+//! impl Event for BalanceChanged {}
+//!
+//! struct BalanceReader;
+//! #[async_trait]
+//! impl Handler<GetBalance> for BalanceReader {
+//!     async fn handle(&self, _: GetBalance) -> CatgaResult<u64> {
+//!         Ok(42)
+//!     }
+//! }
+//!
+//! struct CreditWriter;
+//! #[async_trait]
+//! impl CommandHandler<Credit> for CreditWriter {
+//!     async fn handle(&self, _: Credit) -> CatgaResult<()> {
+//!         Ok(())
+//!     }
+//! }
+//!
+//! struct BalanceProjection;
+//! #[async_trait]
+//! impl EventHandler<BalanceChanged> for BalanceProjection {
+//!     async fn handle(&self, _: BalanceChanged) -> CatgaResult<()> {
+//!         Ok(())
+//!     }
+//! }
+//!
+//! # async fn run() -> CatgaResult<()> {
+//! let mut registry = Registry::new();
+//! registry.register_request::<GetBalance, _>(BalanceReader)?;
+//! registry.register_command::<Credit, _>(CreditWriter)?;
+//! registry.register_event::<BalanceChanged, _>(BalanceProjection);
+//! let mediator = Mediator::new(registry);
+//!
+//! assert_eq!(mediator.send(GetBalance).await?, 42);
+//! mediator.send_command(Credit).await?;
+//! mediator.publish(BalanceChanged).await?;
 //! # Ok(())
 //! # }
 //! ```

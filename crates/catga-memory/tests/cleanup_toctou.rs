@@ -1,3 +1,5 @@
+//! Memory inbox and outbox cleanup atomicity regression tests.
+
 #![cfg(feature = "test-hooks")]
 
 use std::{

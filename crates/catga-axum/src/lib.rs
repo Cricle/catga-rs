@@ -1,5 +1,32 @@
 #![forbid(unsafe_code)]
 //! Axum adapters for Catga's framework-independent result types.
+//!
+//! Use this crate to turn an explicitly registered Catga mediator request or event into an Axum
+//! route. Route construction is static: handlers, request types, and response serialization stay
+//! in the application, while this crate maps Catga errors, correlation IDs, and W3C trace context
+//! at the HTTP boundary. It does not start a server, own a Tokio runtime, or discover routes at
+//! runtime.
+//!
+//! # Route metadata
+//!
+//! [`EndpointMetadata`] and [`catga_endpoint_metadata!`] provide a small, allocation-free bridge
+//! to an OpenAPI implementation without requiring one. The metadata is independent of a running
+//! server and can be inspected in ordinary tests:
+//!
+//! ```
+//! use catga_axum::{EndpointKind, EndpointMethod};
+//!
+//! assert_eq!(EndpointMethod::Patch.as_http_method().as_str(), "PATCH");
+//! assert_eq!(EndpointKind::Query.tag(), "Queries");
+//! ```
+//!
+//! # Boundary assumptions
+//!
+//! Callers retain ownership of server lifecycle, request-size limits other than the bounded Raft
+//! ingress, and authentication. For outgoing requests, [`CorrelationHttpClient`] preserves
+//! caller-provided correlation and trace headers; ambient Catga context fills in only missing
+//! values. Treat inbound correlation headers as untrusted until application middleware validates
+//! or replaces them according to the deployment's trust boundary.
 
 mod validation;
 

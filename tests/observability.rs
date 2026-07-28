@@ -34,11 +34,11 @@ use metrics::{
     Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Metadata, Recorder,
     SharedString, Unit,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use tracing::{Event, Subscriber, field::Visit, subscriber::Interest};
 use tracing_subscriber::{Layer, filter::LevelFilter, layer::SubscriberExt, registry::LookupSpan};
 
-static TRACE_SUBSCRIBER_TEST_LOCK: Mutex<()> = Mutex::new(());
+static TRACE_SUBSCRIBER_TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 
 struct ReconcileStock;
 
@@ -1100,9 +1100,7 @@ async fn logging_behavior_keeps_the_original_handler_error() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mediator_records_opted_in_message_tags_as_structured_tracing_events() {
-    let _subscriber_lock = TRACE_SUBSCRIBER_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _subscriber_lock = TRACE_SUBSCRIBER_TEST_LOCK.lock().await;
     let tags = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(TraceTagLayer(Arc::clone(&tags)));
     let guard = tracing::subscriber::set_default(subscriber);
@@ -1138,9 +1136,7 @@ async fn mediator_records_opted_in_message_tags_as_structured_tracing_events() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mediator_records_only_opted_in_successful_response_tags_as_structured_tracing_events() {
-    let _subscriber_lock = TRACE_SUBSCRIBER_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _subscriber_lock = TRACE_SUBSCRIBER_TEST_LOCK.lock().await;
     let recorder = MetricRecorder::default();
     let metrics_guard = metrics::set_default_local_recorder(&recorder);
     let tags = Arc::new(Mutex::new(Vec::new()));

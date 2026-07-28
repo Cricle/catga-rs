@@ -1,3 +1,5 @@
+//! Bincode frame-limit and exact-decoding contract tests.
+
 use bincode_next::{Decode, Encode};
 use catga_codec_bincode::{BincodeCodec, MAX_BINCODE_FRAME_BYTES};
 use catga_core::{PayloadDecoder, PayloadEncoder};

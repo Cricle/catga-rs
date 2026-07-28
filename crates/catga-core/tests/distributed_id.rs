@@ -1,3 +1,5 @@
+//! Distributed identifier uniqueness contract tests.
+
 use catga_core::{CatgaResult, DistributedIdGenerator, SnowflakeIdGenerator, SnowflakeLayout};
 
 #[test]

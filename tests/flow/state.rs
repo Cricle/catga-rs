@@ -1,3 +1,5 @@
+//! Flow state construction helpers.
+
 use catga_flow::{FlowState, FlowStatus};
 
 #[test]

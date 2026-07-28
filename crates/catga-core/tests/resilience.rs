@@ -1,3 +1,5 @@
+//! Retry, timeout, and resilience policy contract tests.
+
 use std::{
     sync::{
         Arc,

@@ -1,5 +1,25 @@
 #![forbid(unsafe_code)]
 //! Lightweight test helpers for Catga applications.
+//!
+//! This crate provides typed, in-process fixtures rather than a service container: use
+//! [`CatgaTestHarness`] to register handlers before starting a mediator, [`HandlerSpy`] and
+//! [`EventHandlerSpy`] to retain assertions, and [`FlowTestContext`] for isolated Flow persistence
+//! dependencies. Each helper owns its own bounded in-memory state, so tests should construct a
+//! fresh helper instead of sharing one across concurrently running cases.
+//!
+//! ```
+//! use catga_testing::FlowTestContext;
+//!
+//! let context = FlowTestContext::new();
+//! let first = context.suspended_flows();
+//! let second = context.suspended_flows();
+//! assert!(std::sync::Arc::ptr_eq(&first, &second));
+//! ```
+//!
+//! These utilities intentionally model Catga contracts, not a production deployment. They do not
+//! start a network listener, persist state across process boundaries, or prove scheduling and
+//! transport behavior of a production adapter; cover those boundaries with the adapter's own
+//! integration tests.
 
 mod aggregate;
 mod flow;

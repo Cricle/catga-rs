@@ -1,3 +1,5 @@
+//! Raft cluster replication integration tests.
+
 use std::sync::Arc;
 
 use catga_cluster::{ClusterCoordinator, ClusterCoordinatorExt, RaftMember, RaftMessage, RaftNode};

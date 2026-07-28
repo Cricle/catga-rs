@@ -1,4 +1,4 @@
-#![doc = "SQLite integration coverage for the feature-gated FlowStore."]
+//! SQLite integration coverage for the feature-gated FlowStore.
 #![cfg(feature = "sqlite")]
 
 use std::time::{Duration, SystemTime};

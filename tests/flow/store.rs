@@ -1,3 +1,5 @@
+//! In-memory flow store integration helpers.
+
 use std::time::{Duration, SystemTime};
 
 use catga_flow::{FlowContinuation, FlowState, FlowStore, SuspendedFlowStore};

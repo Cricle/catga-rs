@@ -13,8 +13,8 @@ pub fn redis_url() -> CatgaResult<Option<String>> {
     match env::var("CATGA_REDIS_URL") {
         Ok(url) if !url.trim().is_empty() => Ok(Some(url)),
         Ok(_) | Err(env::VarError::NotPresent)
-            if !env::var_os("CATGA_REQUIRE_EXTERNAL_SERVICES")
-                .is_some_and(|value| !value.is_empty()) =>
+            if env::var_os("CATGA_REQUIRE_EXTERNAL_SERVICES")
+                .is_none_or(|value| value.is_empty()) =>
         {
             Ok(None)
         }
