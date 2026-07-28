@@ -1399,12 +1399,15 @@ async fn flow_store_claims_every_stale_flow_across_type_index_pages() -> CatgaRe
     }
 
     let mut claimed = Vec::new();
-    for _ in 0..33 {
+    for claim_index in 0..33 {
         let flow = flows
             .try_claim(flow_type.as_str(), "recoverer", Duration::from_secs(1))
             .await?
             .ok_or_else(|| {
-                CatgaError::new(ErrorCode::Internal, "stale indexed flow was skipped")
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    format!("stale indexed flow was skipped at claim {claim_index}"),
+                )
             })?;
         claimed.push(flow.id().to_owned());
     }

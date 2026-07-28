@@ -32,6 +32,12 @@ struct IndexMarker {
     page: u64,
 }
 
+enum IndexedFlow {
+    Candidate(Box<str>),
+    Advanced,
+    Absent,
+}
+
 /// A JetStream KV-backed flow store with a paged, compact flow-type index.
 ///
 /// Flow identities and types are SHA-256-derived keys. Each type page has a fixed number of
@@ -202,17 +208,17 @@ impl NatsFlows {
         Err(cas_error("index flow"))
     }
 
-    async fn next_indexed_flow(&self, flow_type: &str) -> CatgaResult<Option<Box<str>>> {
+    async fn next_indexed_flow(&self, flow_type: &str) -> CatgaResult<IndexedFlow> {
         let metadata_key = type_metadata_key(flow_type);
         for _ in 0..MAX_CAS_RETRIES {
             let Some(entry) = self.index.entry(&metadata_key).await.map_err(map_error)? else {
-                return Ok(None);
+                return Ok(IndexedFlow::Absent);
             };
             if matches!(
                 entry.operation,
                 kv::Operation::Delete | kv::Operation::Purge
             ) {
-                return Ok(None);
+                return Ok(IndexedFlow::Absent);
             }
             let metadata_record = decode_record(&entry.value)?;
             let metadata = decode::<TypeIndex>(metadata_record.payload())?;
@@ -239,7 +245,10 @@ impl NatsFlows {
             )
             .await?
             {
-                return Ok(candidate);
+                return Ok(match candidate {
+                    Some(candidate) => IndexedFlow::Candidate(candidate),
+                    None => IndexedFlow::Advanced,
+                });
             }
         }
         Err(cas_error("advance flow index cursor"))
@@ -369,8 +378,10 @@ impl FlowStore for NatsFlows {
     ) -> CatgaResult<Option<FlowState>> {
         let now = SystemTime::now();
         for _ in 0..MAX_INDEX_PAGE_ENTRIES {
-            let Some(id) = self.next_indexed_flow(flow_type).await? else {
-                return Ok(None);
+            let id = match self.next_indexed_flow(flow_type).await? {
+                IndexedFlow::Candidate(id) => id,
+                IndexedFlow::Advanced => continue,
+                IndexedFlow::Absent => return Ok(None),
             };
             let Some((entry, current)) = self.get_state(&id).await? else {
                 let _ = self.prune_index(flow_type, &id).await;
