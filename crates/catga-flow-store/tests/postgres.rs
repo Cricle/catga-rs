@@ -332,7 +332,8 @@ async fn postgres_dsl_progress_store_preserves_checkpoint_recovery() -> CatgaRes
     let store = SqlDslStepProgressStore::connect_postgres(url.as_ref()).await?;
     store.migrate().await?;
     store.migrate().await?;
-    sql_contracts::dsl_progress_contract(&store, "postgres-e2e").await
+    sql_contracts::dsl_progress_contract(&store, "postgres-e2e").await?;
+    sql_contracts::dsl_flow_restart_contract(&store, "postgres-e2e").await
 }
 
 #[tokio::test]

@@ -8,16 +8,38 @@
 
 use std::{
     env,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
 use catga_codec_memorypack::MemoryPackable;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowQuery,
-    FlowState, FlowStatus, StateMachineSnapshot, StateMachineStore, SuspendedFlowStore,
-    WaitCondition, WaitPolicy,
+    DslFlow, DslStateCodec, DslStepProgress, DslStepProgressStore, DueFlowScheduler,
+    FlowContinuation, FlowQuery, FlowState, FlowStatus, StateMachineSnapshot, StateMachineStore,
+    SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
+
+struct U32Codec;
+
+impl DslStateCodec<u32> for U32Codec {
+    fn encode(&self, state: &u32) -> CatgaResult<Vec<u8>> {
+        Ok(state.to_be_bytes().to_vec())
+    }
+
+    fn decode(&self, bytes: &[u8]) -> CatgaResult<u32> {
+        let bytes: [u8; 4] = bytes.try_into().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "SQL DSL checkpoint state must be a u32",
+            )
+        })?;
+        Ok(u32::from_be_bytes(bytes))
+    }
+}
 
 /// Returns an explicitly configured service URL.
 ///
@@ -116,6 +138,69 @@ where
     assert!(store.delete(flow_id.as_str(), 4).await?);
     assert!(!store.delete(flow_id.as_str(), 4).await?);
     assert!(store.get(flow_id.as_str(), 4).await?.is_none());
+    Ok(())
+}
+
+/// Verifies a real durable adapter restores a DSL checkpoint after an interrupted execution.
+///
+/// This deliberately goes through [`DslFlow::run_checkpointed`] instead of only testing the
+/// progress-store CRUD interface. It proves that a new execution can load the committed first
+/// step, skip its side effect, complete the remaining step, and then serve the terminal result
+/// without replaying either side effect.
+pub async fn dsl_flow_restart_contract<S>(store: &S, prefix: &str) -> CatgaResult<()>
+where
+    S: DslStepProgressStore + Sync,
+{
+    let flow_id = format!("{}/dsl-flow-restart", isolated_prefix(prefix));
+    let first_step_calls = Arc::new(AtomicUsize::new(0));
+    let fail_once = Arc::new(AtomicBool::new(true));
+    let first_calls = Arc::clone(&first_step_calls);
+    let failures = Arc::clone(&fail_once);
+    let flow = DslFlow::new()
+        .action(move |state: &mut u32| {
+            let calls = Arc::clone(&first_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                *state = state.saturating_add(1);
+                Ok(())
+            })
+        })
+        .action(move |state: &mut u32| {
+            let failures = Arc::clone(&failures);
+            Box::pin(async move {
+                if failures.swap(false, Ordering::SeqCst) {
+                    return Err(CatgaError::new(
+                        ErrorCode::Transient,
+                        "simulate a process interruption after the durable checkpoint",
+                    ));
+                }
+                *state = state.saturating_add(10);
+                Ok(())
+            })
+        });
+
+    let first = flow
+        .run_checkpointed(flow_id.as_str(), 0, store, &U32Codec)
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(first_step_calls.load(Ordering::SeqCst), 1);
+
+    let recovered = flow
+        .run_checkpointed(flow_id.as_str(), 0, store, &U32Codec)
+        .await?;
+    assert_eq!(recovered, 11);
+    assert_eq!(first_step_calls.load(Ordering::SeqCst), 1);
+
+    assert_eq!(
+        flow.run_checkpointed(flow_id.as_str(), 999, store, &U32Codec)
+            .await?,
+        recovered
+    );
+    assert_eq!(first_step_calls.load(Ordering::SeqCst), 1);
+
+    for step_index in [0, 1, u32::MAX] {
+        let _ = store.delete(flow_id.as_str(), step_index).await?;
+    }
     Ok(())
 }
 

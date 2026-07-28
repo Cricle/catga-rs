@@ -76,6 +76,40 @@ impl RaftTransport for RetryOnceTransport {
     }
 }
 
+#[derive(Clone, Default)]
+struct RetryOnceChannelTransport {
+    routes: Arc<RwLock<HashMap<u64, mpsc::Sender<RaftMessage>>>>,
+    rejected_delivery: Arc<AtomicBool>,
+}
+
+impl RetryOnceChannelTransport {
+    async fn register(&self, node: &RaftRuntime) {
+        self.routes.write().await.insert(node.id(), node.inbox());
+    }
+}
+
+#[async_trait]
+impl RaftTransport for RetryOnceChannelTransport {
+    async fn send(&self, message: RaftMessage) -> RaftTransportResult {
+        if !self.rejected_delivery.swap(true, Ordering::AcqRel) {
+            return Err(RaftTransportError::retryable(io::Error::other(
+                "peer inbox is temporarily full",
+            )));
+        }
+        let route = self
+            .routes
+            .read()
+            .await
+            .get(&message.to)
+            .cloned()
+            .ok_or_else(|| RaftTransportError::fatal(io::Error::other("unknown Raft peer")))?;
+        route
+            .send(message)
+            .await
+            .map_err(|_| RaftTransportError::retryable(io::Error::other("Raft peer stopped")))
+    }
+}
+
 fn members() -> Vec<RaftMember> {
     vec![
         RaftMember::new(1, "http://node-1"),
@@ -231,4 +265,58 @@ async fn raft_runtime_keeps_running_after_a_retryable_peer_delivery_failure() {
         .expect("the owner task remains command-responsive after recovery");
     runtime.shutdown();
     runtime.join().await.expect("runtime stops cleanly");
+}
+
+#[tokio::test]
+async fn raft_runtime_recovers_replication_after_a_retryable_peer_delivery_failure() {
+    let transport = RetryOnceChannelTransport::default();
+    let cluster_members = members();
+    let runtimes = cluster_members
+        .iter()
+        .map(|member| {
+            RaftRuntime::spawn(
+                RaftNode::new(member.id(), member.endpoint(), cluster_members.clone())
+                    .expect("Raft node is valid"),
+                Arc::new(transport.clone()),
+                Duration::from_millis(2),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .expect("runtimes start");
+    for runtime in &runtimes {
+        transport.register(runtime).await;
+    }
+
+    runtimes[0]
+        .campaign()
+        .await
+        .expect("one retryable send failure must not stop the leader runtime");
+    assert!(transport.rejected_delivery.load(Ordering::Acquire));
+    runtimes[0]
+        .propose(b"replicate-after-temporary-backpressure")
+        .await
+        .expect("the live runtime accepts proposals after the transient error");
+
+    for runtime in &runtimes {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let committed = runtime.drain_committed().await?;
+                if committed
+                    .iter()
+                    .any(|entry| entry.data == b"replicate-after-temporary-backpressure")
+                {
+                    return Ok::<(), RaftRuntimeError>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replication converges after peer capacity returns")
+        .expect("runtime stays available while replication retries");
+    }
+
+    for runtime in runtimes {
+        runtime.shutdown();
+        runtime.join().await.expect("runtime stops cleanly");
+    }
 }

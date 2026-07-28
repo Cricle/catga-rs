@@ -103,6 +103,38 @@
       "testArguments": ["--ignored"]
     },
     {
+      "id": "flow-dsl-durable-progress",
+      "package": "catga-tests",
+      "target": "dsl_progress",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-recovery",
+      "package": "catga-tests",
+      "target": "flow_recovery",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-mediator",
+      "package": "catga-tests",
+      "target": "mediator",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-runtime-recovery",
+      "package": "catga-tests",
+      "target": "raft_runtime",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
       "id": "mysql-flow-store",
       "package": "catga-flow-store",
       "target": "mysql",

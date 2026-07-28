@@ -205,7 +205,8 @@ async fn mysql_dsl_progress_store_preserves_checkpoint_recovery() -> CatgaResult
     let store = SqlDslStepProgressStore::connect_mysql(url.as_ref()).await?;
     store.migrate().await?;
     store.migrate().await?;
-    sql_contracts::dsl_progress_contract(&store, "mysql-e2e").await
+    sql_contracts::dsl_progress_contract(&store, "mysql-e2e").await?;
+    sql_contracts::dsl_flow_restart_contract(&store, "mysql-e2e").await
 }
 
 #[tokio::test]
