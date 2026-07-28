@@ -449,42 +449,42 @@ async fn redis_transport_reclaims_idle_delivery_with_multiple_receivers() -> Cat
     tokio::time::sleep(Duration::from_millis(120)).await;
     drop(abandoned);
 
-    let first_waiter = {
+    let mut waiters = tokio::task::JoinSet::new();
+    {
         let transport = Arc::clone(&second);
-        tokio::spawn(async move {
+        waiters.spawn(async move {
             redis_delivery(transport.as_ref(), "first concurrent Redis receiver").await
-        })
-    };
-    let second_waiter = {
+        });
+    }
+    {
         let transport = Arc::clone(&second);
-        tokio::spawn(async move {
+        waiters.spawn(async move {
             redis_delivery(transport.as_ref(), "second concurrent Redis receiver").await
-        })
-    };
+        });
+    }
 
-    let mut first_waiter = first_waiter;
-    let mut second_waiter = second_waiter;
-    let reclaimed = tokio::time::timeout(Duration::from_secs(1), async {
-        tokio::select! {
-            result = &mut first_waiter => result.map_err(|error| {
-                CatgaError::new(ErrorCode::Internal, format!("first Redis receiver task failed: {error}"))
-            })?,
-            result = &mut second_waiter => result.map_err(|error| {
-                CatgaError::new(ErrorCode::Internal, format!("second Redis receiver task failed: {error}"))
-            })?,
-        }
-    })
-    .await
-    .map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Timeout,
-            "no concurrent Redis receiver reclaimed the idle delivery",
-        )
-    })??;
-    first_waiter.abort();
-    second_waiter.abort();
-    let _ = first_waiter.await;
-    let _ = second_waiter.await;
+    let reclaimed = tokio::time::timeout(Duration::from_secs(1), waiters.join_next())
+        .await
+        .map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Timeout,
+                "no concurrent Redis receiver reclaimed the idle delivery",
+            )
+        })?
+        .ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "all concurrent Redis receiver tasks ended before returning a result",
+            )
+        })?
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                format!("concurrent Redis receiver task failed: {error}"),
+            )
+        })??;
+    waiters.abort_all();
+    while waiters.join_next().await.is_some() {}
     assert_eq!(reclaimed.envelope().id(), envelope.id());
     second.ack(reclaimed).await?;
     Ok(())

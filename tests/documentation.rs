@@ -13,5 +13,9 @@ fn readme_exposes_the_required_user_onboarding_sections() {
     assert!(
         README.contains("NATS JetStream tests start and remove an isolated Testcontainers server")
     );
-    assert!(README.contains("tests marked `#[ignore]` locally"));
+    assert!(README.contains("marked `#[ignore]` locally."));
+    assert!(
+        README.contains("test-only mailbox-creation control-plane harness"),
+        "README must distinguish mq9 protocol testing from a real RobustMQ broker"
+    );
 }
