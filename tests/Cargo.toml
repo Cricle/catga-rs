@@ -53,6 +53,10 @@ name = "examples"
 path = "examples.rs"
 
 [[test]]
+name = "critical_path_performance"
+path = "critical_path_performance.rs"
+
+[[test]]
 name = "message"
 path = "message.rs"
 
