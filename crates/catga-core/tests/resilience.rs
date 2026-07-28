@@ -11,6 +11,7 @@ use std::{
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, ResilienceExecutor, ResilienceOptions, RetryJitter,
 };
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 fn options() -> ResilienceOptions {
@@ -143,5 +144,77 @@ async fn resilience_cancels_timed_out_attempts_and_opens_the_circuit() -> CatgaR
         Err(error) if error.code() == ErrorCode::Transient
     ));
     assert_eq!(blocked_attempts.load(Ordering::Relaxed), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resilience_allows_only_one_half_open_probe_and_closes_after_its_success() -> CatgaResult<()>
+{
+    let executor = Arc::new(ResilienceExecutor::with_jitter(
+        ResilienceOptions {
+            max_retries: 0,
+            circuit_failure_threshold: 1,
+            circuit_reset_timeout: Duration::from_millis(10),
+            ..options()
+        },
+        RetryJitter::none(),
+    )?);
+    assert!(matches!(
+        executor
+            .execute(CancellationToken::new(), |_| async {
+                Err::<(), _>(CatgaError::new(ErrorCode::Transient, "open circuit"))
+            })
+            .await,
+        Err(error) if error.code() == ErrorCode::Transient
+    ));
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let probe_started = Arc::new(Notify::new());
+    let release_probe = Arc::new(Notify::new());
+    let waiting_for_probe = probe_started.notified();
+    let probing_executor = Arc::clone(&executor);
+    let probe_started_for_operation = Arc::clone(&probe_started);
+    let release_probe_for_operation = Arc::clone(&release_probe);
+    let probe = tokio::spawn(async move {
+        probing_executor
+            .execute(CancellationToken::new(), move |_| {
+                let probe_started = Arc::clone(&probe_started_for_operation);
+                let release_probe = Arc::clone(&release_probe_for_operation);
+                async move {
+                    probe_started.notify_one();
+                    release_probe.notified().await;
+                    Ok::<(), CatgaError>(())
+                }
+            })
+            .await
+    });
+    waiting_for_probe.await;
+
+    let blocked_calls = Arc::new(AtomicUsize::new(0));
+    let blocked_counter = Arc::clone(&blocked_calls);
+    assert!(matches!(
+        executor
+            .execute(CancellationToken::new(), move |_| {
+                let calls = Arc::clone(&blocked_counter);
+                async move {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    Ok::<(), CatgaError>(())
+                }
+            })
+            .await,
+        Err(error) if error.code() == ErrorCode::Transient
+    ));
+    assert_eq!(blocked_calls.load(Ordering::Relaxed), 0);
+
+    release_probe.notify_one();
+    assert_eq!(probe.await.expect("half-open probe task completes"), Ok(()));
+    assert_eq!(
+        executor
+            .execute(CancellationToken::new(), |_| async {
+                Ok::<_, CatgaError>(7_u8)
+            })
+            .await?,
+        7
+    );
     Ok(())
 }

@@ -11,6 +11,7 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{DslFlow, DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
+use futures::{StreamExt, stream};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -372,5 +373,197 @@ async fn checkpointed_when_any_reuses_its_saved_winner_after_a_later_failure() -
         .await?;
     assert_eq!(resumed.total, 10);
     assert_eq!(winner_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpointed_match_restores_the_selected_branch_without_replaying_its_completed_steps()
+-> CatgaResult<()> {
+    let completed_child_calls = Arc::new(AtomicUsize::new(0));
+    let fail_once = Arc::new(AtomicBool::new(true));
+    let completed = Arc::clone(&completed_child_calls);
+    let fails = Arc::clone(&fail_once);
+    let flow = DslFlow::new().match_on(
+        |state: &State| state.branch,
+        [(
+            true,
+            DslFlow::new()
+                .action(move |state: &mut State| {
+                    let completed = Arc::clone(&completed);
+                    Box::pin(async move {
+                        completed.fetch_add(1, Ordering::SeqCst);
+                        state.total = state.total.saturating_add(2);
+                        Ok(())
+                    })
+                })
+                .action(move |state: &mut State| {
+                    let fails = Arc::clone(&fails);
+                    Box::pin(async move {
+                        if fails.swap(false, Ordering::SeqCst) {
+                            return Err(CatgaError::new(
+                                ErrorCode::Transient,
+                                "match branch interrupted",
+                            ));
+                        }
+                        state.total = state.total.saturating_add(20);
+                        Ok(())
+                    })
+                }),
+        )],
+        DslFlow::new().action(|state: &mut State| {
+            Box::pin(async move {
+                state.total = 1_000;
+                Ok(())
+            })
+        }),
+    );
+    let progress = ProgressStore::default();
+
+    let first = flow
+        .run_checkpointed(
+            "match-recovery",
+            State {
+                total: 0,
+                branch: true,
+            },
+            &progress,
+            &StateCodec,
+        )
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(completed_child_calls.load(Ordering::SeqCst), 1);
+
+    let resumed = flow
+        .run_checkpointed("match-recovery", State::default(), &progress, &StateCodec)
+        .await?;
+    assert_eq!(resumed.total, 22);
+    assert!(resumed.branch);
+    assert_eq!(completed_child_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpointed_flows_reject_process_local_collection_steps_before_executing_them()
+-> CatgaResult<()> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sequential_calls = Arc::clone(&calls);
+    let sequential = DslFlow::new().for_each(
+        |_: &State| vec![1_u32],
+        move |_: &mut State, _| {
+            let calls = Arc::clone(&sequential_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        },
+    );
+    let stream_calls = Arc::clone(&calls);
+    let stream_flow = DslFlow::new().for_each_stream(
+        |_| stream::iter([1_u32]).boxed(),
+        move |_: &mut State, _| {
+            let calls = Arc::clone(&stream_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        },
+    );
+    let concurrent_calls = Arc::clone(&calls);
+    let concurrent = DslFlow::new().for_each_stream_concurrent(
+        1,
+        |_| stream::iter([1_u32]).boxed(),
+        move |_: &State, _| {
+            let calls = Arc::clone(&concurrent_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        },
+        |_: &mut State, ()| Ok(()),
+    )?;
+    let progress = ProgressStore::default();
+
+    for (flow_id, flow) in [
+        ("checkpointed-sequential", &sequential),
+        ("checkpointed-stream", &stream_flow),
+        ("checkpointed-concurrent", &concurrent),
+    ] {
+        let error = flow
+            .run_checkpointed(flow_id, State::default(), &progress, &StateCodec)
+            .await
+            .expect_err("process-local collection steps require an explicit replay cursor");
+        assert_eq!(error.code(), ErrorCode::Validation);
+        assert!(progress.get(flow_id, 0).await?.is_none());
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpointed_replayable_for_each_persists_handled_errors_without_replaying_items()
+-> CatgaResult<()> {
+    let item_calls = Arc::new(AtomicUsize::new(0));
+    let fail_after_collection = Arc::new(AtomicBool::new(true));
+    let calls = Arc::clone(&item_calls);
+    let fail = Arc::clone(&fail_after_collection);
+    let flow = DslFlow::new()
+        .for_each_replayable_continue_on_error(
+            |_: &State| vec![1_u32, 2, 3],
+            move |state: &mut State, item| {
+                let calls = Arc::clone(&calls);
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    if item == 2 {
+                        return Err(CatgaError::new(ErrorCode::Validation, "item rejected"));
+                    }
+                    state.total = state.total.saturating_add(item);
+                    Ok(())
+                })
+            },
+            |state, index, error| {
+                Box::pin(async move {
+                    assert_eq!(index, 1);
+                    assert_eq!(error.code(), ErrorCode::Validation);
+                    state.total = state.total.saturating_add(100);
+                    Ok(())
+                })
+            },
+        )
+        .action(move |state: &mut State| {
+            let fail = Arc::clone(&fail);
+            Box::pin(async move {
+                if fail.swap(false, Ordering::SeqCst) {
+                    return Err(CatgaError::new(
+                        ErrorCode::Transient,
+                        "interrupted after handled item",
+                    ));
+                }
+                state.total = state.total.saturating_add(1);
+                Ok(())
+            })
+        });
+    let progress = ProgressStore::default();
+
+    let first = flow
+        .run_checkpointed(
+            "handled-item-recovery",
+            State::default(),
+            &progress,
+            &StateCodec,
+        )
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(item_calls.load(Ordering::SeqCst), 3);
+
+    let resumed = flow
+        .run_checkpointed(
+            "handled-item-recovery",
+            State::default(),
+            &progress,
+            &StateCodec,
+        )
+        .await?;
+    assert_eq!(resumed.total, 105);
+    assert_eq!(item_calls.load(Ordering::SeqCst), 3);
     Ok(())
 }

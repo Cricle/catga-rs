@@ -16,7 +16,8 @@ use catga_core::{
 };
 use catga_flow::{
     DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
-    SuspendedFlowStore, WaitCondition, WaitPolicy,
+    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
+    WaitPolicy,
 };
 use catga_nats::{
     NatsConfig, NatsDeadLetters, NatsEventStore, NatsFlowScheduler, NatsFlows, NatsOutbox,
@@ -846,5 +847,392 @@ async fn projection_checkpoints_update_delete_and_remain_projection_isolated() -
             .map(|checkpoint| checkpoint.version()),
         Some(5)
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn flow_store_concurrent_create_rejects_stale_cas_and_fences_heartbeats() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let flows = NatsFlows::connect(server.url(), unique("CATGA_FLOWS_BOUNDARY")).await?;
+    let flow_type = unique("flow-type");
+    let flow_id = unique("flow-id");
+    let initial = FlowState::new(flow_id.as_str(), flow_type.as_str(), [], "node-a");
+    let (first, second) =
+        tokio::join!(flows.create(initial.clone()), flows.create(initial.clone()));
+    assert_eq!(usize::from(first?) + usize::from(second?), 1);
+    assert!(flows.get("missing-flow").await?.is_none());
+    assert!(!flows.update(0, initial.clone()).await?);
+    assert!(
+        !flows
+            .update(
+                0,
+                FlowState::new("missing-flow", flow_type.as_str(), [], "node-a").next_version()?,
+            )
+            .await?
+    );
+
+    let fresh_id = unique("fresh-flow");
+    assert!(
+        flows
+            .create(FlowState::new(
+                fresh_id.as_str(),
+                flow_type.as_str(),
+                [],
+                "node-a",
+            ))
+            .await?
+    );
+    assert!(
+        flows
+            .try_claim(flow_type.as_str(), "worker-a", Duration::from_secs(1))
+            .await?
+            .is_none()
+    );
+
+    let stale_id = unique("stale-flow");
+    assert!(
+        flows
+            .create(
+                FlowState::new(stale_id.as_str(), flow_type.as_str(), [], "node-a")
+                    .heartbeated_at(UNIX_EPOCH),
+            )
+            .await?
+    );
+    let claimed = flows
+        .try_claim(flow_type.as_str(), "worker-a", Duration::from_secs(1))
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "expected stale flow claim"))?;
+    assert_eq!(claimed.id(), stale_id);
+    assert!(
+        !flows
+            .heartbeat(claimed.id(), "worker-b", claimed.version())
+            .await?
+    );
+    assert!(
+        flows
+            .heartbeat(claimed.id(), "worker-a", claimed.version())
+            .await?
+    );
+    assert!(
+        !flows
+            .heartbeat("missing-flow", "worker-a", claimed.version())
+            .await?
+    );
+    let current = flows
+        .get(claimed.id())
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "claimed flow disappeared"))?;
+    assert_eq!(current.version(), claimed.version());
+    assert_eq!(current.owner(), Some("worker-a"));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn outbox_and_scheduler_recover_released_or_expired_leases_with_owner_fences()
+-> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let outbox = NatsOutbox::connect(server.url(), unique("CATGA_OUTBOX_FENCES")).await?;
+    let message = OutboxMessage::new(envelope(101, QualityOfService::AtLeastOnce));
+    let (first, second) = tokio::join!(outbox.enqueue(message.clone()), outbox.enqueue(message));
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    assert!(matches!(
+        first.err().or_else(|| second.err()),
+        Some(error) if error.code() == ErrorCode::Conflict
+    ));
+    assert_validation(
+        outbox
+            .claim_for("worker-a", usize::MAX, Duration::from_secs(1))
+            .await,
+    );
+
+    let first_claim = outbox
+        .claim_for("worker-a", 1, Duration::from_secs(1))
+        .await?
+        .pop()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "expected outbox claim"))?;
+    let first_token = first_claim
+        .claim_token()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "outbox claim has no token"))?
+        .to_owned();
+    outbox.ack("worker-b", 101, first_token.as_str()).await?;
+    outbox
+        .release("worker-b", 101, first_token.as_str())
+        .await?;
+    assert!(outbox.claim("worker-b", 1).await?.is_empty());
+    outbox
+        .release("worker-a", 101, first_token.as_str())
+        .await?;
+    let released = outbox.claim("worker-b", 1).await?.pop().ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "released outbox claim was not recovered",
+        )
+    })?;
+    let released_token = released.claim_token().ok_or_else(|| {
+        CatgaError::new(ErrorCode::Internal, "released outbox claim has no token")
+    })?;
+    assert_ne!(released_token, first_token);
+    outbox.ack("worker-b", 101, released_token).await?;
+    assert_eq!(outbox.list_published(1).await?[0].id(), 101);
+
+    let scheduler =
+        NatsFlowScheduler::connect(server.url(), unique("CATGA_SCHEDULER_FENCES")).await?;
+    let due = UNIX_EPOCH + Duration::from_secs(10);
+    let schedule_id = scheduler
+        .schedule_resume("payment-fence", "charge", due)
+        .await?;
+    assert!(matches!(
+        scheduler
+            .schedule_resume("payment-fence", "charge", due)
+            .await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    let first_claim = scheduler
+        .claim_due("worker-a", due, Duration::from_secs(1), 1)
+        .await?;
+    assert_eq!(first_claim.len(), 1);
+    let recovered = scheduler
+        .claim_due(
+            "worker-b",
+            due + Duration::from_secs(2),
+            Duration::from_secs(5),
+            1,
+        )
+        .await?;
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].schedule_id(), schedule_id.as_ref());
+    assert!(
+        !scheduler
+            .renew_due(
+                "worker-a",
+                &schedule_id,
+                due + Duration::from_secs(2),
+                Duration::from_secs(1),
+            )
+            .await?
+    );
+    assert!(!scheduler.release_due("worker-a", &schedule_id).await?);
+    assert!(scheduler.release_due("worker-b", &schedule_id).await?);
+    assert_eq!(
+        scheduler
+            .claim_due(
+                "worker-c",
+                due + Duration::from_secs(2),
+                Duration::from_secs(1),
+                1
+            )
+            .await?
+            .len(),
+        1
+    );
+    assert!(scheduler.ack_due("worker-c", &schedule_id).await?);
+    assert!(!scheduler.cancel_resume(&schedule_id).await?);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn suspended_flows_fence_stale_snapshots_and_recover_timeout_receipts() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let store = NatsSuspendedFlows::connect(server.url(), unique("CATGA_SUSPENDED_FENCES")).await?;
+    let plain_id = unique("plain-continuation");
+    let plain = FlowContinuation::new(
+        FlowState::new(plain_id.as_str(), "continuation-fence", [], "node-a").suspended(),
+        "resume",
+    );
+    assert!(store.create(plain.clone()).await?);
+    assert!(
+        !store
+            .record_wait_success(plain_id.as_str(), 0, "child", vec![])
+            .await?
+    );
+    assert!(
+        !store
+            .record_wait_failure(
+                plain_id.as_str(),
+                0,
+                "child",
+                CatgaError::new(ErrorCode::Transient, "unused"),
+            )
+            .await?
+    );
+    assert!(!store.delete(plain_id.as_str(), 1).await?);
+    assert!(store.delete(plain_id.as_str(), 0).await?);
+
+    let correlation = unique("shared-correlation");
+    let timeout_id = unique("timeout-continuation");
+    let timeout = FlowContinuation::waiting(
+        FlowState::new(timeout_id.as_str(), "continuation-fence", [], "node-a").suspended(),
+        "resume",
+        WaitCondition::new(
+            correlation.as_str(),
+            WaitPolicy::All,
+            1,
+            UNIX_EPOCH,
+            Duration::from_secs(1),
+        ),
+    );
+    assert!(store.create(timeout.clone()).await?);
+    let conflicting_id = unique("conflicting-continuation");
+    let conflicting = FlowContinuation::waiting(
+        FlowState::new(conflicting_id.as_str(), "continuation-fence", [], "node-a").suspended(),
+        "resume",
+        WaitCondition::new(
+            correlation.as_str(),
+            WaitPolicy::All,
+            1,
+            UNIX_EPOCH,
+            Duration::from_secs(1),
+        ),
+    );
+    assert!(store.create(conflicting.clone()).await?);
+    assert_eq!(
+        store
+            .get_by_wait_correlation(correlation.as_str())
+            .await
+            .expect_err("multiple active waits must be rejected")
+            .code(),
+        ErrorCode::Conflict
+    );
+    assert!(store.delete(conflicting_id.as_str(), 0).await?);
+    assert_eq!(
+        store
+            .get_by_wait_correlation(correlation.as_str())
+            .await?
+            .as_ref()
+            .map(|value| value.state().id()),
+        Some(timeout_id.as_str())
+    );
+    assert!(store.delete(timeout_id.as_str(), 0).await?);
+
+    let timeout_store =
+        NatsSuspendedFlows::connect(server.url(), unique("CATGA_TIMEOUT_RECEIPTS")).await?;
+    let poll = TimedOutFlowPoll::new(UNIX_EPOCH + Duration::from_secs(1), 1, 4)?;
+    assert!(timeout_store.create(timeout.clone()).await?);
+    let receipt = timeout_store
+        .poll_timed_out(&poll)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "expected timeout receipt"))?;
+    assert_eq!(receipt.flow_id(), timeout_id);
+    assert_eq!(
+        timeout_store
+            .ack_timed_out(&TimedOutFlowReceipt::new(timeout_id.as_str(), [0xff]))
+            .await
+            .expect_err("non-UTF-8 timeout receipt must be rejected")
+            .code(),
+        ErrorCode::Validation
+    );
+    timeout_store.release_timed_out(&receipt).await?;
+    let mut recovered = None;
+    for _ in 0..20 {
+        if let Some(receipt) = timeout_store
+            .poll_timed_out(&poll)
+            .await?
+            .into_iter()
+            .next()
+        {
+            recovered = Some(receipt);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let recovered = recovered
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "released timeout receipt was lost"))?;
+    assert_eq!(recovered.flow_id(), timeout_id);
+    timeout_store.ack_timed_out(&recovered).await?;
+    assert!(timeout_store.delete(timeout_id.as_str(), 0).await?);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn event_store_fences_concurrent_appends_and_pages_public_history() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let store = NatsEventStore::connect(
+        server.url(),
+        unique("CATGA_EVENT_BOUNDARY"),
+        unique("catga.event"),
+    )
+    .await?;
+    assert_validation(store.append("bad.*", Vec::new(), None).await);
+    assert_validation(store.read_page("orders", 0, 0).await);
+    assert_eq!(store.append("orders-a", Vec::new(), Some(7)).await?, -1);
+    assert_eq!(
+        store
+            .append(
+                "orders-a",
+                vec![
+                    envelope(201, QualityOfService::AtLeastOnce),
+                    envelope(202, QualityOfService::AtLeastOnce),
+                    envelope(203, QualityOfService::AtLeastOnce),
+                ],
+                Some(-1),
+            )
+            .await?,
+        2
+    );
+    assert!(matches!(
+        store
+            .append(
+                "orders-a",
+                vec![envelope(204, QualityOfService::AtLeastOnce)],
+                Some(-1),
+            )
+            .await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    let (first, second) = tokio::join!(
+        store.append(
+            "orders-a",
+            vec![envelope(204, QualityOfService::AtLeastOnce)],
+            Some(2),
+        ),
+        store.append(
+            "orders-a",
+            vec![envelope(205, QualityOfService::AtLeastOnce)],
+            Some(2),
+        ),
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    assert!(matches!(
+        first.err().or_else(|| second.err()),
+        Some(error) if error.code() == ErrorCode::Conflict
+    ));
+    assert_eq!(store.version("orders-a").await?, 3);
+
+    let page = store.read_page("orders-a", 1, 1).await?;
+    assert_eq!(page.stream().events()[0].version(), 1);
+    assert_eq!(page.next_version(), Some(2));
+    let bounded = store.read_to_version_page("orders-a", 0, 1, 10).await?;
+    assert_eq!(bounded.stream().events().len(), 2);
+    assert!(bounded.next_version().is_none());
+    let historical = store.version_history_page("orders-a", 0, 2).await?;
+    assert_eq!(historical.entries().len(), 2);
+    assert_eq!(historical.next_version(), Some(2));
+    let future = std::time::SystemTime::now() + Duration::from_secs(1);
+    let timed = store.read_to_time_page("orders-a", 0, future, 10).await?;
+    assert_eq!(timed.stream().events().len(), 4);
+
+    assert_eq!(
+        store
+            .append(
+                "orders-b",
+                vec![envelope(206, QualityOfService::AtLeastOnce)],
+                Some(-1),
+            )
+            .await?,
+        0
+    );
+    let first_ids = store.stream_ids_page(None, 1).await?;
+    assert_eq!(first_ids.ids().len(), 1);
+    let cursor = first_ids
+        .next_stream_id()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "missing stream-id cursor"))?;
+    let second_ids = store.stream_ids_page(Some(cursor), 10).await?;
+    assert_eq!(second_ids.ids().len(), 1);
     Ok(())
 }

@@ -5,7 +5,7 @@ use std::{
     io,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -48,6 +48,49 @@ impl RaftStateMachine for SharedCounter {
         })?;
         self.value
             .fetch_add(u64::from_le_bytes(bytes), Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn snapshot(&self) -> CatgaResult<Vec<u8>> {
+        Ok(self.value.load(Ordering::Relaxed).to_le_bytes().to_vec())
+    }
+
+    fn restore(&mut self, bytes: &[u8]) -> CatgaResult<()> {
+        let bytes: [u8; 8] = bytes.try_into().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "counter snapshots must contain eight bytes",
+            )
+        })?;
+        self.value
+            .store(u64::from_le_bytes(bytes), Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+struct FailsOnceSharedCounter {
+    value: Arc<AtomicU64>,
+    applications: Arc<AtomicU64>,
+    fail_next_application: Arc<AtomicBool>,
+}
+
+impl RaftStateMachine for FailsOnceSharedCounter {
+    fn apply(&mut self, entry: &RaftCommittedEntry) -> CatgaResult<()> {
+        if self.fail_next_application.swap(false, Ordering::AcqRel) {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "simulate a recoverable state-machine application failure",
+            ));
+        }
+        let bytes: [u8; 8] = entry.data.as_slice().try_into().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Validation,
+                "counter commands must contain eight bytes",
+            )
+        })?;
+        self.value
+            .fetch_add(u64::from_le_bytes(bytes), Ordering::Relaxed);
+        self.applications.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -180,6 +223,72 @@ async fn state_machine_runtime_stops_before_acknowledging_a_failed_application()
         runtime.join().await,
         Err(catga_cluster::RaftStateMachineRuntimeError::StateMachine(_))
     ));
+}
+
+#[tokio::test]
+async fn persistent_state_machine_runtime_replays_a_failed_command_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let members = vec![RaftMember::new(1, "http://node-1")];
+    let value = Arc::new(AtomicU64::new(0));
+    let applications = Arc::new(AtomicU64::new(0));
+    let fail_next_application = Arc::new(AtomicBool::new(true));
+
+    let node =
+        RaftNode::open_persistent(1, "http://node-1", members.clone(), directory.path()).unwrap();
+    let driver = RaftStateMachineDriver::new(
+        node,
+        FailsOnceSharedCounter {
+            value: Arc::clone(&value),
+            applications: Arc::clone(&applications),
+            fail_next_application: Arc::clone(&fail_next_application),
+        },
+    )
+    .unwrap();
+    let failed =
+        RaftStateMachineRuntime::spawn(driver, Arc::new(SinkTransport), Duration::from_millis(1))
+            .unwrap();
+
+    failed.campaign().await.unwrap();
+    assert!(matches!(
+        failed.propose(7_u64.to_le_bytes()).await,
+        Err(catga_cluster::RaftStateMachineRuntimeError::StateMachine(_))
+    ));
+    assert!(matches!(
+        failed.join().await,
+        Err(catga_cluster::RaftStateMachineRuntimeError::StateMachine(_))
+    ));
+    assert_eq!(value.load(Ordering::Relaxed), 0);
+    assert_eq!(applications.load(Ordering::Relaxed), 0);
+
+    let node = RaftNode::open_persistent(1, "http://node-1", members, directory.path()).unwrap();
+    let driver = RaftStateMachineDriver::new(
+        node,
+        FailsOnceSharedCounter {
+            value: Arc::clone(&value),
+            applications: Arc::clone(&applications),
+            fail_next_application,
+        },
+    )
+    .unwrap();
+    assert_eq!(value.load(Ordering::Relaxed), 7);
+    assert_eq!(applications.load(Ordering::Relaxed), 1);
+
+    let recovered =
+        RaftStateMachineRuntime::spawn(driver, Arc::new(SinkTransport), Duration::from_millis(1))
+            .unwrap();
+    recovered.campaign().await.unwrap();
+    recovered.propose(5_u64.to_le_bytes()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while value.load(Ordering::Relaxed) != 12 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(applications.load(Ordering::Relaxed), 2);
+
+    recovered.shutdown();
+    recovered.join().await.unwrap();
 }
 
 #[tokio::test]

@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
     FlowChildLaunchState, FlowChildLauncher, FlowContinuation, FlowDefinition, FlowRuntime,
-    FlowState, FlowStatus, FlowStepOutcome, MemoryFlowScheduler, SuspendedFlowStore, WaitCondition,
-    WaitPolicy,
+    FlowState, FlowStatus, FlowStepOutcome, FlowTagPolicy, MemoryFlowScheduler, SuspendedFlowStore,
+    WaitCondition, WaitPolicy,
 };
 use tokio::sync::Mutex;
 
@@ -187,6 +187,24 @@ impl FlowChildLauncher for LaunchRecorder {
     }
 }
 
+#[derive(Default)]
+struct FailsFirstLaunch {
+    attempts: AtomicUsize,
+}
+
+#[async_trait]
+impl FlowChildLauncher for FailsFirstLaunch {
+    async fn launch(&self, _: &str, _: &str, _: &str) -> CatgaResult<()> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Unavailable,
+                "child launcher unavailable",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn runtime_waits_for_all_children_before_running_the_next_step() -> CatgaResult<()> {
     let wait = child_wait(WaitPolicy::All);
@@ -295,6 +313,101 @@ async fn runtime_cancellation_fences_a_delayed_resume_and_removes_its_schedule()
 }
 
 #[tokio::test]
+async fn runtime_keeps_delayed_flows_suspended_until_their_persisted_due_time() -> CatgaResult<()> {
+    let pause_calls = Arc::new(AtomicUsize::new(0));
+    let complete_calls = Arc::new(AtomicUsize::new(0));
+    let due_at = SystemTime::now() + Duration::from_secs(60);
+    let pauses = Arc::clone(&pause_calls);
+    let completes = Arc::clone(&complete_calls);
+    let definition = FlowDefinition::new("delayed")
+        .step("pause", move |_| {
+            let pauses = Arc::clone(&pauses);
+            async move {
+                pauses.fetch_add(1, Ordering::SeqCst);
+                Ok(FlowStepOutcome::suspend_until(due_at))
+            }
+        })
+        .step("complete", move |_| {
+            let completes = Arc::clone(&completes);
+            async move {
+                completes.fetch_add(1, Ordering::SeqCst);
+                Ok(FlowStepOutcome::complete())
+            }
+        });
+    let (_, _, runtime) = runtime(definition);
+
+    assert!(
+        runtime
+            .start("delayed-before-due", [])
+            .await?
+            .is_suspended()
+    );
+    let early = runtime
+        .resume_at("delayed-before-due", due_at - Duration::from_secs(1))
+        .await?;
+    assert!(early.is_suspended());
+    assert_eq!(pause_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(complete_calls.load(Ordering::SeqCst), 0);
+
+    assert!(
+        runtime
+            .resume_at("delayed-before-due", due_at)
+            .await?
+            .is_success()
+    );
+    assert_eq!(pause_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(complete_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_tag_policy_retries_transient_work_and_terminalizes_timeouts() -> CatgaResult<()> {
+    let retry_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::clone(&retry_attempts);
+    let retrying =
+        FlowDefinition::new("tagged-retry").step_with_tag("remote-call", "remote", move |_| {
+            let attempts = Arc::clone(&attempts);
+            async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                    return Err(CatgaError::new(ErrorCode::Transient, "retry remote call"));
+                }
+                Ok(FlowStepOutcome::complete())
+            }
+        });
+    let (_, _, retry_runtime) = runtime(retrying);
+    let retry_runtime = retry_runtime
+        .with_stale_after(Duration::ZERO)
+        .with_tag_policy(FlowTagPolicy::new(Duration::from_secs(1), 2));
+    assert!(
+        retry_runtime
+            .start("tagged-retry-1", [])
+            .await?
+            .is_success()
+    );
+    assert_eq!(retry_attempts.load(Ordering::SeqCst), 3);
+
+    let timed_out = FlowDefinition::new("tagged-timeout").step_with_tag(
+        "slow-call",
+        "remote",
+        |_| async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok(FlowStepOutcome::complete())
+        },
+    );
+    let (_, _, timeout_runtime) = runtime(timed_out);
+    let timeout_runtime = timeout_runtime
+        .with_stale_after(Duration::ZERO)
+        .with_tag_policy(FlowTagPolicy::new(Duration::from_millis(1), 0));
+    let timeout = timeout_runtime.start("tagged-timeout-1", []).await?;
+    assert!(timeout.is_failure());
+    assert_eq!(
+        timeout.state().error().map(CatgaError::code),
+        Some(ErrorCode::Timeout)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_compensates_completed_steps_before_recording_a_later_failure() -> CatgaResult<()> {
     let compensation_calls = Arc::new(AtomicUsize::new(0));
     let calls = Arc::clone(&compensation_calls);
@@ -363,6 +476,49 @@ async fn runtime_launches_each_persisted_child_once_and_marks_the_launch_intent(
         .get("launch-1")
         .await?
         .expect("launched child intents persist");
+    assert!(
+        continuation
+            .wait()
+            .expect("wait remains active")
+            .child_launches()
+            .iter()
+            .all(|launch| matches!(launch.state(), FlowChildLaunchState::Launched))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_releases_a_failed_child_launch_claim_for_a_later_recovery_attempt()
+-> CatgaResult<()> {
+    let wait = child_wait(WaitPolicy::All);
+    let definition = FlowDefinition::new("checkout")
+        .step("await-children", move |_| {
+            let wait = wait.clone();
+            async move { Ok(FlowStepOutcome::wait(wait)) }
+        })
+        .step("complete", |_| async { Ok(FlowStepOutcome::complete()) });
+    let (store, _, runtime) = runtime(definition);
+    let launcher = FailsFirstLaunch::default();
+
+    runtime.start("launch-recovery-1", []).await?;
+    let error = runtime
+        .launch_waiting_children("launch-recovery-1", &launcher)
+        .await
+        .expect_err("a failed launcher must report its original error");
+    assert_eq!(error.code(), ErrorCode::Unavailable);
+    assert_eq!(launcher.attempts.load(Ordering::SeqCst), 1);
+
+    assert_eq!(
+        runtime
+            .launch_waiting_children("launch-recovery-1", &launcher)
+            .await?,
+        2
+    );
+    assert_eq!(launcher.attempts.load(Ordering::SeqCst), 3);
+    let continuation = store
+        .get("launch-recovery-1")
+        .await?
+        .expect("recovered launch state remains durable");
     assert!(
         continuation
             .wait()

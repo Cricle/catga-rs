@@ -7,8 +7,8 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    AcceptanceGate, AsyncInitializable, CatgaResult, ErrorCode, OperationTracker, Stoppable,
-    TransportLifecycle, TransportLifecycleOptions, TransportShutdown, Waitable,
+    AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, ErrorCode, OperationTracker,
+    Stoppable, TransportLifecycle, TransportLifecycleOptions, TransportShutdown, Waitable,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -60,6 +60,24 @@ impl Waitable for LifecycleFixture {
     }
 }
 
+#[derive(Default)]
+struct FailsFirstInitialization {
+    attempts: AtomicUsize,
+}
+
+#[async_trait]
+impl AsyncInitializable for FailsFirstInitialization {
+    async fn initialize(&self) -> CatgaResult<()> {
+        if self.attempts.fetch_add(1, Ordering::AcqRel) == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "startup dependency is temporarily unavailable",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[test]
 fn acceptance_gate_and_lifecycle_options_reject_invalid_shutdown_state() {
     let gate = AcceptanceGate::default();
@@ -75,6 +93,22 @@ fn acceptance_gate_and_lifecycle_options_reject_invalid_shutdown_state() {
         TransportLifecycleOptions::new(Duration::ZERO),
         Err(error) if error.code() == ErrorCode::Validation
     ));
+}
+
+#[tokio::test]
+async fn lifecycle_initialization_failure_leaves_the_transport_available_for_retry()
+-> CatgaResult<()> {
+    let lifecycle = TransportLifecycle::new(FailsFirstInitialization::default());
+
+    assert!(matches!(
+        lifecycle.initialize().await,
+        Err(error) if error.code() == ErrorCode::Transient
+    ));
+    assert_eq!(lifecycle.transport().attempts.load(Ordering::Acquire), 1);
+
+    lifecycle.initialize().await?;
+    assert_eq!(lifecycle.transport().attempts.load(Ordering::Acquire), 2);
+    Ok(())
 }
 
 #[tokio::test]
