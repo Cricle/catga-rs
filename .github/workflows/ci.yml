@@ -12,7 +12,7 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
@@ -25,13 +25,13 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 95 --fail-under-regions 95
       - name: Upload coverage report
         if: ${{ always() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: lcov.info
@@ -92,7 +92,7 @@ jobs:
       CATGA_POSTGRES_URL: postgres://catga:catga_e2e_password@127.0.0.1:5432/catga
       CATGA_MSSQL_URL: server=tcp:127.0.0.1,1433;User Id=sa;Password=Catga_e2e_password_2026!;TrustServerCertificate=true;Database=master
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: docker run -d --rm --name catga-ci-nats -p 4222:4222 -p 8222:8222 nats:2.10-alpine -js -m 8222
