@@ -263,3 +263,114 @@ async fn replayable_for_each_resumes_saved_items_and_terminal_result_is_idempote
     assert_eq!(item_three_calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn checkpointed_parallel_restores_completed_branches_without_replaying_them()
+-> CatgaResult<()> {
+    let completed_calls = Arc::new(AtomicUsize::new(0));
+    let fail_once = Arc::new(AtomicBool::new(true));
+    let completed = Arc::clone(&completed_calls);
+    let fails = Arc::clone(&fail_once);
+    let flow = DslFlow::new().parallel(
+        [
+            DslFlow::new().action(move |state: &mut State| {
+                let completed = Arc::clone(&completed);
+                Box::pin(async move {
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    state.total = 1;
+                    Ok(())
+                })
+            }),
+            DslFlow::new().action(move |state: &mut State| {
+                let fails = Arc::clone(&fails);
+                Box::pin(async move {
+                    if fails.swap(false, Ordering::SeqCst) {
+                        return Err(CatgaError::new(ErrorCode::Transient, "branch interrupted"));
+                    }
+                    state.total = 10;
+                    Ok(())
+                })
+            }),
+        ],
+        |state, branches| {
+            state.total = branches.into_iter().map(|branch| branch.total).sum();
+            Ok(())
+        },
+    );
+    let progress = ProgressStore::default();
+
+    let first = flow
+        .run_checkpointed(
+            "parallel-recovery",
+            State::default(),
+            &progress,
+            &StateCodec,
+        )
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(completed_calls.load(Ordering::SeqCst), 1);
+
+    let resumed = flow
+        .run_checkpointed(
+            "parallel-recovery",
+            State::default(),
+            &progress,
+            &StateCodec,
+        )
+        .await?;
+    assert_eq!(resumed.total, 11);
+    assert_eq!(completed_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpointed_when_any_reuses_its_saved_winner_after_a_later_failure() -> CatgaResult<()> {
+    let winner_calls = Arc::new(AtomicUsize::new(0));
+    let fail_once = Arc::new(AtomicBool::new(true));
+    let winner = Arc::clone(&winner_calls);
+    let fails = Arc::clone(&fail_once);
+    let flow = DslFlow::new()
+        .when_any(
+            [
+                DslFlow::new().action(|_: &mut State| {
+                    Box::pin(async { Err(CatgaError::new(ErrorCode::Transient, "loser")) })
+                }),
+                DslFlow::new().action(move |state: &mut State| {
+                    let winner = Arc::clone(&winner);
+                    Box::pin(async move {
+                        winner.fetch_add(1, Ordering::SeqCst);
+                        state.total = 9;
+                        Ok(())
+                    })
+                }),
+            ],
+            |state, selected| {
+                state.total = selected.total;
+                Ok(())
+            },
+        )
+        .action(move |state: &mut State| {
+            let fails = Arc::clone(&fails);
+            Box::pin(async move {
+                if fails.swap(false, Ordering::SeqCst) {
+                    return Err(CatgaError::new(ErrorCode::Transient, "after winner"));
+                }
+                state.total = state.total.saturating_add(1);
+                Ok(())
+            })
+        });
+    let progress = ProgressStore::default();
+
+    let first = flow
+        .run_checkpointed("winner-recovery", State::default(), &progress, &StateCodec)
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(winner_calls.load(Ordering::SeqCst), 1);
+
+    let resumed = flow
+        .run_checkpointed("winner-recovery", State::default(), &progress, &StateCodec)
+        .await?;
+    assert_eq!(resumed.total, 10);
+    assert_eq!(winner_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}

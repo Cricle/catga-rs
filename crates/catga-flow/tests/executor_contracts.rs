@@ -11,8 +11,12 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{FlowExecutor, FlowResult, FlowState, FlowStatus, FlowStore};
+use catga_flow::{
+    FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions, FlowResult, FlowState, FlowStatus,
+    FlowStore,
+};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
 struct Store {
@@ -199,6 +203,71 @@ async fn executor_converts_work_errors_to_terminal_failures() -> CatgaResult<()>
     assert_eq!(
         stored.error().map(CatgaError::code),
         Some(ErrorCode::Transient)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn executor_recovers_stale_flows_once_and_stops_when_none_remain() -> CatgaResult<()> {
+    let store = Arc::new(Store::default());
+    store
+        .insert(FlowState::new("recover", "checkout", [], "old").heartbeated_at(UNIX_EPOCH))
+        .await;
+    let executor = FlowExecutor::new(Arc::clone(&store), "worker-d", Duration::from_secs(1));
+    let options = FlowRecoveryOptions::new(2, Duration::from_secs(1))?;
+
+    let recovered = executor
+        .recover_stale("checkout", options, |_| async {
+            Ok(FlowResult::success(3))
+        })
+        .await?;
+    assert_eq!(recovered, 1);
+    assert_eq!(
+        store
+            .get("recover")
+            .await?
+            .expect("recovered state persists")
+            .status(),
+        FlowStatus::Done
+    );
+    assert_eq!(
+        executor
+            .recover_stale("checkout", options, |_| async {
+                Ok(FlowResult::success(9))
+            })
+            .await?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn executor_heartbeat_execution_returns_cancellation_without_terminalizing_work()
+-> CatgaResult<()> {
+    let store = Arc::new(Store::default());
+    let executor = FlowExecutor::new(Arc::clone(&store), "worker-e", Duration::from_secs(1));
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let error = executor
+        .execute_with_heartbeat(
+            "cancelled-work",
+            "checkout",
+            [],
+            FlowHeartbeatOptions::new(Duration::from_secs(1))?,
+            cancellation,
+            |_| std::future::pending::<CatgaResult<FlowResult>>(),
+        )
+        .await
+        .expect_err("caller cancellation must stop supervised work");
+    assert_eq!(error.code(), ErrorCode::Cancelled);
+    assert_eq!(
+        store
+            .get("cancelled-work")
+            .await?
+            .expect("running state persists for recovery")
+            .status(),
+        FlowStatus::Running
     );
     Ok(())
 }

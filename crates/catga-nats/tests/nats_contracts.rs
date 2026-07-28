@@ -473,6 +473,135 @@ async fn scheduler_fences_owners_and_supports_cancellation() -> CatgaResult<()> 
 
 #[tokio::test]
 #[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn scheduler_reuses_the_target_identity_across_repeated_registration() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let scheduler =
+        NatsFlowScheduler::connect(server.url(), unique("CATGA_SCHEDULER_IDEMPOTENT")).await?;
+    let due = UNIX_EPOCH + Duration::from_secs(100);
+
+    let first = scheduler
+        .schedule_resume("payment-21", "charge", due)
+        .await?;
+    let repeated = scheduler
+        .schedule_resume("payment-21", "charge", due + Duration::from_secs(1))
+        .await?;
+
+    assert_eq!(repeated, first);
+    assert_eq!(
+        scheduler
+            .claim_due("worker", due, Duration::from_secs(1), 1)
+            .await?
+            .first()
+            .map(|resume| resume.due_at()),
+        Some(due)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn scheduler_claims_across_full_index_pages() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let scheduler =
+        NatsFlowScheduler::connect(server.url(), unique("CATGA_SCHEDULER_PAGES")).await?;
+    let due = UNIX_EPOCH + Duration::from_secs(200);
+
+    for state_id in 0..33 {
+        scheduler
+            .schedule_resume("payment-22", &format!("charge-{state_id}"), due)
+            .await?;
+    }
+
+    let first_page = scheduler
+        .claim_due("worker", due, Duration::from_secs(10), 32)
+        .await?;
+    assert_eq!(first_page.len(), 32);
+    assert_eq!(
+        scheduler
+            .claim_due("worker", due, Duration::from_secs(10), 1)
+            .await?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn outbox_orders_claims_recovers_expired_leases_and_bounds_cleanup() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let outbox = NatsOutbox::connect(server.url(), unique("CATGA_OUTBOX_ORDERING")).await?;
+    let now = std::time::SystemTime::now();
+
+    for id in [24, 22, 23] {
+        outbox
+            .enqueue(OutboxMessage::new(envelope(
+                id,
+                QualityOfService::AtLeastOnce,
+            )))
+            .await?;
+    }
+    outbox
+        .enqueue(OutboxMessage::scheduled(
+            envelope(25, QualityOfService::AtLeastOnce),
+            now + Duration::from_secs(30),
+        )?)
+        .await?;
+
+    let first = outbox
+        .claim_for("worker", 2, Duration::from_millis(10))
+        .await?;
+    assert_eq!(
+        first.iter().map(OutboxMessage::id).collect::<Vec<_>>(),
+        vec![22, 23]
+    );
+    let stale_token = first[0]
+        .claim_token()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "claimed message has no token"))?
+        .to_owned();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    let recovered = outbox
+        .claim_for("worker", 2, Duration::from_secs(10))
+        .await?;
+    assert_eq!(
+        recovered.iter().map(OutboxMessage::id).collect::<Vec<_>>(),
+        vec![22, 23]
+    );
+    let current_token = recovered[0]
+        .claim_token()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "recovered message has no token"))?;
+    assert_ne!(current_token, stale_token);
+    outbox.ack("worker", 22, &stale_token).await?;
+    assert!(!outbox.cancel(22).await?);
+    outbox.ack("worker", 22, current_token).await?;
+
+    let other_token = recovered[1].claim_token().ok_or_else(|| {
+        CatgaError::new(ErrorCode::Internal, "second claimed message has no token")
+    })?;
+    outbox.ack("worker", 23, other_token).await?;
+    assert_eq!(outbox.list_published(10).await?.len(), 2);
+    assert!(outbox.cleanup_published(Duration::ZERO, 1).await? <= 1);
+    let retained = outbox.list_published(10).await?.len();
+    assert_eq!(
+        outbox.cleanup_published(Duration::ZERO, 10).await?,
+        retained
+    );
+    assert!(outbox.list_published(10).await?.is_empty());
+    assert_eq!(
+        outbox
+            .claim("worker", 10)
+            .await?
+            .iter()
+            .map(OutboxMessage::id)
+            .collect::<Vec<_>>(),
+        vec![24]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn flows_create_claim_heartbeat_and_prune_terminal_states() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let flows = NatsFlows::connect(server.url(), unique("CATGA_FLOWS_LIFECYCLE")).await?;

@@ -2,15 +2,19 @@
 
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    FlowContinuation, FlowDefinition, FlowRuntime, FlowState, FlowStatus, FlowStepOutcome,
-    MemoryFlowScheduler, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowChildLaunchState, FlowChildLauncher, FlowContinuation, FlowDefinition, FlowRuntime,
+    FlowState, FlowStatus, FlowStepOutcome, MemoryFlowScheduler, SuspendedFlowStore, WaitCondition,
+    WaitPolicy,
 };
 use tokio::sync::Mutex;
 
@@ -159,6 +163,28 @@ fn child_wait(policy: WaitPolicy) -> WaitCondition {
     .expect("test child identities are valid")
 }
 
+#[derive(Default)]
+struct LaunchRecorder {
+    launches: Mutex<Vec<(Box<str>, Box<str>, Box<str>)>>,
+}
+
+#[async_trait]
+impl FlowChildLauncher for LaunchRecorder {
+    async fn launch(
+        &self,
+        parent_flow_id: &str,
+        child_id: &str,
+        correlation_id: &str,
+    ) -> CatgaResult<()> {
+        self.launches.lock().await.push((
+            parent_flow_id.into(),
+            child_id.into(),
+            correlation_id.into(),
+        ));
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn runtime_waits_for_all_children_before_running_the_next_step() -> CatgaResult<()> {
     let wait = child_wait(WaitPolicy::All);
@@ -263,5 +289,85 @@ async fn runtime_cancellation_fences_a_delayed_resume_and_removes_its_schedule()
 
     let replay = runtime.resume_at("delayed-1", due_at).await?;
     assert!(replay.is_cancelled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_compensates_completed_steps_before_recording_a_later_failure() -> CatgaResult<()> {
+    let compensation_calls = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&compensation_calls);
+    let definition = FlowDefinition::new("checkout")
+        .step_with_compensation(
+            "reserve",
+            |_| async { Ok(FlowStepOutcome::Advance) },
+            move |_| {
+                let calls = Arc::clone(&calls);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+        )
+        .step("charge", |_| async {
+            Ok(FlowStepOutcome::Fail(CatgaError::new(
+                ErrorCode::Validation,
+                "charge declined",
+            )))
+        });
+    let (_, _, runtime) = runtime(definition);
+
+    let result = runtime.start("compensation-1", []).await?;
+    assert!(result.is_failure());
+    assert_eq!(
+        result.state().error().map(CatgaError::code),
+        Some(ErrorCode::Validation)
+    );
+    assert_eq!(compensation_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_launches_each_persisted_child_once_and_marks_the_launch_intent() -> CatgaResult<()>
+{
+    let wait = child_wait(WaitPolicy::All);
+    let definition = FlowDefinition::new("checkout")
+        .step("await-children", move |_| {
+            let wait = wait.clone();
+            async move { Ok(FlowStepOutcome::wait(wait)) }
+        })
+        .step("complete", |_| async { Ok(FlowStepOutcome::complete()) });
+    let (store, _, runtime) = runtime(definition);
+    let launcher = LaunchRecorder::default();
+
+    runtime.start("launch-1", []).await?;
+    assert_eq!(
+        runtime
+            .launch_waiting_children("launch-1", &launcher)
+            .await?,
+        2
+    );
+    assert_eq!(
+        runtime
+            .launch_waiting_children("launch-1", &launcher)
+            .await?,
+        0
+    );
+    let launches = launcher.launches.lock().await;
+    assert_eq!(launches.len(), 2);
+    assert!(launches.iter().all(|(parent, _, correlation)| {
+        parent.as_ref() == "launch-1" && correlation.as_ref() == "checkout-children"
+    }));
+    let continuation = store
+        .get("launch-1")
+        .await?
+        .expect("launched child intents persist");
+    assert!(
+        continuation
+            .wait()
+            .expect("wait remains active")
+            .child_launches()
+            .iter()
+            .all(|launch| matches!(launch.state(), FlowChildLaunchState::Launched))
+    );
     Ok(())
 }

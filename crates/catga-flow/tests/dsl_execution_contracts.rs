@@ -2,19 +2,33 @@
 
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{DslFlow, DslStep};
+use catga_flow::{
+    DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver, DslStep,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct State {
     value: u32,
     enabled: bool,
+}
+
+#[derive(Default)]
+struct EventLog(Mutex<Vec<DslFlowLifecycleEvent>>);
+
+impl DslFlowLifecycleObserver for EventLog {
+    fn observe(&self, event: &DslFlowLifecycleEvent) {
+        self.0
+            .lock()
+            .expect("event log lock is available")
+            .push(event.clone());
+    }
 }
 
 #[tokio::test]
@@ -195,5 +209,85 @@ async fn dsl_branches_parallel_and_when_any_merge_only_the_selected_state() -> C
 
     flow.run(&mut state).await?;
     assert_eq!(state.value, 50);
+    Ok(())
+}
+
+#[tokio::test]
+async fn dsl_when_any_returns_a_failure_without_merging_a_failed_branch() -> CatgaResult<()> {
+    let flow = DslFlow::new().when_any(
+        [
+            DslFlow::new().action(|_: &mut State| {
+                Box::pin(async { Err(CatgaError::new(ErrorCode::Transient, "first failure")) })
+            }),
+            DslFlow::new().action(|_: &mut State| {
+                Box::pin(async { Err(CatgaError::new(ErrorCode::Transient, "second failure")) })
+            }),
+        ],
+        |state, winner| {
+            state.value = winner.value;
+            Ok(())
+        },
+    );
+    let mut state = State::default();
+
+    let error = flow
+        .run(&mut state)
+        .await
+        .expect_err("when_any must fail when every branch fails");
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(state, State::default());
+    Ok(())
+}
+
+#[tokio::test]
+async fn dsl_failure_notifies_observers_and_async_hooks_with_the_original_error() -> CatgaResult<()>
+{
+    let events = Arc::new(EventLog::default());
+    let step_failed = Arc::new(AtomicUsize::new(0));
+    let flow_failed = Arc::new(AtomicUsize::new(0));
+    let step_failed_hook = Arc::clone(&step_failed);
+    let flow_failed_hook = Arc::clone(&flow_failed);
+    let flow = DslFlow::new()
+        .action(|_: &mut State| {
+            Box::pin(async { Err(CatgaError::new(ErrorCode::Validation, "declined")) })
+        })
+        .with_lifecycle_observer(Arc::clone(&events))
+        .with_lifecycle_hooks(
+            DslFlowLifecycleHooks::new()
+                .on_step_failed(move |_, step_index, error| {
+                    let step_failed_hook = Arc::clone(&step_failed_hook);
+                    Box::pin(async move {
+                        assert_eq!(step_index, 0);
+                        assert_eq!(error.code(), ErrorCode::Validation);
+                        step_failed_hook.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                })
+                .on_flow_failed(move |_, error| {
+                    let flow_failed_hook = Arc::clone(&flow_failed_hook);
+                    Box::pin(async move {
+                        assert_eq!(error.code(), ErrorCode::Validation);
+                        flow_failed_hook.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                }),
+        );
+    let mut state = State::default();
+
+    let error = flow
+        .run(&mut state)
+        .await
+        .expect_err("the original step failure reaches the caller");
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(step_failed.load(Ordering::SeqCst), 1);
+    assert_eq!(flow_failed.load(Ordering::SeqCst), 1);
+    let events = events.0.lock().expect("event log lock is available");
+    assert!(matches!(
+        events.as_slice(),
+        [
+            DslFlowLifecycleEvent::StepFailed { step_index: 0, error },
+            DslFlowLifecycleEvent::FlowFailed { error: flow_error },
+        ] if error.code() == ErrorCode::Validation && flow_error.code() == ErrorCode::Validation
+    ));
     Ok(())
 }

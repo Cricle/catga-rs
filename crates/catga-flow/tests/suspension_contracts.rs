@@ -3,7 +3,9 @@
 use std::time::{Duration, UNIX_EPOCH};
 
 use catga_core::{CatgaError, ErrorCode};
-use catga_flow::{MAX_WAIT_RESULT_BYTES, WaitCondition, WaitPolicy};
+use catga_flow::{
+    FlowContinuation, FlowState, FlowStatus, MAX_WAIT_RESULT_BYTES, WaitCondition, WaitPolicy,
+};
 
 #[test]
 fn child_waits_accept_only_persisted_children_and_deduplicate_results() {
@@ -68,4 +70,33 @@ fn waits_reject_invalid_child_sets_and_oversized_results_without_retaining_them(
     assert_eq!(too_large.completed_count(), 0);
     assert!(!external.is_expired_at(UNIX_EPOCH));
     assert!(external.is_expired_at(UNIX_EPOCH + Duration::from_secs(1)));
+}
+
+#[test]
+fn continuation_trigger_transitions_keep_only_the_current_wait_or_delay_metadata() {
+    let wait = WaitCondition::new(
+        "external",
+        WaitPolicy::Any,
+        1,
+        UNIX_EPOCH,
+        Duration::from_secs(30),
+    );
+    let initial = FlowState::new("flow-1", "checkout", [], "worker").suspended();
+    let delayed = FlowContinuation::waiting(initial, "await-result", wait.clone())
+        .delayed_until(UNIX_EPOCH + Duration::from_secs(60));
+
+    assert!(delayed.wait().is_none());
+    assert_eq!(
+        delayed.resume_at(),
+        Some(UNIX_EPOCH + Duration::from_secs(60))
+    );
+    let ready = delayed.at_step("complete");
+    assert_eq!(ready.step_name(), "complete");
+    assert!(ready.wait().is_none());
+    assert!(ready.resume_at().is_none());
+    assert_eq!(ready.state().status(), FlowStatus::Suspended);
+
+    let waiting = ready.with_wait(wait);
+    assert!(waiting.wait().is_some());
+    assert!(waiting.resume_at().is_none());
 }
