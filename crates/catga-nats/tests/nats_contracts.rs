@@ -6,7 +6,7 @@ use std::{
     net::TcpListener,
     process::{Child, Command},
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
 
 use async_nats::jetstream::{self, kv};
@@ -16,9 +16,13 @@ use catga_core::{
     EnvelopeCodec, ErrorCode, EventStore, MessageMetadata, MessageTransport, OutboxMessage,
     OutboxState, OutboxStore, QualityOfService,
 };
+use catga_flow::{
+    DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
+    SuspendedFlowStore, WaitCondition, WaitPolicy,
+};
 use catga_nats::{
-    NatsConfig, NatsDeadLetters, NatsEventStore, NatsOutbox, NatsPubSubConfig, NatsPubSubTransport,
-    NatsRequestClient, NatsTransport,
+    NatsConfig, NatsDeadLetters, NatsEventStore, NatsFlowScheduler, NatsFlows, NatsOutbox,
+    NatsPubSubConfig, NatsPubSubTransport, NatsRequestClient, NatsSuspendedFlows, NatsTransport,
 };
 use tempfile::TempDir;
 
@@ -276,6 +280,7 @@ async fn dead_letters_round_trip_diagnostics_and_read_legacy_records() -> CatgaR
         diagnostics,
     )?;
     letters.enqueue(current.clone()).await?;
+    assert!(letters.list(0).await?.is_empty());
 
     let legacy_envelope = envelope(8, QualityOfService::AtLeastOnce);
     let payload = MemoryPackCodec::default().encode(&legacy_envelope)?;
@@ -306,12 +311,316 @@ async fn dead_letters_round_trip_diagnostics_and_read_legacy_records() -> CatgaR
         .await
         .map_err(|error| test_error("confirm legacy dead-letter publish", error))?;
 
+    let first = letters.list(1).await?;
+    assert_eq!(first, vec![current.clone()]);
     let listed = letters.list(10).await?;
     assert_eq!(listed[0], current);
     assert_eq!(listed[1].envelope(), &legacy_envelope);
     assert_eq!(listed[1].reason(), "old failure");
     assert_eq!(listed[1].diagnostics().stage(), "legacy");
     assert_eq!(listed[1].diagnostics().failed_at_unix_ms(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn outbox_exercises_release_failure_cancel_and_published_cleanup() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let outbox = NatsOutbox::connect(server.url(), unique("CATGA_OUTBOX_LIFECYCLE")).await?;
+
+    assert_validation(
+        outbox
+            .enqueue(OutboxMessage::new(envelope(
+                0,
+                QualityOfService::AtLeastOnce,
+            )))
+            .await,
+    );
+    outbox
+        .enqueue(OutboxMessage::new(envelope(
+            10,
+            QualityOfService::AtLeastOnce,
+        )))
+        .await?;
+    assert!(outbox.cancel(10).await?);
+    assert!(!outbox.cancel(10).await?);
+
+    let retrying =
+        OutboxMessage::new(envelope(11, QualityOfService::AtLeastOnce)).with_max_retries(2)?;
+    outbox.enqueue(retrying).await?;
+    let first_claim =
+        outbox.claim("worker-a", 1).await?.pop().ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "expected first NATS outbox claim")
+        })?;
+    let first_token = first_claim
+        .claim_token()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "NATS outbox claim has no token"))?;
+    outbox.release("worker-a", 11, "stale-token").await?;
+    assert!(outbox.claim("worker-a", 1).await?.is_empty());
+    outbox.release("worker-a", 11, first_token).await?;
+
+    let second_claim = outbox.claim("worker-a", 1).await?.pop().ok_or_else(|| {
+        CatgaError::new(ErrorCode::Internal, "expected released NATS outbox claim")
+    })?;
+    let second_token = second_claim.claim_token().ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "released NATS outbox claim has no token",
+        )
+    })?;
+    outbox
+        .record_failure("worker-a", 11, second_token, "first publish failure")
+        .await?;
+
+    let final_claim = outbox.claim("worker-a", 1).await?.pop().ok_or_else(|| {
+        CatgaError::new(ErrorCode::Internal, "expected retried NATS outbox claim")
+    })?;
+    assert_eq!(final_claim.retry_count(), 1);
+    assert_eq!(final_claim.last_error(), Some("first publish failure"));
+    let final_token = final_claim.claim_token().ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "retried NATS outbox claim has no token",
+        )
+    })?;
+    outbox
+        .record_failure("worker-a", 11, final_token, "terminal publish failure")
+        .await?;
+    assert!(outbox.claim("worker-a", 1).await?.is_empty());
+
+    outbox
+        .enqueue(OutboxMessage::new(envelope(
+            12,
+            QualityOfService::AtLeastOnce,
+        )))
+        .await?;
+    let published_claim = outbox.claim("worker-b", 1).await?.pop().ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "expected publishable NATS outbox claim",
+        )
+    })?;
+    let published_token = published_claim.claim_token().ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "publishable NATS outbox claim has no token",
+        )
+    })?;
+    outbox.ack("worker-b", 12, published_token).await?;
+    assert!(outbox.list_published(0).await?.is_empty());
+    assert_eq!(
+        outbox.list_published(1).await?[0].state(),
+        OutboxState::Published
+    );
+    assert_eq!(outbox.cleanup_published(Duration::ZERO, 10).await?, 1);
+    assert!(outbox.list_published(10).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn scheduler_fences_owners_and_supports_cancellation() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let scheduler = NatsFlowScheduler::connect(server.url(), unique("CATGA_SCHEDULER")).await?;
+    let now = UNIX_EPOCH + Duration::from_secs(1);
+    let schedule_id = scheduler
+        .schedule_resume("payment-17", "charge", now)
+        .await?;
+    assert_validation(
+        scheduler
+            .claim_due("worker-a", now, Duration::ZERO, 1)
+            .await,
+    );
+    assert!(
+        scheduler
+            .claim_due("worker-a", now, Duration::from_secs(5), 0)
+            .await?
+            .is_empty()
+    );
+
+    let claimed = scheduler
+        .claim_due("worker-a", now, Duration::from_secs(5), 1)
+        .await?;
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].schedule_id(), schedule_id.as_ref());
+    assert_eq!(claimed[0].due_at(), now);
+    assert!(!scheduler.ack_due("worker-b", &schedule_id).await?);
+    assert!(!scheduler.release_due("worker-b", &schedule_id).await?);
+    assert!(
+        scheduler
+            .renew_due("worker-a", &schedule_id, now, Duration::from_secs(5))
+            .await?
+    );
+    assert!(scheduler.release_due("worker-a", &schedule_id).await?);
+    assert_eq!(
+        scheduler
+            .claim_due("worker-b", now, Duration::from_secs(5), 1)
+            .await?
+            .len(),
+        1
+    );
+    assert!(scheduler.ack_due("worker-b", &schedule_id).await?);
+    assert!(!scheduler.ack_due("worker-b", "invalid-schedule-id").await?);
+
+    let future = now + Duration::from_secs(60);
+    let cancelled = scheduler
+        .schedule_resume("payment-18", "charge", future)
+        .await?;
+    assert!(scheduler.cancel_resume(&cancelled).await?);
+    assert!(!scheduler.cancel_resume(&cancelled).await?);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn flows_create_claim_heartbeat_and_prune_terminal_states() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let flows = NatsFlows::connect(server.url(), unique("CATGA_FLOWS_LIFECYCLE")).await?;
+    let stale = FlowState::new("payment-19", "payment", b"input".to_vec(), "worker-a")
+        .heartbeated_at(UNIX_EPOCH);
+    assert!(flows.create(stale.clone()).await?);
+    assert!(!flows.create(stale.clone()).await?);
+    assert!(
+        flows
+            .try_claim("refund", "worker-b", Duration::ZERO)
+            .await?
+            .is_none()
+    );
+
+    let claimed = flows
+        .try_claim("payment", "worker-b", Duration::from_secs(1))
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "expected stale NATS flow claim"))?;
+    assert_eq!(claimed.id(), stale.id());
+    assert_eq!(claimed.owner(), Some("worker-b"));
+    assert!(
+        !flows
+            .heartbeat(claimed.id(), "worker-a", claimed.version())
+            .await?
+    );
+    assert!(
+        flows
+            .heartbeat(claimed.id(), "worker-b", claimed.version())
+            .await?
+    );
+    assert!(
+        !flows
+            .update(claimed.version() - 1, claimed.clone().next_version()?)
+            .await?
+    );
+
+    let current = flows
+        .get(claimed.id())
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "claimed NATS flow disappeared"))?;
+    let terminal = current.clone().done(1).next_version()?;
+    assert!(flows.update(current.version(), terminal).await?);
+    assert!(
+        flows
+            .try_claim("payment", "worker-c", Duration::ZERO)
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        flows.get(claimed.id()).await?.map(|state| state.status()),
+        Some(FlowStatus::Done)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn suspended_flows_track_wait_correlations_across_lifecycle_changes() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let store = NatsSuspendedFlows::connect(server.url(), unique("CATGA_SUSPENDED_FLOWS")).await?;
+    let continuation = FlowContinuation::waiting(
+        FlowState::new("payment-20", "payment", b"input".to_vec(), "worker-a").suspended(),
+        "charge",
+        WaitCondition::new(
+            "payment-20-correlation",
+            WaitPolicy::All,
+            2,
+            UNIX_EPOCH,
+            Duration::from_secs(30),
+        ),
+    );
+    assert!(store.create(continuation.clone()).await?);
+    assert!(!store.create(continuation.clone()).await?);
+    assert_eq!(
+        store
+            .get_by_wait_correlation("payment-20-correlation")
+            .await?
+            .as_ref()
+            .map(|value| value.state().id()),
+        Some(continuation.state().id())
+    );
+    assert_eq!(
+        store
+            .query(&FlowQuery::new(10, 10)?.with_status(FlowStatus::Suspended))
+            .await?
+            .iter()
+            .map(|summary| summary.id())
+            .collect::<Vec<_>>(),
+        vec![continuation.state().id()]
+    );
+    assert!(
+        store
+            .record_wait_success("payment-20", 0, "child-a", b"accepted".to_vec())
+            .await?
+    );
+    assert!(
+        store
+            .record_wait_failure(
+                "payment-20",
+                0,
+                "child-b",
+                CatgaError::new(ErrorCode::Transient, "unavailable"),
+            )
+            .await?
+    );
+    let stale_claim = continuation.clone().with_state(
+        continuation
+            .state()
+            .clone()
+            .claimed_by("worker-b")
+            .next_version()?,
+    );
+    assert!(!store.claim(&continuation, stale_claim).await?);
+    let current = store
+        .get("payment-20")
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "NATS suspended flow disappeared"))?;
+    assert_eq!(current.wait().map(|wait| wait.completed_count()), Some(2));
+    let claimed = current.clone().with_state(
+        current
+            .state()
+            .clone()
+            .claimed_by("worker-b")
+            .next_version()?,
+    );
+    assert!(store.claim(&current, claimed.clone()).await?);
+    assert!(!store.heartbeat("payment-20", "worker-a", 1).await?);
+    assert!(store.heartbeat("payment-20", "worker-b", 1).await?);
+
+    let ready = store.get("payment-20").await?.ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            "claimed NATS suspended flow disappeared",
+        )
+    })?;
+    let running = ready
+        .clone()
+        .ready()
+        .with_state(ready.state().clone().running().next_version()?);
+    assert!(store.update(ready.state().version(), running).await?);
+    assert!(
+        store
+            .get_by_wait_correlation("payment-20-correlation")
+            .await?
+            .is_none()
+    );
+    assert!(store.delete("payment-20", 2).await?);
+    assert!(store.get("payment-20").await?.is_none());
     Ok(())
 }
 
