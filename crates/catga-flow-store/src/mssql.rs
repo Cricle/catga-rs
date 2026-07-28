@@ -108,15 +108,27 @@ pub(crate) async fn migrate(pool: &MssqlPool) -> CatgaResult<()> {
     }
     .await;
     match result {
-        Ok(()) => connection
-            .execute("COMMIT TRANSACTION", &[])
-            .await
-            .map(|_| ())
-            .map_err(|error| database_error("commit SQL Server FlowStore schema migration", error)),
+        Ok(()) => {
+            connection
+                .simple_query("COMMIT TRANSACTION")
+                .await
+                .map_err(|error| {
+                    database_error("commit SQL Server FlowStore schema migration", error)
+                })?
+                .into_first_result()
+                .await
+                .map_err(|error| {
+                    database_error("commit SQL Server FlowStore schema migration", error)
+                })?;
+            Ok(())
+        }
         Err(error) => {
-            let _ = connection
-                .execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", &[])
-                .await;
+            if let Ok(stream) = connection
+                .simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+                .await
+            {
+                let _ = stream.into_first_result().await;
+            }
             Err(error)
         }
     }

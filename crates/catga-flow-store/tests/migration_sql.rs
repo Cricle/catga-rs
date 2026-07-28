@@ -33,6 +33,18 @@ fn mssql_continuation_migration_serializes_concurrent_schema_changes() {
     assert!(!migration.contains("SET XACT_ABORT ON"));
 }
 
+#[cfg(feature = "mssql")]
+#[test]
+fn mssql_flow_migration_uses_simple_query_for_transaction_boundaries() {
+    let migration = include_str!("../src/mssql.rs");
+
+    // Tiberius validates the transaction count after `execute`; sending either boundary through
+    // that API turns a valid standalone BEGIN/COMMIT command into SQL Server error 266.
+    assert!(migration.contains(".simple_query(\"BEGIN TRANSACTION\")"));
+    assert!(migration.contains(".simple_query(\"COMMIT TRANSACTION\")"));
+    assert!(!migration.contains(".execute(\"COMMIT TRANSACTION\", &[])"));
+}
+
 #[test]
 fn mssql_scheduler_keeps_idempotent_creation_atomic_and_claims_compatible_with_rcsi() {
     let scheduler = include_str!("../src/mssql_scheduler.rs");
