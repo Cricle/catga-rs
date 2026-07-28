@@ -14,6 +14,7 @@ mod config;
 mod execution;
 mod forward;
 mod health;
+mod inbound;
 mod leader_only;
 mod metrics;
 mod raft;
@@ -27,12 +28,18 @@ pub use config::{RaftClusterConfig, RaftClusterConfigError, RaftClusterMemberCon
 pub use execution::ClusterCoordinatorExt;
 pub use forward::{ClusterForwarder, ForwardToLeaderBehavior};
 pub use health::{ClusterHealth, cluster_health};
+pub use inbound::{
+    RaftInboundPolicy, RaftInboundPolicyError, RaftInboundRejection, RaftPeerIdentity,
+    StaticRaftInboundPolicy,
+};
 pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
 pub use raft::{
     RaftApplicationSnapshot, RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage,
     RaftNode, RaftNodeError,
 };
-pub use runtime::{RaftRuntime, RaftRuntimeError, RaftTransport, RaftTransportResult};
+pub use runtime::{
+    RaftRuntime, RaftRuntimeError, RaftTransport, RaftTransportError, RaftTransportResult,
+};
 pub use singleton_task::SingletonTaskRunner;
 pub use state_machine::{RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError};
 pub use state_machine_runtime::{RaftStateMachineRuntime, RaftStateMachineRuntimeError};

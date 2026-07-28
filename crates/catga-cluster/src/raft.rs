@@ -480,6 +480,16 @@ impl RaftNode {
         self.drive_ready()
     }
 
+    /// Reports a temporarily unreachable remote peer to `raft-rs`.
+    ///
+    /// Transport runtimes call this after a retryable delivery failure. The native Raft state
+    /// machine adjusts replication for that peer and later heartbeats retry naturally; this does
+    /// not retain the failed frame or create an application-level retry queue.
+    pub fn report_unreachable(&mut self, peer_id: u64) -> raft::Result<()> {
+        self.raw.report_unreachable(peer_id);
+        self.drive_ready()
+    }
+
     /// Proposes an application command on the current leader.
     pub fn propose(&mut self, data: impl Into<Vec<u8>>) -> raft::Result<()> {
         self.try_propose(data)

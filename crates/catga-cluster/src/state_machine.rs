@@ -151,6 +151,14 @@ where
         self.node.step(message)
     }
 
+    /// Reports one temporarily unreachable remote peer to the owned Raft node.
+    ///
+    /// This is used by the owner runtime after a retryable transport failure. It updates native
+    /// Raft replication state without retaining an unbounded application retry queue.
+    pub fn report_unreachable(&mut self, peer_id: u64) -> raft::Result<()> {
+        self.node.report_unreachable(peer_id)
+    }
+
     /// Proposes one application command on the current leader.
     pub fn propose(&mut self, data: impl Into<Vec<u8>>) -> raft::Result<()> {
         self.node.propose(data)

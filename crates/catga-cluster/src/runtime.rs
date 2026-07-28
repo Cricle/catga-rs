@@ -18,8 +18,62 @@ use crate::{
 const COMMAND_BUFFER: usize = 64;
 const INBOUND_BUFFER: usize = 256;
 
+/// A transport failure classified by whether the Raft owner can safely continue.
+///
+/// Retryable failures describe a peer that is temporarily unavailable, such as a saturated
+/// inbox, timeout, or transient connection failure. The runtime reports that peer unreachable
+/// to `raft-rs` and stays alive so its later heartbeats can restore replication. Fatal failures
+/// indicate a configuration, authentication, or protocol boundary error and stop the owner task.
+#[derive(Debug)]
+pub enum RaftTransportError {
+    /// A temporary peer failure that must not stop the Raft owner task.
+    Retryable(Box<dyn Error + Send + Sync>),
+    /// A non-recoverable transport configuration or protocol failure.
+    Fatal(Box<dyn Error + Send + Sync>),
+}
+
+impl RaftTransportError {
+    /// Classifies `error` as a temporary peer delivery failure.
+    pub fn retryable<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        Self::Retryable(Box::new(error))
+    }
+
+    /// Classifies `error` as a terminal transport failure.
+    pub fn fatal<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        Self::Fatal(Box::new(error))
+    }
+
+    /// Returns whether this failure permits the Raft runtime to continue.
+    #[must_use]
+    pub const fn is_retryable(&self) -> bool {
+        matches!(self, Self::Retryable(_))
+    }
+}
+
+impl fmt::Display for RaftTransportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Retryable(error) | Self::Fatal(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for RaftTransportError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Retryable(error) | Self::Fatal(error) => Some(error.as_ref()),
+        }
+    }
+}
+
 /// Result returned by an application-provided Raft transport.
-pub type RaftTransportResult = Result<(), Box<dyn Error + Send + Sync>>;
+pub type RaftTransportResult = Result<(), RaftTransportError>;
 
 /// Sends wire-level Raft messages to their destination node.
 ///
@@ -45,7 +99,7 @@ pub enum RaftRuntimeError {
     /// `raft-rs` rejected an operation or an inbound protocol message.
     Raft(raft::Error),
     /// The configured transport failed while sending an outbound protocol message.
-    Transport(Box<dyn Error + Send + Sync>),
+    Transport(RaftTransportError),
     /// The owner task panicked or was aborted.
     Task(tokio::task::JoinError),
 }
@@ -68,7 +122,7 @@ impl Error for RaftRuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Raft(error) => Some(error),
-            Self::Transport(error) => Some(error.as_ref()),
+            Self::Transport(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidTickInterval | Self::Stopped => None,
         }
@@ -93,7 +147,8 @@ impl RaftRuntime {
     /// Starts a runtime that ticks at `tick_interval` and emits messages through `transport`.
     ///
     /// `tick_interval` must be non-zero. The runtime stops on a Raft or transport
-    /// failure; [`Self::join`] returns that terminal error.
+    /// fatal failure; transient peer failures are reported unreachable and later retried by Raft.
+    /// [`Self::join`] returns a terminal error.
     pub fn spawn<T>(
         node: RaftNode,
         transport: Arc<T>,
@@ -295,12 +350,24 @@ async fn drive(
         return Err(RaftRuntimeError::Raft(error));
     }
     for message in node.drain_messages() {
+        let peer_id = message.to;
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => return Ok(false),
             result = transport.send(message) => {
                 if let Err(error) = result {
                     record_failure("transport");
+                    if error.is_retryable() {
+                        tracing::debug!(
+                            target: catga_core::TRACING_TARGET,
+                            peer_id,
+                            error = %error,
+                            "catga Raft peer delivery is temporarily unavailable"
+                        );
+                        node.report_unreachable(peer_id)
+                            .map_err(RaftRuntimeError::Raft)?;
+                        continue;
+                    }
                     tracing::error!(
                         target: catga_core::TRACING_TARGET,
                         error = %error,

@@ -6,10 +6,7 @@ use async_trait::async_trait;
 use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{FlowState, FlowStatus, FlowStore};
-use redis::{
-    AsyncCommands, Script,
-    aio::{ConnectionManager, ConnectionManagerConfig},
-};
+use redis::{AsyncCommands, Script, aio::ConnectionManager};
 use sha2::{Digest, Sha256};
 
 use crate::transport::map_error;
@@ -78,9 +75,7 @@ impl RedisFlows {
     ) -> CatgaResult<Self> {
         let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
         let connection = client
-            .get_connection_manager_with_config(
-                ConnectionManagerConfig::new().set_response_timeout(None),
-            )
+            .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
             .map_err(map_error)?;
         Ok(Self {

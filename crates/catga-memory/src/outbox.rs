@@ -4,6 +4,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "test-hooks")]
+use std::sync::{Arc, Barrier, Mutex};
+
 use async_trait::async_trait;
 use catga_core::{
     CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_OUTBOX_CLAIM_LEASE, ErrorCode,
@@ -14,16 +17,30 @@ use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::{
     DEFAULT_MEMORY_RECORD_CAPACITY,
-    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity},
+    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity, RecordSequence},
 };
+
+struct StoredMessage {
+    identity: u64,
+    message: OutboxMessage,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct PublishedRecord {
+    published_at: u64,
+    record_identity: u64,
+}
 
 /// A shard-locked, process-local outbox for development and deterministic tests.
 pub struct MemoryOutbox {
-    messages: DashMap<u64, OutboxMessage>,
-    published: DashMap<u64, u64>,
+    messages: DashMap<u64, StoredMessage>,
+    published: DashMap<u64, PublishedRecord>,
     claim_sequence: AtomicU64,
+    record_sequence: RecordSequence,
     capacity: RecordCapacity,
     published_retention: Duration,
+    #[cfg(feature = "test-hooks")]
+    cleanup_after_snapshot: Mutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
 }
 
 impl Default for MemoryOutbox {
@@ -32,8 +49,11 @@ impl Default for MemoryOutbox {
             messages: DashMap::new(),
             published: DashMap::new(),
             claim_sequence: AtomicU64::new(0),
+            record_sequence: RecordSequence::new(),
             capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
             published_retention: DEFAULT_IDEMPOTENCY_RETENTION,
+            #[cfg(feature = "test-hooks")]
+            cleanup_after_snapshot: Mutex::new(None),
         }
     }
 }
@@ -54,8 +74,11 @@ impl MemoryOutbox {
             messages: DashMap::with_capacity(capacity),
             published: DashMap::with_capacity(capacity),
             claim_sequence: AtomicU64::new(0),
+            record_sequence: RecordSequence::new(),
             capacity: RecordCapacity::new(capacity)?,
             published_retention: retention,
+            #[cfg(feature = "test-hooks")]
+            cleanup_after_snapshot: Mutex::new(None),
         })
     }
 
@@ -65,6 +88,42 @@ impl MemoryOutbox {
             self.claim_sequence.fetch_add(1, Ordering::Relaxed)
         )
         .into()
+    }
+
+    #[doc(hidden)]
+    #[cfg(feature = "test-hooks")]
+    pub fn pause_next_cleanup_after_snapshot(
+        &self,
+        observed: Arc<Barrier>,
+        resume: Arc<Barrier>,
+    ) -> CatgaResult<()> {
+        let mut hook = self.cleanup_after_snapshot.lock().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "memory outbox cleanup test hook is poisoned",
+            )
+        })?;
+        *hook = Some((observed, resume));
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn wait_after_cleanup_snapshot(&self) -> CatgaResult<()> {
+        let barriers = self
+            .cleanup_after_snapshot
+            .lock()
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "memory outbox cleanup test hook is poisoned",
+                )
+            })?
+            .take();
+        if let Some((observed, resume)) = barriers {
+            observed.wait();
+            resume.wait();
+        }
+        Ok(())
     }
 }
 
@@ -97,10 +156,16 @@ impl OutboxStore for MemoryOutbox {
             }
         }
         let result = match self.messages.entry(id) {
-            Entry::Vacant(entry) => {
-                entry.insert(message);
-                Ok(())
-            }
+            Entry::Vacant(entry) => match self.record_sequence.next() {
+                Ok(identity) => {
+                    entry.insert(StoredMessage { identity, message });
+                    Ok(())
+                }
+                Err(error) => {
+                    self.capacity.release();
+                    Err(error)
+                }
+            },
             Entry::Occupied(_) => {
                 self.capacity.release();
                 Err(CatgaError::new(
@@ -139,7 +204,7 @@ impl OutboxStore for MemoryOutbox {
             // backlog copy merely to honor the source outbox creation ordering.
             let mut candidates = BinaryHeap::with_capacity(limit);
             for entry in self.messages.iter() {
-                let message = entry.value();
+                let message = &entry.value().message;
                 if !message.is_claimable_at(now_unix_ms) || !message.is_due_at(now) {
                     continue;
                 }
@@ -160,9 +225,13 @@ impl OutboxStore for MemoryOutbox {
                 let Some(mut entry) = self.messages.get_mut(&id) else {
                     continue;
                 };
-                if entry.is_claimable_at(now_unix_ms) && entry.is_due_at(now) {
-                    entry.claim_until_with_token(owner, self.next_claim_token(), expires_at);
-                    claimed.push(entry.clone());
+                if entry.message.is_claimable_at(now_unix_ms) && entry.message.is_due_at(now) {
+                    entry.message.claim_until_with_token(
+                        owner,
+                        self.next_claim_token(),
+                        expires_at,
+                    );
+                    claimed.push(entry.message.clone());
                 }
             }
             Ok(claimed)
@@ -176,11 +245,17 @@ impl OutboxStore for MemoryOutbox {
         let result = (|| {
             let published_at = current_unix_ms()?;
             if let Some(mut message) = self.messages.get_mut(&id)
-                && message.owner() == Some(owner)
-                && message.claim_token() == Some(claim_token)
+                && message.message.owner() == Some(owner)
+                && message.message.claim_token() == Some(claim_token)
             {
-                message.mark_published(published_at);
-                self.published.insert(id, published_at);
+                message.message.mark_published(published_at);
+                self.published.insert(
+                    id,
+                    PublishedRecord {
+                        published_at,
+                        record_identity: message.identity,
+                    },
+                );
             }
             Ok(())
         })();
@@ -191,10 +266,10 @@ impl OutboxStore for MemoryOutbox {
     async fn release(&self, owner: &str, id: u64, claim_token: &str) -> CatgaResult<()> {
         let mut operation = telemetry::persistence_operation("memory", "outbox", "release");
         if let Some(mut message) = self.messages.get_mut(&id)
-            && message.owner() == Some(owner)
-            && message.claim_token() == Some(claim_token)
+            && message.message.owner() == Some(owner)
+            && message.message.claim_token() == Some(claim_token)
         {
-            message.release();
+            message.message.release();
         }
         let result = Ok(());
         operation.complete(&result);
@@ -210,10 +285,10 @@ impl OutboxStore for MemoryOutbox {
     ) -> CatgaResult<()> {
         let mut operation = telemetry::persistence_operation("memory", "outbox", "failure");
         if let Some(mut message) = self.messages.get_mut(&id)
-            && message.owner() == Some(owner)
-            && message.claim_token() == Some(claim_token)
+            && message.message.owner() == Some(owner)
+            && message.message.claim_token() == Some(claim_token)
         {
-            message.record_failure(reason);
+            message.message.record_failure(reason);
         }
         let result = Ok(());
         operation.complete(&result);
@@ -226,7 +301,7 @@ impl OutboxStore for MemoryOutbox {
             let Entry::Occupied(entry) = self.messages.entry(id) else {
                 return Ok(false);
             };
-            if entry.get().state() != OutboxState::Pending {
+            if entry.get().message.state() != OutboxState::Pending {
                 return Ok(false);
             }
             entry.remove();
@@ -248,7 +323,7 @@ impl OutboxStore for MemoryOutbox {
                 .filter_map(|entry| {
                     self.messages
                         .get(entry.key())
-                        .map(|message| message.clone())
+                        .map(|message| message.message.clone())
                 })
                 .collect();
             records.sort_unstable_by_key(OutboxMessage::published_at_unix_ms);
@@ -270,25 +345,30 @@ impl OutboxStore for MemoryOutbox {
                 )
             })?;
             let now = current_unix_ms()?;
-            let candidates: Vec<u64> = self
+            let candidates: Vec<(u64, PublishedRecord)> = self
                 .published
                 .iter()
                 .take(limit)
-                .filter(|entry| now.saturating_sub(*entry.value()) >= retention)
-                .map(|entry| *entry.key())
+                .filter(|entry| now.saturating_sub(entry.value().published_at) >= retention)
+                .map(|entry| (*entry.key(), *entry.value()))
                 .collect();
+            #[cfg(feature = "test-hooks")]
+            self.wait_after_cleanup_snapshot()?;
             let mut removed = 0;
-            for id in candidates {
+            for (id, candidate) in candidates {
                 if self
                     .messages
-                    .get(&id)
-                    .is_some_and(|message| message.state() == OutboxState::Published)
-                    && self.messages.remove(&id).is_some()
+                    .remove_if(&id, |_, message| {
+                        message.identity == candidate.record_identity
+                            && message.message.state() == OutboxState::Published
+                    })
+                    .is_some()
                 {
                     self.capacity.release();
                     removed += 1;
                 }
-                self.published.remove(&id);
+                self.published
+                    .remove_if(&id, |_, current| *current == candidate);
             }
             Ok(removed)
         })();

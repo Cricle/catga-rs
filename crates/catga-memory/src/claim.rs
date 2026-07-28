@@ -13,6 +13,7 @@ const COMPLETING: u8 = 4;
 const CLAIMING: u8 = 5;
 
 pub(crate) struct ClaimRecord {
+    identity: u64,
     state: AtomicU8,
     expires_at_millis: AtomicU64,
     generation: AtomicU64,
@@ -20,13 +21,18 @@ pub(crate) struct ClaimRecord {
 }
 
 impl ClaimRecord {
-    pub(crate) fn claimed() -> Self {
+    pub(crate) fn claimed(identity: u64) -> Self {
         Self {
+            identity,
             state: AtomicU8::new(CLAIMED),
             expires_at_millis: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             result: OnceLock::new(),
         }
+    }
+
+    pub(crate) const fn identity(&self) -> u64 {
+        self.identity
     }
 
     pub(crate) fn try_claim(&self) -> bool {

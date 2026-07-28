@@ -17,14 +17,18 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::Request as AxumRequest,
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header::LOCATION},
+    extract::{DefaultBodyLimit, Extension, Request as AxumRequest},
+    http::{
+        HeaderMap, HeaderValue, Method, StatusCode,
+        header::{CONTENT_TYPE, LOCATION},
+    },
     middleware::Next,
     response::{IntoResponse, Response},
     routing::{MethodFilter, on, post},
 };
 use catga_cluster::{
-    ClusterForwarder, RaftMember, RaftMessage, RaftTransport, RaftTransportResult,
+    ClusterForwarder, RaftInboundPolicy, RaftInboundRejection, RaftMember, RaftMessage,
+    RaftPeerIdentity, RaftTransport, RaftTransportError, RaftTransportResult,
 };
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, Event, Mediator, MessageMetadata, Request,
@@ -46,6 +50,12 @@ pub use validation::{
 
 /// Header used to propagate request correlation identifiers.
 pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
+
+/// Largest protobuf frame accepted by the Raft HTTP ingress route.
+///
+/// This matches the native Raft node `max_size_per_msg` setting. Deployments carrying a larger
+/// snapshot must use the snapshot transport rather than bypassing this bounded route.
+pub const MAX_RAFT_MESSAGE_BYTES: usize = 1024 * 1024;
 
 /// Adds the current task's correlation identifier to an outgoing HTTP header map.
 ///
@@ -722,10 +732,15 @@ impl HttpRaftTransport {
 #[async_trait]
 impl RaftTransport for HttpRaftTransport {
     async fn send(&self, message: RaftMessage) -> RaftTransportResult {
-        let endpoint = self
-            .endpoints
-            .get(&message.to)
-            .ok_or_else(|| io::Error::other(format!("unknown Raft peer {}", message.to)))?;
+        let endpoint = self.endpoints.get(&message.to).ok_or_else(|| {
+            RaftTransportError::fatal(io::Error::other(format!(
+                "unknown Raft peer {}",
+                message.to
+            )))
+        })?;
+        let body = message
+            .write_to_bytes()
+            .map_err(RaftTransportError::fatal)?;
         let response = self
             .client
             .post(format!(
@@ -733,39 +748,112 @@ impl RaftTransport for HttpRaftTransport {
                 endpoint.trim_end_matches('/')
             ))
             .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
-            .body(message.write_to_bytes()?)
+            .body(body)
             .send()
-            .await?;
+            .await
+            .map_err(classify_raft_http_client_error)?;
         if response.status().is_success() {
             Ok(())
+        } else if retryable_raft_http_status(response.status()) {
+            Err(RaftTransportError::retryable(io::Error::other(format!(
+                "Raft peer returned temporary HTTP {}",
+                response.status()
+            ))))
         } else {
-            Err(io::Error::other(format!("Raft peer returned HTTP {}", response.status())).into())
+            Err(RaftTransportError::fatal(io::Error::other(format!(
+                "Raft peer returned HTTP {}",
+                response.status()
+            ))))
         }
+    }
+}
+
+fn retryable_raft_http_status(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::REQUEST_TIMEOUT
+            | reqwest::StatusCode::TOO_EARLY
+            | reqwest::StatusCode::TOO_MANY_REQUESTS
+            | reqwest::StatusCode::BAD_GATEWAY
+            | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            | reqwest::StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn classify_raft_http_client_error(error: reqwest::Error) -> RaftTransportError {
+    if error.is_timeout() || error.is_connect() {
+        RaftTransportError::retryable(error)
+    } else {
+        RaftTransportError::fatal(error)
     }
 }
 
 /// Builds the server route that decodes protobuf Raft frames into a runtime inbox.
 ///
-/// A full inbox returns HTTP 429 immediately so the sender can apply transport
-/// backpressure instead of creating unbounded request tasks.
-pub fn raft_message_route(inbox: mpsc::Sender<RaftMessage>) -> Router {
-    Router::new().route(
-        RAFT_MESSAGE_PATH,
-        post(move |body: Bytes| {
-            let inbox = inbox.clone();
-            async move {
-                let message = match RaftMessage::parse_from_bytes(&body) {
-                    Ok(message) => message,
-                    Err(_) => return StatusCode::BAD_REQUEST,
-                };
-                match inbox.try_send(message) {
-                    Ok(()) => StatusCode::NO_CONTENT,
-                    Err(mpsc::error::TrySendError::Full(_)) => StatusCode::TOO_MANY_REQUESTS,
-                    Err(mpsc::error::TrySendError::Closed(_)) => StatusCode::SERVICE_UNAVAILABLE,
-                }
-            }
-        }),
-    )
+/// The surrounding transport-authentication layer must insert a verified [`RaftPeerIdentity`]
+/// extension (for example, from an mTLS SAN or a signed-frame key ID). Never derive this value
+/// from a request header or the untrusted protobuf payload. `policy` then binds that identity to
+/// the message sender and the local node before the frame reaches Raft.
+///
+/// The route accepts only bounded `application/x-protobuf` bodies. It returns `401` for a missing
+/// authenticated identity, `403` for an untrusted sender or target, `429` for a full inbox, and
+/// `503` when the runtime has stopped. A full inbox therefore creates bounded peer backpressure
+/// rather than unbounded request tasks.
+pub fn raft_message_route<P>(inbox: mpsc::Sender<RaftMessage>, policy: P) -> Router
+where
+    P: RaftInboundPolicy + 'static,
+{
+    let policy = Arc::new(policy);
+    Router::new()
+        .route(
+            RAFT_MESSAGE_PATH,
+            post(
+                move |headers: HeaderMap,
+                      peer: Option<Extension<RaftPeerIdentity>>,
+                      body: Bytes| {
+                    let inbox = inbox.clone();
+                    let policy = Arc::clone(&policy);
+                    async move {
+                        if !is_protobuf_content_type(&headers) {
+                            return StatusCode::UNSUPPORTED_MEDIA_TYPE;
+                        }
+                        let message = match RaftMessage::parse_from_bytes(&body) {
+                            Ok(message) => message,
+                            Err(_) => return StatusCode::BAD_REQUEST,
+                        };
+                        match policy.authorize(peer.as_ref().map(|peer| &peer.0), &message) {
+                            Ok(()) => {}
+                            Err(RaftInboundRejection::Unauthenticated) => {
+                                return StatusCode::UNAUTHORIZED;
+                            }
+                            Err(RaftInboundRejection::Forbidden) => return StatusCode::FORBIDDEN,
+                        }
+                        match inbox.try_send(message) {
+                            Ok(()) => StatusCode::NO_CONTENT,
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                StatusCode::TOO_MANY_REQUESTS
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                StatusCode::SERVICE_UNAVAILABLE
+                            }
+                        }
+                    }
+                },
+            ),
+        )
+        .layer(DefaultBodyLimit::max(MAX_RAFT_MESSAGE_BYTES))
+}
+
+fn is_protobuf_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media_type| {
+            media_type
+                .trim()
+                .eq_ignore_ascii_case("application/x-protobuf")
+        })
 }
 
 /// Builds the leader-side forwarding route for one explicitly registered request type.

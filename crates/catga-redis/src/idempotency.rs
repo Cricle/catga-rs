@@ -7,10 +7,7 @@ use catga_core::{
     CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, ErrorCode, IdempotencyStore,
     ProcessingState, telemetry, validate_completed_retention, validate_retention_cleanup_limit,
 };
-use redis::{
-    AsyncCommands, Script,
-    aio::{ConnectionManager, ConnectionManagerConfig},
-};
+use redis::{AsyncCommands, Script, aio::ConnectionManager};
 use sha2::{Digest, Sha256};
 
 use crate::transport::map_error;
@@ -82,9 +79,7 @@ impl RedisIdempotency {
         let completed_retention_millis = retention_millis(retention)?;
         let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
         let connection = client
-            .get_connection_manager_with_config(
-                ConnectionManagerConfig::new().set_response_timeout(None),
-            )
+            .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
             .map_err(map_error)?;
         Ok(Self {

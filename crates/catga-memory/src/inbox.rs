@@ -3,6 +3,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "test-hooks")]
+use std::sync::{Barrier, Mutex};
+
 use async_trait::async_trait;
 use catga_core::{
     CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode,
@@ -13,16 +16,25 @@ use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::{
     DEFAULT_MEMORY_RECORD_CAPACITY,
-    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity},
+    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity, RecordSequence},
     claim::ClaimRecord,
 };
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct CompletedRecord {
+    completed_at: u64,
+    record_identity: u64,
+}
 
 /// A process-local inbox using atomic per-message claim transitions.
 pub struct MemoryInbox {
     records: DashMap<u64, ClaimRecord>,
-    completed: DashMap<u64, u64>,
+    completed: DashMap<u64, CompletedRecord>,
     capacity: RecordCapacity,
+    record_sequence: RecordSequence,
     retention: Duration,
+    #[cfg(feature = "test-hooks")]
+    cleanup_after_snapshot: Mutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
 }
 
 impl Default for MemoryInbox {
@@ -31,7 +43,10 @@ impl Default for MemoryInbox {
             records: DashMap::new(),
             completed: DashMap::new(),
             capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
+            record_sequence: RecordSequence::new(),
             retention: DEFAULT_IDEMPOTENCY_RETENTION,
+            #[cfg(feature = "test-hooks")]
+            cleanup_after_snapshot: Mutex::new(None),
         }
     }
 }
@@ -49,8 +64,47 @@ impl MemoryInbox {
             records: DashMap::with_capacity(capacity),
             completed: DashMap::with_capacity(capacity),
             capacity: RecordCapacity::new(capacity)?,
+            record_sequence: RecordSequence::new(),
             retention,
+            #[cfg(feature = "test-hooks")]
+            cleanup_after_snapshot: Mutex::new(None),
         })
+    }
+
+    #[doc(hidden)]
+    #[cfg(feature = "test-hooks")]
+    pub fn pause_next_cleanup_after_snapshot(
+        &self,
+        observed: Arc<Barrier>,
+        resume: Arc<Barrier>,
+    ) -> CatgaResult<()> {
+        let mut hook = self.cleanup_after_snapshot.lock().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "memory inbox cleanup test hook is poisoned",
+            )
+        })?;
+        *hook = Some((observed, resume));
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn wait_after_cleanup_snapshot(&self) -> CatgaResult<()> {
+        let barriers = self
+            .cleanup_after_snapshot
+            .lock()
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "memory inbox cleanup test hook is poisoned",
+                )
+            })?
+            .take();
+        if let Some((observed, resume)) = barriers {
+            observed.wait();
+            resume.wait();
+        }
+        Ok(())
     }
 }
 
@@ -100,14 +154,20 @@ impl InboxStore for MemoryInbox {
                         .try_claim_generation_until(expires_at, now)
                         .and_then(|generation| InboxClaim::new(message_id, generation)))
                 }
-                Entry::Vacant(entry) => {
-                    let record = ClaimRecord::claimed();
-                    let claimed = record
-                        .try_claim_generation_until(expires_at, now)
-                        .and_then(|generation| InboxClaim::new(message_id, generation));
-                    entry.insert(record);
-                    Ok(claimed)
-                }
+                Entry::Vacant(entry) => match self.record_sequence.next() {
+                    Ok(identity) => {
+                        let record = ClaimRecord::claimed(identity);
+                        let claimed = record
+                            .try_claim_generation_until(expires_at, now)
+                            .and_then(|generation| InboxClaim::new(message_id, generation));
+                        entry.insert(record);
+                        Ok(claimed)
+                    }
+                    Err(error) => {
+                        self.capacity.release();
+                        Err(error)
+                    }
+                },
             }
         };
         operation.complete_optional_claim(&result);
@@ -117,12 +177,14 @@ impl InboxStore for MemoryInbox {
     async fn complete(&self, claim: InboxClaim, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
         let message_id = claim.message_id();
         let mut operation = telemetry::persistence_operation("memory", "inbox", "complete");
+        let mut record_identity = None;
         let outcome = self
             .records
             .get(&message_id)
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "inbox message is not claimed"))
             .and_then(|record| {
                 if record.complete_for(claim.generation(), result) {
+                    record_identity = Some(record.identity());
                     Ok(())
                 } else {
                     Err(CatgaError::new(
@@ -131,8 +193,14 @@ impl InboxStore for MemoryInbox {
                     ))
                 }
             });
-        if outcome.is_ok() {
-            self.completed.insert(message_id, now_millis());
+        if let Some(record_identity) = record_identity {
+            self.completed.insert(
+                message_id,
+                CompletedRecord {
+                    completed_at: now_millis(),
+                    record_identity,
+                },
+            );
         }
         operation.complete(&outcome);
         outcome
@@ -187,25 +255,30 @@ impl InboxStore for MemoryInbox {
                 )
             })?;
             let now = now_millis();
-            let candidates: Vec<u64> = self
+            let candidates: Vec<(u64, CompletedRecord)> = self
                 .completed
                 .iter()
                 .take(limit)
-                .filter(|entry| now.saturating_sub(*entry.value()) >= retention)
-                .map(|entry| *entry.key())
+                .filter(|entry| now.saturating_sub(entry.value().completed_at) >= retention)
+                .map(|entry| (*entry.key(), *entry.value()))
                 .collect();
+            #[cfg(feature = "test-hooks")]
+            self.wait_after_cleanup_snapshot()?;
             let mut removed = 0;
-            for id in candidates {
+            for (id, candidate) in candidates {
                 if self
                     .records
-                    .get(&id)
-                    .is_some_and(|record| record.state() == ProcessingState::Completed)
-                    && self.records.remove(&id).is_some()
+                    .remove_if(&id, |_, record| {
+                        record.identity() == candidate.record_identity
+                            && record.state() == ProcessingState::Completed
+                    })
+                    .is_some()
                 {
                     self.capacity.release();
                     removed += 1;
                 }
-                self.completed.remove(&id);
+                self.completed
+                    .remove_if(&id, |_, current| *current == candidate);
             }
             Ok(removed)
         })();

@@ -579,7 +579,9 @@ where
                         .at_step(next_step)
                         .with_state(state.at_step(completed_steps).suspended().next_version()?)
                         .delayed_until(resume_at);
-                    self.persist(expected_version, pending.clone()).await?;
+                    if !self.persist(expected_version, pending.clone()).await? {
+                        return self.current_result(pending.state().id()).await;
+                    }
                     let suspended = match self
                         .persist_delayed_schedule_identity(pending.clone())
                         .await
@@ -628,7 +630,9 @@ where
                         .at_step(next_step)
                         .with_state(state.at_step(completed_steps).suspended().next_version()?)
                         .with_wait(wait);
-                    self.persist(expected_version, suspended.clone()).await?;
+                    if !self.persist(expected_version, suspended.clone()).await? {
+                        return self.current_result(suspended.state().id()).await;
+                    }
                     execution.complete("suspended");
                     return Ok(FlowRuntimeResult::new(suspended.state().clone()));
                 }
@@ -757,8 +761,12 @@ where
         let done = continuation
             .clone()
             .with_state(state.done(completed_steps).next_version()?);
-        self.persist(continuation.state().version(), done.clone())
-            .await?;
+        if !self
+            .persist(continuation.state().version(), done.clone())
+            .await?
+        {
+            return self.current_result(continuation.state().id()).await;
+        }
         self.metrics.record_completed(continuation.created_at());
         execution.complete("success");
         Ok(FlowRuntimeResult::new(done.state().clone()))
@@ -779,16 +787,24 @@ where
                     .compensating()
                     .next_version()?,
             );
-            self.persist(continuation.state().version(), compensating.clone())
-                .await?;
+            if !self
+                .persist(continuation.state().version(), compensating.clone())
+                .await?
+            {
+                return self.current_result(continuation.state().id()).await;
+            }
             return self.compensate(compensating, execution).await;
         }
         let failed = continuation
             .clone()
             .ready()
             .with_state(continuation.state().clone().failed(error).next_version()?);
-        self.persist(continuation.state().version(), failed.clone())
-            .await?;
+        if !self
+            .persist(continuation.state().version(), failed.clone())
+            .await?
+        {
+            return self.current_result(continuation.state().id()).await;
+        }
         self.metrics.record_failed(continuation.created_at());
         if let Some(execution) = execution {
             execution.complete("failure");
@@ -812,8 +828,12 @@ where
                 .clone()
                 .complete_compensation()
                 .with_state(continuation.state().clone().compensating().next_version()?);
-            self.persist(continuation.state().version(), next.clone())
-                .await?;
+            if !self
+                .persist(continuation.state().version(), next.clone())
+                .await?
+            {
+                return self.current_result(continuation.state().id()).await;
+            }
             continuation = next;
         }
         let error = continuation.state().error().cloned().ok_or_else(|| {
@@ -826,8 +846,12 @@ where
             .clone()
             .ready()
             .with_state(continuation.state().clone().failed(error).next_version()?);
-        self.persist(continuation.state().version(), failed.clone())
-            .await?;
+        if !self
+            .persist(continuation.state().version(), failed.clone())
+            .await?
+        {
+            return self.current_result(continuation.state().id()).await;
+        }
         self.metrics.record_failed(continuation.created_at());
         if let Some(execution) = execution {
             execution.complete("failure");
@@ -882,8 +906,12 @@ where
             .clone()
             .at_step(next_step)
             .with_state(state.at_step(completed_steps).suspended().next_version()?);
-        self.persist(continuation.state().version(), next.clone())
-            .await?;
+        if !self
+            .persist(continuation.state().version(), next.clone())
+            .await?
+        {
+            return Ok(None);
+        }
         self.claim(next).await
     }
 
@@ -899,15 +927,13 @@ where
         Ok(continuation.clone())
     }
 
-    async fn persist(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<()> {
-        if self.store.update(expected_version, next).await? {
-            Ok(())
-        } else {
-            Err(CatgaError::new(
-                ErrorCode::Transient,
-                "flow continuation changed before it could be persisted",
-            ))
-        }
+    /// Persists the next version, returning `false` when another owner won the CAS race.
+    ///
+    /// A version mismatch is expected coordination, not a transient store failure. Callers must
+    /// return the current durable result rather than allowing stale execution to report a false
+    /// failure or overwrite the newer state.
+    async fn persist(&self, expected_version: i64, next: FlowContinuation) -> CatgaResult<bool> {
+        self.store.update(expected_version, next).await
     }
 
     async fn persist_delayed_schedule_identity(

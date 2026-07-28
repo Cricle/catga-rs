@@ -11,7 +11,8 @@ use std::{
 use async_trait::async_trait;
 use catga_cluster::{
     ClusterCoordinator, RaftCommittedEntry, RaftMember, RaftMessage, RaftNode, RaftStateMachine,
-    RaftStateMachineDriver, RaftStateMachineRuntime, RaftTransport, RaftTransportResult,
+    RaftStateMachineDriver, RaftStateMachineRuntime, RaftTransport, RaftTransportError,
+    RaftTransportResult,
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use raft::eraftpb::{ConfState, MessageType, Snapshot};
@@ -74,6 +75,23 @@ impl RaftTransport for SinkTransport {
     }
 }
 
+#[derive(Default)]
+struct RetryOnceTransport {
+    attempts: AtomicU64,
+}
+
+#[async_trait]
+impl RaftTransport for RetryOnceTransport {
+    async fn send(&self, _message: RaftMessage) -> RaftTransportResult {
+        if self.attempts.fetch_add(1, Ordering::AcqRel) == 0 {
+            return Err(RaftTransportError::retryable(io::Error::other(
+                "peer inbox is temporarily full",
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Default)]
 struct RoutedTransport {
     routes: Arc<RwLock<HashMap<u64, mpsc::Sender<RaftMessage>>>>,
@@ -97,11 +115,11 @@ impl RaftTransport for RoutedTransport {
             .await
             .get(&message.to)
             .cloned()
-            .ok_or_else(|| io::Error::other("unknown Raft peer"))?;
+            .ok_or_else(|| RaftTransportError::fatal(io::Error::other("unknown Raft peer")))?;
         route
             .send(message)
             .await
-            .map_err(|_| io::Error::other("Raft peer stopped"))?;
+            .map_err(|_| RaftTransportError::retryable(io::Error::other("Raft peer stopped")))?;
         Ok(())
     }
 }
@@ -330,4 +348,37 @@ async fn state_machine_runtime_shutdown_cancels_a_blocked_transport_send() {
         .await
         .expect("shutdown must cancel a blocked transport send")
         .unwrap();
+}
+
+#[tokio::test]
+async fn state_machine_runtime_keeps_running_after_a_retryable_peer_delivery_failure() {
+    let transport = Arc::new(RetryOnceTransport::default());
+    let node = RaftNode::new(
+        1,
+        "http://node-1",
+        vec![
+            RaftMember::new(1, "http://node-1"),
+            RaftMember::new(2, "http://node-2"),
+        ],
+    )
+    .expect("Raft node is valid");
+    let runtime = RaftStateMachineRuntime::spawn(
+        RaftStateMachineDriver::new(node, SharedCounter::default()).expect("driver is valid"),
+        Arc::clone(&transport),
+        Duration::from_millis(1),
+    )
+    .expect("runtime starts");
+
+    runtime
+        .campaign()
+        .await
+        .expect("a retryable peer failure must not terminate the runtime");
+    assert!(transport.attempts.load(Ordering::Acquire) > 0);
+
+    runtime
+        .campaign()
+        .await
+        .expect("the owner task remains command-responsive after recovery");
+    runtime.shutdown();
+    runtime.join().await.expect("runtime stops cleanly");
 }

@@ -20,17 +20,21 @@ use axum::{
 use catga_axum::{
     CORRELATION_ID_HEADER, CatgaHttpError, CorrelationHttpClient, EndpointKind, EndpointMetadata,
     EndpointValidation, HttpClusterForwarder, HttpRaftTransport, IntoCatgaHttpResponse,
-    axum_routes, catga_endpoint_metadata, catga_routes, correlation_id, correlation_middleware,
-    endpoint_panic_middleware, event_route, leader_forward_route, mediator_route,
-    propagate_correlation_header, propagate_trace_context_headers, raft_message_route,
-    validate_min_length, validate_required,
+    MAX_RAFT_MESSAGE_BYTES, axum_routes, catga_endpoint_metadata, catga_routes, correlation_id,
+    correlation_middleware, endpoint_panic_middleware, event_route, leader_forward_route,
+    mediator_route, propagate_correlation_header, propagate_trace_context_headers,
+    raft_message_route, validate_min_length, validate_required,
 };
-use catga_cluster::{ClusterForwarder, RaftMember, RaftMessage, RaftTransport};
+use catga_cluster::{
+    ClusterForwarder, RaftInboundPolicy, RaftInboundPolicyError, RaftInboundRejection, RaftMember,
+    RaftMessage, RaftPeerIdentity, RaftTransport, StaticRaftInboundPolicy,
+};
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeHeaders, ErrorCode, Event, EventHandler, Handler,
     Mediator, MessageMetadata, Registry, Request, current_transport_context, scope_correlation_id,
     scope_transport_context,
 };
+use protobuf::Message as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tower::ServiceExt;
@@ -1192,11 +1196,15 @@ async fn axum_routes_registers_native_handlers_with_extractors_methods_and_closu
 }
 
 #[tokio::test]
-async fn http_raft_transport_posts_a_protobuf_frame_to_the_runtime_inbox() {
+async fn http_raft_transport_posts_an_authenticated_protobuf_frame_to_the_runtime_inbox() {
     let (inbox, mut receiver) = mpsc::channel(1);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(axum::serve(listener, raft_message_route(inbox)).into_future());
+    let policy = StaticRaftInboundPolicy::new(1, [(2, "spiffe://catga/node-2")]).unwrap();
+    let router = raft_message_route(inbox, policy).layer(axum::Extension(
+        RaftPeerIdentity::new("spiffe://catga/node-2").unwrap(),
+    ));
+    let server = tokio::spawn(axum::serve(listener, router).into_future());
     let transport = HttpRaftTransport::new(
         reqwest::Client::new(),
         [RaftMember::new(1, endpoint.clone())],
@@ -1211,4 +1219,250 @@ async fn http_raft_transport_posts_a_protobuf_frame_to_the_runtime_inbox() {
     server.abort();
 
     assert_eq!(receiver.recv().await, Some(message));
+}
+
+#[tokio::test]
+async fn raft_route_establishes_a_member_and_target_trust_boundary() {
+    let message = RaftMessage {
+        from: 2,
+        to: 1,
+        ..RaftMessage::default()
+    }
+    .write_to_bytes()
+    .unwrap();
+    let make_request = |body: Vec<u8>| {
+        AxumRequest::post("/api/catga/raft")
+            .header(axum::http::header::CONTENT_TYPE, "application/x-protobuf")
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    let (inbox, mut receiver) = mpsc::channel(1);
+    let policy = StaticRaftInboundPolicy::new(1, [(2, "spiffe://catga/node-2")]).unwrap();
+    let response = raft_message_route(inbox, policy)
+        .oneshot(make_request(message.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(receiver.try_recv().is_err());
+
+    let (inbox, mut receiver) = mpsc::channel(1);
+    let policy = StaticRaftInboundPolicy::new(1, [(2, "spiffe://catga/node-2")]).unwrap();
+    let response = raft_message_route(inbox, policy)
+        .layer(axum::Extension(
+            RaftPeerIdentity::new("spiffe://catga/attacker").unwrap(),
+        ))
+        .oneshot(make_request(message.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(receiver.try_recv().is_err());
+
+    let (inbox, mut receiver) = mpsc::channel(1);
+    let policy = StaticRaftInboundPolicy::new(1, [(2, "spiffe://catga/node-2")]).unwrap();
+    let response = raft_message_route(inbox, policy)
+        .layer(axum::Extension(
+            RaftPeerIdentity::new("spiffe://catga/node-2").unwrap(),
+        ))
+        .oneshot(make_request(
+            RaftMessage {
+                from: 99,
+                to: 1,
+                ..RaftMessage::default()
+            }
+            .write_to_bytes()
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(receiver.try_recv().is_err());
+
+    let (inbox, mut receiver) = mpsc::channel(1);
+    let policy = StaticRaftInboundPolicy::new(1, [(2, "spiffe://catga/node-2")]).unwrap();
+    let response = raft_message_route(inbox, policy)
+        .layer(axum::Extension(
+            RaftPeerIdentity::new("spiffe://catga/node-2").unwrap(),
+        ))
+        .oneshot(make_request(
+            RaftMessage {
+                from: 2,
+                to: 3,
+                ..RaftMessage::default()
+            }
+            .write_to_bytes()
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(receiver.try_recv().is_err());
+
+    let (inbox, mut receiver) = mpsc::channel(1);
+    let policy = StaticRaftInboundPolicy::new(1, [(2, "spiffe://catga/node-2")]).unwrap();
+    let response = raft_message_route(inbox, policy)
+        .layer(axum::Extension(
+            RaftPeerIdentity::new("spiffe://catga/node-2").unwrap(),
+        ))
+        .oneshot(make_request(message))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(receiver.recv().await.unwrap().from, 2);
+}
+
+#[tokio::test]
+async fn http_raft_transport_distinguishes_retryable_backpressure_from_fatal_rejection() {
+    for (status, retryable) in [
+        (StatusCode::TOO_MANY_REQUESTS, true),
+        (StatusCode::FORBIDDEN, false),
+    ] {
+        let app = Router::new().route("/api/catga/raft", post(move || async move { status }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener binds");
+        let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+        let server = tokio::spawn(axum::serve(listener, app).into_future());
+        let transport =
+            HttpRaftTransport::new(reqwest::Client::new(), [RaftMember::new(2, endpoint)]);
+
+        let error = transport
+            .send(RaftMessage {
+                from: 1,
+                to: 2,
+                ..RaftMessage::default()
+            })
+            .await
+            .expect_err("the test peer returns a non-success status");
+        server.abort();
+        assert_eq!(error.is_retryable(), retryable, "{status}");
+    }
+}
+
+#[tokio::test]
+async fn raft_route_rejects_invalid_frames_and_reports_bounded_inbox_backpressure() {
+    let valid_message = RaftMessage {
+        from: 2,
+        to: 1,
+        ..RaftMessage::default()
+    }
+    .write_to_bytes()
+    .expect("Raft frame serializes");
+    let trusted_identity = RaftPeerIdentity::new("spiffe://catga/node-2").expect("identity");
+    let policy = || {
+        StaticRaftInboundPolicy::new(1, [(2, "spiffe://catga/node-2")])
+            .expect("member policy is valid")
+    };
+    let request = |body: Vec<u8>| {
+        AxumRequest::post("/api/catga/raft")
+            .header(axum::http::header::CONTENT_TYPE, "application/x-protobuf")
+            .body(Body::from(body))
+            .expect("request is valid")
+    };
+
+    let (inbox, _receiver) = mpsc::channel(1);
+    let response = raft_message_route(inbox, policy())
+        .oneshot(
+            AxumRequest::post("/api/catga/raft")
+                .body(Body::from(valid_message.clone()))
+                .expect("request"),
+        )
+        .await
+        .expect("route responds");
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let (inbox, _receiver) = mpsc::channel(1);
+    let response = raft_message_route(inbox, policy())
+        .layer(axum::Extension(trusted_identity.clone()))
+        .oneshot(request(vec![0xff]))
+        .await
+        .expect("route responds");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let (inbox, _receiver) = mpsc::channel(1);
+    let response = raft_message_route(inbox, policy())
+        .layer(axum::Extension(trusted_identity.clone()))
+        .oneshot(request(vec![0; MAX_RAFT_MESSAGE_BYTES + 1]))
+        .await
+        .expect("route responds");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let (inbox, mut receiver) = mpsc::channel(1);
+    inbox
+        .try_send(RaftMessage {
+            from: 2,
+            to: 1,
+            ..RaftMessage::default()
+        })
+        .expect("test inbox fills");
+    let response = raft_message_route(inbox, policy())
+        .layer(axum::Extension(trusted_identity.clone()))
+        .oneshot(request(valid_message.clone()))
+        .await
+        .expect("route responds");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        receiver.recv().await.expect("original message remains"),
+        RaftMessage {
+            from: 2,
+            to: 1,
+            ..RaftMessage::default()
+        }
+    );
+
+    let (inbox, receiver) = mpsc::channel(1);
+    drop(receiver);
+    let response = raft_message_route(inbox, policy())
+        .layer(axum::Extension(trusted_identity))
+        .oneshot(request(valid_message))
+        .await
+        .expect("route responds");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[test]
+fn static_raft_policy_rejects_invalid_configuration_and_untrusted_protocol_origins() {
+    assert!(matches!(
+        RaftPeerIdentity::new(" \t "),
+        Err(RaftInboundPolicyError::EmptyIdentity)
+    ));
+    assert!(matches!(
+        StaticRaftInboundPolicy::new(0, std::iter::empty::<(u64, &str)>()),
+        Err(RaftInboundPolicyError::ZeroNodeId)
+    ));
+    assert!(matches!(
+        StaticRaftInboundPolicy::new(1, [(2, "node-2"), (2, "node-2-repeated")]),
+        Err(RaftInboundPolicyError::DuplicatePeerId)
+    ));
+
+    let policy = StaticRaftInboundPolicy::new(1, [(2, "node-2")]).expect("valid member map");
+    let peer = RaftPeerIdentity::new("node-2").expect("valid peer identity");
+    let valid = RaftMessage {
+        from: 2,
+        to: 1,
+        ..RaftMessage::default()
+    };
+    assert_eq!(policy.authorize(Some(&peer), &valid), Ok(()));
+    assert_eq!(
+        policy.authorize(
+            Some(&peer),
+            &RaftMessage {
+                from: 1,
+                to: 1,
+                ..RaftMessage::default()
+            }
+        ),
+        Err(RaftInboundRejection::Forbidden)
+    );
+    assert_eq!(
+        policy.authorize(
+            Some(&peer),
+            &RaftMessage {
+                from: 0,
+                to: 1,
+                ..RaftMessage::default()
+            }
+        ),
+        Err(RaftInboundRejection::Forbidden)
+    );
 }

@@ -22,6 +22,72 @@ use tokio_util::sync::CancellationToken;
 mod timeout_store_contract;
 
 #[tokio::test]
+async fn cancellation_wins_over_a_running_step_and_fences_its_late_completion() {
+    let store = Arc::new(MemorySuspendedFlows::default());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let step_calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(FlowRuntime::new(
+        Arc::clone(&store),
+        Arc::new(MemoryFlowScheduler::default()),
+        FlowDefinition::new("cancel-race")
+            .step("external-effect", {
+                let entered = Arc::clone(&entered);
+                let release = Arc::clone(&release);
+                let step_calls = Arc::clone(&step_calls);
+                move |_| {
+                    let entered = Arc::clone(&entered);
+                    let release = Arc::clone(&release);
+                    let step_calls = Arc::clone(&step_calls);
+                    async move {
+                        step_calls.fetch_add(1, Ordering::SeqCst);
+                        entered.notify_one();
+                        release.notified().await;
+                        Ok(FlowStepOutcome::Advance)
+                    }
+                }
+            })
+            .step("must-not-run", |_| async {
+                Ok(FlowStepOutcome::complete())
+            }),
+        "node-a",
+    ));
+
+    let running = tokio::spawn({
+        let runtime = Arc::clone(&runtime);
+        async move { runtime.start("cancel-race/1", []).await }
+    });
+    entered.notified().await;
+
+    assert!(
+        runtime
+            .cancel("cancel-race/1")
+            .await
+            .expect("cancellation persists a terminal state")
+            .is_cancelled()
+    );
+    release.notify_one();
+
+    assert!(
+        running
+            .await
+            .expect("running task does not panic")
+            .expect("late step completion resolves to the durable state")
+            .is_cancelled()
+    );
+    let persisted = store
+        .get("cancel-race/1")
+        .await
+        .expect("memory store remains available")
+        .expect("cancelled continuation remains durable");
+    assert_eq!(
+        persisted.state().status(),
+        catga_flow::FlowStatus::Cancelled
+    );
+    assert_eq!(step_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn durable_runtime_rejects_duplicate_step_names_before_persisting_or_running() {
     let invocations = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(MemorySuspendedFlows::default());

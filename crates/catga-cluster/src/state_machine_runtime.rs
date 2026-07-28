@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     RaftClusterNode, RaftMessage, RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError,
-    RaftTransport,
+    RaftTransport, RaftTransportError,
     metrics::{record_failure, record_queue_depth},
 };
 
@@ -31,7 +31,7 @@ pub enum RaftStateMachineRuntimeError {
     /// The state machine or its Raft storage failed while applying an entry.
     StateMachine(RaftStateMachineError),
     /// The configured transport failed while sending an outbound protocol message.
-    Transport(Box<dyn Error + Send + Sync>),
+    Transport(RaftTransportError),
     /// The owner task panicked or was aborted.
     Task(tokio::task::JoinError),
 }
@@ -56,7 +56,7 @@ impl Error for RaftStateMachineRuntimeError {
         match self {
             Self::Raft(error) => Some(error),
             Self::StateMachine(error) => Some(error),
-            Self::Transport(error) => Some(error.as_ref()),
+            Self::Transport(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidTickInterval | Self::Stopped => None,
         }
@@ -335,12 +335,25 @@ where
     M: RaftStateMachine,
 {
     for message in driver.drain_messages() {
+        let peer_id = message.to;
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => return Ok(false),
             result = transport.send(message) => {
                 if let Err(error) = result {
                     record_failure("transport");
+                    if error.is_retryable() {
+                        tracing::debug!(
+                            target: catga_core::TRACING_TARGET,
+                            peer_id,
+                            error = %error,
+                            "catga Raft state-machine peer delivery is temporarily unavailable"
+                        );
+                        driver
+                            .report_unreachable(peer_id)
+                            .map_err(RaftStateMachineRuntimeError::Raft)?;
+                        continue;
+                    }
                     tracing::error!(
                         target: catga_core::TRACING_TARGET,
                         error = %error,

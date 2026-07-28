@@ -902,6 +902,7 @@ dependencies = [
  "futures",
  "hex",
  "metrics",
+ "protobuf",
  "raft",
  "redis",
  "reqwest",

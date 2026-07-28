@@ -13,7 +13,7 @@ use catga_core::{
 use dashmap::{DashMap, DashSet};
 use redis::{
     AsyncCommands, AsyncConnectionConfig,
-    aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection},
+    aio::{ConnectionManager, MultiplexedConnection},
     streams::{
         StreamClaimReply, StreamId, StreamPendingCountReply, StreamReadOptions, StreamReadReply,
     },
@@ -169,7 +169,7 @@ where
         reclaim_options: RedisPendingReclaimOptions,
         codec: C,
     ) -> CatgaResult<Self> {
-        let manager_config = ConnectionManagerConfig::new().set_response_timeout(None);
+        let manager_config = crate::config::command_connection_manager_config();
         let mut commands = client
             .get_connection_manager_with_config(manager_config)
             .await

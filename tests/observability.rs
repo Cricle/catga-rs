@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use catga_cluster::{
     RaftCommittedEntry, RaftMember, RaftNode, RaftRuntime, RaftRuntimeError, RaftStateMachine,
     RaftStateMachineDriver, RaftStateMachineRuntime, RaftStateMachineRuntimeError, RaftTransport,
+    RaftTransportError,
 };
 use catga_core::{
     CachedResultCodec, CatgaError, CatgaResult, CircuitBreakerBehavior, Command, CommandBehavior,
@@ -154,11 +155,10 @@ struct FailingRaftTransport;
 
 #[async_trait]
 impl RaftTransport for FailingRaftTransport {
-    async fn send(
-        &self,
-        _: catga_cluster::RaftMessage,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Err(Box::new(io::Error::other("transport is unavailable")))
+    async fn send(&self, _: catga_cluster::RaftMessage) -> catga_cluster::RaftTransportResult {
+        Err(RaftTransportError::fatal(io::Error::other(
+            "transport is unavailable",
+        )))
     }
 }
 

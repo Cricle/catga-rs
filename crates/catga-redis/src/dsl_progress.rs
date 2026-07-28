@@ -4,10 +4,7 @@ use async_trait::async_trait;
 use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::CatgaResult;
 use catga_flow::{DslStepProgress, DslStepProgressStore};
-use redis::{
-    Script,
-    aio::{ConnectionManager, ConnectionManagerConfig},
-};
+use redis::{Script, aio::ConnectionManager};
 use sha2::{Digest, Sha256};
 
 use crate::transport::map_error;
@@ -43,9 +40,7 @@ impl RedisDslStepProgress {
     ) -> CatgaResult<Self> {
         let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
         let connection = client
-            .get_connection_manager_with_config(
-                ConnectionManagerConfig::new().set_response_timeout(None),
-            )
+            .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
             .map_err(map_error)?;
         Ok(Self {

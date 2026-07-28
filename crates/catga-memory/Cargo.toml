@@ -9,6 +9,9 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+test-hooks = []
+
 [dependencies]
 async-trait = "0.1"
 arc-swap = "1"

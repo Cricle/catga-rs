@@ -32,7 +32,8 @@ mod transport;
 
 pub use catga_codec_memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
 pub use config::{
-    MAX_REDIS_PENDING_RECLAIM_SCANS, RedisConfig, RedisPendingReclaimOptions, RedisPubSubConfig,
+    DEFAULT_REDIS_COMMAND_RESPONSE_TIMEOUT, MAX_REDIS_PENDING_RECLAIM_SCANS, RedisCommandOptions,
+    RedisConfig, RedisPendingReclaimOptions, RedisPubSubConfig,
 };
 pub use dead_letter::RedisDeadLetters;
 pub use dsl_progress::RedisDslStepProgress;

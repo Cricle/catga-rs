@@ -3,7 +3,7 @@ use std::{
     io,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -11,7 +11,7 @@ use std::{
 use async_trait::async_trait;
 use catga_cluster::{
     ClusterCoordinator, RaftMember, RaftMessage, RaftNode, RaftRuntime, RaftRuntimeError,
-    RaftTransport,
+    RaftTransport, RaftTransportError, RaftTransportResult,
 };
 use tokio::sync::{RwLock, mpsc};
 
@@ -22,10 +22,7 @@ struct BlockingTransport {
 
 #[async_trait]
 impl RaftTransport for BlockingTransport {
-    async fn send(
-        &self,
-        _message: RaftMessage,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send(&self, _message: RaftMessage) -> RaftTransportResult {
         self.entered_send.store(true, Ordering::Release);
         std::future::pending().await
     }
@@ -44,21 +41,35 @@ impl ChannelTransport {
 
 #[async_trait]
 impl RaftTransport for ChannelTransport {
-    async fn send(
-        &self,
-        message: RaftMessage,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send(&self, message: RaftMessage) -> RaftTransportResult {
         let route = self
             .routes
             .read()
             .await
             .get(&message.to)
             .cloned()
-            .ok_or_else(|| io::Error::other("unknown Raft peer"))?;
+            .ok_or_else(|| RaftTransportError::fatal(io::Error::other("unknown Raft peer")))?;
         route
             .send(message)
             .await
-            .map_err(|_| io::Error::other("Raft peer stopped"))?;
+            .map_err(|_| RaftTransportError::retryable(io::Error::other("Raft peer stopped")))?;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RetryOnceTransport {
+    attempts: AtomicU64,
+}
+
+#[async_trait]
+impl RaftTransport for RetryOnceTransport {
+    async fn send(&self, _message: RaftMessage) -> RaftTransportResult {
+        if self.attempts.fetch_add(1, Ordering::AcqRel) == 0 {
+            return Err(RaftTransportError::retryable(io::Error::other(
+                "peer inbox is temporarily full",
+            )));
+        }
         Ok(())
     }
 }
@@ -186,4 +197,36 @@ async fn raft_runtime_shutdown_cancels_a_blocked_transport_send() {
         .await
         .expect("shutdown must cancel a blocked transport send")
         .unwrap();
+}
+
+#[tokio::test]
+async fn raft_runtime_keeps_running_after_a_retryable_peer_delivery_failure() {
+    let transport = Arc::new(RetryOnceTransport::default());
+    let runtime = RaftRuntime::spawn(
+        RaftNode::new(
+            1,
+            "http://node-1",
+            vec![
+                RaftMember::new(1, "http://node-1"),
+                RaftMember::new(2, "http://node-2"),
+            ],
+        )
+        .expect("Raft node is valid"),
+        Arc::clone(&transport),
+        Duration::from_millis(1),
+    )
+    .expect("runtime starts");
+
+    runtime
+        .campaign()
+        .await
+        .expect("a retryable peer failure must not terminate the runtime");
+    assert!(transport.attempts.load(Ordering::Acquire) > 0);
+
+    runtime
+        .campaign()
+        .await
+        .expect("the owner task remains command-responsive after recovery");
+    runtime.shutdown();
+    runtime.join().await.expect("runtime stops cleanly");
 }

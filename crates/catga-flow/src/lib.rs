@@ -2,9 +2,29 @@
 //! Durable and compensating flow primitives for Catga.
 //!
 //! Use [`Flow`] for a small in-process sequence with reverse-order compensation. Use
-//! [`FlowDefinition`] with a caller-owned [`FlowStore`] when work must survive a restart. Flow
-//! runtimes never create hidden schedulers: callers explicitly poll [`DueFlowScheduler`] and
-//! compose any transport through [`FlowCompletionAdapter`].
+//! [`FlowDefinition`] with a caller-owned [`SuspendedFlowStore`] when work must survive a
+//! restart, wait for a child result, or resume after a delay. [`FlowRuntime`] owns one definition
+//! and performs version-fenced transitions; the application owns storage, scheduler polling, and
+//! transport integration. This keeps deployment and failure policy explicit instead of starting
+//! hidden background tasks.
+//!
+//! # Durable flow recipe
+//!
+//! 1. Build a [`FlowDefinition`] with stable step names. [`flow_definition!`] removes only the
+//!    repetitive builder reassignment; ordinary [`FlowDefinition`] calls remain available for
+//!    dynamic composition.
+//! 2. Construct a [`FlowRuntime`] with a durable [`SuspendedFlowStore`] and a [`FlowScheduler`].
+//!    Call [`FlowRuntime::start`] for new work and [`FlowRuntime::resume`] from the worker that
+//!    owns a due schedule or child completion.
+//! 3. Poll a [`DueFlowScheduler`] from an application-owned worker and acknowledge a schedule
+//!    only after `resume` completes. For child completions, route the result through
+//!    [`FlowCompletionAdapter`] or the correlation-based `FlowRuntime::record_wait_*` methods.
+//!
+//! A lease prevents a stale executor from persisting a later transition after another owner has
+//! taken over. It cannot undo an already-started external action: durable flow steps are
+//! at-least-once, so charge, email, and other external effects must use an idempotency key derived
+//! from the stable flow and step identity. [`FlowRuntime::cancel`] fences late state writes but
+//! does not cancel an external system that has already accepted a request.
 //!
 //! # Deterministic delayed transition
 //!
@@ -21,14 +41,15 @@
 //!
 //! # Durable composition
 //!
-//! ```no_run
-//! use catga_flow::{FlowDefinition, FlowStepOutcome};
+//! ```
+//! use catga_flow::{FlowStepOutcome, flow_definition};
 //!
-//! let checkout = FlowDefinition::new("checkout")
-//!     .step("reserve", |_| async { Ok(FlowStepOutcome::Advance) })
-//!     .step("charge", |_| async { Ok(FlowStepOutcome::complete()) });
+//! let checkout = flow_definition! {
+//!     "checkout";
+//!     "reserve" => |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::Advance) };
+//!     "charge" => |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::complete()) };
+//! };
 //! assert_eq!(checkout.name(), "checkout");
-//! # Ok::<(), catga_core::CatgaError>(())
 //! ```
 
 mod child_launch;
@@ -95,12 +116,15 @@ pub use timeout::{
 
 /// Builds a named durable flow definition from registered async step handlers.
 ///
-/// ```ignore
-/// let definition = catga_flow::flow_definition! {
+/// ```
+/// use catga_flow::{FlowStepOutcome, flow_definition};
+///
+/// let definition = flow_definition! {
 ///     "payment";
-///     "reserve" => |_| async { Ok(FlowStepOutcome::Advance) };
-///     "charge" => |_| async { Ok(FlowStepOutcome::complete()) };
+///     "reserve" => |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::Advance) };
+///     "charge" => |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::complete()) };
 /// };
+/// assert_eq!(definition.name(), "payment");
 /// ```
 #[macro_export]
 macro_rules! flow_definition {

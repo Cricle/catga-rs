@@ -15,12 +15,12 @@ use catga_core::{
 };
 use redis::{
     AsyncCommands, Script,
-    aio::{ConnectionManager, ConnectionManagerConfig},
+    aio::ConnectionManager,
     cmd,
     streams::{StreamId, StreamRangeReply},
 };
 
-use crate::transport::map_error;
+use crate::{RedisCommandOptions, transport::map_error};
 
 const APPEND: &str = r#"
 local current = redis.call('GET', KEYS[1])
@@ -78,11 +78,20 @@ impl RedisEventStore {
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
+        Self::connect_with_options(server, prefix, RedisCommandOptions::default()).await
+    }
+
+    /// Connects with an explicit timeout policy for ordinary Redis commands.
+    ///
+    /// The policy bounds later persistence commands after the connection is established.
+    pub async fn connect_with_options(
+        server: impl AsRef<str>,
+        prefix: impl Into<Box<str>>,
+        command_options: RedisCommandOptions,
+    ) -> CatgaResult<Self> {
         let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
         let connection = client
-            .get_connection_manager_with_config(
-                ConnectionManagerConfig::new().set_response_timeout(None),
-            )
+            .get_connection_manager_with_config(command_options.connection_manager_config())
             .await
             .map_err(map_error)?;
         Ok(Self {

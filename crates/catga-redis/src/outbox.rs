@@ -12,10 +12,7 @@ use catga_core::{
     ErrorCode, OutboxMessage, OutboxStore, outbox_claim_expires_at, telemetry,
     validate_outbox_claim_limit, validate_outbox_message_id, validate_retention_cleanup_limit,
 };
-use redis::{
-    Script,
-    aio::{ConnectionManager, ConnectionManagerConfig},
-};
+use redis::{Script, aio::ConnectionManager};
 use uuid::Uuid;
 
 use crate::transport::map_error;
@@ -58,9 +55,7 @@ impl RedisOutbox {
     ) -> CatgaResult<Self> {
         let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
         let connection = client
-            .get_connection_manager_with_config(
-                ConnectionManagerConfig::new().set_response_timeout(None),
-            )
+            .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
             .map_err(map_error)?;
         Ok(Self {

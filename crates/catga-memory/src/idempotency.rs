@@ -3,6 +3,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "test-hooks")]
+use std::sync::{Barrier, Mutex};
+
 use async_trait::async_trait;
 use catga_core::{
     CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, ErrorCode, IdempotencyStore,
@@ -12,16 +15,25 @@ use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::{
     DEFAULT_MEMORY_RECORD_CAPACITY,
-    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity},
+    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity, RecordSequence},
     claim::ClaimRecord,
 };
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct CompletedRecord {
+    completed_at: u64,
+    record_identity: u64,
+}
 
 /// A process-local idempotency store using atomic per-key claim transitions.
 pub struct MemoryIdempotency {
     records: DashMap<Box<str>, ClaimRecord>,
-    completed: DashMap<Box<str>, u64>,
+    completed: DashMap<Box<str>, CompletedRecord>,
     retention: Duration,
     capacity: RecordCapacity,
+    record_sequence: RecordSequence,
+    #[cfg(feature = "test-hooks")]
+    cleanup_after_snapshot: Mutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
 }
 
 impl Default for MemoryIdempotency {
@@ -31,6 +43,9 @@ impl Default for MemoryIdempotency {
             completed: DashMap::new(),
             retention: DEFAULT_IDEMPOTENCY_RETENTION,
             capacity: RecordCapacity::fixed(DEFAULT_MEMORY_RECORD_CAPACITY),
+            record_sequence: RecordSequence::new(),
+            #[cfg(feature = "test-hooks")]
+            cleanup_after_snapshot: Mutex::new(None),
         }
     }
 }
@@ -54,7 +69,59 @@ impl MemoryIdempotency {
             completed: DashMap::new(),
             retention,
             capacity: RecordCapacity::new(capacity)?,
+            record_sequence: RecordSequence::new(),
+            #[cfg(feature = "test-hooks")]
+            cleanup_after_snapshot: Mutex::new(None),
         })
+    }
+
+    #[doc(hidden)]
+    #[cfg(feature = "test-hooks")]
+    pub fn pause_next_cleanup_after_snapshot(
+        &self,
+        observed: Arc<Barrier>,
+        resume: Arc<Barrier>,
+    ) -> CatgaResult<()> {
+        let mut hook = self.cleanup_after_snapshot.lock().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "memory idempotency cleanup test hook is poisoned",
+            )
+        })?;
+        *hook = Some((observed, resume));
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    #[cfg(feature = "test-hooks")]
+    pub fn expire_completed_index_for_test(&self, key: &str) -> CatgaResult<()> {
+        let mut completed = self.completed.get_mut(key).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::NotFound,
+                "memory idempotency completion index is not retained",
+            )
+        })?;
+        completed.completed_at = 0;
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn wait_after_cleanup_snapshot(&self) -> CatgaResult<()> {
+        let barriers = self
+            .cleanup_after_snapshot
+            .lock()
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "memory idempotency cleanup test hook is poisoned",
+                )
+            })?
+            .take();
+        if let Some((observed, resume)) = barriers {
+            observed.wait();
+            resume.wait();
+        }
+        Ok(())
     }
 }
 
@@ -85,10 +152,16 @@ impl IdempotencyStore for MemoryIdempotency {
                     self.capacity.release();
                     Ok(record.get().try_claim())
                 }
-                Entry::Vacant(entry) => {
-                    entry.insert(ClaimRecord::claimed());
-                    Ok(true)
-                }
+                Entry::Vacant(entry) => match self.record_sequence.next() {
+                    Ok(identity) => {
+                        entry.insert(ClaimRecord::claimed(identity));
+                        Ok(true)
+                    }
+                    Err(error) => {
+                        self.capacity.release();
+                        Err(error)
+                    }
+                },
             }
         };
         operation.complete_claim(&result);
@@ -97,12 +170,14 @@ impl IdempotencyStore for MemoryIdempotency {
 
     async fn complete(&self, key: &str, result: Option<Arc<[u8]>>) -> CatgaResult<()> {
         let mut operation = telemetry::persistence_operation("memory", "idempotency", "complete");
+        let mut record_identity = None;
         let outcome = self
             .records
             .get(key)
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "idempotency key is not claimed"))
             .and_then(|record| {
                 if record.complete(result) {
+                    record_identity = Some(record.identity());
                     Ok(())
                 } else {
                     Err(CatgaError::new(
@@ -111,8 +186,14 @@ impl IdempotencyStore for MemoryIdempotency {
                     ))
                 }
             });
-        if outcome.is_ok() {
-            self.completed.insert(key.into(), now_millis());
+        if let Some(record_identity) = record_identity {
+            self.completed.insert(
+                key.into(),
+                CompletedRecord {
+                    completed_at: now_millis(),
+                    record_identity,
+                },
+            );
         }
         operation.complete(&outcome);
         outcome
@@ -163,25 +244,30 @@ impl IdempotencyStore for MemoryIdempotency {
                     "idempotency retention exceeds the supported millisecond range",
                 )
             })?;
-            let candidates: Vec<Box<str>> = self
+            let candidates: Vec<(Box<str>, CompletedRecord)> = self
                 .completed
                 .iter()
                 .take(limit)
-                .filter(|entry| now.saturating_sub(*entry.value()) >= retention)
-                .map(|entry| entry.key().clone())
+                .filter(|entry| now.saturating_sub(entry.value().completed_at) >= retention)
+                .map(|entry| (entry.key().clone(), *entry.value()))
                 .collect();
+            #[cfg(feature = "test-hooks")]
+            self.wait_after_cleanup_snapshot()?;
             let mut removed = 0;
-            for key in candidates {
+            for (key, candidate) in candidates {
                 if self
                     .records
-                    .get(&key)
-                    .is_some_and(|record| record.state() == ProcessingState::Completed)
-                    && self.records.remove(&key).is_some()
+                    .remove_if(&key, |_, record| {
+                        record.identity() == candidate.record_identity
+                            && record.state() == ProcessingState::Completed
+                    })
+                    .is_some()
                 {
                     self.capacity.release();
                     removed += 1;
                 }
-                self.completed.remove(&key);
+                self.completed
+                    .remove_if(&key, |_, current| *current == candidate);
             }
             Ok(removed)
         })();
