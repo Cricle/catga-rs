@@ -7,7 +7,7 @@ use catga_flow::{FlowState, FlowStatus};
 use sqlx::{MySqlPool, Row};
 
 use crate::{
-    error::database_error,
+    error::{database_error, is_mysql_duplicate_key},
     key::flow_key,
     sql_backend::{
         MAX_CAS_RETRIES, cas_error, is_stale, stale_before_unix_millis, statement, status_code,
@@ -47,8 +47,7 @@ pub(crate) async fn create(pool: &MySqlPool, state: FlowState) -> CatgaResult<bo
     let result = sqlx::query(statement(
         "INSERT INTO catga_flow_states \
          (flow_key, flow_id, flow_type, flow_type_key, status, version, heartbeat_ms, revision, payload) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) \
-         ON DUPLICATE KEY UPDATE flow_key = flow_key",
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
         false,
     ))
     .bind(key.as_slice())
@@ -60,9 +59,13 @@ pub(crate) async fn create(pool: &MySqlPool, state: FlowState) -> CatgaResult<bo
     .bind(unix_millis(state.heartbeat())?)
     .bind(encode_state(&state)?)
     .execute(pool)
-    .await
-    .map_err(|error| database_error("create MySQL flow state", error))?;
-    if result.rows_affected() == 1 {
+    .await;
+    let created = match result {
+        Ok(result) => result.rows_affected() == 1,
+        Err(error) if is_mysql_duplicate_key(&error) => false,
+        Err(error) => return Err(database_error("create MySQL flow state", error)),
+    };
+    if created {
         return Ok(true);
     }
     let row = sqlx::query(statement(

@@ -6,7 +6,7 @@ macro_rules! define_server_suspended {
         use catga_core::{CatgaError, CatgaResult, ErrorCode};
         use catga_flow::{FlowContinuation, FlowQuery, FlowSummary, decode_continuation, encode_continuation};
         use sqlx::Row;
-        use crate::{error::database_error, key::flow_key, sql_backend::{cas_error, deadline_millis, statement, status_code, status_from_code, system_time_from_unix_millis_and_subsec_nanos, unix_millis_and_subsec_nanos, MAX_CAS_RETRIES}};
+        use crate::{error::{database_error, is_mysql_duplicate_key}, key::flow_key, sql_backend::{cas_error, deadline_millis, statement, status_code, status_from_code, system_time_from_unix_millis_and_subsec_nanos, unix_millis_and_subsec_nanos, MAX_CAS_RETRIES}};
 
         struct StoredContinuation { continuation: FlowContinuation, revision: i64 }
 
@@ -18,12 +18,13 @@ macro_rules! define_server_suspended {
             let insert = if $postgres {
                 "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING"
             } else {
-                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE flow_key = flow_key"
+                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"
             };
             let flow_type_key = flow_key(continuation.state().flow_type());
             let result = sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(flow_type_key.as_slice()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(wait_correlation(&continuation)).bind(wait_correlation_key(&continuation).map(|key| key.to_vec())).bind(encode_continuation(&continuation)?)
-                .execute(pool).await.map_err(|error| database_error(concat!("create ", $label, " continuation"), error))?;
-            if result.rows_affected() == 1 { return Ok(true); }
+                .execute(pool).await;
+            let created = match result { Ok(result) => result.rows_affected() == 1, Err(error) if !$postgres && is_mysql_duplicate_key(&error) => false, Err(error) => return Err(database_error(concat!("create ", $label, " continuation"), error)), };
+            if created { return Ok(true); }
             let row = sqlx::query(statement("SELECT flow_id FROM catga_flow_continuations WHERE flow_key = ?", $postgres)).bind(key.as_slice()).fetch_optional(pool).await.map_err(|error| database_error(concat!("read conflicting ", $label, " continuation"), error))?;
             let Some(row) = row else { return Err(CatgaError::new(ErrorCode::Transient, concat!($label, " continuation disappeared after a conflicting create"))); };
             let existing: String = row.try_get("flow_id").map_err(|error| database_error(concat!("decode ", $label, " continuation identity"), error))?;

@@ -203,13 +203,15 @@ async fn transport_batcher_flushes_after_the_batch_timeout() {
     let (batcher, runner) = TransportBatcher::new(transport_for_batcher, options).unwrap();
     let shutdown = CancellationToken::new();
     let runner_task = tokio::spawn(runner.run_until_cancelled(shutdown.clone()));
-    let publish_task = tokio::spawn(async move { batcher.publish(envelope(3)).await });
+    let expected = envelope(3);
+    let published = expected.clone();
+    let publish_task = tokio::spawn(async move { batcher.publish(published).await });
 
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(1)).await;
 
     assert!(publish_task.await.unwrap().is_ok());
-    assert_eq!(transport.batches(), vec![(vec![envelope(3)], 1)]);
+    assert_eq!(transport.batches(), vec![(vec![expected], 1)]);
 
     shutdown.cancel();
     assert!(runner_task.await.unwrap().is_ok());

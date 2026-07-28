@@ -7,7 +7,7 @@ macro_rules! define_server_state_machine {
         use sqlx::Row;
 
         use crate::{
-            error::database_error,
+            error::{database_error, is_mysql_duplicate_key},
             key::flow_key,
             sql_backend::{cas_error, statement, MAX_CAS_RETRIES},
             state_machine_codec::{decode, encode},
@@ -31,7 +31,7 @@ macro_rules! define_server_state_machine {
             let insert = if $postgres {
                 "INSERT INTO catga_state_machine_snapshots (instance_key, instance_id, version, revision, payload) VALUES (?, ?, ?, 0, ?) ON CONFLICT(instance_key) DO NOTHING"
             } else {
-                "INSERT INTO catga_state_machine_snapshots (instance_key, instance_id, version, revision, payload) VALUES (?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE instance_key = instance_key"
+                "INSERT INTO catga_state_machine_snapshots (instance_key, instance_id, version, revision, payload) VALUES (?, ?, ?, 0, ?)"
             };
             let result = sqlx::query(statement(insert, $postgres))
                 .bind(key.as_slice())
@@ -39,9 +39,13 @@ macro_rules! define_server_state_machine {
                 .bind(snapshot.version())
                 .bind(encode(&snapshot, codec)?)
                 .execute(pool)
-                .await
-                .map_err(|error| database_error(concat!("create ", $label, " state-machine snapshot"), error))?;
-            if result.rows_affected() == 1 {
+                .await;
+            let created = match result {
+                Ok(result) => result.rows_affected() == 1,
+                Err(error) if !$postgres && is_mysql_duplicate_key(&error) => false,
+                Err(error) => return Err(database_error(concat!("create ", $label, " state-machine snapshot"), error)),
+            };
+            if created {
                 return Ok(true);
             }
             let row = sqlx::query(statement(

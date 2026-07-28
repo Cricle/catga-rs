@@ -14,7 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # Test artifacts can be absent for workspace integration-test packages.
+      # Cache dependencies only so a cache restore never fails on a missing target path.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
@@ -24,11 +28,109 @@ jobs:
       - run: cargo check -p catga-examples --bins
   coverage:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: catga
+          MYSQL_USER: catga
+          MYSQL_PASSWORD: catga_e2e_password
+          MYSQL_ROOT_PASSWORD: catga_root_e2e_password
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -p$MYSQL_ROOT_PASSWORD"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 60
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: catga
+          POSTGRES_USER: catga
+          POSTGRES_PASSWORD: catga_e2e_password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2025-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Catga_e2e_password_2026!
+        ports: ['1433:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -C -Q 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+    env:
+      CATGA_REQUIRE_EXTERNAL_SERVICES: '1'
+      CATGA_NATS_URL: nats://127.0.0.1:4222
+      CATGA_REDIS_URL: redis://127.0.0.1:6379
+      CATGA_MYSQL_URL: mysql://catga:catga_e2e_password@127.0.0.1:3306/catga
+      CATGA_POSTGRES_URL: postgres://catga:catga_e2e_password@127.0.0.1:5432/catga
+      CATGA_MSSQL_URL: server=tcp:127.0.0.1,1433;User Id=sa;Password=Catga_e2e_password_2026!;TrustServerCertificate=true;Database=master
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 95 --fail-under-regions 95
+      - run: docker run -d --rm --name catga-ci-nats -p 4222:4222 -p 8222:8222 nats:2.10-alpine -js -m 8222
+      - name: Wait for coverage dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          wait_for_tcp() {
+            local service="$1"
+            local port="$2"
+            for attempt in $(seq 1 60); do
+              if (echo > "/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+                echo "${service} is reachable"
+                return 0
+              fi
+              echo "Waiting for ${service} (${attempt}/60)"
+              sleep 1
+            done
+            echo "${service} did not become ready within 60 seconds" >&2
+            return 1
+          }
+          wait_for_tcp redis 6379
+          wait_for_tcp mysql 3306
+          wait_for_tcp postgres 5432
+          wait_for_tcp mssql 1433
+          wait_for_tcp nats 4222
+      - name: Run unit and non-ignored integration coverage
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov test --workspace --all-features --no-report
+      - name: Accumulate real-service E2E coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          # cargo-llvm-cov 0.8.7 does not permit --no-report with --no-clean.
+          # Each following command keeps the same raw profiles and emits only an intermediate
+          # summary; the final command below writes the gated lcov artifact.
+          cargo llvm-cov test -p catga-tests --all-features --test redis --no-clean -- --ignored
+          cargo llvm-cov test -p catga-tests --all-features --test robustmq mailbox_request_server_replies_through_the_private_reply_mailbox --no-clean -- --ignored
+          cargo llvm-cov test -p catga-tests --all-features --test robustmq --no-clean -- --ignored --skip mailbox_request_server_replies_through_the_private_reply_mailbox
+          cargo llvm-cov test -p catga-tests --all-features --test state_machine_persistence --no-clean -- --ignored
+          cargo llvm-cov test -p catga-tests --all-features --test cross_backend --no-clean -- --ignored
+          cargo llvm-cov test -p catga-nats --all-features --test nats_contracts --no-clean -- --ignored
+          cargo llvm-cov test -p catga-redis --all-features --test codec_injection --no-clean -- --ignored
+          cargo llvm-cov test -p catga-flow-store --all-features --test mysql --no-clean -- --ignored
+          cargo llvm-cov test -p catga-flow-store --all-features --test postgres --no-clean -- --ignored
+          cargo llvm-cov test -p catga-flow-store --all-features --test mssql --no-clean -- --ignored
+      - name: Enforce coverage threshold
+        run: cargo llvm-cov report --lcov --output-path lcov.info --fail-under-lines 95 --fail-under-regions 95
       - name: Upload coverage report
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -94,7 +196,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # Keep only dependency caches; nested integration-test target directories are transient.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
       - run: docker run -d --rm --name catga-ci-nats -p 4222:4222 -p 8222:8222 nats:2.10-alpine -js -m 8222
       - name: Wait for real-service E2E dependencies
         shell: bash

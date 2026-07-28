@@ -8,7 +8,7 @@ macro_rules! define_server_dsl_progress {
 
         use crate::{
             dsl_progress_codec::{advances_version, decode_progress, encode_progress, validate_progress},
-            error::database_error,
+            error::{database_error, is_mysql_duplicate_key},
             key::flow_key,
             sql_backend::{cas_error, statement, MAX_CAS_RETRIES},
         };
@@ -29,7 +29,7 @@ macro_rules! define_server_dsl_progress {
             let insert = if $postgres {
                 "INSERT INTO catga_dsl_step_progress (flow_key, flow_id, step_index, version, revision, payload) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key, step_index) DO NOTHING"
             } else {
-                "INSERT INTO catga_dsl_step_progress (flow_key, flow_id, step_index, version, revision, payload) VALUES (?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE flow_key = flow_key"
+                "INSERT INTO catga_dsl_step_progress (flow_key, flow_id, step_index, version, revision, payload) VALUES (?, ?, ?, ?, 0, ?)"
             };
             let result = sqlx::query(statement(insert, $postgres))
                 .bind(key.as_slice())
@@ -38,9 +38,13 @@ macro_rules! define_server_dsl_progress {
                 .bind(progress.version())
                 .bind(encode_progress(&progress)?)
                 .execute(pool)
-                .await
-                .map_err(|error| database_error(concat!("create ", $label, " DSL step progress"), error))?;
-            if result.rows_affected() == 1 {
+                .await;
+            let created = match result {
+                Ok(result) => result.rows_affected() == 1,
+                Err(error) if !$postgres && is_mysql_duplicate_key(&error) => false,
+                Err(error) => return Err(database_error(concat!("create ", $label, " DSL step progress"), error)),
+            };
+            if created {
                 return Ok(true);
             }
             let row = sqlx::query(statement(

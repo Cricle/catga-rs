@@ -57,6 +57,17 @@ pub async fn start(server: &str) -> CatgaResult<Mq9ControlPlane> {
                 format!("subscribe mq9 mailbox creation: {error}"),
             )
         })?;
+    // `async_nats::Client::subscribe` only queues the SUB command locally.  The request
+    // client may publish immediately after this function returns, so wait until NATS has
+    // processed the subscription before exposing the harness.  Without this barrier a
+    // request can be legitimately dropped by core NATS (there is no subscriber yet), which
+    // made the real-service contract intermittently time out under CI scheduling pressure.
+    client.flush().await.map_err(|error| {
+        CatgaError::new(
+            ErrorCode::Unavailable,
+            format!("flush mq9 mailbox-creation subscription: {error}"),
+        )
+    })?;
     let shutdown = CancellationToken::new();
     let task_shutdown = shutdown.clone();
     let created_mailboxes = Arc::new(AtomicUsize::new(0));
