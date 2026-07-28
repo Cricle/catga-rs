@@ -163,9 +163,11 @@ fn child_wait(policy: WaitPolicy) -> WaitCondition {
     .expect("test child identities are valid")
 }
 
+type ChildLaunch = (Box<str>, Box<str>, Box<str>);
+
 #[derive(Default)]
 struct LaunchRecorder {
-    launches: Mutex<Vec<(Box<str>, Box<str>, Box<str>)>>,
+    launches: Mutex<Vec<ChildLaunch>>,
 }
 
 #[async_trait]
