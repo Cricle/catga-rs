@@ -479,7 +479,7 @@ fn validate_subject_prefix(subject_prefix: &str) -> CatgaResult<()> {
     if subject_prefix.is_empty()
         || subject_prefix
             .split('.')
-            .any(|token| token.is_empty() || token == "*" || token == ">")
+            .any(|token| token.trim().is_empty() || token == "*" || token == ">")
     {
         return Err(CatgaError::new(
             ErrorCode::Validation,

@@ -1,0 +1,265 @@
+//! Durable DSL checkpoint boundary and recovery contracts.
+
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
+
+use async_trait::async_trait;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use catga_flow::{DslFlow, DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
+use tokio::sync::Mutex;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct State {
+    total: u32,
+    branch: bool,
+}
+
+struct StateCodec;
+
+impl DslStateCodec<State> for StateCodec {
+    fn encode(&self, state: &State) -> CatgaResult<Vec<u8>> {
+        Ok([
+            state.total.to_be_bytes().as_slice(),
+            &[u8::from(state.branch)],
+        ]
+        .concat())
+    }
+
+    fn decode(&self, bytes: &[u8]) -> CatgaResult<State> {
+        let total: [u8; 4] = bytes
+            .get(..4)
+            .ok_or_else(|| CatgaError::new(ErrorCode::Validation, "checkpoint state is truncated"))?
+            .try_into()
+            .map_err(|_| CatgaError::new(ErrorCode::Validation, "checkpoint state is invalid"))?;
+        let branch = match bytes.get(4..) {
+            Some([0]) => false,
+            Some([1]) => true,
+            _ => {
+                return Err(CatgaError::new(
+                    ErrorCode::Validation,
+                    "checkpoint state has an invalid branch flag",
+                ));
+            }
+        };
+        Ok(State {
+            total: u32::from_be_bytes(total),
+            branch,
+        })
+    }
+}
+
+#[derive(Default)]
+struct ProgressStore {
+    records: Mutex<HashMap<(Box<str>, u32), DslStepProgress>>,
+}
+
+#[async_trait]
+impl DslStepProgressStore for ProgressStore {
+    async fn create(&self, progress: DslStepProgress) -> CatgaResult<bool> {
+        let key = (progress.flow_id().into(), progress.step_index());
+        let mut records = self.records.lock().await;
+        if records.contains_key(&key) {
+            return Ok(false);
+        }
+        records.insert(key, progress);
+        Ok(true)
+    }
+
+    async fn update(&self, expected_version: i64, next: DslStepProgress) -> CatgaResult<bool> {
+        let key = (next.flow_id().into(), next.step_index());
+        let mut records = self.records.lock().await;
+        let Some(current) = records.get(&key) else {
+            return Ok(false);
+        };
+        if current.version() != expected_version
+            || !DslStepProgress::is_next_version(expected_version, next.version())
+        {
+            return Ok(false);
+        }
+        records.insert(key, next);
+        Ok(true)
+    }
+
+    async fn get(&self, flow_id: &str, step_index: u32) -> CatgaResult<Option<DslStepProgress>> {
+        Ok(self
+            .records
+            .lock()
+            .await
+            .get(&(flow_id.into(), step_index))
+            .cloned())
+    }
+
+    async fn delete(&self, flow_id: &str, step_index: u32) -> CatgaResult<bool> {
+        Ok(self
+            .records
+            .lock()
+            .await
+            .remove(&(flow_id.into(), step_index))
+            .is_some())
+    }
+}
+
+#[tokio::test]
+async fn checkpointed_if_branch_restores_its_cursor_without_replaying_completed_children()
+-> CatgaResult<()> {
+    let completed_child_calls = Arc::new(AtomicUsize::new(0));
+    let fail_once = Arc::new(AtomicBool::new(true));
+    let completed_child = Arc::clone(&completed_child_calls);
+    let fails = Arc::clone(&fail_once);
+    let flow = DslFlow::new().if_else(
+        |state: &State| state.branch,
+        DslFlow::new()
+            .action(move |state: &mut State| {
+                let completed_child = Arc::clone(&completed_child);
+                Box::pin(async move {
+                    completed_child.fetch_add(1, Ordering::SeqCst);
+                    state.total = state.total.saturating_add(1);
+                    Ok(())
+                })
+            })
+            .action(move |state: &mut State| {
+                let fails = Arc::clone(&fails);
+                Box::pin(async move {
+                    if fails.swap(false, Ordering::SeqCst) {
+                        return Err(CatgaError::new(
+                            ErrorCode::Transient,
+                            "interrupted after cursor",
+                        ));
+                    }
+                    state.total = state.total.saturating_add(10);
+                    Ok(())
+                })
+            }),
+        DslFlow::new().action(|state: &mut State| {
+            Box::pin(async move {
+                state.total = 100;
+                Ok(())
+            })
+        }),
+    );
+    let progress = ProgressStore::default();
+
+    let first = flow
+        .run_checkpointed(
+            "branch-recovery",
+            State {
+                total: 0,
+                branch: true,
+            },
+            &progress,
+            &StateCodec,
+        )
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(completed_child_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        progress
+            .get("branch-recovery", 0)
+            .await?
+            .expect("nested branch checkpoint exists")
+            .kind(),
+        DslProgressKind::CheckpointFrame
+    );
+
+    let resumed = flow
+        .run_checkpointed("branch-recovery", State::default(), &progress, &StateCodec)
+        .await?;
+    assert_eq!(resumed.total, 11);
+    assert!(resumed.branch);
+    assert_eq!(completed_child_calls.load(Ordering::SeqCst), 1);
+
+    let terminal = flow
+        .run_checkpointed("branch-recovery", State::default(), &progress, &StateCodec)
+        .await?;
+    assert_eq!(terminal, resumed);
+    assert_eq!(completed_child_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn replayable_for_each_resumes_saved_items_and_terminal_result_is_idempotent()
+-> CatgaResult<()> {
+    let fail_once = Arc::new(AtomicBool::new(true));
+    let item_one_calls = Arc::new(AtomicUsize::new(0));
+    let item_two_calls = Arc::new(AtomicUsize::new(0));
+    let item_three_calls = Arc::new(AtomicUsize::new(0));
+    let fail = Arc::clone(&fail_once);
+    let one = Arc::clone(&item_one_calls);
+    let two = Arc::clone(&item_two_calls);
+    let three = Arc::clone(&item_three_calls);
+    let flow = DslFlow::new().for_each_replayable(
+        |_: &State| vec![1_u32, 2, 3],
+        move |state: &mut State, item| {
+            let one = Arc::clone(&one);
+            let two = Arc::clone(&two);
+            let three = Arc::clone(&three);
+            let fail = Arc::clone(&fail);
+            Box::pin(async move {
+                match item {
+                    1 => {
+                        one.fetch_add(1, Ordering::SeqCst);
+                    }
+                    2 => {
+                        two.fetch_add(1, Ordering::SeqCst);
+                        if fail.swap(false, Ordering::SeqCst) {
+                            return Err(CatgaError::new(
+                                ErrorCode::Transient,
+                                "item two interrupted",
+                            ));
+                        }
+                    }
+                    3 => {
+                        three.fetch_add(1, Ordering::SeqCst);
+                    }
+                    _ => {
+                        return Err(CatgaError::new(
+                            ErrorCode::Validation,
+                            "test selection contains an unexpected item",
+                        ));
+                    }
+                }
+                state.total = state.total.saturating_add(item);
+                Ok(())
+            })
+        },
+    );
+    let progress = ProgressStore::default();
+
+    let first = flow
+        .run_checkpointed("item-recovery", State::default(), &progress, &StateCodec)
+        .await;
+    assert!(matches!(first, Err(error) if error.code() == ErrorCode::Transient));
+    assert_eq!(item_one_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(item_two_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(item_three_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        progress
+            .get("item-recovery", 0)
+            .await?
+            .expect("replayable cursor exists")
+            .kind(),
+        DslProgressKind::CheckpointFrame
+    );
+
+    let resumed = flow
+        .run_checkpointed("item-recovery", State::default(), &progress, &StateCodec)
+        .await?;
+    assert_eq!(resumed.total, 6);
+    assert_eq!(item_one_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(item_two_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(item_three_calls.load(Ordering::SeqCst), 1);
+
+    let terminal = flow
+        .run_checkpointed("item-recovery", State::default(), &progress, &StateCodec)
+        .await?;
+    assert_eq!(terminal, resumed);
+    assert_eq!(item_one_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(item_two_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(item_three_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
