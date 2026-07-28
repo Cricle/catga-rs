@@ -114,11 +114,14 @@ background worker.
 
 NATS JetStream tests start and remove an isolated Testcontainers server when
 `CATGA_NATS_URL` is unset; set it to test an externally managed NATS service.
-Redis, MySQL, PostgreSQL, SQL Server, and RobustMQ tests are real-service E2E
-tests marked `#[ignore]` locally. Provide the matching `CATGA_*_URL` and run
-the target with `-- --ignored`; CI provisions all of these services and runs
-the ignored E2E targets. A default local test run therefore does not prove an
-external-service contract beyond its automatic NATS container coverage.
+Redis, MySQL, PostgreSQL, and SQL Server tests are real-service E2E tests
+marked `#[ignore]` locally. Provide the matching `CATGA_*_URL` and run the
+target with `-- --ignored`; CI provisions those services and runs the ignored
+E2E targets. RobustMQ's published mq9 SDK is exercised over real NATS with a
+test-only mailbox-creation control-plane harness, because the public RobustMQ
+broker image does not expose the mq9/NATS protocol. A default local test run
+therefore does not prove an external-service contract beyond its automatic
+NATS container coverage.
 
 RabbitMQ/AMQP, Flow hot reload, and an HTTP health endpoint are intentionally
 not part of this Rust workspace. Use OpenTelemetry-compatible tracing and

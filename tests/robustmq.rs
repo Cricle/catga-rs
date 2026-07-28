@@ -15,6 +15,8 @@ use catga_core::{
 use catga_robustmq::{MailboxClient, MailboxPriority, MailboxRequest, MailboxRequestServer};
 use robustmq::Priority;
 
+#[path = "support/mq9_control_plane.rs"]
+mod mq9_control_plane;
 #[path = "support/nats_e2e.rs"]
 mod nats_e2e;
 
@@ -237,13 +239,13 @@ async fn mailbox_request_fails_promptly_without_the_mailbox_control_plane() -> C
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_ROBUSTMQ_URL"]
+#[ignore = "requires a NATS endpoint"]
 /// A custom codec must frame both request directions and the request-server response.
 async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> CatgaResult<()> {
-    let server = std::env::var("CATGA_ROBUSTMQ_URL")
-        .expect("CATGA_ROBUSTMQ_URL must be set for ignored RobustMQ tests");
+    let server = nats_e2e::server_url().await;
+    let control_plane = mq9_control_plane::start(server.url()).await?;
     let codec = TaggedEnvelopeCodec::default();
-    let client = MailboxClient::connect_with_codec(&server, codec.clone()).await?;
+    let client = MailboxClient::connect_with_codec(server.url(), codec.clone()).await?;
     let mailbox = format!("catga-robustmq-rpc-{}", std::process::id());
     let mut request_server = MailboxRequestServer::subscribe(client.clone(), &mailbox, 8).await?;
     let request = Envelope::versioned(
@@ -277,5 +279,11 @@ async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> C
     assert_eq!(reply.payload(), [3, 4]);
     assert_eq!(codec.encoded.load(Ordering::Relaxed), 2);
     assert_eq!(codec.decoded.load(Ordering::Relaxed), 2);
+    assert_eq!(control_plane.created_mailboxes(), 1);
+    control_plane.close().await?;
+    server
+        .close()
+        .await
+        .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?;
     Ok(())
 }

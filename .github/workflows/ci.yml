@@ -12,7 +12,7 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
@@ -25,13 +25,13 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 95 --fail-under-regions 95
       - name: Upload coverage report
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-lcov
           path: lcov.info
@@ -88,19 +88,14 @@ jobs:
       CATGA_REQUIRE_EXTERNAL_SERVICES: '1'
       CATGA_NATS_URL: nats://127.0.0.1:4222
       CATGA_REDIS_URL: redis://127.0.0.1:6379
-      # RobustMQ implements the mq9 mailbox control plane; a plain NATS server does not.
-      CATGA_ROBUSTMQ_URL: nats://127.0.0.1:4223
       CATGA_MYSQL_URL: mysql://catga:catga_e2e_password@127.0.0.1:3306/catga
       CATGA_POSTGRES_URL: postgres://catga:catga_e2e_password@127.0.0.1:5432/catga
       CATGA_MSSQL_URL: server=tcp:127.0.0.1,1433;User Id=sa;Password=Catga_e2e_password_2026!;TrustServerCertificate=true;Database=master
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: docker run -d --rm --name catga-ci-nats -p 4222:4222 -p 8222:8222 nats:2.10-alpine -js -m 8222
-      # The amd64 manifest resolved from ghcr.io/robustmq/robustmq:latest on 2026-07-28.
-      # Pinning it makes every Ubuntu runner exercise the same mq9 control-plane implementation.
-      - run: docker run -d --rm --name catga-ci-robustmq -p 4223:4222 ghcr.io/robustmq/robustmq@sha256:0884a50d8e67828d521e25bf662f7d85b6b823bc28faa5eacbbf440029f59e53
       - name: Wait for real-service E2E dependencies
         shell: bash
         run: |
@@ -124,8 +119,7 @@ jobs:
           wait_for_tcp postgres 5432
           wait_for_tcp mssql 1433
           wait_for_tcp nats 4222
-          wait_for_tcp robustmq 4223
-      - name: Verify RobustMQ mq9 mailbox control plane
+      - name: Verify RobustMQ mq9 compatibility over real NATS
         run: cargo test -p catga-tests --test robustmq mailbox_request_server_replies_through_the_private_reply_mailbox -- --ignored
       - run: cargo test -p catga-tests --test nats
       - run: cargo test -p catga-tests --test nats_request
@@ -141,6 +135,3 @@ jobs:
       - run: cargo test -p catga-flow-store --all-features --test mysql -- --ignored
       - run: cargo test -p catga-flow-store --all-features --test postgres -- --ignored
       - run: cargo test -p catga-flow-store --all-features --test mssql -- --ignored
-      - name: Collect RobustMQ diagnostics after an E2E failure
-        if: ${{ failure() }}
-        run: docker logs catga-ci-robustmq || true
