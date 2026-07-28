@@ -3,8 +3,9 @@
 use std::{sync::Arc, time::Duration};
 
 use catga_codec_memorypack::{
-    MemoryPackCodec, MemoryPackRequestClient, MemoryPackRequestClientFactory,
-    MemoryPackRpcResponse, MemoryPackSerializer, MemoryPackSnapshotCodec, MemoryPackable,
+    MemoryPackCodec, MemoryPackDecodeLimits, MemoryPackRequestClient,
+    MemoryPackRequestClientFactory, MemoryPackRpcResponse, MemoryPackSerializer,
+    MemoryPackSnapshotCodec, MemoryPackable,
 };
 use catga_core::{
     CatgaError, CatgaResult, DistributedIdGenerator, Envelope, ErrorCode, MessageMetadata, Request,
@@ -137,6 +138,51 @@ fn typed_rpc_responses_preserve_success_and_failure() {
             .expect("failure response decodes"),
         MemoryPackRpcResponse::Failure(error) if error.code() == ErrorCode::Conflict
     ));
+}
+
+#[test]
+fn typed_responses_propagate_request_metadata_and_failure_details() {
+    let codec = MemoryPackCodec::default();
+    let request = Envelope::new(17, "request", vec![], MessageMetadata::new(9, None));
+    let response = codec
+        .typed_success(&request, &WireOnlyResponse(3))
+        .expect("success response encodes");
+
+    assert_eq!(response.id(), request.id());
+    assert_eq!(response.metadata().message_id(), 9);
+    assert_eq!(response.metadata().correlation_id(), Some(9));
+    assert_eq!(
+        response.metadata().priority(),
+        request.metadata().priority()
+    );
+
+    let failure = codec
+        .typed_failure(
+            &request,
+            CatgaError::new(ErrorCode::Conflict, "already exists").with_details("sku-42"),
+        )
+        .expect("failure response encodes");
+    assert!(matches!(
+        codec
+            .decode_rpc_response::<WireOnlyResponse>(failure.payload())
+            .expect("failure response decodes"),
+        MemoryPackRpcResponse::Failure(error)
+            if error.code() == ErrorCode::Conflict && error.details() == Some("sku-42")
+    ));
+}
+
+#[test]
+fn bounded_codec_clears_caller_buffer_when_an_encoded_frame_is_too_large() {
+    let limits = MemoryPackDecodeLimits::new(4, 16, 16, 4, 4).expect("test limits are valid");
+    let codec = MemoryPackCodec::new(limits);
+    let mut output = vec![99];
+
+    let error = codec
+        .encode_value_into(&42_u64, &mut output)
+        .expect_err("a frame beyond the configured limit is rejected");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert!(output.is_empty());
 }
 
 #[test]

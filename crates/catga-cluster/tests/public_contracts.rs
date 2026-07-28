@@ -115,9 +115,11 @@ fn static_inbound_policy_binds_sender_ids_to_authenticated_peers() {
         .expect("valid member map must construct");
     let authenticated = RaftPeerIdentity::new("node-two").expect("non-empty identity must work");
     let another_peer = RaftPeerIdentity::new("node-three").expect("non-empty identity must work");
-    let mut message = RaftMessage::default();
-    message.from = 2;
-    message.to = 1;
+    let mut message = RaftMessage {
+        from: 2,
+        to: 1,
+        ..RaftMessage::default()
+    };
 
     assert_eq!(policy.authorize(Some(&authenticated), &message), Ok(()));
     assert_eq!(

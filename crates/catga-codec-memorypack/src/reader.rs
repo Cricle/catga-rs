@@ -177,12 +177,13 @@ impl<'a> MemoryPackReader<'a> {
         let pos = self.cursor.position() as usize;
         let buffer = self.cursor.get_ref();
 
-        if pos + length > buffer.len() {
-            return Err(MemoryPackError::UnexpectedEndOfBuffer);
-        }
+        let end = pos
+            .checked_add(length)
+            .filter(|end| *end <= buffer.len())
+            .ok_or(MemoryPackError::UnexpectedEndOfBuffer)?;
 
-        let slice = &buffer[pos..pos + length];
-        self.cursor.set_position((pos + length) as u64);
+        let slice = &buffer[pos..end];
+        self.cursor.set_position(end as u64);
         Ok(slice)
     }
 
