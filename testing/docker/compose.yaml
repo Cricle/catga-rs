@@ -3,7 +3,7 @@ name: catga-e2e
 services:
   nats:
     image: ${CATGA_CONTAINER_IMAGE_PREFIX:-docker.io}/library/nats:2.10-alpine
-    command: ["-js", "-m", "8222"]
+    command: ["-js", "-sd", "/data", "-m", "8222"]
     ports:
       - "127.0.0.1::4222"
       - "127.0.0.1::8222"

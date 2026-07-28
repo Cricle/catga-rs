@@ -337,6 +337,10 @@ name = "e2e_performance"
 path = "e2e_performance.rs"
 
 [[test]]
+name = "e2e_compose"
+path = "e2e_compose.rs"
+
+[[test]]
 name = "nats_request"
 path = "nats_request.rs"
 

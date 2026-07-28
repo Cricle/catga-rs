@@ -735,10 +735,13 @@ dependencies = [
  "async-trait",
  "axum",
  "catga-axum",
+ "catga-cluster",
  "catga-core",
  "catga-flow",
  "catga-memory",
+ "reqwest",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
