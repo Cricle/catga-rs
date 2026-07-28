@@ -18,6 +18,10 @@ fn performance_runner_executes_every_manual_benchmark_class() {
             "performance runner must execute {benchmark}"
         );
     }
+    assert!(
+        PERFORMANCE_RUNNER.contains("cargo test --release -p catga-tests"),
+        "performance runner must measure optimized release binaries"
+    );
     assert!(PERFORMANCE_RUNNER.contains("--ignored --nocapture"));
 }
 

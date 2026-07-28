@@ -150,7 +150,7 @@ fi
 set_connection_environment
 export CATGA_PERFORMANCE_RESULTS="$output_directory/performance.json"
 set +e
-cargo test -p catga-tests --all-features \
+cargo test --release -p catga-tests --all-features \
     --test critical_path_performance \
     --test mediator_performance \
     --test flow_performance \
@@ -163,7 +163,7 @@ if (( in_process_exit_code != 0 )); then
 fi
 
 set +e
-cargo test -p catga-tests --all-features --test nats_performance -- --ignored --nocapture \
+cargo test --release -p catga-tests --all-features --test nats_performance -- --ignored --nocapture \
     2>&1 | tee "$output_directory/nats-performance.log"
 nats_exit_code=${PIPESTATUS[0]}
 set -e
@@ -172,7 +172,7 @@ if (( nats_exit_code != 0 )); then
 fi
 
 set +e
-cargo test -p catga-tests --all-features --test e2e_performance -- --ignored --nocapture \
+cargo test --release -p catga-tests --all-features --test e2e_performance -- --ignored --nocapture \
     2>&1 | tee "$output_directory/e2e-performance.log"
 e2e_performance_exit_code=${PIPESTATUS[0]}
 set -e
