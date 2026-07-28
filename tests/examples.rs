@@ -2,7 +2,8 @@
 
 use std::path::Path;
 
-const EXAMPLES: [&str; 4] = [
+const EXAMPLES: [&str; 5] = [
+    "examples/src/bin/axum_checkout.rs",
     "examples/src/bin/mediator.rs",
     "examples/src/bin/flow.rs",
     "examples/src/bin/memory_transport.rs",

@@ -333,6 +333,10 @@ name = "nats_performance"
 path = "nats_performance.rs"
 
 [[test]]
+name = "e2e_performance"
+path = "e2e_performance.rs"
+
+[[test]]
 name = "nats_request"
 path = "nats_request.rs"
 

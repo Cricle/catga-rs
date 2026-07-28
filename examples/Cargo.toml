@@ -10,7 +10,10 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+catga-axum = { path = "../crates/catga-axum" }
 catga-core = { path = "../crates/catga-core" }
 catga-flow = { path = "../crates/catga-flow" }
 catga-memory = { path = "../crates/catga-memory" }
-tokio = { version = "1", features = ["macros", "rt"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "net", "rt"] }

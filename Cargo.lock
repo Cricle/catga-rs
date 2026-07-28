@@ -733,9 +733,12 @@ name = "catga-examples"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "axum",
+ "catga-axum",
  "catga-core",
  "catga-flow",
  "catga-memory",
+ "serde",
  "tokio",
 ]
 
