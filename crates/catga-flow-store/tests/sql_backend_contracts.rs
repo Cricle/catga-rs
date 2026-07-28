@@ -17,6 +17,11 @@ use catga_flow::{
     TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
+use tokio::sync::Mutex;
+
+// Timeout receipts are leased from one backend-wide due queue. These E2E contracts use a
+// bounded global poll, so they must not claim one another's deliberately expired records.
+static SQL_TIMEOUT_POLL_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Returns the configured external service URL or skips a locally disabled E2E case.
 fn external_url(variable: &str) -> CatgaResult<Option<Box<str>>> {
@@ -50,6 +55,7 @@ async fn suspended_null_and_cas_contract<S>(store: &S, backend: &str) -> CatgaRe
 where
     S: SuspendedFlowStore + TimedOutFlowStore + Sync,
 {
+    let _timeout_poll_guard = SQL_TIMEOUT_POLL_LOCK.lock().await;
     let prefix = format!("{backend}-sql-boundary-{}", uuid::Uuid::new_v4());
     let plain_id = format!("{prefix}/plain");
     let plain = FlowContinuation::new(
@@ -217,6 +223,7 @@ async fn timeout_receipt_recovery_contract<S>(store: &S, backend: &str) -> Catga
 where
     S: SuspendedFlowStore + TimedOutFlowStore + Sync,
 {
+    let _timeout_poll_guard = SQL_TIMEOUT_POLL_LOCK.lock().await;
     let prefix = format!("{backend}-timeout-boundary-{}", uuid::Uuid::new_v4());
     let flow_id = format!("{prefix}/waiting");
     // Use the earliest valid timeout instant. Other E2E cases use later fixed deadlines, so this
