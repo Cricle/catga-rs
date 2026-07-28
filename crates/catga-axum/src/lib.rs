@@ -442,6 +442,7 @@ macro_rules! __catga_endpoint_method {
 /// # use std::sync::Arc;
 /// # use async_trait::async_trait;
 /// # use catga_core::{CatgaResult, Event, EventHandler, Handler, Mediator, Message, Request, catga_handlers};
+/// # #[derive(serde::Deserialize)]
 /// # struct CreateOrder;
 /// # impl Message for CreateOrder {}
 /// # impl Request for CreateOrder { type Response = (); }
@@ -450,7 +451,7 @@ macro_rules! __catga_endpoint_method {
 /// # impl Handler<CreateOrder> for CreateOrderHandler {
 /// #     async fn handle(&self, _: CreateOrder) -> CatgaResult<()> { Ok(()) }
 /// # }
-/// # #[derive(Clone)]
+/// # #[derive(Clone, serde::Deserialize)]
 /// # struct OrderCreated;
 /// # impl Message for OrderCreated {}
 /// # impl Event for OrderCreated {}
