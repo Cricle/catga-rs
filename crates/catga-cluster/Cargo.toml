@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 arc-swap = "1"
 async-trait = "0.1"
-catga-core = { path = "../catga-core" }
+catga-core = { path = "../catga-core", version = "0.1.0" }
 metrics = "0.24"
 parking_lot = "0.12"
 raft = { version = "0.7", default-features = false, features = ["protobuf-codec"] }

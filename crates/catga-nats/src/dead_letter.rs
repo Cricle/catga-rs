@@ -66,7 +66,7 @@ impl DeadLetterStore for NatsDeadLetters {
             return Ok(Vec::new());
         }
         let mut info = self.stream.clone();
-        let state = info.info().await.map_err(map_error)?.state;
+        let state = info.info().await.map_err(map_error)?.state.clone();
         let mut letters = Vec::with_capacity(limit);
         if state.messages == 0 {
             return Ok(letters);
@@ -82,8 +82,7 @@ impl DeadLetterStore for NatsDeadLetters {
                 .as_str()
                 .starts_with(&format!("{}.", self.subject))
             {
-                let message: async_nats::Message = raw.try_into().map_err(map_error)?;
-                letters.push(decode(&self.codec, &message.payload)?);
+                letters.push(decode(&self.codec, &raw.payload)?);
                 if letters.len() == limit {
                     break;
                 }

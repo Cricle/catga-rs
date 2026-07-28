@@ -10,9 +10,8 @@ use std::{
 use async_nats::{
     Message,
     jetstream::{
-        self,
-        context::Publish,
-        kv,
+        self, kv,
+        message::PublishMessage,
         stream::{self, DirectGetErrorKind, Stream},
     },
 };
@@ -140,10 +139,7 @@ impl NatsEventStore {
     async fn current(&self, stream_id: &str) -> CatgaResult<Option<(i64, u64)>> {
         let subject = self.subject(stream_id)?;
         match self.stream.direct_get_last_for_subject(subject).await {
-            Ok(message) => Ok(Some((
-                message_version(&message)?,
-                message_sequence(&message)?,
-            ))),
+            Ok(message) => Ok(Some((stream_message_version(&message)?, message.sequence))),
             Err(error) if error.kind() == DirectGetErrorKind::NotFound => Ok(None),
             Err(error) => Err(map_error(error)),
         }
@@ -275,7 +271,7 @@ impl EventStore for NatsEventStore {
                 let payload = self.codec.encode(&event)?;
                 let version_text = version.to_string();
                 let timestamp_text = timestamp.to_string();
-                let mut publish = Publish::build()
+                let mut publish = PublishMessage::build()
                     .payload(payload.into())
                     .header(VERSION, version_text.as_str())
                     .header(TIMESTAMP, timestamp_text.as_str());
@@ -518,15 +514,13 @@ fn next_direct_sequence(sequence: u64) -> Option<u64> {
     sequence.checked_add(1)
 }
 
-fn message_header<N>(message: &async_nats::Message, name: N) -> CatgaResult<&str>
+fn message_header<N>(headers: &async_nats::HeaderMap, name: N) -> CatgaResult<&str>
 where
     N: async_nats::header::IntoHeaderName + std::fmt::Display,
 {
     let label = name.to_string();
-    message
-        .headers
-        .as_ref()
-        .and_then(|headers| headers.get(name))
+    headers
+        .get(name)
         .map(|value| value.as_str())
         .ok_or_else(|| {
             CatgaError::new(
@@ -536,23 +530,51 @@ where
         })
 }
 fn message_version(message: &async_nats::Message) -> CatgaResult<i64> {
-    message_header(message, VERSION)?.parse().map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Internal,
-            "JetStream event has an invalid version",
-        )
-    })
+    message
+        .headers
+        .as_ref()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "JetStream event is missing headers"))
+        .and_then(|headers| message_header(headers, VERSION))?
+        .parse()
+        .map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "JetStream event has an invalid version",
+            )
+        })
+}
+fn stream_message_version(
+    message: &async_nats::jetstream::message::StreamMessage,
+) -> CatgaResult<i64> {
+    message_header(&message.headers, VERSION)?
+        .parse()
+        .map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "JetStream event has an invalid version",
+            )
+        })
 }
 fn message_timestamp(message: &async_nats::Message) -> CatgaResult<u64> {
-    message_header(message, TIMESTAMP)?.parse().map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Internal,
-            "JetStream event has an invalid timestamp",
-        )
-    })
+    message
+        .headers
+        .as_ref()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "JetStream event is missing headers"))
+        .and_then(|headers| message_header(headers, TIMESTAMP))?
+        .parse()
+        .map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "JetStream event has an invalid timestamp",
+            )
+        })
 }
 fn message_sequence(message: &async_nats::Message) -> CatgaResult<u64> {
-    message_header(message, async_nats::header::NATS_SEQUENCE)?
+    message
+        .headers
+        .as_ref()
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "JetStream event is missing headers"))
+        .and_then(|headers| message_header(headers, async_nats::header::NATS_SEQUENCE))?
         .parse()
         .map_err(|_| {
             CatgaError::new(

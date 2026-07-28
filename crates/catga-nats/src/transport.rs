@@ -239,7 +239,7 @@ where
                 .context
                 .send_publish(
                     subject.to_owned(),
-                    jetstream::context::Publish::build()
+                    jetstream::message::PublishMessage::build()
                         .payload(payload.into())
                         .message_id(envelope.metadata().message_id().to_string()),
                 )
@@ -334,7 +334,7 @@ where
                         .context
                         .send_publish(
                             self.subject.to_string(),
-                            jetstream::context::Publish::build()
+                            jetstream::message::PublishMessage::build()
                                 .payload(encode_envelope(&self.codec, &envelope)?.into())
                                 .message_id(envelope.metadata().message_id().to_string()),
                         )

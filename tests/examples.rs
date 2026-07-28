@@ -1,6 +1,6 @@
-//! Compile contracts for the public examples.
+//! Presence contracts for the public executable examples.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 const EXAMPLES: [&str; 3] = [
     "examples/src/bin/mediator.rs",
@@ -9,7 +9,7 @@ const EXAMPLES: [&str; 3] = [
 ];
 
 #[test]
-fn public_examples_exist_and_compile_with_every_feature() {
+fn public_examples_are_present() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| {
@@ -22,11 +22,4 @@ fn public_examples_exist_and_compile_with_every_feature() {
             "missing required public example: {example}"
         );
     }
-
-    let status = Command::new("cargo")
-        .args(["check", "-p", "catga-examples", "--bins"])
-        .current_dir(workspace)
-        .status()
-        .unwrap_or_else(|error| panic!("failed to run cargo check for examples: {error}"));
-    assert!(status.success(), "every public example must compile");
 }

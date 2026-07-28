@@ -10,17 +10,18 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-async-nats = "0.35"
+async-nats = "0.50"
 async-trait = "0.1"
-catga-codec-memorypack = { path = "../catga-codec-memorypack" }
-catga-core = { path = "../catga-core" }
-catga-flow = { path = "../catga-flow" }
+catga-codec-memorypack = { path = "../catga-codec-memorypack", version = "0.1.0" }
+catga-core = { path = "../catga-core", version = "0.1.0" }
+catga-flow = { path = "../catga-flow", version = "0.1.0" }
 dashmap = "6"
 futures = "0.3"
+hex = "0.4"
 metrics = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tokio = { version = "1", features = ["time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1"

@@ -2,7 +2,7 @@
 
 //! Service-gated public-contract coverage migrated from crate-local tests.
 
-use std::{env, time::Duration};
+use std::time::Duration;
 
 use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
@@ -12,9 +12,8 @@ use catga_flow::{FlowState, FlowStore};
 use catga_redis::{RedisDeadLetters, RedisFlows, RedisIdempotency};
 use redis::AsyncCommands;
 
-fn redis_url() -> Option<String> {
-    env::var("CATGA_REDIS_URL").ok()
-}
+#[path = "support/service_url.rs"]
+mod service_url;
 
 fn map_redis_error(error: redis::RedisError) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
@@ -22,7 +21,7 @@ fn map_redis_error(error: redis::RedisError) -> CatgaError {
 
 #[tokio::test]
 async fn redis_dead_letters_decode_legacy_hash_records() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let prefix = format!("catga-test-dead-letter-{}", uuid::Uuid::new_v4());
@@ -65,7 +64,7 @@ async fn redis_dead_letters_decode_legacy_hash_records() -> CatgaResult<()> {
 
 #[tokio::test]
 async fn redis_idempotency_accepts_submillisecond_and_maximum_retention() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
 
@@ -97,7 +96,7 @@ async fn redis_idempotency_rejects_retention_above_its_maximum_before_connecting
 
 #[tokio::test]
 async fn redis_flows_use_stable_hashed_record_and_type_index_keys() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let prefix = format!("catga-test-flow-{}", uuid::Uuid::new_v4());
@@ -128,7 +127,7 @@ async fn redis_flows_use_stable_hashed_record_and_type_index_keys() -> CatgaResu
 
 #[tokio::test]
 async fn redis_flows_do_not_claim_terminal_flows() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let prefix = format!("catga-test-flow-{}", uuid::Uuid::new_v4());
@@ -178,7 +177,7 @@ mod streams_rpc {
 
     #[tokio::test]
     async fn request_timeout_budget_bounds_a_never_resolving_durable_send() -> CatgaResult<()> {
-        let Some(url) = redis_url() else {
+        let Some(url) = service_url::redis_url()? else {
             return Ok(());
         };
         let client = RedisStreamsRequestClient::new(Arc::new(NeverSendingTransport), &url)?;

@@ -161,7 +161,7 @@ fn key(flow_id: &str, step_index: u32) -> String {
     let mut digest = Sha256::new();
     digest.update(flow_id.as_bytes());
     digest.update(step_index.to_be_bytes());
-    format!("d{:x}", digest.finalize())
+    format!("d{}", hex::encode(digest.finalize()))
 }
 
 fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {

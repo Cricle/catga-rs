@@ -24,14 +24,30 @@ use tempfile::TempDir;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
+#[test]
+fn configured_nats_url_prefers_the_ci_service_url() {
+    assert_eq!(
+        configured_nats_url(Some("nats://127.0.0.1:4222")),
+        Some("nats://127.0.0.1:4222".to_owned())
+    );
+}
+
 struct NatsServer {
-    child: Child,
-    _data_directory: TempDir,
+    child: Option<Child>,
+    _data_directory: Option<TempDir>,
     url: String,
 }
 
 impl NatsServer {
     async fn start() -> CatgaResult<Self> {
+        if let Some(url) = configured_nats_url(std::env::var("CATGA_NATS_URL").ok().as_deref()) {
+            return Ok(Self {
+                child: None,
+                _data_directory: None,
+                url,
+            });
+        }
+
         let listener = TcpListener::bind("127.0.0.1:0")
             .map_err(|error| test_error("reserve NATS test port", error))?;
         let port = listener
@@ -55,8 +71,8 @@ impl NatsServer {
             if let Ok(client) = async_nats::connect(&url).await {
                 drop(client);
                 return Ok(Self {
-                    child,
-                    _data_directory: data_directory,
+                    child: Some(child),
+                    _data_directory: Some(data_directory),
                     url,
                 });
             }
@@ -78,9 +94,18 @@ impl NatsServer {
 
 impl Drop for NatsServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
+}
+
+fn configured_nats_url(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn test_error(context: &'static str, error: impl std::fmt::Display) -> CatgaError {
@@ -146,6 +171,7 @@ async fn public_connectors_reject_invalid_configuration_before_network_io() {
 }
 
 #[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn durable_transport_uses_public_qos_contracts_and_round_trips_envelopes() -> CatgaResult<()>
 {
     let server = NatsServer::start().await?;
@@ -189,6 +215,7 @@ async fn durable_transport_uses_public_qos_contracts_and_round_trips_envelopes()
 }
 
 #[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn core_pubsub_delivers_at_most_once_envelopes() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let transport = NatsPubSubTransport::connect(NatsPubSubConfig {
@@ -206,6 +233,7 @@ async fn core_pubsub_delivers_at_most_once_envelopes() -> CatgaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn event_store_persists_versioned_pages_through_its_public_trait() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let store =
@@ -234,6 +262,7 @@ async fn event_store_persists_versioned_pages_through_its_public_trait() -> Catg
 }
 
 #[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn dead_letters_round_trip_diagnostics_and_read_legacy_records() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let stream = unique("CATGA_DLQ");
@@ -287,6 +316,7 @@ async fn dead_letters_round_trip_diagnostics_and_read_legacy_records() -> CatgaR
 }
 
 #[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn outbox_persists_published_messages_and_recovers_legacy_records() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let bucket = unique("CATGA_OUTBOX");

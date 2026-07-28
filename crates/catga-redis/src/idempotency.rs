@@ -97,7 +97,7 @@ impl RedisIdempotency {
     fn key(&self, key: &str) -> String {
         let mut digest = Sha256::new();
         digest.update(key.as_bytes());
-        format!("{}:{:x}", self.prefix, digest.finalize())
+        format!("{}:{}", self.prefix, hex::encode(digest.finalize()))
     }
 
     async fn transition(

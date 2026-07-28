@@ -17,7 +17,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```rust,no_run
 use async_trait::async_trait;
-use catga_core::{CatgaResult, Handler, Mediator, Registry, Request};
+use catga_core::{CatgaResult, Handler, Mediator, Request, catga_handlers};
 
 struct Double(u64);
 impl catga_core::Message for Double {}
@@ -36,10 +36,8 @@ impl Handler<Double> for DoubleHandler {
 
 #[tokio::main]
 async fn main() -> CatgaResult<()> {
-    let mut registry = Registry::new();
-    registry.register_request::<Double, _>(DoubleHandler)?;
-
-    let result = Mediator::new(registry).send(Double(21)).await?;
+    let mediator = Mediator::new(catga_handlers! { request Double => DoubleHandler }?);
+    let result = mediator.send(Double(21)).await?;
     assert_eq!(result, 42);
     Ok(())
 }
@@ -114,10 +112,13 @@ background worker.
 
 ## External services and boundaries
 
-Live service tests are opt-in. Set `CATGA_REDIS_URL`, `CATGA_MYSQL_URL`,
-`CATGA_POSTGRES_URL`, `CATGA_MSSQL_URL`, or `CATGA_ROBUSTMQ_URL` before
-running the matching integration target. A test run without those variables
-does not prove an external service contract.
+NATS JetStream tests start and remove an isolated Testcontainers server when
+`CATGA_NATS_URL` is unset; set it to test an externally managed NATS service.
+Redis, MySQL, PostgreSQL, SQL Server, and RobustMQ tests are real-service E2E
+tests marked `#[ignore]` locally. Provide the matching `CATGA_*_URL` and run
+the target with `-- --ignored`; CI provisions all of these services and runs
+the ignored E2E targets. A default local test run therefore does not prove an
+external-service contract beyond its automatic NATS container coverage.
 
 RabbitMQ/AMQP, Flow hot reload, and an HTTP health endpoint are intentionally
 not part of this Rust workspace. Use OpenTelemetry-compatible tracing and

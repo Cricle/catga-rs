@@ -536,11 +536,14 @@ impl TimedOutFlowStore for NatsSuspendedFlows {
 }
 
 fn kv_key(flow_id: &str) -> String {
-    format!("f{:x}", Sha256::digest(flow_id.as_bytes()))
+    format!("f{}", hex::encode(Sha256::digest(flow_id.as_bytes())))
 }
 
 fn correlation_key(correlation_id: &str) -> String {
-    format!("c{:x}", Sha256::digest(correlation_id.as_bytes()))
+    format!(
+        "c{}",
+        hex::encode(Sha256::digest(correlation_id.as_bytes()))
+    )
 }
 
 async fn create_index(

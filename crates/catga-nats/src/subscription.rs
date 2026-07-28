@@ -492,11 +492,17 @@ impl LeaseRecord {
 }
 
 fn definition_key(subscription_name: &str) -> String {
-    format!("d{:x}", Sha256::digest(subscription_name.as_bytes()))
+    format!(
+        "d{}",
+        hex::encode(Sha256::digest(subscription_name.as_bytes()))
+    )
 }
 
 fn lease_key(subscription_name: &str) -> String {
-    format!("l{:x}", Sha256::digest(subscription_name.as_bytes()))
+    format!(
+        "l{}",
+        hex::encode(Sha256::digest(subscription_name.as_bytes()))
+    )
 }
 
 fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {

@@ -21,12 +21,33 @@ jobs:
       - run: cargo test --doc --workspace --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: cargo check --examples --workspace --all-features
+      - run: cargo check -p catga-examples --bins
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 95 --fail-under-regions 95
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          if-no-files-found: warn
+          retention-days: 14
   e2e:
     runs-on: ubuntu-latest
     services:
       redis:
         image: redis:8-alpine
         ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
       mysql:
         image: mysql:8.4
         env:
@@ -35,6 +56,11 @@ jobs:
           MYSQL_PASSWORD: catga_e2e_password
           MYSQL_ROOT_PASSWORD: catga_root_e2e_password
         ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -p$MYSQL_ROOT_PASSWORD"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 60
       postgres:
         image: postgres:17-alpine
         env:
@@ -42,15 +68,27 @@ jobs:
           POSTGRES_USER: catga
           POSTGRES_PASSWORD: catga_e2e_password
         ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
       mssql:
         image: mcr.microsoft.com/mssql/server:2025-latest
         env:
           ACCEPT_EULA: Y
           MSSQL_SA_PASSWORD: Catga_e2e_password_2026!
         ports: ['1433:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -C -Q 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
     env:
       CATGA_NATS_URL: nats://127.0.0.1:4222
       CATGA_REDIS_URL: redis://127.0.0.1:6379
+      # RobustMQ implements the mq9 mailbox control plane; a plain NATS server does not.
+      CATGA_ROBUSTMQ_URL: nats://127.0.0.1:4223
       CATGA_MYSQL_URL: mysql://catga:catga_e2e_password@127.0.0.1:3306/catga
       CATGA_POSTGRES_URL: postgres://catga:catga_e2e_password@127.0.0.1:5432/catga
       CATGA_MSSQL_URL: server=tcp:127.0.0.1,1433;User Id=sa;Password=Catga_e2e_password_2026!;TrustServerCertificate=true;Database=master
@@ -58,7 +96,50 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: docker run -d --rm --name catga-ci-nats -p 4222:4222 nats:2.10-alpine -js
-      - run: cargo test --workspace --all-features
+      - run: docker run -d --rm --name catga-ci-nats -p 4222:4222 -p 8222:8222 nats:2.10-alpine -js -m 8222
+      # The amd64 manifest resolved from ghcr.io/robustmq/robustmq:latest on 2026-07-28.
+      # Pinning it makes every Ubuntu runner exercise the same mq9 control-plane implementation.
+      - run: docker run -d --rm --name catga-ci-robustmq -p 4223:4222 ghcr.io/robustmq/robustmq@sha256:0884a50d8e67828d521e25bf662f7d85b6b823bc28faa5eacbbf440029f59e53
+      - name: Wait for real-service E2E dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          wait_for_tcp() {
+            local service="$1"
+            local port="$2"
+            for attempt in $(seq 1 60); do
+              if (echo > "/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+                echo "${service} is reachable"
+                return 0
+              fi
+              echo "Waiting for ${service} (${attempt}/60)"
+              sleep 1
+            done
+            echo "${service} did not become ready within 60 seconds" >&2
+            return 1
+          }
+          wait_for_tcp redis 6379
+          wait_for_tcp mysql 3306
+          wait_for_tcp postgres 5432
+          wait_for_tcp mssql 1433
+          wait_for_tcp nats 4222
+          wait_for_tcp robustmq 4223
+      - name: Verify RobustMQ mq9 mailbox control plane
+        run: cargo test -p catga-tests --test robustmq mailbox_request_server_replies_through_the_private_reply_mailbox -- --ignored
+      - run: cargo test -p catga-tests --test nats
+      - run: cargo test -p catga-tests --test nats_request
       - run: cargo test -p catga-tests --test redis -- --ignored
+      - run: cargo test -p catga-tests --test robustmq
+      - run: cargo test -p catga-tests --test robustmq -- --ignored --skip mailbox_request_server_replies_through_the_private_reply_mailbox
+      - run: cargo test -p catga-tests --test state_machine_persistence -- --ignored
+      - run: cargo test -p catga-tests --test cross_backend -- --ignored
+      - run: cargo test -p catga-nats --test nats_contracts -- --ignored
+      - run: cargo test -p catga-redis --all-features
+      - run: cargo test -p catga-redis --all-features --test codec_injection -- --ignored
       - run: cargo test -p catga-flow-store --all-features
+      - run: cargo test -p catga-flow-store --all-features --test mysql -- --ignored
+      - run: cargo test -p catga-flow-store --all-features --test postgres -- --ignored
+      - run: cargo test -p catga-flow-store --all-features --test mssql -- --ignored
+      - name: Collect RobustMQ diagnostics after an E2E failure
+        if: ${{ failure() }}
+        run: docker logs catga-ci-robustmq || true

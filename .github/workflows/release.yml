@@ -23,7 +23,14 @@ jobs:
       - run: cargo test --doc --workspace --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: |
-          for package in catga-core catga-codec-memorypack catga-codec-bincode catga-macros catga-flow catga-memory catga-flow-store catga-scheduler-tokio-cron catga-redis catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
+          for package in catga-macros catga-core catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
+            version="$(cargo pkgid -p "$package")"
+            version="${version##*#}"
+            if curl --fail --silent --show-error "https://crates.io/api/v1/crates/$package/$version" > /dev/null; then
+              echo "$package v$version is already published; skipping"
+              continue
+            fi
+
             cargo publish --dry-run -p "$package"
-            cargo publish -p "$package" || cargo search "$package" --limit 1
+            cargo publish -p "$package"
           done

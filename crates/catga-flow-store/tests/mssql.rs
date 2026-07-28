@@ -1,26 +1,30 @@
-//! SQL Server integration coverage, enabled only when `CATGA_MSSQL_URL` is configured.
+//! SQL Server real-service integration coverage.
 #![cfg(feature = "mssql")]
 
-use std::{
-    env,
-    time::{Duration, SystemTime},
-};
+use std::time::{Duration, SystemTime};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{
-    DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
-    SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
+    FlowContinuation, FlowQuery, FlowState, FlowStatus, FlowStore, SuspendedFlowStore,
+    TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
-use catga_flow_store::{SqlFlowScheduler, SqlFlowStore, SqlSuspendedFlowStore};
+use catga_flow_store::{
+    SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
+    SqlSuspendedFlowStore,
+};
+
+#[path = "sql_contracts.rs"]
+mod sql_contracts;
 
 #[tokio::test]
+#[ignore = "requires CATGA_MSSQL_URL"]
 async fn mssql_continuation_migration_is_concurrent_and_repeatable() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_MSSQL_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_MSSQL_URL")? else {
         return Ok(());
     };
     let (first, second) = tokio::join!(
-        SqlSuspendedFlowStore::connect_mssql(&url),
-        SqlSuspendedFlowStore::connect_mssql(&url),
+        SqlSuspendedFlowStore::connect_mssql(url.as_ref()),
+        SqlSuspendedFlowStore::connect_mssql(url.as_ref()),
     );
     let first = first?;
     let second = second?;
@@ -31,53 +35,24 @@ async fn mssql_continuation_migration_is_concurrent_and_repeatable() -> CatgaRes
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_MSSQL_URL"]
 async fn mssql_scheduler_is_idempotent_and_lease_fenced() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_MSSQL_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_MSSQL_URL")? else {
         return Ok(());
     };
-    let scheduler = SqlFlowScheduler::connect_mssql(&url).await?;
+    let scheduler = SqlFlowScheduler::connect_mssql(url.as_ref()).await?;
     scheduler.migrate().await?;
-    let target = format!("mssql-schedule-{}", uuid::Uuid::new_v4());
-    let due = SystemTime::now() + Duration::from_secs(5);
-    let (first, second) = tokio::join!(
-        scheduler.schedule_resume(&target, "resume", due),
-        scheduler.schedule_resume(&target, "resume", due),
-    );
-    let first = first?;
-    assert_eq!(first, second?);
-    let claimed = scheduler
-        .claim_due("worker-a", due, Duration::from_secs(30), 1)
-        .await?;
-    assert_eq!(claimed.len(), 1);
-    assert!(!scheduler.cancel_resume(first.as_ref()).await?);
-    assert!(
-        scheduler
-            .release_due("worker-a", claimed[0].schedule_id())
-            .await?
-    );
-    let reclaimed = scheduler
-        .claim_due(
-            "worker-b",
-            due + Duration::from_secs(1),
-            Duration::from_secs(30),
-            1,
-        )
-        .await?;
-    assert_eq!(reclaimed.len(), 1);
-    assert!(
-        scheduler
-            .ack_due("worker-b", reclaimed[0].schedule_id())
-            .await?
-    );
-    Ok(())
+    scheduler.migrate().await?;
+    sql_contracts::scheduler_contract(&scheduler, "mssql-e2e").await
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_MSSQL_URL"]
 async fn mssql_flow_and_continuation_contracts() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_MSSQL_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_MSSQL_URL")? else {
         return Ok(());
     };
-    let flow = SqlFlowStore::connect_mssql(&url).await?;
+    let flow = SqlFlowStore::connect_mssql(url.as_ref()).await?;
     flow.migrate().await?;
     let id = format!("mssql-flow-{}", uuid::Uuid::new_v4());
     let initial = FlowState::new(id.as_str(), "mssql-contract", [], "node-a");
@@ -92,7 +67,7 @@ async fn mssql_flow_and_continuation_contracts() -> CatgaResult<()> {
             .is_some()
     );
 
-    let store = SqlSuspendedFlowStore::connect_mssql(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_mssql(url.as_ref()).await?;
     store.migrate().await?;
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(5_000);
     let continuation = FlowContinuation::waiting(
@@ -132,11 +107,12 @@ async fn mssql_flow_and_continuation_contracts() -> CatgaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_MSSQL_URL"]
 async fn mssql_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_MSSQL_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_MSSQL_URL")? else {
         return Ok(());
     };
-    let store = SqlSuspendedFlowStore::connect_mssql(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_mssql(url.as_ref()).await?;
     store.migrate().await?;
     let id = format!("mssql-filtered-suspended-{}", uuid::Uuid::new_v4());
     assert!(
@@ -170,4 +146,29 @@ async fn mssql_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].id(), format!("{id}-matching"));
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_MSSQL_URL"]
+async fn mssql_state_machine_store_preserves_snapshots_and_version_cas() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_MSSQL_URL")? else {
+        return Ok(());
+    };
+    let store =
+        SqlStateMachineStore::<sql_contracts::ContractState>::connect_mssql(url.as_ref()).await?;
+    store.migrate().await?;
+    store.migrate().await?;
+    sql_contracts::state_machine_contract(&store, "mssql-e2e").await
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_MSSQL_URL"]
+async fn mssql_dsl_progress_store_preserves_checkpoint_recovery() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_MSSQL_URL")? else {
+        return Ok(());
+    };
+    let store = SqlDslStepProgressStore::connect_mssql(url.as_ref()).await?;
+    store.migrate().await?;
+    store.migrate().await?;
+    sql_contracts::dsl_progress_contract(&store, "mssql-e2e").await
 }

@@ -12,12 +12,12 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core" }
-catga-flow = { path = "../catga-flow" }
+catga-core = { path = "../catga-core", version = "0.1.0" }
+catga-flow = { path = "../catga-flow", version = "0.1.0" }
 tokio-cron-scheduler = { version = "0.15.1", default-features = false }
 tracing = "0.1"
 uuid = "1"
 
 [dev-dependencies]
-catga-memory = { path = "../catga-memory" }
+catga-memory = { path = "../catga-memory", version = "0.1.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

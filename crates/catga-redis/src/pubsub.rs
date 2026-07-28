@@ -117,7 +117,7 @@ impl RedisPubSubTransport {
         if scope == b"receive" {
             digest.update(self.receiver_id.as_bytes());
         }
-        format!("catga:pubsub:dedup:{:x}", digest.finalize()).into_boxed_str()
+        format!("catga:pubsub:dedup:{}", hex::encode(digest.finalize())).into_boxed_str()
     }
 
     /// Atomically reserves one received exactly-once identity for this subscriber instance.

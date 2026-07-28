@@ -4,7 +4,7 @@
 
 #![cfg(feature = "streams-rpc")]
 
-use std::{env, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use catga_codec_memorypack::{MemoryPackCodec, MemoryPackRpcResponse};
 use catga_core::{
@@ -15,9 +15,8 @@ use catga_redis::{
     RedisConfig, RedisStreamsRequestClient, RedisStreamsRequestServer, RedisTransport,
 };
 
-fn redis_url() -> Option<String> {
-    env::var("CATGA_REDIS_URL").ok()
-}
+#[path = "support/service_url.rs"]
+mod service_url;
 
 async fn transport(url: &str, label: &str) -> CatgaResult<Arc<RedisTransport>> {
     RedisTransport::connect(RedisConfig {
@@ -50,7 +49,7 @@ fn reply(request: &Envelope) -> Envelope {
 
 #[tokio::test]
 async fn streams_rpc_returns_a_successful_reply_and_acknowledges_ingress() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let label = uuid::Uuid::new_v4().to_string();
@@ -83,7 +82,7 @@ async fn streams_rpc_returns_a_successful_reply_and_acknowledges_ingress() -> Ca
 
 #[tokio::test]
 async fn streams_rpc_returns_structured_remote_errors() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let label = uuid::Uuid::new_v4().to_string();
@@ -123,7 +122,7 @@ async fn streams_rpc_returns_structured_remote_errors() -> CatgaResult<()> {
 
 #[tokio::test]
 async fn streams_rpc_times_out_when_no_server_replies() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let label = uuid::Uuid::new_v4().to_string();
@@ -144,7 +143,7 @@ async fn streams_rpc_times_out_when_no_server_replies() -> CatgaResult<()> {
 
 #[tokio::test]
 async fn streams_rpc_redelivers_when_response_cannot_be_prepared() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let label = uuid::Uuid::new_v4().to_string();

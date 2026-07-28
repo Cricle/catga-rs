@@ -545,7 +545,7 @@ async fn delete_if_revision(store: &kv::Store, key: &str, revision: u64) -> Catg
 }
 
 fn target_record_key(target: &[u8]) -> String {
-    format!("r{:x}", Sha256::digest(target))
+    format!("r{}", hex::encode(Sha256::digest(target)))
 }
 
 fn schedule_key(schedule_id: &str) -> Option<&str> {
@@ -569,7 +569,7 @@ fn page_key(page: u64) -> String {
 }
 
 fn marker_key(key: &str) -> String {
-    format!("i{:x}", Sha256::digest(key.as_bytes()))
+    format!("i{}", hex::encode(Sha256::digest(key.as_bytes())))
 }
 
 fn target_bytes(flow_id: &str, state_id: &str) -> CatgaResult<Vec<u8>> {

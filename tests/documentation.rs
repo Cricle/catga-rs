@@ -7,4 +7,11 @@ fn readme_exposes_the_required_user_onboarding_sections() {
     for heading in ["## Quick start", "## Flow", "## FlowStore", "## Features"] {
         assert!(README.contains(heading), "README is missing {heading}");
     }
+
+    assert!(README.contains("catga_handlers!"));
+    assert!(!README.contains("registry.register_request::<Double, _>(DoubleHandler)?"));
+    assert!(
+        README.contains("NATS JetStream tests start and remove an isolated Testcontainers server")
+    );
+    assert!(README.contains("tests marked `#[ignore]` locally"));
 }

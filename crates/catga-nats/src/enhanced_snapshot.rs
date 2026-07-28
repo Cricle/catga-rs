@@ -452,7 +452,7 @@ struct StoredSnapshot {
 }
 
 fn stream_key(stream_id: &str) -> String {
-    format!("s{:x}", Sha256::digest(stream_id.as_bytes()))
+    format!("s{}", hex::encode(Sha256::digest(stream_id.as_bytes())))
 }
 
 fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {

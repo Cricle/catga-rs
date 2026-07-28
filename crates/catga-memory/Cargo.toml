@@ -12,8 +12,8 @@ workspace = true
 [dependencies]
 async-trait = "0.1"
 arc-swap = "1"
-catga-core = { path = "../catga-core" }
-catga-flow = { path = "../catga-flow" }
+catga-core = { path = "../catga-core", version = "0.1.0" }
+catga-flow = { path = "../catga-flow", version = "0.1.0" }
 dashmap = "6"
 tokio = { version = "1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }

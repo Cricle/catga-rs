@@ -2,8 +2,9 @@
 //! Core contracts for Catga's explicit, typed CQRS runtime.
 //!
 //! Applications construct a [`Registry`] once at startup, then dispatch values through a
-//! [`Mediator`]. The core owns no adapter configuration or background worker; callers choose
-//! bounded stores, transports, and policies from the companion crates.
+//! [`Mediator`]. [`catga_handlers!`] keeps common handler registration concise while preserving
+//! explicit startup composition. The core owns no adapter configuration or background worker;
+//! callers choose bounded stores, transports, and policies from the companion crates.
 //!
 //! # Deterministic policy checks
 //!
@@ -25,7 +26,7 @@
 //!
 //! ```no_run
 //! use async_trait::async_trait;
-//! use catga_core::{CatgaResult, Handler, Mediator, Registry, Request};
+//! use catga_core::{CatgaResult, Handler, Mediator, Request, catga_handlers};
 //!
 //! struct Double(u64);
 //! impl catga_core::Message for Double {}
@@ -40,9 +41,8 @@
 //! }
 //!
 //! # async fn run() -> CatgaResult<()> {
-//! let mut registry = Registry::new();
-//! registry.register_request::<Double, _>(DoubleHandler)?;
-//! assert_eq!(Mediator::new(registry).send(Double(21)).await?, 42);
+//! let mediator = Mediator::new(catga_handlers! { request Double => DoubleHandler }?);
+//! assert_eq!(mediator.send(Double(21)).await?, 42);
 //! # Ok(())
 //! # }
 //! ```

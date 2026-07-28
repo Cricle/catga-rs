@@ -1,4 +1,4 @@
-//! MySQL integration coverage, enabled only when `CATGA_MYSQL_URL` is configured.
+//! MySQL real-service integration coverage.
 #![cfg(feature = "mysql")]
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
@@ -6,18 +6,22 @@ use catga_flow::{
     FlowContinuation, FlowQuery, FlowState, FlowStatus, FlowStore, SuspendedFlowStore,
     TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
-use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
-use std::{
-    env,
-    time::{Duration, SystemTime},
+use catga_flow_store::{
+    SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
+    SqlSuspendedFlowStore,
 };
+use std::time::{Duration, SystemTime};
+
+#[path = "sql_contracts.rs"]
+mod sql_contracts;
 
 #[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
 async fn mysql_flow_and_continuation_contracts() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_MYSQL_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_MYSQL_URL")? else {
         return Ok(());
     };
-    let flow = SqlFlowStore::connect_mysql(&url).await?;
+    let flow = SqlFlowStore::connect_mysql(url.as_ref()).await?;
     flow.migrate().await?;
     let id = format!("mysql-flow-{}", uuid::Uuid::new_v4());
     let initial = FlowState::new(id.as_str(), "mysql-contract", [], "node-a");
@@ -32,7 +36,7 @@ async fn mysql_flow_and_continuation_contracts() -> CatgaResult<()> {
             .is_some()
     );
 
-    let store = SqlSuspendedFlowStore::connect_mysql(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_mysql(url.as_ref()).await?;
     store.migrate().await?;
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(5_000);
     let continuation = FlowContinuation::waiting(
@@ -61,11 +65,12 @@ async fn mysql_flow_and_continuation_contracts() -> CatgaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
 async fn mysql_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_MYSQL_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_MYSQL_URL")? else {
         return Ok(());
     };
-    let store = SqlSuspendedFlowStore::connect_mysql(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_mysql(url.as_ref()).await?;
     store.migrate().await?;
     let id = format!("mysql-filtered-suspended-{}", uuid::Uuid::new_v4());
     assert!(
@@ -102,11 +107,12 @@ async fn mysql_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
 async fn mysql_suspended_store_looks_up_indexed_wait_correlations() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_MYSQL_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_MYSQL_URL")? else {
         return Ok(());
     };
-    let store = SqlSuspendedFlowStore::connect_mysql(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_mysql(url.as_ref()).await?;
     store.migrate().await?;
     let id = format!("mysql-correlation-{}", uuid::Uuid::new_v4());
     let correlation = format!("{id}/{}", "x".repeat(1_024));
@@ -174,4 +180,41 @@ async fn mysql_suspended_store_looks_up_indexed_wait_correlations() -> CatgaResu
         ErrorCode::Conflict
     );
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
+async fn mysql_state_machine_store_preserves_snapshots_and_version_cas() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_MYSQL_URL")? else {
+        return Ok(());
+    };
+    let store =
+        SqlStateMachineStore::<sql_contracts::ContractState>::connect_mysql(url.as_ref()).await?;
+    store.migrate().await?;
+    store.migrate().await?;
+    sql_contracts::state_machine_contract(&store, "mysql-e2e").await
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
+async fn mysql_dsl_progress_store_preserves_checkpoint_recovery() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_MYSQL_URL")? else {
+        return Ok(());
+    };
+    let store = SqlDslStepProgressStore::connect_mysql(url.as_ref()).await?;
+    store.migrate().await?;
+    store.migrate().await?;
+    sql_contracts::dsl_progress_contract(&store, "mysql-e2e").await
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_MYSQL_URL"]
+async fn mysql_flow_scheduler_is_idempotent_and_lease_fenced() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_MYSQL_URL")? else {
+        return Ok(());
+    };
+    let scheduler = SqlFlowScheduler::connect_mysql(url.as_ref()).await?;
+    scheduler.migrate().await?;
+    scheduler.migrate().await?;
+    sql_contracts::scheduler_contract(&scheduler, "mysql-e2e").await
 }

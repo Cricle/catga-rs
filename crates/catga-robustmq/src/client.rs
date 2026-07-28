@@ -51,6 +51,23 @@ pub struct MailboxClient<C = MemoryPackCodec> {
     codec: Arc<C>,
 }
 
+/// Owns a private reply subscription and unsubscribes when a request completes or times out.
+struct ReplySubscription(Option<Subscription>);
+
+impl ReplySubscription {
+    fn new(subscription: Subscription) -> Self {
+        Self(Some(subscription))
+    }
+}
+
+impl Drop for ReplySubscription {
+    fn drop(&mut self) {
+        if let Some(subscription) = self.0.take() {
+            subscription.unsubscribe();
+        }
+    }
+}
+
 impl MailboxClient<MemoryPackCodec> {
     /// Connects to a RobustMQ NATS-compatible endpoint.
     pub async fn connect(server: &str) -> CatgaResult<Self> {
@@ -192,46 +209,44 @@ where
                 "RobustMQ request timeout must be greater than zero",
             ));
         }
-        let reply = self
-            .client
-            .create(60, false, "", "")
-            .await
-            .map_err(map_error)?;
-        let (sender, mut receiver) = mpsc::channel(1);
-        let codec = Arc::clone(&self.codec);
-        let subscription = self
-            .client
-            .subscribe(
-                &reply.mail_id,
-                move |message| {
-                    let decoded = decode_envelope(codec.as_ref(), &message.payload);
-                    let sender = sender.clone();
-                    async move {
-                        let _ = sender.send(decoded).await;
-                    }
-                },
-                None,
-                "",
-            )
-            .await
-            .map_err(map_error)?;
-        let priority = MailboxPriority::from_envelope(&request).as_sdk();
-        let payload = encode_envelope(self.codec.as_ref(), &request.with_reply_to(reply.mail_id))?;
-        let result = async {
+        tokio::time::timeout(timeout, async {
+            let reply = self
+                .client
+                .create(60, false, "", "")
+                .await
+                .map_err(map_error)?;
+            let (sender, mut receiver) = mpsc::channel(1);
+            let codec = Arc::clone(&self.codec);
+            let _subscription = ReplySubscription::new(
+                self.client
+                    .subscribe(
+                        &reply.mail_id,
+                        move |message| {
+                            let decoded = decode_envelope(codec.as_ref(), &message.payload);
+                            let sender = sender.clone();
+                            async move {
+                                let _ = sender.send(decoded).await;
+                            }
+                        },
+                        None,
+                        "",
+                    )
+                    .await
+                    .map_err(map_error)?,
+            );
+            let priority = MailboxPriority::from_envelope(&request).as_sdk();
+            let payload =
+                encode_envelope(self.codec.as_ref(), &request.with_reply_to(reply.mail_id))?;
             self.client
                 .send(mailbox_id, &payload, priority)
                 .await
                 .map_err(map_error)?;
-            tokio::time::timeout(timeout, receiver.recv())
-                .await
-                .map_err(|_| CatgaError::new(ErrorCode::Timeout, "RobustMQ request timed out"))?
-                .ok_or_else(|| {
-                    CatgaError::new(ErrorCode::Transient, "RobustMQ reply subscription closed")
-                })?
-        }
-        .await;
-        subscription.unsubscribe();
-        result
+            receiver.recv().await.ok_or_else(|| {
+                CatgaError::new(ErrorCode::Transient, "RobustMQ reply subscription closed")
+            })?
+        })
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "RobustMQ request timed out"))?
     }
 }
 

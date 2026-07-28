@@ -1,4 +1,4 @@
-//! PostgreSQL integration coverage, enabled only when `CATGA_POSTGRES_URL` is configured.
+//! PostgreSQL real-service integration coverage.
 #![cfg(feature = "postgres")]
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
@@ -6,18 +6,22 @@ use catga_flow::{
     FlowContinuation, FlowQuery, FlowState, FlowStatus, FlowStore, SuspendedFlowStore,
     TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
-use catga_flow_store::{SqlFlowStore, SqlSuspendedFlowStore};
-use std::{
-    env,
-    time::{Duration, SystemTime},
+use catga_flow_store::{
+    SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
+    SqlSuspendedFlowStore,
 };
+use std::time::{Duration, SystemTime};
+
+#[path = "sql_contracts.rs"]
+mod sql_contracts;
 
 #[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
 async fn postgres_flow_and_continuation_contracts() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_POSTGRES_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_POSTGRES_URL")? else {
         return Ok(());
     };
-    let flow = SqlFlowStore::connect_postgres(&url).await?;
+    let flow = SqlFlowStore::connect_postgres(url.as_ref()).await?;
     flow.migrate().await?;
     let id = format!("postgres-flow-{}", uuid::Uuid::new_v4());
     let initial = FlowState::new(id.as_str(), "postgres-contract", [], "node-a");
@@ -32,7 +36,7 @@ async fn postgres_flow_and_continuation_contracts() -> CatgaResult<()> {
             .is_some()
     );
 
-    let store = SqlSuspendedFlowStore::connect_postgres(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_postgres(url.as_ref()).await?;
     store.migrate().await?;
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(5_000);
     let continuation = FlowContinuation::waiting(
@@ -61,11 +65,12 @@ async fn postgres_flow_and_continuation_contracts() -> CatgaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
 async fn postgres_suspended_query_filters_before_its_scan_limit() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_POSTGRES_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_POSTGRES_URL")? else {
         return Ok(());
     };
-    let store = SqlSuspendedFlowStore::connect_postgres(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_postgres(url.as_ref()).await?;
     store.migrate().await?;
     let id = format!("postgres-filtered-suspended-{}", uuid::Uuid::new_v4());
     assert!(
@@ -102,11 +107,12 @@ async fn postgres_suspended_query_filters_before_its_scan_limit() -> CatgaResult
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
 async fn postgres_suspended_store_looks_up_indexed_wait_correlations() -> CatgaResult<()> {
-    let Ok(url) = env::var("CATGA_POSTGRES_URL") else {
+    let Some(url) = sql_contracts::service_url("CATGA_POSTGRES_URL")? else {
         return Ok(());
     };
-    let store = SqlSuspendedFlowStore::connect_postgres(&url).await?;
+    let store = SqlSuspendedFlowStore::connect_postgres(url.as_ref()).await?;
     store.migrate().await?;
     let id = format!("postgres-correlation-{}", uuid::Uuid::new_v4());
     let correlation = format!("{id}/one");
@@ -176,4 +182,42 @@ async fn postgres_suspended_store_looks_up_indexed_wait_correlations() -> CatgaR
         ErrorCode::Conflict
     );
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
+async fn postgres_state_machine_store_preserves_snapshots_and_version_cas() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_POSTGRES_URL")? else {
+        return Ok(());
+    };
+    let store =
+        SqlStateMachineStore::<sql_contracts::ContractState>::connect_postgres(url.as_ref())
+            .await?;
+    store.migrate().await?;
+    store.migrate().await?;
+    sql_contracts::state_machine_contract(&store, "postgres-e2e").await
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
+async fn postgres_dsl_progress_store_preserves_checkpoint_recovery() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_POSTGRES_URL")? else {
+        return Ok(());
+    };
+    let store = SqlDslStepProgressStore::connect_postgres(url.as_ref()).await?;
+    store.migrate().await?;
+    store.migrate().await?;
+    sql_contracts::dsl_progress_contract(&store, "postgres-e2e").await
+}
+
+#[tokio::test]
+#[ignore = "requires CATGA_POSTGRES_URL"]
+async fn postgres_flow_scheduler_is_idempotent_and_lease_fenced() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_POSTGRES_URL")? else {
+        return Ok(());
+    };
+    let scheduler = SqlFlowScheduler::connect_postgres(url.as_ref()).await?;
+    scheduler.migrate().await?;
+    scheduler.migrate().await?;
+    sql_contracts::scheduler_contract(&scheduler, "postgres-e2e").await
 }

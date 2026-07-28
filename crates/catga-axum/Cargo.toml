@@ -12,11 +12,12 @@ workspace = true
 [dependencies]
 axum = "0.8"
 async-trait = "0.1"
-catga-cluster = { path = "../catga-cluster" }
-catga-core = { path = "../catga-core" }
+catga-cluster = { path = "../catga-cluster", version = "0.1.0" }
+catga-core = { path = "../catga-core", version = "0.1.0" }
 futures = "0.3"
-protobuf = "2"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# Raft 0.7 (the newest compatible Raft release) exposes protobuf 2 message types.
+protobuf = "2.28"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }

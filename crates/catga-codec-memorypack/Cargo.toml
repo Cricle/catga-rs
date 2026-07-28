@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core" }
+catga-core = { path = "../catga-core", version = "0.1.0" }
 byteorder = { version = "1.5.0", features = ["i128"] }
 memorypack-derive = { version = "1.1.0", path = "memorypack-derive", optional = true }
 simdutf8 = "0.1.5"
@@ -19,16 +19,16 @@ thiserror = "2.0"
 
 ahash = { version = "0.8", features = ["compile-time-rng"], optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
-glam = { version = "0.29", features = ["serde", "fast-math"], optional = true }
+glam = { version = "0.33", features = ["serde", "fast-math"], optional = true }
 half = { version = "2.7", features = ["serde"], optional = true }
-hashbrown = { version = "0.16", features = ["serde"], optional = true }
-num-bigint = { version = "0.4", features = ["serde"], optional = true }
+hashbrown = { version = "0.17", features = ["serde"], optional = true }
+num-bigint = { version = "0.5", features = ["serde"], optional = true }
 num-complex = { version = "0.4", features = ["serde"], optional = true }
-rust_decimal = { version = "1.39", features = ["serde"], optional = true }
-rust_decimal_macros = { version = "1.39", optional = true }
+rust_decimal = { version = "1.42", features = ["serde"], optional = true }
+rust_decimal_macros = { version = "1.40", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 url = { version = "2.5", features = ["serde"], optional = true }
-uuid = { version = "1.18", features = ["serde"], optional = true }
+uuid = { version = "1.24", features = ["serde"], optional = true }
 
 [dev-dependencies]
 futures = "0.3"

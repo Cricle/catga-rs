@@ -2,19 +2,15 @@
 
 //! Service-gated contracts for Redis-backed durable flow scheduling.
 
-use std::{
-    env,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::time::{Duration, UNIX_EPOCH};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow::{DueFlowScheduler, FlowScheduler};
 use catga_redis::RedisFlowScheduler;
 use redis::AsyncCommands;
 
-fn redis_url() -> Option<String> {
-    env::var("CATGA_REDIS_URL").ok()
-}
+#[path = "support/service_url.rs"]
+mod service_url;
 
 fn map_redis_error(error: redis::RedisError) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
@@ -31,7 +27,7 @@ fn target_key(flow_id: &str, state_id: &str) -> Vec<u8> {
 
 #[tokio::test]
 async fn scheduler_returns_a_stable_id_only_for_its_own_target() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let prefix = format!("catga-test-scheduler-{}", uuid::Uuid::new_v4());
@@ -75,7 +71,7 @@ async fn scheduler_returns_a_stable_id_only_for_its_own_target() -> CatgaResult<
 
 #[tokio::test]
 async fn scheduler_does_not_renew_an_expired_lease() -> CatgaResult<()> {
-    let Some(url) = redis_url() else {
+    let Some(url) = service_url::redis_url()? else {
         return Ok(());
     };
     let prefix = format!("catga-test-scheduler-{}", uuid::Uuid::new_v4());

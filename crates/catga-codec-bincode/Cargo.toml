@@ -11,4 +11,4 @@ workspace = true
 
 [dependencies]
 bincode-next = { version = "3.1.1", default-features = false, features = ["alloc", "derive"] }
-catga-core = { path = "../catga-core" }
+catga-core = { path = "../catga-core", version = "0.1.0" }

@@ -154,30 +154,32 @@ impl RedisRequestClient {
                 "Redis request timeout must be greater than zero",
             ));
         }
-        let reply_to: Box<str> = format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
-        let mut subscription = self.client.get_async_pubsub().await.map_err(map_error)?;
-        subscription
-            .subscribe(reply_to.as_ref())
-            .await
-            .map_err(map_error)?;
-        let request = request.with_reply_to(reply_to);
-        let payload = self.codec.encode(&request)?;
-        let mut commands = self
-            .client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(map_error)?;
-        let _: usize = commands
-            .publish(destination, payload)
-            .await
-            .map_err(map_error)?;
-        let reply = tokio::time::timeout(timeout, subscription.on_message().next())
-            .await
-            .map_err(|_| CatgaError::new(ErrorCode::Timeout, "Redis request timed out"))?
-            .ok_or_else(|| {
+        tokio::time::timeout(timeout, async {
+            let reply_to: Box<str> =
+                format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
+            let mut subscription = self.client.get_async_pubsub().await.map_err(map_error)?;
+            subscription
+                .subscribe(reply_to.as_ref())
+                .await
+                .map_err(map_error)?;
+            let request = request.with_reply_to(reply_to);
+            let payload = self.codec.encode(&request)?;
+            let mut commands = self
+                .client
+                .get_multiplexed_async_connection()
+                .await
+                .map_err(map_error)?;
+            let _: usize = commands
+                .publish(destination, payload)
+                .await
+                .map_err(map_error)?;
+            let reply = subscription.on_message().next().await.ok_or_else(|| {
                 CatgaError::new(ErrorCode::Transient, "Redis reply subscription closed")
             })?;
-        self.codec.decode(reply.get_payload_bytes())
+            self.codec.decode(reply.get_payload_bytes())
+        })
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "Redis request timed out"))?
     }
 }
 

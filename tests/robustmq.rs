@@ -12,13 +12,27 @@ use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, MessageMetadata, MessagePriority,
 };
-use catga_robustmq::{MailboxClient, MailboxPriority, MailboxRequestServer};
+use catga_robustmq::{MailboxClient, MailboxPriority, MailboxRequest, MailboxRequestServer};
 use robustmq::Priority;
 
 #[path = "support/nats_e2e.rs"]
 mod nats_e2e;
 
 const TAGGED_ENVELOPE_CODEC_PREFIX: &[u8] = b"catga-robustmq-e2e-codec-v1\0";
+const ROBUSTMQ_BROKER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Receives one RobustMQ request within the E2E test's bounded broker-response budget.
+async fn robustmq_request<C>(
+    server: &mut MailboxRequestServer<C>,
+    context: &str,
+) -> CatgaResult<MailboxRequest<C>>
+where
+    C: EnvelopeCodec + 'static,
+{
+    tokio::time::timeout(ROBUSTMQ_BROKER_RESPONSE_TIMEOUT, server.next())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, format!("{context} timed out")))?
+}
 
 /// A deliberately non-default frame proving mailbox envelope APIs use their configured codec.
 #[derive(Clone, Default)]
@@ -246,7 +260,7 @@ async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> C
             .request_to(&mailbox_request, request, Duration::from_secs(2))
             .await
     });
-    let received = request_server.next().await?;
+    let received = robustmq_request(&mut request_server, "RobustMQ request server").await?;
     assert!(received.envelope().reply_to().is_some());
     received
         .respond(Envelope::versioned(

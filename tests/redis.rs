@@ -26,7 +26,7 @@ use catga_redis::{
     MAX_REDIS_PENDING_RECLAIM_SCANS, RedisConfig, RedisDeadLetters, RedisDslStepProgress,
     RedisEnhancedSnapshots, RedisEventStore, RedisFlowScheduler, RedisFlows, RedisIdempotency,
     RedisInbox, RedisLeases, RedisOutbox, RedisPendingReclaimOptions, RedisProjectionCheckpoints,
-    RedisPubSubConfig, RedisPubSubTransport, RedisRequestClient, RedisRequestServer,
+    RedisPubSubConfig, RedisPubSubTransport, RedisRequest, RedisRequestClient, RedisRequestServer,
     RedisSnapshotStore, RedisSubscriptions, RedisSuspendedFlows, RedisTransport,
 };
 use redis::AsyncCommands;
@@ -38,6 +38,28 @@ mod dsl_progress_contract;
 mod timeout_store_contract;
 
 static TEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+const REDIS_BROKER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Receives one Redis delivery within the E2E test's bounded broker-response budget.
+async fn redis_delivery(
+    transport: &impl MessageTransport,
+    context: &str,
+) -> CatgaResult<catga_core::Delivery> {
+    tokio::time::timeout(REDIS_BROKER_RESPONSE_TIMEOUT, transport.receive())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, format!("{context} timed out")))?
+}
+
+/// Receives one Redis RPC request within the E2E test's bounded broker-response budget.
+async fn redis_request(
+    server: &mut RedisRequestServer,
+    context: &str,
+) -> CatgaResult<RedisRequest> {
+    tokio::time::timeout(REDIS_BROKER_RESPONSE_TIMEOUT, server.next())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, format!("{context} timed out")))?
+}
 
 /// Redis Pub/Sub delivers ephemeral broadcast messages without a durable acknowledgement token.
 #[tokio::test]
@@ -109,7 +131,7 @@ async fn redis_pubsub_transport_deduplicates_exactly_once_publications() -> Catg
     );
 
     transport.publish(envelope.clone()).await?;
-    let first = transport.receive().await?;
+    let first = redis_delivery(&transport, "Redis Pub/Sub first delivery").await?;
     assert_eq!(first.envelope().id(), 93);
     transport.publish(envelope).await?;
     assert!(
@@ -153,7 +175,7 @@ async fn redis_pubsub_transport_deduplicates_exactly_once_receptions() -> CatgaR
         .publish(&channel, payload.clone())
         .await
         .map_err(|error| CatgaError::new(ErrorCode::Transient, error.to_string()))?;
-    let first = transport.receive().await?;
+    let first = redis_delivery(&transport, "Redis Pub/Sub deduplicated delivery").await?;
     assert_eq!(first.envelope().id(), 94);
     let _: usize = connection
         .publish(&channel, payload)
@@ -169,7 +191,7 @@ async fn redis_pubsub_transport_deduplicates_exactly_once_receptions() -> CatgaR
 
 #[tokio::test]
 #[ignore = "requires CATGA_REDIS_URL"]
-async fn redis_pubsub_request_reply_uses_a_private_reply_channel() {
+async fn redis_pubsub_request_reply_uses_a_private_reply_channel() -> CatgaResult<()> {
     let config = redis_config();
     let destination = format!(
         "{}:rpc:{}",
@@ -178,9 +200,14 @@ async fn redis_pubsub_request_reply_uses_a_private_reply_channel() {
     );
     let mut server = RedisRequestServer::connect(&config.server, &destination)
         .await
-        .unwrap();
+        .map_err(|error| {
+            CatgaError::new(
+                error.code(),
+                format!("Redis RPC server setup failed: {error:?}"),
+            )
+        })?;
     let responder = tokio::spawn(async move {
-        let request = server.next().await.unwrap();
+        let request = redis_request(&mut server, "Redis RPC server request").await?;
         request
             .respond(Envelope::new(
                 42,
@@ -189,19 +216,23 @@ async fn redis_pubsub_request_reply_uses_a_private_reply_channel() {
                 MessageMetadata::new(42, Some(42)),
             ))
             .await
-            .unwrap();
     });
-    let client = RedisRequestClient::connect(&config.server).unwrap();
+    let client = RedisRequestClient::connect(&config.server)?;
     let response = client
         .request_to(
             &destination,
             Envelope::new(42, "request", vec![1], MessageMetadata::new(42, Some(42))),
             Duration::from_secs(2),
         )
-        .await
-        .unwrap();
-    responder.await.unwrap();
+        .await?;
+    responder.await.map_err(|error| {
+        CatgaError::new(
+            ErrorCode::Internal,
+            format!("Redis RPC responder task failed: {error}"),
+        )
+    })??;
     assert_eq!(response.payload(), [9]);
+    Ok(())
 }
 
 #[tokio::test]
@@ -365,7 +396,7 @@ async fn redis_transport_reclaim_fences_a_stale_acknowledgement() -> CatgaResult
     );
 
     first.publish(envelope.clone()).await?;
-    let stale_delivery = first.receive().await?;
+    let stale_delivery = redis_delivery(&first, "Redis stale delivery").await?;
     assert_eq!(stale_delivery.envelope().id(), envelope.id());
     tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -411,25 +442,36 @@ async fn redis_transport_reclaims_idle_delivery_with_multiple_receivers() -> Cat
     );
 
     first.publish(envelope.clone()).await?;
-    let abandoned = first.receive().await?;
+    let abandoned = redis_delivery(&first, "Redis abandoned delivery").await?;
+    // Make the pending entry reclaimable before either receiver performs its first recovery
+    // scan. Starting them earlier lets both scans observe a non-idle entry and enter Redis's
+    // one-second blocking read, which makes this concurrency assertion depend on a poll cycle.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    drop(abandoned);
+
     let first_waiter = {
         let transport = Arc::clone(&second);
-        tokio::spawn(async move { transport.receive().await })
+        tokio::spawn(async move {
+            redis_delivery(transport.as_ref(), "first concurrent Redis receiver").await
+        })
     };
     let second_waiter = {
         let transport = Arc::clone(&second);
-        tokio::spawn(async move { transport.receive().await })
+        tokio::spawn(async move {
+            redis_delivery(transport.as_ref(), "second concurrent Redis receiver").await
+        })
     };
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    drop(abandoned);
-    tokio::time::sleep(Duration::from_millis(120)).await;
 
     let mut first_waiter = first_waiter;
     let mut second_waiter = second_waiter;
-    let reclaimed = tokio::time::timeout(Duration::from_secs(2), async {
+    let reclaimed = tokio::time::timeout(Duration::from_secs(1), async {
         tokio::select! {
-            result = &mut first_waiter => result.expect("first Redis receiver task must not panic"),
-            result = &mut second_waiter => result.expect("second Redis receiver task must not panic"),
+            result = &mut first_waiter => result.map_err(|error| {
+                CatgaError::new(ErrorCode::Internal, format!("first Redis receiver task failed: {error}"))
+            })?,
+            result = &mut second_waiter => result.map_err(|error| {
+                CatgaError::new(ErrorCode::Internal, format!("second Redis receiver task failed: {error}"))
+            })?,
         }
     })
     .await
@@ -441,6 +483,8 @@ async fn redis_transport_reclaims_idle_delivery_with_multiple_receivers() -> Cat
     })??;
     first_waiter.abort();
     second_waiter.abort();
+    let _ = first_waiter.await;
+    let _ = second_waiter.await;
     assert_eq!(reclaimed.envelope().id(), envelope.id());
     second.ack(reclaimed).await?;
     Ok(())
@@ -465,7 +509,7 @@ async fn redis_transport_does_not_redeliver_a_local_in_flight_delivery() -> Catg
 
     transport.publish(first_envelope.clone()).await?;
     transport.publish(second_envelope.clone()).await?;
-    let first = transport.receive().await?;
+    let first = redis_delivery(&transport, "Redis first delivery").await?;
     let second = tokio::time::timeout(Duration::from_secs(1), transport.receive())
         .await
         .map_err(|_| CatgaError::new(ErrorCode::Timeout, "second Redis delivery timed out"))??;
@@ -1834,7 +1878,9 @@ async fn redis_stream_round_trip_and_ack() {
         ))
         .await
         .unwrap();
-    let delivery = transport.receive().await.unwrap();
+    let delivery = redis_delivery(&transport, "Redis stream delivery")
+        .await
+        .unwrap();
     assert_eq!(delivery.envelope().payload(), [1, 2]);
     assert_eq!(transport.pending_operations(), 1);
 
@@ -1868,11 +1914,12 @@ async fn redis_stream_round_trip_and_ack() {
 
 #[tokio::test]
 #[ignore = "requires CATGA_REDIS_URL"]
-async fn redis_idle_receive_does_not_block_publish() {
+async fn redis_idle_receive_does_not_block_publish() -> CatgaResult<()> {
     let config = redis_config();
-    let transport = Arc::new(RedisTransport::connect(config).await.unwrap());
+    let transport = Arc::new(RedisTransport::connect(config).await?);
     let receiver = Arc::clone(&transport);
-    let receive = tokio::spawn(async move { receiver.receive().await });
+    let receive =
+        tokio::spawn(async move { redis_delivery(receiver.as_ref(), "idle Redis receiver").await });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     transport
@@ -1883,15 +1930,25 @@ async fn redis_idle_receive_does_not_block_publish() {
             MessageMetadata::new(1, None),
         ))
         .await
-        .expect("publish succeeds while receive blocks");
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Transient,
+                format!("Redis publish while idle failed: {error:?}"),
+            )
+        })?;
 
     let delivery = tokio::time::timeout(Duration::from_secs(1), receive)
         .await
-        .expect("receive completes after publish")
-        .expect("receive task does not panic")
-        .expect("receive succeeds");
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "idle Redis receive did not complete"))?
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                format!("idle Redis receiver task failed: {error}"),
+            )
+        })??;
     assert_eq!(delivery.envelope().payload(), [3, 4]);
-    transport.ack(delivery).await.unwrap();
+    transport.ack(delivery).await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -1909,7 +1966,9 @@ async fn redis_dropped_delivery_is_recovered_from_its_pending_entries() {
         .await
         .unwrap();
 
-    let delivery = transport.receive().await.unwrap();
+    let delivery = redis_delivery(&transport, "Redis pending delivery")
+        .await
+        .unwrap();
     drop(delivery);
 
     let recovered = tokio::time::timeout(Duration::from_secs(1), transport.receive())
@@ -1938,7 +1997,7 @@ async fn redis_stream_delivery_reports_native_redelivery_attempts() -> CatgaResu
         ))
         .await?;
 
-    let first = transport.receive().await?;
+    let first = redis_delivery(&transport, "Redis first retry delivery").await?;
     assert_eq!(first.attempts(), 1);
     transport.nack(first).await?;
 
@@ -1966,7 +2025,9 @@ async fn redis_live_delivery_does_not_block_the_next_stream_entry() {
             .unwrap();
     }
 
-    let first = transport.receive().await.unwrap();
+    let first = redis_delivery(&transport, "Redis first live delivery")
+        .await
+        .unwrap();
     assert_eq!(first.envelope().payload(), [9]);
     let second = tokio::time::timeout(Duration::from_secs(1), transport.receive())
         .await
@@ -1991,7 +2052,12 @@ async fn redis_decode_error_does_not_block_pending_entry_recovery() {
         .await
         .unwrap();
 
-    assert!(transport.receive().await.is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), transport.receive())
+            .await
+            .expect("Redis decode-error delivery did not return within two seconds")
+            .is_err()
+    );
     transport
         .publish(Envelope::new(
             1,
@@ -2025,7 +2091,9 @@ async fn redis_ack_errors_when_the_pending_entry_was_already_acknowledged() {
         ))
         .await
         .unwrap();
-    let delivery = transport.receive().await.unwrap();
+    let delivery = redis_delivery(&transport, "Redis acknowledgement delivery")
+        .await
+        .unwrap();
 
     let client = redis::Client::open(server).unwrap();
     let mut connection = client.get_multiplexed_async_connection().await.unwrap();

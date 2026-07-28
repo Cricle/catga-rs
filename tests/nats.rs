@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use async_nats::jetstream::{self, context::Publish, kv};
+use async_nats::jetstream::{self, kv, message::PublishMessage};
 use catga_codec_memorypack::{MemoryPackCodec, MemoryPackSerializer};
 use catga_core::{
     AsyncInitializable, CatgaError, CatgaResult, DeadLetter, DeadLetterStore, Destination,
@@ -567,7 +567,7 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
         .get_key_value(format!("{bucket}_IDX"))
         .await
         .unwrap();
-    let type_hash = format!("{:x}", Sha256::digest(flow_type.as_bytes()));
+    let type_hash = hex::encode(Sha256::digest(flow_type.as_bytes()));
     for (page, expected_entries) in [INDEX_PAGE_CAPACITY, 1].into_iter().enumerate() {
         let entry = index
             .entry(format!("p{type_hash}.{page}"))
@@ -617,7 +617,10 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
     let states = context.get_key_value(&bucket).await.unwrap();
     states
         .create(
-            format!("f{:x}", Sha256::digest(interrupted.id().as_bytes())),
+            format!(
+                "f{}",
+                hex::encode(Sha256::digest(interrupted.id().as_bytes()))
+            ),
             MemoryPackSerializer::serialize(&interrupted)
                 .unwrap()
                 .into(),
@@ -1009,7 +1012,10 @@ async fn jetstream_round_trip_and_ack() {
         ))
         .await
         .unwrap();
-    let delivery = transport.receive().await.unwrap();
+    let delivery = tokio::time::timeout(Duration::from_secs(2), transport.receive())
+        .await
+        .expect("JetStream did not deliver the published envelope within two seconds")
+        .unwrap();
     assert_eq!(delivery.envelope().payload(), [1, 2]);
     assert_eq!(transport.pending_operations(), 1);
 
@@ -1163,11 +1169,15 @@ async fn jetstream_delivery_reports_native_redelivery_attempts() -> CatgaResult<
             MessageMetadata::new(71, None),
         ))
         .await?;
-    let first = transport.receive().await?;
+    let first = tokio::time::timeout(Duration::from_secs(2), transport.receive())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "first JetStream delivery timed out"))??;
     assert_eq!(first.attempts(), 1);
     transport.nack(first).await?;
 
-    let redelivery = transport.receive().await?;
+    let redelivery = tokio::time::timeout(Duration::from_secs(2), transport.receive())
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "JetStream redelivery timed out"))??;
     assert!(redelivery.attempts() >= 2);
     transport.ack(redelivery).await
 }
@@ -1216,7 +1226,15 @@ async fn jetstream_destination_requires_explicit_resource_provisioning() -> Catg
             ),
         )
         .await?;
-    let delivery = transport.receive_from(&destination).await?;
+    let delivery =
+        tokio::time::timeout(Duration::from_secs(2), transport.receive_from(&destination))
+            .await
+            .map_err(|_| {
+                CatgaError::new(
+                    ErrorCode::Timeout,
+                    "NATS provisioned destination delivery timed out",
+                )
+            })??;
     assert_eq!(delivery.envelope().id(), 401);
     transport.ack(delivery).await?;
     Ok(())
@@ -1396,7 +1414,7 @@ async fn nats_event_store_rejects_version_exhaustion_before_publishing() {
     context
         .send_publish(
             format!("{subject_prefix}.{stream_id}"),
-            Publish::build()
+            PublishMessage::build()
                 .payload(Vec::<u8>::new().into())
                 .header("Catga-Version", max_version.as_str())
                 .header("Catga-Timestamp", "0"),

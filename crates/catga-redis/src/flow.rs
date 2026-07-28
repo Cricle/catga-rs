@@ -253,7 +253,7 @@ fn hashed_key(prefix: &str, kind: &str, value: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(value.len().to_be_bytes());
     digest.update(value.as_bytes());
-    format!("{prefix}:{kind}:{:x}", digest.finalize())
+    format!("{prefix}:{kind}:{}", hex::encode(digest.finalize()))
 }
 
 fn unix_millis(time: SystemTime) -> CatgaResult<u64> {

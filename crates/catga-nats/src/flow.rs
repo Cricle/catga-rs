@@ -470,19 +470,22 @@ async fn compare_and_set(
 }
 
 fn flow_key(id: &str) -> String {
-    format!("f{:x}", Sha256::digest(id.as_bytes()))
+    format!("f{}", hex::encode(Sha256::digest(id.as_bytes())))
 }
 fn type_metadata_key(flow_type: &str) -> String {
-    format!("m{:x}", Sha256::digest(flow_type.as_bytes()))
+    format!("m{}", hex::encode(Sha256::digest(flow_type.as_bytes())))
 }
 fn type_page_key(flow_type: &str, page: u64) -> String {
-    format!("p{:x}.{page}", Sha256::digest(flow_type.as_bytes()))
+    format!(
+        "p{}.{page}",
+        hex::encode(Sha256::digest(flow_type.as_bytes()))
+    )
 }
 fn type_marker_key(flow_type: &str, id: &str) -> String {
     format!(
-        "i{:x}.{:x}",
-        Sha256::digest(flow_type.as_bytes()),
-        Sha256::digest(id.as_bytes())
+        "i{}.{}",
+        hex::encode(Sha256::digest(flow_type.as_bytes())),
+        hex::encode(Sha256::digest(id.as_bytes()))
     )
 }
 fn next_index_cursor(metadata: &TypeIndex, consumed: bool) -> CatgaResult<TypeIndex> {

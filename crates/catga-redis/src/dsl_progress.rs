@@ -60,7 +60,11 @@ impl RedisDslStepProgress {
         digest.update(flow_id.len().to_be_bytes());
         digest.update(flow_id.as_bytes());
         digest.update(step_index.to_be_bytes());
-        format!("{}:dsl-progress:{:x}", self.prefix, digest.finalize())
+        format!(
+            "{}:dsl-progress:{}",
+            self.prefix,
+            hex::encode(digest.finalize())
+        )
     }
 }
 

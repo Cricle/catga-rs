@@ -181,7 +181,7 @@ where
 }
 
 fn kv_key(instance_id: &str) -> String {
-    format!("s{:x}", Sha256::digest(instance_id.as_bytes()))
+    format!("s{}", hex::encode(Sha256::digest(instance_id.as_bytes())))
 }
 
 fn is_revision_conflict(error: &kv::UpdateError) -> bool {

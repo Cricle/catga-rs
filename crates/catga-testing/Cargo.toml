@@ -11,8 +11,8 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core" }
-catga-flow = { path = "../catga-flow" }
-catga-memory = { path = "../catga-memory" }
+catga-core = { path = "../catga-core", version = "0.1.0" }
+catga-flow = { path = "../catga-flow", version = "0.1.0" }
+catga-memory = { path = "../catga-memory", version = "0.1.0" }
 dashmap = "6"
 futures = "0.3"

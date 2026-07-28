@@ -292,7 +292,10 @@ impl StoredCheckpoint {
 }
 
 fn projection_key(projection_name: &str) -> String {
-    format!("p{:x}", Sha256::digest(projection_name.as_bytes()))
+    format!(
+        "p{}",
+        hex::encode(Sha256::digest(projection_name.as_bytes()))
+    )
 }
 
 fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
