@@ -18,16 +18,20 @@ use catga_flow::{
 
 /// Returns an explicitly configured service URL.
 ///
-/// A developer workstation without the variable skips an external-service
-/// contract. Any CI invocation missing its required URL fails loudly instead
-/// of silently downgrading an E2E target into a no-op.
+/// A job without `CATGA_REQUIRE_EXTERNAL_SERVICES` skips an external-service
+/// contract. E2E jobs set that marker, so a missing required URL fails loudly
+/// instead of silently downgrading an E2E target into a no-op.
 pub fn service_url(variable: &str) -> CatgaResult<Option<Box<str>>> {
     match env::var(variable) {
         Ok(url) if !url.trim().is_empty() => Ok(Some(url.into_boxed_str())),
-        _ if env::var_os("CI").is_some_and(|value| !value.is_empty()) => Err(CatgaError::new(
-            ErrorCode::Unavailable,
-            format!("{variable} must be configured when CI executes this SQL E2E test"),
-        )),
+        _ if env::var_os("CATGA_REQUIRE_EXTERNAL_SERVICES")
+            .is_some_and(|value| !value.is_empty()) =>
+        {
+            Err(CatgaError::new(
+                ErrorCode::Unavailable,
+                format!("{variable} must be configured when SQL E2E is required"),
+            ))
+        }
         _ => Ok(None),
     }
 }

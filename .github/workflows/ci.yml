@@ -85,6 +85,7 @@ jobs:
           --health-timeout 10s
           --health-retries 30
     env:
+      CATGA_REQUIRE_EXTERNAL_SERVICES: '1'
       CATGA_NATS_URL: nats://127.0.0.1:4222
       CATGA_REDIS_URL: redis://127.0.0.1:6379
       # RobustMQ implements the mq9 mailbox control plane; a plain NATS server does not.
