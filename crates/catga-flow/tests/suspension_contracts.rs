@@ -100,3 +100,56 @@ fn continuation_trigger_transitions_keep_only_the_current_wait_or_delay_metadata
     assert!(waiting.wait().is_some());
     assert!(waiting.resume_at().is_none());
 }
+
+#[test]
+fn external_waits_bound_distinct_results_and_preserve_failure_diagnostics() {
+    let wait = WaitCondition::new(
+        "external/42",
+        WaitPolicy::All,
+        2,
+        UNIX_EPOCH,
+        Duration::from_secs(30),
+    )
+    .record_success("provider-a", [7_u8, 8])
+    .record_failure(
+        "provider-b",
+        CatgaError::new(ErrorCode::Unavailable, "provider-b did not respond"),
+    )
+    .record_success("provider-c", [9_u8]);
+
+    assert_eq!(wait.completed_count(), 2);
+    assert_eq!(wait.results().len(), 2);
+    assert_eq!(wait.results()[0].child_id(), "provider-a");
+    assert_eq!(wait.results()[0].payload(), Some(&[7_u8, 8][..]));
+    assert_eq!(
+        wait.results()[0]
+            .shared_payload()
+            .expect("successful results retain their bounded payload")
+            .as_ref(),
+        &[7_u8, 8]
+    );
+    assert_eq!(wait.results()[1].child_id(), "provider-b");
+    assert_eq!(
+        wait.results()[1].error().map(CatgaError::code),
+        Some(ErrorCode::Unavailable)
+    );
+    assert!(wait.validate().is_ok());
+
+    let empty_correlation =
+        WaitCondition::new("", WaitPolicy::Any, 1, UNIX_EPOCH, Duration::from_secs(1));
+    assert!(matches!(
+        empty_correlation.validate(),
+        Err(error) if error.code() == ErrorCode::Validation
+    ));
+    let zero_expected = WaitCondition::new(
+        "external/zero",
+        WaitPolicy::Any,
+        0,
+        UNIX_EPOCH,
+        Duration::from_secs(1),
+    );
+    assert!(matches!(
+        zero_expected.validate(),
+        Err(error) if error.code() == ErrorCode::Validation
+    ));
+}

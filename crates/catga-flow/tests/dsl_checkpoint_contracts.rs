@@ -54,6 +54,21 @@ impl DslStateCodec<State> for StateCodec {
     }
 }
 
+struct RejectingTerminalCodec;
+
+impl DslStateCodec<State> for RejectingTerminalCodec {
+    fn encode(&self, _: &State) -> CatgaResult<Vec<u8>> {
+        Ok(vec![0])
+    }
+
+    fn decode(&self, _: &[u8]) -> CatgaResult<State> {
+        Err(CatgaError::new(
+            ErrorCode::Validation,
+            "terminal state cannot be decoded",
+        ))
+    }
+}
+
 #[derive(Default)]
 struct ProgressStore {
     records: Mutex<HashMap<(Box<str>, u32), DslStepProgress>>,
@@ -565,5 +580,131 @@ async fn checkpointed_replayable_for_each_persists_handled_errors_without_replay
         .await?;
     assert_eq!(resumed.total, 105);
     assert_eq!(item_calls.load(Ordering::SeqCst), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpointed_legacy_step_payload_resumes_after_the_committed_step() -> CatgaResult<()> {
+    let committed_step_calls = Arc::new(AtomicUsize::new(0));
+    let committed_calls = Arc::clone(&committed_step_calls);
+    let flow = DslFlow::new()
+        .action(move |state: &mut State| {
+            let committed_calls = Arc::clone(&committed_calls);
+            Box::pin(async move {
+                committed_calls.fetch_add(1, Ordering::SeqCst);
+                state.total = state.total.saturating_add(100);
+                Ok(())
+            })
+        })
+        .action(|state: &mut State| {
+            Box::pin(async move {
+                state.total = state.total.saturating_add(1);
+                Ok(())
+            })
+        });
+    let progress = ProgressStore::default();
+    let committed = State {
+        total: 41,
+        branch: true,
+    };
+    assert!(
+        progress
+            .create(DslStepProgress::new(
+                "legacy-step-payload",
+                0,
+                StateCodec.encode(&committed)?,
+            ))
+            .await?
+    );
+
+    let resumed = flow
+        .run_checkpointed(
+            "legacy-step-payload",
+            State::default(),
+            &progress,
+            &StateCodec,
+        )
+        .await?;
+
+    assert_eq!(resumed.total, 42);
+    assert!(resumed.branch);
+    assert_eq!(committed_step_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        progress
+            .get("legacy-step-payload", u32::MAX)
+            .await?
+            .expect("a completed checkpoint writes its terminal result")
+            .kind(),
+        DslProgressKind::Terminal
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpointed_flows_reject_invalid_terminal_records_before_actions_run() -> CatgaResult<()>
+{
+    let actions = Arc::new(AtomicUsize::new(0));
+    let action_calls = Arc::clone(&actions);
+    let flow = DslFlow::new().action(move |_: &mut State| {
+        let action_calls = Arc::clone(&action_calls);
+        Box::pin(async move {
+            action_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    });
+
+    let non_terminal = ProgressStore::default();
+    assert!(
+        non_terminal
+            .create(DslStepProgress::new("wrong-terminal-kind", u32::MAX, []))
+            .await?
+    );
+    let error = flow
+        .run_checkpointed(
+            "wrong-terminal-kind",
+            State::default(),
+            &non_terminal,
+            &StateCodec,
+        )
+        .await
+        .expect_err("the reserved terminal slot cannot contain an ordinary progress record");
+    assert_eq!(error.code(), ErrorCode::Conflict);
+
+    assert_eq!(actions.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpointed_terminal_decode_failure_never_replays_completed_actions() -> CatgaResult<()> {
+    let actions = Arc::new(AtomicUsize::new(0));
+    let action_calls = Arc::clone(&actions);
+    let flow = DslFlow::new().action(move |_: &mut State| {
+        let action_calls = Arc::clone(&action_calls);
+        Box::pin(async move {
+            action_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    });
+    let progress = ProgressStore::default();
+
+    flow.run_checkpointed(
+        "undecodable-terminal",
+        State::default(),
+        &progress,
+        &RejectingTerminalCodec,
+    )
+    .await?;
+    let error = flow
+        .run_checkpointed(
+            "undecodable-terminal",
+            State::default(),
+            &progress,
+            &RejectingTerminalCodec,
+        )
+        .await
+        .expect_err("terminal data is decoded before the flow can execute again");
+
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(actions.load(Ordering::SeqCst), 1);
     Ok(())
 }

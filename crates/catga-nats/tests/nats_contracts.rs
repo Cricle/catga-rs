@@ -3,6 +3,7 @@
 use std::{
     net::TcpListener,
     process::{Child, Command},
+    sync::Arc,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, UNIX_EPOCH},
 };
@@ -10,9 +11,10 @@ use std::{
 use async_nats::jetstream::{self, kv};
 use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
-    CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore, Envelope,
-    EnvelopeCodec, ErrorCode, EventStore, MessageMetadata, MessageTransport, OutboxMessage,
-    OutboxState, OutboxStore, ProjectionCheckpoint, ProjectionCheckpointStore, QualityOfService,
+    CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore,
+    EnhancedSnapshotStore, Envelope, EnvelopeCodec, ErrorCode, EventStore, MessageMetadata,
+    MessageTransport, OutboxMessage, OutboxState, OutboxStore, ProjectionCheckpoint,
+    ProjectionCheckpointStore, QualityOfService, Snapshot, SnapshotStore,
 };
 use catga_flow::{
     DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
@@ -20,9 +22,9 @@ use catga_flow::{
     WaitPolicy,
 };
 use catga_nats::{
-    NatsConfig, NatsDeadLetters, NatsEventStore, NatsFlowScheduler, NatsFlows, NatsOutbox,
-    NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport, NatsRequestClient,
-    NatsSuspendedFlows, NatsTransport,
+    NatsConfig, NatsDeadLetters, NatsEnhancedSnapshots, NatsEventStore, NatsFlowScheduler,
+    NatsFlows, NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport,
+    NatsRequestClient, NatsSuspendedFlows, NatsTransport,
 };
 use tempfile::TempDir;
 
@@ -1234,5 +1236,322 @@ async fn event_store_fences_concurrent_appends_and_pages_public_history() -> Cat
         .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "missing stream-id cursor"))?;
     let second_ids = store.stream_ids_page(Some(cursor), 10).await?;
     assert_eq!(second_ids.ids().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn enhanced_snapshots_preserve_history_under_concurrent_writers_and_cleanup()
+-> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let snapshots = Arc::new(
+        NatsEnhancedSnapshots::<u64>::connect(server.url(), unique("CATGA_ENHANCED_SNAPSHOTS"))
+            .await?,
+    );
+
+    assert!(snapshots.load::<u64>("missing").await?.is_none());
+    assert!(snapshots.history("missing").await?.is_empty());
+    snapshots.delete("missing").await?;
+
+    for (version, state) in [(1, 10_u64), (3, 30), (5, 50)] {
+        snapshots
+            .save(Snapshot::new("account-history", state, version))
+            .await?;
+    }
+    let at_four = snapshots
+        .load_at_version::<u64>("account-history", 4)
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "historical snapshot is missing"))?;
+    assert_eq!((*at_four.state(), at_four.version()), (30, 3));
+
+    let first = Arc::clone(&snapshots);
+    let second = Arc::clone(&snapshots);
+    let (first, second) = tokio::join!(
+        first.save(Snapshot::new("account-history", 60_u64, 6)),
+        second.save(Snapshot::new("account-history", 61_u64, 6)),
+    );
+    first?;
+    second?;
+    assert!(matches!(
+        snapshots
+            .save(Snapshot::new("account-history", 40_u64, 4))
+            .await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    assert_eq!(
+        snapshots
+            .load::<String>("account-history")
+            .await
+            .expect_err("a store for u64 snapshots must reject String reads")
+            .code(),
+        ErrorCode::Validation
+    );
+
+    let history = snapshots.history("account-history").await?;
+    assert_eq!(
+        history
+            .iter()
+            .map(|snapshot| snapshot.version())
+            .collect::<Vec<_>>(),
+        vec![1, 3, 5, 6]
+    );
+    assert_eq!(
+        snapshots
+            .load::<u64>("account-history")
+            .await?
+            .map(|snapshot| snapshot.version()),
+        Some(6)
+    );
+
+    snapshots
+        .delete_before_version("account-history", 3)
+        .await?;
+    snapshots.cleanup("account-history", 1).await?;
+    assert_eq!(
+        snapshots
+            .history("account-history")
+            .await?
+            .iter()
+            .map(|snapshot| snapshot.version())
+            .collect::<Vec<_>>(),
+        vec![6]
+    );
+    snapshots.cleanup("account-history", 0).await?;
+    assert!(snapshots.load::<u64>("account-history").await?.is_none());
+    snapshots.delete("account-history").await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn outbox_concurrent_claims_are_exclusive_and_cleanup_validates_boundaries() -> CatgaResult<()>
+{
+    let server = NatsServer::start().await?;
+    let outbox = Arc::new(NatsOutbox::connect(server.url(), unique("CATGA_OUTBOX_RACE")).await?);
+    for id in [310, 311, 312, 313] {
+        outbox
+            .enqueue(OutboxMessage::new(envelope(
+                id,
+                QualityOfService::AtLeastOnce,
+            )))
+            .await?;
+    }
+    assert!(
+        outbox
+            .claim_for("worker-a", 0, Duration::from_secs(1))
+            .await?
+            .is_empty()
+    );
+
+    let first = Arc::clone(&outbox);
+    let second = Arc::clone(&outbox);
+    let (first, second) = tokio::join!(
+        first.claim_for("worker-a", 4, Duration::from_secs(5)),
+        second.claim_for("worker-b", 4, Duration::from_secs(5)),
+    );
+    let first = first?;
+    let second = second?;
+    let mut claimed_ids = first
+        .iter()
+        .chain(&second)
+        .map(OutboxMessage::id)
+        .collect::<Vec<_>>();
+    claimed_ids.sort_unstable();
+    assert_eq!(claimed_ids, vec![310, 311, 312, 313]);
+
+    for (owner, claims) in [("worker-a", &first), ("worker-b", &second)] {
+        for claim in claims {
+            let token = claim.claim_token().ok_or_else(|| {
+                CatgaError::new(ErrorCode::Internal, "concurrent outbox claim has no token")
+            })?;
+            outbox
+                .record_failure("wrong-owner", claim.id(), token, "must be fenced")
+                .await?;
+            outbox.ack(owner, claim.id(), token).await?;
+        }
+    }
+    assert!(outbox.list_published(0).await?.is_empty());
+    assert_eq!(outbox.list_published(10).await?.len(), 4);
+    assert_validation(outbox.cleanup_published(Duration::MAX, 1).await);
+    assert_eq!(outbox.cleanup_published(Duration::ZERO, 10).await?, 4);
+    assert!(outbox.list_published(10).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn flow_store_claims_every_stale_flow_across_type_index_pages() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let flows = NatsFlows::connect(server.url(), unique("CATGA_FLOWS_PAGED_INDEX")).await?;
+    let flow_type = unique("paged-flow-type");
+    let mut ids = Vec::new();
+    for position in 0..33 {
+        let id = unique(&format!("paged-flow-{position}"));
+        assert!(
+            flows
+                .create(
+                    FlowState::new(id.as_str(), flow_type.as_str(), [], "node-a")
+                        .heartbeated_at(UNIX_EPOCH),
+                )
+                .await?
+        );
+        ids.push(id);
+    }
+
+    let mut claimed = Vec::new();
+    for _ in 0..33 {
+        let flow = flows
+            .try_claim(flow_type.as_str(), "recoverer", Duration::from_secs(1))
+            .await?
+            .ok_or_else(|| {
+                CatgaError::new(ErrorCode::Internal, "stale indexed flow was skipped")
+            })?;
+        claimed.push(flow.id().to_owned());
+    }
+    claimed.sort_unstable();
+    ids.sort_unstable();
+    assert_eq!(claimed, ids);
+    assert!(
+        flows
+            .try_claim(
+                flow_type.as_str(),
+                "recoverer",
+                Duration::from_secs(60 * 60),
+            )
+            .await?
+            .is_none()
+    );
+
+    let current = flows
+        .get(&claimed[0])
+        .await?
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "claimed flow is missing"))?;
+    assert!(
+        flows
+            .update(current.version(), current.clone().done(1).next_version()?,)
+            .await?
+    );
+    assert_eq!(
+        flows.get(&claimed[0]).await?.map(|state| state.status()),
+        Some(FlowStatus::Done)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn scheduler_skips_cancelled_index_entries_before_claiming_live_work() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let scheduler =
+        NatsFlowScheduler::connect(server.url(), unique("CATGA_SCHEDULER_CANCELLED")).await?;
+    let due = UNIX_EPOCH + Duration::from_secs(500);
+    let cancelled = scheduler
+        .schedule_resume("flow-cancelled", "state-cancelled", due)
+        .await?;
+    let live = scheduler
+        .schedule_resume("flow-live", "state-live", due)
+        .await?;
+    assert!(scheduler.cancel_resume(&cancelled).await?);
+
+    let claimed = scheduler
+        .claim_due("worker", due, Duration::from_secs(10), 2)
+        .await?;
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].schedule_id(), live.as_ref());
+    assert!(scheduler.ack_due("worker", &live).await?);
+    assert!(
+        scheduler
+            .claim_due("worker", due, Duration::from_secs(10), 2)
+            .await?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn suspended_flow_wait_correlation_capacity_is_bounded_and_released() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let store =
+        NatsSuspendedFlows::connect(server.url(), unique("CATGA_SUSPENDED_CAPACITY")).await?;
+    let correlation = unique("bounded-correlation");
+    let mut ids = Vec::new();
+    for position in 0..16 {
+        let id = unique(&format!("bounded-wait-{position}"));
+        let continuation = FlowContinuation::waiting(
+            FlowState::new(id.as_str(), "bounded-wait", [], "node-a").suspended(),
+            "resume",
+            WaitCondition::new(
+                correlation.as_str(),
+                WaitPolicy::All,
+                1,
+                UNIX_EPOCH,
+                Duration::from_secs(60),
+            ),
+        );
+        assert!(store.create(continuation).await?);
+        ids.push(id);
+    }
+    let overflow = FlowContinuation::waiting(
+        FlowState::new("overflow-wait", "bounded-wait", [], "node-a").suspended(),
+        "resume",
+        WaitCondition::new(
+            correlation.as_str(),
+            WaitPolicy::All,
+            1,
+            UNIX_EPOCH,
+            Duration::from_secs(60),
+        ),
+    );
+    assert!(matches!(
+        store.create(overflow).await,
+        Err(error) if error.code() == ErrorCode::Conflict
+    ));
+    assert_eq!(
+        store
+            .get_by_wait_correlation(correlation.as_str())
+            .await
+            .expect_err("ambiguous correlation must not choose a continuation")
+            .code(),
+        ErrorCode::Conflict
+    );
+    for id in ids {
+        assert!(store.delete(&id, 0).await?);
+    }
+    assert!(
+        store
+            .get_by_wait_correlation(correlation.as_str())
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn dead_letters_reject_malformed_jetstream_records() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let stream = unique("CATGA_DLQ_MALFORMED");
+    let subject = unique("catga.dlq.malformed");
+    let letters = NatsDeadLetters::connect(server.url(), stream, subject.clone()).await?;
+    let publisher = jetstream::new(
+        async_nats::connect(server.url())
+            .await
+            .map_err(|error| test_error("connect malformed dead-letter publisher", error))?,
+    );
+    publisher
+        .publish(format!("{subject}.broken"), vec![1, 2, 3].into())
+        .await
+        .map_err(|error| test_error("publish malformed dead-letter record", error))?
+        .await
+        .map_err(|error| test_error("confirm malformed dead-letter record", error))?;
+    assert_eq!(
+        letters
+            .list(1)
+            .await
+            .expect_err("malformed persisted dead-letter data must not decode")
+            .code(),
+        ErrorCode::Internal
+    );
     Ok(())
 }

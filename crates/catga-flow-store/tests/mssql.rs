@@ -593,6 +593,196 @@ async fn mssql_scheduler_handles_zero_limits_expired_leases_and_unclaimed_cancel
     cleanup
 }
 
+/// Exercises concurrent physical-revision updates through every SQL Server adapter.
+///
+/// The public stores keep their logical version unchanged for several operations (claims,
+/// wait-result writes, and physical record deletes).  This test uses a fresh database so the
+/// concurrent operations cannot accidentally observe another E2E case's due records.  It proves
+/// that an optimistic-CAS retry preserves every distinct update and that a single stale flow or
+/// due schedule cannot be leased twice.
+#[tokio::test]
+#[ignore = "requires CATGA_MSSQL_URL"]
+async fn mssql_concurrent_physical_revision_paths_preserve_all_records() -> CatgaResult<()> {
+    let Some(url) = sql_contracts::service_url("CATGA_MSSQL_URL")? else {
+        return Ok(());
+    };
+    let (admin, isolated_url, database) = create_mssql_test_database(url.as_ref()).await?;
+    let result = async {
+        let flow = SqlFlowStore::connect_mssql(isolated_url.as_str()).await?;
+        let suspended = SqlSuspendedFlowStore::connect_mssql(isolated_url.as_str()).await?;
+        let progress = SqlDslStepProgressStore::connect_mssql(isolated_url.as_str()).await?;
+        let snapshots =
+            SqlStateMachineStore::<MssqlCoverageState>::connect_mssql(isolated_url.as_str())
+                .await?;
+        let scheduler = SqlFlowScheduler::connect_mssql(isolated_url.as_str()).await?;
+        flow.migrate().await?;
+        suspended.migrate().await?;
+        progress.migrate().await?;
+        snapshots.migrate().await?;
+        scheduler.migrate().await?;
+
+        let prefix = format!("mssql-concurrent-{}", uuid::Uuid::new_v4());
+        let flow_type = format!("{prefix}/type");
+        let stale_id = format!("{prefix}/stale-flow");
+        assert!(
+            flow.create(
+                FlowState::new(stale_id.as_str(), flow_type.as_str(), [], "creator")
+                    .heartbeated_at(SystemTime::UNIX_EPOCH),
+            )
+            .await?
+        );
+        let (first_claim, second_claim) = tokio::join!(
+            flow.try_claim(flow_type.as_str(), "worker-a", Duration::from_secs(1)),
+            flow.try_claim(flow_type.as_str(), "worker-b", Duration::from_secs(1)),
+        );
+        let first_claim = first_claim?;
+        let second_claim = second_claim?;
+        assert_eq!(
+            usize::from(first_claim.is_some()) + usize::from(second_claim.is_some()),
+            1,
+            "exactly one concurrent worker may claim a stale flow"
+        );
+        let claimed = flow
+            .get(stale_id.as_str())
+            .await?
+            .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "claimed flow disappeared"))?;
+        assert!(matches!(claimed.owner(), Some("worker-a" | "worker-b")));
+
+        let continuation_id = format!("{prefix}/continuation");
+        let continuation = FlowContinuation::waiting(
+            FlowState::new(
+                continuation_id.as_str(),
+                format!("{prefix}/continuation-type"),
+                [],
+                "node-a",
+            )
+            .suspended(),
+            "resume",
+            WaitCondition::new(
+                format!("{prefix}/correlation"),
+                WaitPolicy::All,
+                2,
+                SystemTime::now(),
+                Duration::from_secs(30),
+            ),
+        );
+        assert!(suspended.create(continuation).await?);
+        let (first_result, second_result) = tokio::join!(
+            suspended.record_wait_success(
+                continuation_id.as_str(),
+                0,
+                "child-a",
+                b"first".to_vec(),
+            ),
+            suspended.record_wait_success(
+                continuation_id.as_str(),
+                0,
+                "child-b",
+                b"second".to_vec(),
+            ),
+        );
+        assert!(first_result?);
+        assert!(second_result?);
+        let persisted = suspended
+            .get(continuation_id.as_str())
+            .await?
+            .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "continuation disappeared"))?;
+        assert_eq!(
+            persisted
+                .wait()
+                .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "wait disappeared"))?
+                .completed_count(),
+            2,
+            "concurrent child results must both survive the revision retry"
+        );
+
+        let progress_id = format!("{prefix}/progress");
+        let initial_progress = DslStepProgress::new(progress_id.as_str(), 7, b"initial".as_slice());
+        assert!(progress.create(initial_progress.clone()).await?);
+        let first_progress = initial_progress.clone().next_version(b"first".as_slice())?;
+        let second_progress = initial_progress.next_version(b"second".as_slice())?;
+        let (first_update, second_update) = tokio::join!(
+            progress.update(0, first_progress.clone()),
+            progress.update(0, second_progress.clone()),
+        );
+        assert_eq!(usize::from(first_update?) + usize::from(second_update?), 1);
+        let (first_delete, second_delete) = tokio::join!(
+            progress.delete(progress_id.as_str(), 7),
+            progress.delete(progress_id.as_str(), 7),
+        );
+        assert_eq!(usize::from(first_delete?) + usize::from(second_delete?), 1);
+        assert!(progress.get(progress_id.as_str(), 7).await?.is_none());
+
+        let snapshot_id = format!("{prefix}/snapshot");
+        let initial_snapshot =
+            StateMachineSnapshot::new(snapshot_id.as_str(), MssqlCoverageState { attempts: 0 });
+        let (first_create, second_create) = tokio::join!(
+            snapshots.create(initial_snapshot.clone()),
+            snapshots.create(initial_snapshot.clone()),
+        );
+        assert_eq!(usize::from(first_create?) + usize::from(second_create?), 1);
+        let first_snapshot = initial_snapshot.next_version(MssqlCoverageState { attempts: 1 })?;
+        let second_snapshot = initial_snapshot.next_version(MssqlCoverageState { attempts: 2 })?;
+        let (first_update, second_update) = tokio::join!(
+            snapshots.update(0, first_snapshot),
+            snapshots.update(0, second_snapshot),
+        );
+        assert_eq!(usize::from(first_update?) + usize::from(second_update?), 1);
+        let persisted_snapshot = snapshots
+            .get(snapshot_id.as_str())
+            .await?
+            .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "snapshot disappeared"))?;
+        assert_eq!(persisted_snapshot.version(), 1);
+        assert!(matches!(persisted_snapshot.state().attempts, 1 | 2,));
+
+        let due = SystemTime::now() - Duration::from_secs(1);
+        let schedule_flow = format!("{prefix}/schedule-flow");
+        let first_schedule = scheduler
+            .schedule_resume(schedule_flow.as_str(), "first", due)
+            .await?;
+        let second_schedule = scheduler
+            .schedule_resume(schedule_flow.as_str(), "second", due)
+            .await?;
+        let now = SystemTime::now();
+        let (first_due, second_due) = tokio::join!(
+            scheduler.claim_due("worker-a", now, Duration::from_secs(30), 1),
+            scheduler.claim_due("worker-b", now, Duration::from_secs(30), 1),
+        );
+        let first_due = first_due?;
+        let second_due = second_due?;
+        assert_eq!(first_due.len() + second_due.len(), 2);
+        let mut schedule_ids = first_due
+            .iter()
+            .chain(&second_due)
+            .map(|scheduled| scheduled.schedule_id().to_owned())
+            .collect::<Vec<_>>();
+        schedule_ids.sort_unstable();
+        let mut expected_schedule_ids: Vec<String> =
+            vec![first_schedule.into(), second_schedule.into()];
+        expected_schedule_ids.sort_unstable();
+        assert_eq!(schedule_ids, expected_schedule_ids);
+        for scheduled in &first_due {
+            assert!(
+                scheduler
+                    .ack_due("worker-a", scheduled.schedule_id())
+                    .await?
+            );
+        }
+        for scheduled in &second_due {
+            assert!(
+                scheduler
+                    .ack_due("worker-b", scheduled.schedule_id())
+                    .await?
+            );
+        }
+        Ok(())
+    }
+    .await;
+    let cleanup = drop_mssql_test_database(&admin, database.as_str()).await;
+    result?;
+    cleanup
+}
+
 async fn create_mssql_test_database(url: &str) -> CatgaResult<(MssqlAdminPool, String, String)> {
     let database = format!("catga_e2e_{}", uuid::Uuid::new_v4().simple());
     let manager = bb8_tiberius::ConnectionManager::build(url).map_err(|error| {

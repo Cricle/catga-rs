@@ -361,6 +361,86 @@ async fn runtime_keeps_delayed_flows_suspended_until_their_persisted_due_time() 
 }
 
 #[tokio::test]
+async fn runtime_fails_expired_external_waits_without_executing_the_next_step() -> CatgaResult<()> {
+    let completed_calls = Arc::new(AtomicUsize::new(0));
+    let completion_calls = Arc::clone(&completed_calls);
+    let expired_wait = WaitCondition::new(
+        "external-timeout",
+        WaitPolicy::All,
+        1,
+        UNIX_EPOCH,
+        Duration::ZERO,
+    );
+    let definition = FlowDefinition::new("external-timeout")
+        .step("await-provider", move |_| {
+            let expired_wait = expired_wait.clone();
+            async move { Ok(FlowStepOutcome::wait(expired_wait)) }
+        })
+        .step("complete", move |_| {
+            let completion_calls = Arc::clone(&completion_calls);
+            async move {
+                completion_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(FlowStepOutcome::complete())
+            }
+        });
+    let (_, _, runtime) = runtime(definition);
+
+    assert!(runtime.start("expired-wait-1", []).await?.is_suspended());
+    let result = runtime
+        .resume_at("expired-wait-1", UNIX_EPOCH + Duration::from_secs(1))
+        .await?;
+
+    assert!(result.is_failure());
+    assert_eq!(
+        result.state().error().map(CatgaError::code),
+        Some(ErrorCode::Timeout)
+    );
+    assert_eq!(completed_calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_applies_registered_gotos_and_terminalizes_unknown_targets() -> CatgaResult<()> {
+    let final_step_calls = Arc::new(AtomicUsize::new(0));
+    let final_calls = Arc::clone(&final_step_calls);
+    let valid = FlowDefinition::new("goto-valid")
+        .step("route", |_| async { Ok(FlowStepOutcome::goto("finish")) })
+        .step("finish", move |_| {
+            let final_calls = Arc::clone(&final_calls);
+            async move {
+                final_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(FlowStepOutcome::complete())
+            }
+        });
+    let (_, _, valid_runtime) = runtime(valid);
+    let completed = valid_runtime.start("goto-valid-1", []).await?;
+    assert!(completed.is_success());
+    assert_eq!(completed.state().step(), 2);
+    assert_eq!(final_step_calls.load(Ordering::SeqCst), 1);
+
+    let unreachable_calls = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&unreachable_calls);
+    let invalid = FlowDefinition::new("goto-invalid")
+        .step("route", |_| async { Ok(FlowStepOutcome::goto("missing")) })
+        .step("unreachable", move |_| {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(FlowStepOutcome::complete())
+            }
+        });
+    let (_, _, runtime) = runtime(invalid);
+    let failed = runtime.start("goto-invalid-1", []).await?;
+    assert!(failed.is_failure());
+    assert_eq!(
+        failed.state().error().map(CatgaError::code),
+        Some(ErrorCode::NotFound)
+    );
+    assert_eq!(unreachable_calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_tag_policy_retries_transient_work_and_terminalizes_timeouts() -> CatgaResult<()> {
     let retry_attempts = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::clone(&retry_attempts);
