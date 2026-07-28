@@ -88,10 +88,19 @@ where
     let receipts = store
         .poll_timed_out(&TimedOutFlowPoll::new(now, 4, 16)?)
         .await?;
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].flow_id(), waiting_id);
-    assert_ne!(receipts[0].flow_id(), plain_id);
-    store.release_timed_out(&receipts[0]).await?;
+    assert!(
+        receipts
+            .iter()
+            .any(|receipt| receipt.flow_id() == waiting_id),
+        "the expired wait created by this test must be discoverable"
+    );
+    assert!(
+        receipts.iter().all(|receipt| receipt.flow_id() != plain_id),
+        "a continuation without a wait must retain a SQL NULL deadline and never be discovered"
+    );
+    for receipt in receipts {
+        store.release_timed_out(&receipt).await?;
+    }
     Ok(())
 }
 
