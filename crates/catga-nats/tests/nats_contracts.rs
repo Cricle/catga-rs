@@ -473,33 +473,6 @@ async fn scheduler_fences_owners_and_supports_cancellation() -> CatgaResult<()> 
 
 #[tokio::test]
 #[ignore = "requires a real JetStream server; run in the E2E job"]
-async fn scheduler_reuses_the_target_identity_across_repeated_registration() -> CatgaResult<()> {
-    let server = NatsServer::start().await?;
-    let scheduler =
-        NatsFlowScheduler::connect(server.url(), unique("CATGA_SCHEDULER_IDEMPOTENT")).await?;
-    let due = UNIX_EPOCH + Duration::from_secs(100);
-
-    let first = scheduler
-        .schedule_resume("payment-21", "charge", due)
-        .await?;
-    let repeated = scheduler
-        .schedule_resume("payment-21", "charge", due + Duration::from_secs(1))
-        .await?;
-
-    assert_eq!(repeated, first);
-    assert_eq!(
-        scheduler
-            .claim_due("worker", due, Duration::from_secs(1), 1)
-            .await?
-            .first()
-            .map(|resume| resume.due_at()),
-        Some(due)
-    );
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn scheduler_claims_across_full_index_pages() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let scheduler =

@@ -299,9 +299,6 @@ impl FlowScheduler for NatsFlowScheduler {
     ) -> CatgaResult<Box<str>> {
         let due_at_millis = to_millis(due_at)?;
         let key = target_record_key(&target_bytes(flow_id, state_id)?);
-        if let Some((_, schedule)) = self.load_schedule_by_key(&key).await? {
-            return Ok(schedule.schedule_id);
-        }
         let schedule_id: Box<str> = format!("{key}:{}", Uuid::new_v4()).into();
         self.index_schedule(&key).await?;
         let schedule = StoredSchedule {
@@ -316,15 +313,10 @@ impl FlowScheduler for NatsFlowScheduler {
         if create_or_restore(&self.schedules, &key, &schedule).await? {
             Ok(schedule_id)
         } else {
-            self.load_schedule_by_key(&key)
-                .await?
-                .map(|(_, existing)| existing.schedule_id)
-                .ok_or_else(|| {
-                    CatgaError::new(
-                        ErrorCode::Transient,
-                        "NATS scheduler record disappeared during registration",
-                    )
-                })
+            Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "a resume is already scheduled for this flow state",
+            ))
         }
     }
 
