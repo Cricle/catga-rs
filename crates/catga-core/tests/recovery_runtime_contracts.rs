@@ -197,7 +197,9 @@ async fn concurrent_recovery_is_rejected_without_abandoning_the_active_component
     let started = component.started();
     let first_manager = Arc::clone(&manager);
     let first = tokio::spawn(async move { first_manager.recover_unhealthy().await });
-    timeout(Duration::from_secs(1), started.notified()).await??;
+    timeout(Duration::from_secs(1), started.notified())
+        .await
+        .expect("recovery starts");
     assert!(manager.is_recovering());
     assert_eq!(
         manager.recover_unhealthy().await,
@@ -206,7 +208,10 @@ async fn concurrent_recovery_is_rejected_without_abandoning_the_active_component
 
     component.release().notify_one();
     assert!(matches!(
-        timeout(Duration::from_secs(1), first).await??,
+        timeout(Duration::from_secs(1), first)
+            .await
+            .expect("first recovery completes")
+            .expect("first recovery task does not panic"),
         RecoveryResult::Completed {
             succeeded: 1,
             failed: 0,
@@ -228,10 +233,15 @@ async fn cancellation_drops_a_pending_recovery_and_releases_the_next_sweep() -> 
     let task_cancellation = cancellation.clone();
     let task = tokio::spawn(async move { task_manager.recover_all_until(task_cancellation).await });
 
-    timeout(Duration::from_secs(1), started.notified()).await??;
+    timeout(Duration::from_secs(1), started.notified())
+        .await
+        .expect("recovery starts");
     cancellation.cancel();
     assert!(matches!(
-        timeout(Duration::from_secs(1), task).await??,
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("cancelled recovery completes")
+            .expect("cancelled recovery task does not panic"),
         Err(error) if error.code() == ErrorCode::Cancelled
     ));
     assert_eq!(component.attempts(), 1);
@@ -275,9 +285,14 @@ async fn automatic_recovery_retries_a_failed_sweep_then_stops_without_a_backgrou
             .await
     });
 
-    timeout(Duration::from_secs(1), recovered.notified()).await??;
+    timeout(Duration::from_secs(1), recovered.notified())
+        .await
+        .expect("automatic recovery succeeds");
     cancellation.cancel();
-    timeout(Duration::from_secs(1), task).await???;
+    timeout(Duration::from_secs(1), task)
+        .await
+        .expect("automatic recovery stops after cancellation")
+        .expect("automatic recovery task does not panic")?;
     assert_eq!(component.attempts(), 2);
     assert!(component.is_healthy());
     assert!(!manager.is_recovering());

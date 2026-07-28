@@ -355,10 +355,15 @@ async fn in_flight_request_cancellation_drops_the_handler_and_keeps_the_mediator
             .await
     });
 
-    timeout(std::time::Duration::from_secs(1), waiting_for_handler).await??;
+    timeout(std::time::Duration::from_secs(1), waiting_for_handler)
+        .await
+        .expect("handler starts before cancellation");
     cancellation.cancel();
     assert!(matches!(
-        timeout(std::time::Duration::from_secs(1), dispatch).await??,
+        timeout(std::time::Duration::from_secs(1), dispatch)
+            .await
+            .expect("cancelled dispatch completes")
+            .expect("dispatch task does not panic"),
         Err(error) if error.code() == ErrorCode::Cancelled
     ));
     assert_eq!(observed_cancellation_scope.load(Ordering::Acquire), 1);
