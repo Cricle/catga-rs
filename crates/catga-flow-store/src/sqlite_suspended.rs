@@ -70,12 +70,26 @@ pub(crate) async fn migrate(pool: &SqlitePool) -> CatgaResult<()> {
         .execute(&mut *transaction)
         .await
         .map_err(|error| database_error("add SQLite continuation update column", error))?;
+    }
+    let has_updated_subsec_column: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('catga_flow_continuations') \
+         WHERE name = ?",
+    )
+    .bind("updated_at_subsec_ns")
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| {
+        database_error("inspect SQLite continuation update precision column", error)
+    })?;
+    if has_updated_subsec_column == 0 {
         sqlx::query(
             "ALTER TABLE catga_flow_continuations ADD COLUMN updated_at_subsec_ns INTEGER NOT NULL DEFAULT 0",
         )
         .execute(&mut *transaction)
         .await
         .map_err(|error| database_error("add SQLite continuation update precision column", error))?;
+    }
+    if has_updated_column == 0 {
         sqlx::query(
             "UPDATE catga_flow_continuations SET updated_at_ms = created_at_ms, \
              updated_at_subsec_ns = created_at_subsec_ns",

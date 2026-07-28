@@ -434,6 +434,46 @@ async fn sqlite_suspended_store_migrates_an_existing_table_with_discovery_order_
 }
 
 #[tokio::test]
+async fn sqlite_suspended_store_migrates_partial_update_timestamp_schema() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("partial-update-timestamp-schema.db");
+    let url = format!("sqlite://{}", database.display());
+    std::fs::File::create(&database).map_err(|error| {
+        CatgaError::new(ErrorCode::Internal, "create partial continuation database")
+            .with_details(error.to_string())
+    })?;
+    let pool = sqlx::SqlitePool::connect(&url)
+        .await
+        .map_err(|error| test_database_error("connect partial continuation database", error))?;
+    sqlx::query(
+        "CREATE TABLE catga_flow_continuations (\
+         flow_key BLOB PRIMARY KEY NOT NULL, flow_id TEXT NOT NULL UNIQUE, \
+         flow_type TEXT NOT NULL, status INTEGER NOT NULL, version INTEGER NOT NULL, \
+         created_at_ms INTEGER NOT NULL, created_at_subsec_ns INTEGER NOT NULL DEFAULT 0, \
+         updated_at_ms INTEGER NOT NULL DEFAULT 0, deadline_ms INTEGER NULL, \
+         revision INTEGER NOT NULL, due_token BLOB NULL, lease_until_ms INTEGER NULL, \
+         payload BLOB NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|error| test_database_error("create partial continuation table", error))?;
+    drop(pool);
+
+    let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    store.migrate().await?;
+    assert!(
+        store
+            .create(FlowContinuation::new(
+                FlowState::new("partial-update-timestamp", "payment", [], "node-a"),
+                "finish",
+            ))
+            .await?,
+        "migration must make partially upgraded tables writable"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_suspended_store_uses_full_snapshot_claims_and_versioned_updates() -> CatgaResult<()>
 {
     let directory = temporary_directory()?;
