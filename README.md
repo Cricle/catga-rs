@@ -57,6 +57,37 @@ Their source lives in [`examples/src/bin`](examples/src/bin).
 They are deliberately in-memory. Select a production transport or store only
 where the application crosses that boundary.
 
+## Performance snapshot
+
+The latest complete release-mode Docker run is available as the
+[performance artifact](https://github.com/Cricle/catga-rs/suites/82436920246/artifacts/8709395607).
+It ran the functional E2E preflight and every manual benchmark on commit
+[`76d49dc`](https://github.com/Cricle/catga-rs/commit/76d49dc81b62598ceec9e7a825575e3a3a71b889).
+The figures below are observations from that shared CI runner, not performance
+thresholds or hardware-independent guarantees.
+
+| Source | Benchmark | Operations | Throughput (ops/s) | p50 | p95 | p99 | RSS before / after / peak |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Memory | Tokio mpsc round-trip lower bound | 4,096 | 3,318,426 | 230ns | 281ns | 431ns | 3.10 / 3.17 / 3.17 MiB |
+| Memory | Catga publish / receive / ack | 4,096 | 967,975 | 962ns | 1.03µs | 1.24µs | 3.20 / 3.20 / 3.20 MiB |
+| Memory | Mediator request | 4,096 | 3,058,275 | 281ns | 291ns | 331ns | 3.20 / 3.20 / 3.20 MiB |
+| Memory | Three-step local Flow | 4,096 | 3,847,089 | 200ns | 221ns | 241ns | 3.80 / 3.71 / 3.86 MiB |
+| Memory | Retain 4,096 outbox records (256B payload) | 4,096 | 1,013,808 | 511ns | 3.77µs | 5.22µs | 3.71 / 6.45 / 6.45 MiB |
+| In-process | CQRS + Flow + transport workflow | 4,096 | 452,452 | — | — | — | — |
+| In-process | Bounded mediator batch scheduler | 4,096 | 1,725,882 | — | — | — | — |
+| In-process | Local Flow execution | 4,096 | 3,072,480 | — | — | — | — |
+| In-process | Local DSL Flow execution | 4,096 | 577,910 | — | — | — | — |
+| NATS JetStream | Durable publish / receive / ack | 1,000 | 2,040 | — | — | — | — |
+| Docker E2E | Axum HTTP quote | 512 | 15,028 | 61.3µs | 89.8µs | 118.6µs | — |
+| Docker E2E | NATS JetStream round-trip | 512 | 2,065 | 472.3µs | 553.3µs | 646.4µs | — |
+
+The Tokio row is deliberately only a lower bound: it does not include Catga's
+delivery acknowledgement, lifecycle-drain tracking, bounded telemetry, or
+typed error contract. The outbox row retains 1MiB of payload plus record and
+index metadata. Run `scripts/performance.sh --profile full` manually or from a
+release workflow to produce the current machine-readable JSON reports and the
+complete Markdown total table.
+
 ## Quick start
 
 Start with `catga-core` and register handlers during application startup:

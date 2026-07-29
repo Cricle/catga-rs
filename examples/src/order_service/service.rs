@@ -165,6 +165,37 @@ impl OrderService {
         ))
     }
 
+    /// Binds and runs the example's default Axum server.
+    ///
+    /// This is the concise runnable-sample entry point. Applications that need custom middleware,
+    /// TLS, graceful shutdown, or a shared listener should call [`Self::router`] instead and own
+    /// the server lifecycle themselves.
+    pub async fn serve<A>(self, address: A) -> CatgaResult<()>
+    where
+        A: tokio::net::ToSocketAddrs,
+    {
+        let listener = tokio::net::TcpListener::bind(address)
+            .await
+            .map_err(|error| {
+                CatgaError::new(ErrorCode::Unavailable, "bind order-service listener")
+                    .with_details(error.to_string())
+            })?;
+        let address = listener.local_addr().map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Unavailable,
+                "read order-service listener address",
+            )
+            .with_details(error.to_string())
+        })?;
+        println!("order service listening on http://{address}/orders");
+        axum::serve(listener, self.router()?)
+            .await
+            .map_err(|error| {
+                CatgaError::new(ErrorCode::Unavailable, "serve order-service API")
+                    .with_details(error.to_string())
+            })
+    }
+
     /// Captures the local cluster-health snapshot used by `GET /healthz`.
     #[must_use]
     pub fn health(&self) -> OrderServiceHealth {

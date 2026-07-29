@@ -72,7 +72,10 @@ impl MemoryOutbox {
         validate_completed_retention(retention)?;
         Ok(Self {
             messages: DashMap::with_capacity(capacity),
-            published: DashMap::with_capacity(capacity),
+            // Published records are created only after an acknowledgement. Avoid reserving a
+            // second full index for the common pending-only backlog; DashMap grows this index if
+            // acknowledgements later need it, without changing the shared record capacity.
+            published: DashMap::new(),
             claim_sequence: AtomicU64::new(0),
             record_sequence: RecordSequence::new(),
             capacity: RecordCapacity::new(capacity)?,

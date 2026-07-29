@@ -22,6 +22,14 @@ async fn start(service: OrderService) -> (String, JoinHandle<()>) {
     (endpoint, server)
 }
 
+#[test]
+fn order_service_exposes_a_concise_default_server_entrypoint() {
+    let service = OrderService::in_memory(OrderServiceOptions::default())
+        .expect("construct the in-memory order service");
+    let server = service.serve("127.0.0.1:0");
+    drop(server);
+}
+
 #[tokio::test]
 async fn order_service_e2e_records_cqrs_flow_event_and_acknowledged_delivery() {
     let service = OrderService::in_memory(OrderServiceOptions::default())
