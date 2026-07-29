@@ -148,113 +148,63 @@ if (( functional_exit_code != 0 )); then
 fi
 
 set_connection_environment
-export CATGA_PERFORMANCE_RESULTS="$output_directory/memory-performance.json"
-set +e
-cargo test --release -p catga-memory --test memory_performance -- --ignored --nocapture \
-    2>&1 | tee "$output_directory/memory-performance.log"
-memory_exit_code=${PIPESTATUS[0]}
-set -e
-if (( memory_exit_code != 0 )); then
-    die "memory performance test failed with exit code $memory_exit_code"
-fi
-
-set +e
-cargo test --release -p catga-tests --all-features \
-    --test critical_path_performance \
-    --test mediator_performance \
-    --test flow_performance \
-    -- --ignored --nocapture \
-    2>&1 | tee "$output_directory/in-process-performance.log"
-in_process_exit_code=${PIPESTATUS[0]}
-set -e
-if (( in_process_exit_code != 0 )); then
-    die "in-process performance test failed with exit code $in_process_exit_code"
-fi
-
-set +e
-cargo test --release -p catga-tests --all-features --test nats_performance -- --ignored --nocapture \
-    2>&1 | tee "$output_directory/nats-performance.log"
-nats_exit_code=${PIPESTATUS[0]}
-set -e
-if (( nats_exit_code != 0 )); then
-    die "NATS JetStream performance test failed with exit code $nats_exit_code"
-fi
-
-extract_throughput() {
-    local log_file=$1 metric_name=$2
-    local value
-    value=$(grep -E "^${metric_name}:" "$log_file" | tail -n1 | sed -E 's/.*_per_second=([0-9.]+).*/\1/')
-    [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "could not read $metric_name throughput from $log_file"
-    printf '%s\n' "$value"
+run_benchmark() {
+    local name=$1 report=$2
+    shift 2
+    rm -f "$output_directory/$report"
+    export CATGA_PERFORMANCE_RESULTS="$output_directory/$report"
+    set +e
+    "$@" 2>&1 | tee "$output_directory/$name.log"
+    local benchmark_exit_code=${PIPESTATUS[0]}
+    set -e
+    if (( benchmark_exit_code != 0 )); then
+        die "$name failed with exit code $benchmark_exit_code"
+    fi
+    [[ -s "$output_directory/$report" ]] || die "$name did not produce $report"
 }
 
-write_in_process_results() {
-    local critical mediator flow dsl nats
-    critical=$(extract_throughput "$output_directory/in-process-performance.log" critical_application_path)
-    mediator=$(extract_throughput "$output_directory/in-process-performance.log" mediator_batch_scheduler_throughput)
-    flow=$(extract_throughput "$output_directory/in-process-performance.log" local_flow_execution_throughput)
-    dsl=$(extract_throughput "$output_directory/in-process-performance.log" local_dsl_flow_execution_throughput)
-    nats=$(extract_throughput "$output_directory/nats-performance.log" nats_jetstream_publish_receive_ack)
+run_benchmark memory-performance memory-performance.json \
+    cargo test --release -p catga-memory --test memory_performance -- --ignored --nocapture
+run_benchmark critical-performance critical-performance.json \
+    cargo test --release -p catga-tests --all-features --test critical_path_performance -- --ignored --nocapture
+run_benchmark mediator-performance mediator-performance.json \
+    cargo test --release -p catga-tests --all-features --test mediator_performance -- --ignored --nocapture
+run_benchmark flow-performance flow-performance.json \
+    cargo test --release -p catga-tests --all-features --test flow_performance -- --ignored --nocapture
+run_benchmark nats-performance nats-performance.json \
+    cargo test --release -p catga-tests --all-features --test nats_performance -- --ignored --nocapture
+# Storage backends: SQLite, MySQL, PostgreSQL, SQL Server, and Redis.
+run_benchmark storage-performance storage-performance.json \
+    cargo test --release -p catga-tests --all-features --test storage_performance -- --ignored --nocapture
+run_benchmark e2e-performance performance.json \
+    cargo test --release -p catga-tests --all-features --test e2e_performance -- --ignored --nocapture
 
-    jq -n \
-        --argjson critical "$critical" \
-        --argjson mediator "$mediator" \
-        --argjson flow "$flow" \
-        --argjson dsl "$dsl" \
-        '{ schema_version: 1, source: "in-process", results: [
-            { name: "critical_application_path", operations: 4096, operations_per_second: $critical },
-            { name: "mediator_batch_scheduler", operations: 4096, operations_per_second: $mediator },
-            { name: "local_flow_execution", operations: 4096, operations_per_second: $flow },
-            { name: "local_dsl_flow_execution", operations: 4096, operations_per_second: $dsl }
-        ] }' >"$output_directory/in-process-performance.json"
-    jq -n \
-        --argjson nats "$nats" \
-        '{ schema_version: 1, source: "NATS JetStream", results: [
-            { name: "nats_jetstream_publish_receive_ack", operations: 1000, operations_per_second: $nats }
-        ] }' >"$output_directory/nats-performance.json"
-}
+docker compose --project-name "$compose_project" -f "$compose_file" \
+    "${compose_profile_args[@]}" ps --quiet \
+    | xargs -r docker stats --no-stream --format '{{json .}}' \
+    | jq -s '{ schema_version: 1, source: "Docker container statistics", containers: . }' \
+    >"$output_directory/container-memory.json"
 
-write_in_process_results
-
-set +e
-export CATGA_PERFORMANCE_RESULTS="$output_directory/performance.json"
-cargo test --release -p catga-tests --all-features --test e2e_performance -- --ignored --nocapture \
-    2>&1 | tee "$output_directory/e2e-performance.log"
-e2e_performance_exit_code=${PIPESTATUS[0]}
-set -e
-if (( e2e_performance_exit_code != 0 )); then
-    die "Docker E2E performance test failed with exit code $e2e_performance_exit_code"
-fi
-
-jq -r '
-  "Catga Docker E2E performance summary", "",
-  (.results[] | "\(.name): operations=\(.operations), elapsed_ns=\(.elapsed_nanoseconds), operations_per_second=\(.operations_per_second)")
-' "$output_directory/performance.json" >"$output_directory/summary.txt"
-jq -r '
-  "", "Functional Docker E2E timings", "",
-  (.scenarios[] | "\(.id): succeeded=\(.succeeded), duration_ms=\(.durationMilliseconds)")
-' "$output_directory/functional-e2e-results.json" >>"$output_directory/summary.txt"
 jq -r -s '
   def cell: if . == null then "—" else tostring end;
   [
     "# Catga performance total table",
     "",
-    "| Source | Benchmark | Operations | Throughput (ops/s) | p50 (ns) | p95 (ns) | p99 (ns) | RSS before (bytes) | RSS after (bytes) | RSS peak (bytes) |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    "All latency percentiles are nearest-rank. RSS is the benchmark process only; container resource data is in `container-memory.json`.",
+    "",
+    "| Source | Benchmark | Payload (bytes) | Operations | Throughput (ops/s) | Latency scope | p50 (ns) | p95 (ns) | p99 (ns) | RSS before (bytes) | RSS after (bytes) | RSS peak (bytes) |",
+    "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |"
   ][],
   (
-    [
-      (.[0].results[]? | . + { source: "memory" }),
-      (.[1].results[]? | . + { source: "in-process" }),
-      (.[2].results[]? | . + { source: "NATS JetStream" }),
-      (.[3].results[]? | . + { source: "Docker E2E" })
-    ]
+    [ .[] | .source as $source | .results[]? | . + { source: $source } ]
     | .[]
     | [
         .source,
         .name,
+        (.payload_bytes | cell),
         (.operations | cell),
         (.operations_per_second | cell),
+        (.latency_scope | cell),
         (.p50_ns | cell),
         (.p95_ns | cell),
         (.p99_ns | cell),
@@ -265,11 +215,25 @@ jq -r -s '
     | "| " + join(" | ") + " |"
   )
 ' "$output_directory/memory-performance.json" \
-    "$output_directory/in-process-performance.json" \
+    "$output_directory/critical-performance.json" \
+    "$output_directory/mediator-performance.json" \
+    "$output_directory/flow-performance.json" \
     "$output_directory/nats-performance.json" \
+    "$output_directory/storage-performance.json" \
     "$output_directory/performance.json" >"$output_directory/summary.md"
-printf '\nIn-process and JetStream benchmark timings\n\n' >>"$output_directory/summary.txt"
-grep -hE '^(critical_application_path|mediator_batch_scheduler_throughput|local_(dsl_)?flow_execution_throughput|nats_jetstream_publish_receive_ack):' \
-    "$output_directory/in-process-performance.log" \
-    "$output_directory/nats-performance.log" >>"$output_directory/summary.txt" || true
+
+jq -r -s '
+  "Catga performance measurements", "",
+  ([.[] | .source as $source | .results[]? | "\($source) / \(.name): operations=\(.operations), elapsed_ns=\(.elapsed_nanoseconds), operations_per_second=\(.operations_per_second)"] | .[])
+' "$output_directory/memory-performance.json" \
+    "$output_directory/critical-performance.json" \
+    "$output_directory/mediator-performance.json" \
+    "$output_directory/flow-performance.json" \
+    "$output_directory/nats-performance.json" \
+    "$output_directory/storage-performance.json" \
+    "$output_directory/performance.json" >"$output_directory/summary.txt"
+jq -r '
+  "", "Functional Docker E2E timings", "",
+  (.scenarios[] | "\(.id): succeeded=\(.succeeded), duration_ms=\(.durationMilliseconds)")
+' "$output_directory/functional-e2e-results.json" >>"$output_directory/summary.txt"
 printf 'Docker E2E performance suite passed; results: %s\n' "$output_directory"

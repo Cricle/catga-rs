@@ -18,6 +18,8 @@ use catga_nats::{NatsConfig, NatsTransport};
 
 #[path = "support/nats_e2e.rs"]
 mod nats_e2e;
+#[path = "support/performance_report.rs"]
+mod performance_report;
 
 const MESSAGE_COUNT: u64 = 1_000;
 const PAYLOAD_BYTES: usize = 256;
@@ -47,13 +49,17 @@ async fn nats_jetstream_publish_receive_ack_benchmark() -> Result<(), String> {
     let envelopes = (1..=MESSAGE_COUNT)
         .map(benchmark_envelope)
         .collect::<Vec<_>>();
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
+    let mut latencies = Vec::with_capacity(MESSAGE_COUNT as usize);
     for envelope in envelopes {
+        let operation_started = Instant::now();
         let expected_id = envelope.id();
         transport.publish(envelope).await.map_err(debug_error)?;
         let delivery = transport.receive().await.map_err(debug_error)?;
         assert_eq!(delivery.envelope().id(), expected_id);
         transport.ack(delivery).await.map_err(debug_error)?;
+        latencies.push(operation_started.elapsed());
     }
     let elapsed = started.elapsed();
     let elapsed_per_message = elapsed / (MESSAGE_COUNT as u32);
@@ -61,6 +67,24 @@ async fn nats_jetstream_publish_receive_ack_benchmark() -> Result<(), String> {
 
     println!(
         "nats_jetstream_publish_receive_ack: messages={MESSAGE_COUNT}, payload_bytes={PAYLOAD_BYTES}, total={elapsed:?}, per_message={elapsed_per_message:?}, messages_per_second={messages_per_second:.2}"
+    );
+    let report = performance_report::PerformanceReport {
+        schema_version: 1,
+        source: "NATS JetStream",
+        environment: performance_report::environment(),
+        results: vec![performance_report::measured(
+            "nats_jetstream_publish_receive_ack",
+            Some(PAYLOAD_BYTES),
+            elapsed,
+            latencies,
+            "message round trip",
+            rss_before_bytes,
+        )],
+    };
+    performance_report::write_report_if_configured(&report)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(debug_error)?
     );
 
     server.close().await.map_err(debug_error)?;

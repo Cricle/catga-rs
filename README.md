@@ -66,6 +66,12 @@ It ran the functional E2E preflight and every manual benchmark on commit
 The figures below are observations from that shared CI runner, not performance
 thresholds or hardware-independent guarantees.
 
+That historical artifact predates the structured storage benchmark. The next
+manual or release run writes one complete JSON report per benchmark, including
+SQLite, MySQL, PostgreSQL, SQL Server, and Redis FlowStore lifecycles, then
+renders their payload sizes, latency scope, p50/p95/p99, process RSS, and Docker
+container statistics into the published artifact.
+
 | Source | Benchmark | Operations | Throughput (ops/s) | p50 | p95 | p99 | RSS before / after / peak |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Memory | Tokio mpsc round-trip lower bound | 4,096 | 3,318,426 | 230ns | 281ns | 431ns | 3.10 / 3.17 / 3.17 MiB |

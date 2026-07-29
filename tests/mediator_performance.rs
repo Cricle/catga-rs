@@ -18,6 +18,9 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Handler, MAX_MEDIATOR_BATCH_SIZE, Mediator, Registry, Request};
 
+#[path = "support/performance_report.rs"]
+mod performance_report;
+
 const MESSAGE_COUNT: usize = 4_096;
 const CONCURRENCY_LIMIT: usize = 32;
 
@@ -72,10 +75,13 @@ async fn mediator_batch_scheduler_throughput_benchmark() -> CatgaResult<()> {
     })?;
     let mediator = Mediator::new(registry);
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
+    let mut batch_latencies = Vec::new();
     let mut responses = Vec::with_capacity(MESSAGE_COUNT);
     for batch_start in (0..MESSAGE_COUNT).step_by(MAX_MEDIATOR_BATCH_SIZE) {
         let batch_end = (batch_start + MAX_MEDIATOR_BATCH_SIZE).min(MESSAGE_COUNT);
+        let batch_started = Instant::now();
         responses.extend(
             mediator
                 .send_batch(
@@ -84,6 +90,7 @@ async fn mediator_batch_scheduler_throughput_benchmark() -> CatgaResult<()> {
                 )
                 .await?,
         );
+        batch_latencies.push(batch_started.elapsed());
     }
     let elapsed = started.elapsed();
 
@@ -98,6 +105,25 @@ async fn mediator_batch_scheduler_throughput_benchmark() -> CatgaResult<()> {
     println!(
         "mediator_batch_scheduler_throughput: messages={MESSAGE_COUNT}, concurrency_limit={CONCURRENCY_LIMIT}, peak_in_flight={}, total={elapsed:?}, messages_per_second={messages_per_second:.2}",
         peak.load(Ordering::Acquire),
+    );
+    let report = performance_report::PerformanceReport {
+        schema_version: 1,
+        source: "in-process mediator",
+        environment: performance_report::environment(),
+        results: vec![performance_report::measured(
+            "mediator_batch_scheduler",
+            None,
+            elapsed,
+            batch_latencies,
+            "batch",
+            rss_before_bytes,
+        )],
+    };
+    performance_report::write_report_if_configured(&report)
+        .map_err(|error| catga_core::CatgaError::new(catga_core::ErrorCode::Internal, error))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize report")
     );
     Ok(())
 }

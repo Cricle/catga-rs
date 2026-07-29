@@ -13,7 +13,7 @@ axum = "0.8"
 catga-axum = { path = "../crates/catga-axum" }
 catga-core = { path = "../crates/catga-core" }
 catga-flow = { path = "../crates/catga-flow" }
-catga-flow-store = { path = "../crates/catga-flow-store", features = ["mysql", "postgres", "mssql"] }
+catga-flow-store = { path = "../crates/catga-flow-store", features = ["sqlite", "mysql", "postgres", "mssql"] }
 catga-codec-memorypack = { path = "../crates/catga-codec-memorypack" }
 catga-cluster = { path = "../crates/catga-cluster" }
 catga-memory = { path = "../crates/catga-memory" }
@@ -339,6 +339,10 @@ path = "nats_performance.rs"
 [[test]]
 name = "e2e_performance"
 path = "e2e_performance.rs"
+
+[[test]]
+name = "storage_performance"
+path = "storage_performance.rs"
 
 [[test]]
 name = "e2e_compose"

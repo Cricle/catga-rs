@@ -12,6 +12,9 @@ use std::time::Instant;
 use catga_core::CatgaResult;
 use catga_flow::{DslFlow, Flow, dsl_action};
 
+#[path = "support/performance_report.rs"]
+mod performance_report;
+
 const FLOW_COUNT: usize = 4_096;
 const STEPS_PER_FLOW: u32 = 3;
 
@@ -25,9 +28,13 @@ async fn local_flow_execution_throughput_benchmark() -> CatgaResult<()> {
 
     assert_successful_flow(local_flow_fixture().run().await);
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
+    let mut latencies = Vec::with_capacity(FLOW_COUNT);
     for flow in flows {
+        let operation_started = Instant::now();
         assert_successful_flow(flow.run().await);
+        latencies.push(operation_started.elapsed());
     }
     let elapsed = started.elapsed();
     let executions_per_second = (FLOW_COUNT as f64) / elapsed.as_secs_f64();
@@ -35,6 +42,7 @@ async fn local_flow_execution_throughput_benchmark() -> CatgaResult<()> {
     println!(
         "local_flow_execution_throughput: flows={FLOW_COUNT}, steps_per_flow={STEPS_PER_FLOW}, total={elapsed:?}, flows_per_second={executions_per_second:.2}"
     );
+    write_report("local_flow_execution", elapsed, latencies, rss_before_bytes)?;
     Ok(())
 }
 
@@ -49,16 +57,54 @@ async fn local_dsl_flow_execution_throughput_benchmark() -> CatgaResult<()> {
     flow.run(&mut warm_up_state).await?;
     assert_eq!(warm_up_state, STEPS_PER_FLOW);
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
+    let mut latencies = Vec::with_capacity(FLOW_COUNT);
     for state in &mut states {
+        let operation_started = Instant::now();
         flow.run(state).await?;
         assert_eq!(*state, STEPS_PER_FLOW);
+        latencies.push(operation_started.elapsed());
     }
     let elapsed = started.elapsed();
     let executions_per_second = (FLOW_COUNT as f64) / elapsed.as_secs_f64();
 
     println!(
         "local_dsl_flow_execution_throughput: flows={FLOW_COUNT}, steps_per_flow={STEPS_PER_FLOW}, total={elapsed:?}, flows_per_second={executions_per_second:.2}"
+    );
+    write_report(
+        "local_dsl_flow_execution",
+        elapsed,
+        latencies,
+        rss_before_bytes,
+    )?;
+    Ok(())
+}
+
+fn write_report(
+    name: &'static str,
+    elapsed: std::time::Duration,
+    latencies: Vec<std::time::Duration>,
+    rss_before_bytes: Option<u64>,
+) -> CatgaResult<()> {
+    let report = performance_report::PerformanceReport {
+        schema_version: 1,
+        source: "in-process flow",
+        environment: performance_report::environment(),
+        results: vec![performance_report::measured(
+            name,
+            None,
+            elapsed,
+            latencies,
+            "flow execution",
+            rss_before_bytes,
+        )],
+    };
+    performance_report::write_report_if_configured(&report)
+        .map_err(|error| catga_core::CatgaError::new(catga_core::ErrorCode::Internal, error))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize report")
     );
     Ok(())
 }

@@ -23,6 +23,9 @@ use catga_core::{
 use catga_flow::Flow;
 use catga_memory::MemoryTransport;
 
+#[path = "support/performance_report.rs"]
+mod performance_report;
+
 const WORKFLOW_COUNT: u64 = 4_096;
 
 /// A fixed-cost query keeps the measured CQRS path independent of serialization and I/O.
@@ -63,8 +66,11 @@ async fn critical_application_path_throughput_benchmark() -> CatgaResult<()> {
     )
     .await?;
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
+    let mut latencies = Vec::with_capacity(WORKFLOW_COUNT as usize);
     for id in 1..=WORKFLOW_COUNT {
+        let operation_started = Instant::now();
         run_workflow(
             id,
             &mediator,
@@ -73,6 +79,7 @@ async fn critical_application_path_throughput_benchmark() -> CatgaResult<()> {
             Arc::clone(&charges),
         )
         .await?;
+        latencies.push(operation_started.elapsed());
     }
     let elapsed = started.elapsed();
 
@@ -84,6 +91,25 @@ async fn critical_application_path_throughput_benchmark() -> CatgaResult<()> {
     let workflows_per_second = WORKFLOW_COUNT as f64 / elapsed.as_secs_f64();
     println!(
         "critical_application_path: workflows={WORKFLOW_COUNT}, total={elapsed:?}, workflows_per_second={workflows_per_second:.2}"
+    );
+    let report = performance_report::PerformanceReport {
+        schema_version: 1,
+        source: "in-process critical path",
+        environment: performance_report::environment(),
+        results: vec![performance_report::measured(
+            "critical_application_path",
+            None,
+            elapsed,
+            latencies,
+            "workflow",
+            rss_before_bytes,
+        )],
+    };
+    performance_report::write_report_if_configured(&report)
+        .map_err(|error| catga_core::CatgaError::new(catga_core::ErrorCode::Internal, error))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize report")
     );
     Ok(())
 }

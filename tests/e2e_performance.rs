@@ -17,6 +17,9 @@ use catga_core::{
 use catga_nats::{NatsConfig, NatsTransport};
 use serde::{Deserialize, Serialize};
 
+#[path = "support/performance_report.rs"]
+mod performance_report;
+
 const HTTP_REQUEST_COUNT: u64 = 512;
 const NATS_MESSAGE_COUNT: u64 = 512;
 const PAYLOAD_BYTES: usize = 256;
@@ -49,24 +52,6 @@ impl Handler<PriceOrder> for PriceHandler {
     }
 }
 
-#[derive(Serialize)]
-struct PerformanceResult {
-    name: &'static str,
-    operations: u64,
-    elapsed_nanoseconds: u128,
-    operations_per_second: f64,
-    p50_ns: u64,
-    p95_ns: u64,
-    p99_ns: u64,
-}
-
-#[derive(Serialize)]
-struct PerformanceReport {
-    schema_version: u8,
-    environment: &'static str,
-    results: Vec<PerformanceResult>,
-}
-
 /// Exercises real TCP Axum requests and a Docker NATS JetStream round trip without thresholds.
 #[tokio::test]
 #[ignore = "Docker E2E performance benchmark; run scripts/performance.sh --nocapture"]
@@ -95,6 +80,7 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
     let client = reqwest::Client::new();
 
     send_price(&client, &endpoint).await?;
+    let http_rss_before_bytes = performance_report::current_rss_bytes();
     let http_started = Instant::now();
     let mut http_latencies = Vec::with_capacity(HTTP_REQUEST_COUNT as usize);
     for _ in 0..HTTP_REQUEST_COUNT {
@@ -122,6 +108,7 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
         .ack(transport.receive().await.map_err(debug_error)?)
         .await
         .map_err(debug_error)?;
+    let nats_rss_before_bytes = performance_report::current_rss_bytes();
     let nats_started = Instant::now();
     let mut nats_latencies = Vec::with_capacity(NATS_MESSAGE_COUNT as usize);
     for id in 1..=NATS_MESSAGE_COUNT {
@@ -137,25 +124,30 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
     }
     let nats_elapsed = nats_started.elapsed();
 
-    let report = PerformanceReport {
+    let report = performance_report::PerformanceReport {
         schema_version: 1,
-        environment: "docker-compose",
+        source: "Docker E2E",
+        environment: performance_report::environment(),
         results: vec![
-            measured(
+            performance_report::measured(
                 "axum_http_quote",
-                HTTP_REQUEST_COUNT,
+                Some(PAYLOAD_BYTES),
                 http_elapsed,
                 http_latencies,
+                "HTTP request",
+                http_rss_before_bytes,
             ),
-            measured(
+            performance_report::measured(
                 "nats_jetstream_round_trip",
-                NATS_MESSAGE_COUNT,
+                Some(PAYLOAD_BYTES),
                 nats_elapsed,
                 nats_latencies,
+                "message round trip",
+                nats_rss_before_bytes,
             ),
         ],
     };
-    write_report(&report)?;
+    performance_report::write_report_if_configured(&report)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&report).map_err(debug_error)?
@@ -198,35 +190,8 @@ fn performance_envelope(id: u64) -> Envelope {
     )
 }
 
-fn measured(
-    name: &'static str,
-    operations: u64,
-    elapsed: std::time::Duration,
-    latencies: Vec<std::time::Duration>,
-) -> PerformanceResult {
-    PerformanceResult {
-        name,
-        operations,
-        elapsed_nanoseconds: elapsed.as_nanos(),
-        operations_per_second: operations as f64 / elapsed.as_secs_f64(),
-        p50_ns: percentile_nanoseconds(&latencies, 50),
-        p95_ns: percentile_nanoseconds(&latencies, 95),
-        p99_ns: percentile_nanoseconds(&latencies, 99),
-    }
-}
-
 fn percentile_nanoseconds(latencies: &[std::time::Duration], percentile: usize) -> u64 {
-    assert!(!latencies.is_empty());
-    assert!((1..=100).contains(&percentile));
-    let mut nanoseconds = latencies
-        .iter()
-        .map(|latency| u64::try_from(latency.as_nanos()).unwrap_or(u64::MAX))
-        .collect::<Vec<_>>();
-    nanoseconds.sort_unstable();
-    let rank = (nanoseconds.len() * percentile)
-        .div_ceil(100)
-        .saturating_sub(1);
-    nanoseconds[rank]
+    performance_report::percentile_nanoseconds(latencies, percentile)
 }
 
 #[test]
@@ -244,14 +209,6 @@ fn unique_suffix() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     format!("{}_{}", std::process::id(), epoch_nanos)
-}
-
-fn write_report(report: &PerformanceReport) -> Result<(), String> {
-    let Ok(path) = std::env::var("CATGA_PERFORMANCE_RESULTS") else {
-        return Ok(());
-    };
-    let serialized = serde_json::to_vec_pretty(report).map_err(debug_error)?;
-    std::fs::write(path, serialized).map_err(debug_error)
 }
 
 fn debug_error(error: impl std::fmt::Debug) -> String {
