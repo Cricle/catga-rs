@@ -35,6 +35,32 @@ impl Handler<Double> for DoubleHandler {
     }
 }
 
+#[derive(Deserialize)]
+struct NestedDouble {
+    value: u64,
+}
+
+impl Message for NestedDouble {}
+
+impl Request for NestedDouble {
+    type Response = Doubled;
+}
+
+struct NestedDoubleHandler {
+    handle: MediatorHandle,
+}
+
+#[async_trait]
+impl Handler<NestedDouble> for NestedDoubleHandler {
+    async fn handle(&self, request: NestedDouble) -> CatgaResult<Doubled> {
+        self.handle
+            .send(Double {
+                value: request.value,
+            })
+            .await
+    }
+}
+
 #[tokio::test]
 async fn application_macro_binds_the_explicit_handle_and_builds_typed_routes() {
     let handle = MediatorHandle::new();
@@ -72,6 +98,33 @@ async fn application_macro_binds_the_explicit_handle_and_builds_typed_routes() {
         .expect("route request");
     assert!(response.status().is_success());
     let _: Arc<_> = application.mediator();
+}
+
+#[tokio::test]
+async fn application_macro_binds_handles_before_nested_handler_dispatch() {
+    let handle = MediatorHandle::new();
+    let application = catga_axum::catga_application! {
+        mediator_handle = handle;
+        handlers {
+            request Double => DoubleHandler;
+            request NestedDouble => NestedDoubleHandler { handle: handle.clone() };
+        }
+        routes {
+            requests { @post "/nested-double" => NestedDouble }
+            events {}
+        }
+    }
+    .expect("compose the nested-dispatch application");
+
+    assert_eq!(
+        application
+            .mediator()
+            .send(NestedDouble { value: 9 })
+            .await
+            .expect("nested handler dispatches through its bound handle")
+            .value,
+        18
+    );
 }
 
 #[tokio::test]

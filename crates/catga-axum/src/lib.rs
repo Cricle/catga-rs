@@ -98,6 +98,10 @@ pub struct CatgaApplication {
 
 impl CatgaApplication {
     /// Combines an already constructed mediator and static Axum router.
+    ///
+    /// The supplied `router` must dispatch its typed Catga routes through `mediator`; use
+    /// [`catga_application!`] when constructing both together so this relationship cannot be
+    /// accidentally split across startup code.
     #[must_use]
     pub const fn new(mediator: Arc<Mediator>, router: Router) -> Self {
         Self { mediator, router }
