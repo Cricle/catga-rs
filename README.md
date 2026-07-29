@@ -62,9 +62,9 @@ where the application crosses that boundary.
 ## Performance snapshot
 
 The latest complete release-mode Docker run is available from the
-[performance workflow](https://github.com/Cricle/catga-rs/actions/runs/30416325626).
+[performance workflow](https://github.com/Cricle/catga-rs/actions/runs/30461404688).
 It ran the functional E2E preflight and every manual benchmark on commit
-[`497042c`](https://github.com/Cricle/catga-rs/commit/497042c1849f2fb4bb9a1fe7166f133d2b59a80d).
+[`25b6e01`](https://github.com/Cricle/catga-rs/commit/25b6e018d97ae1c9afd7d63e3acc516cf49e472d).
 The figures below are observations from that shared CI runner, not performance
 thresholds or hardware-independent guarantees.
 
@@ -75,23 +75,23 @@ create, read, and optimistic-update lifecycle.
 
 | Source | Benchmark | Throughput (ops/s) | p50 | p95 | p99 |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Memory | Tokio mpsc round-trip lower bound | 3,017,307 | 260ns | 301ns | 451ns |
-| Memory | Catga publish / receive / ack | 946,038 | 962ns | 1.05µs | 1.58µs |
-| Memory | Mediator request | 2,987,781 | 281ns | 291ns | 361ns |
-| Memory | Three-step local Flow | 3,863,579 | 200ns | 211ns | 320ns |
-| Memory | Retain 4,096 outbox records | 1,098,454 | 441ns | 3.74µs | 4.98µs |
-| In-process | CQRS + Flow + transport workflow | 557,414 | 1.67µs | 1.82µs | 2.93µs |
-| In-process | Bounded mediator batch scheduler (batch) | 1,814 | 538.1µs | 590.8µs | 590.8µs |
-| In-process | Local Flow execution | 2,723,667 | 290ns | 440ns | 571ns |
-| In-process | Local DSL Flow execution | 581,837 | 1.71µs | 1.96µs | 2.19µs |
-| NATS JetStream | Durable publish / receive / ack | 2,009 | 484.7µs | 617.2µs | 791.6µs |
-| SQLite | FlowStore lifecycle | 863 | 1.19ms | 1.52ms | 3.21ms |
-| MySQL | FlowStore lifecycle | 334 | 2.76ms | 4.29ms | 6.56ms |
-| PostgreSQL | FlowStore lifecycle | 513 | 1.71ms | 3.08ms | 5.00ms |
-| SQL Server | FlowStore lifecycle | 240 | 3.97ms | 5.00ms | 6.67ms |
-| Redis | FlowStore lifecycle | 1,830 | 527.6µs | 636.9µs | 787.3µs |
-| Docker E2E | Axum HTTP quote | 15,158 | 61.4µs | 93.1µs | 108.5µs |
-| Docker E2E | NATS JetStream round-trip | 2,046 | 477.3µs | 560.0µs | 836.9µs |
+| Memory | Tokio mpsc round-trip lower bound | 3,228,855 | 250ns | 280ns | 431ns |
+| Memory | Catga publish / receive / ack | 979,889 | 952ns | 1.02µs | 1.49µs |
+| Memory | Mediator request | 5,357,365 | 150ns | 151ns | 211ns |
+| Memory | Three-step local Flow | 4,020,487 | 200ns | 201ns | 221ns |
+| Memory | Retain 4,096 outbox records | 1,208,523 | 401ns | 3.48µs | 3.81µs |
+| In-process | CQRS + Flow + transport workflow | 642,741 | 1.45µs | 1.54µs | 2.27µs |
+| In-process | Bounded mediator batch scheduler (batch) | 2,989 | 299.4µs | 384.4µs | 384.4µs |
+| In-process | Local Flow execution | 2,481,042 | 331ns | 341ns | 370ns |
+| In-process | Local DSL Flow execution | 691,578 | 1.08µs | 1.85µs | 2.05µs |
+| NATS JetStream | Durable publish / receive / ack | 2,278 | 427.5µs | 488.9µs | 751.3µs |
+| SQLite | FlowStore lifecycle (c=1) | 2,835 | 332.5µs | 369.8µs | 451.2µs |
+| MySQL | FlowStore lifecycle (c=1) | 372 | 2.56ms | 3.76ms | 4.89ms |
+| PostgreSQL | FlowStore lifecycle (c=1) | 759 | 1.26ms | 1.53ms | 3.05ms |
+| SQL Server | FlowStore lifecycle (c=1) | 299 | 3.23ms | 4.16ms | 5.97ms |
+| Redis | FlowStore lifecycle (c=1) | 2,108 | 456.0µs | 542.7µs | 704.4µs |
+| Docker E2E | Axum HTTP quote | 16,373 | 58.8µs | 82.1µs | 89.1µs |
+| Docker E2E | NATS JetStream round-trip | 2,301 | 432.2µs | 469.4µs | 492.5µs |
 
 The Tokio row is deliberately only a lower bound: it does not include Catga's
 delivery acknowledgement, lifecycle-drain tracking, bounded telemetry, or
@@ -101,7 +101,7 @@ release workflow to produce the JSON reports and complete Markdown total table.
 
 ### Mediator dispatch micro-benchmarks
 
-The following numbers measure pure in-process dispatch with no tracing
+The following **workstation** reference numbers measure pure in-process dispatch with no tracing
 subscriber attached (the `span.is_disabled()` fast path). They reflect the
 Vec-slot registry optimization that replaced `HashMap<TypeId>` with a
 contiguous linear scan. Run locally with:
@@ -165,10 +165,10 @@ must be shared across heterogeneous boundaries.
 
 | Benchmark | Throughput | Notes |
 | --- | ---: | --- |
-| Local Flow (3 steps) | 1,555,640 flows/s | Compensating sequence, in-memory |
-| Local DSL Flow (3 steps) | 601,195 flows/s | Typed DSL with state threading |
-| CQRS + Flow + transport workflow | 447,587 workflows/s | End-to-end critical path |
-| NATS JetStream publish/receive/ack | 1,436 msg/s | Durable, 256B payload, Podman |
+| Local Flow (3 steps) | 2,481,042 flows/s | Compensating sequence, in-memory CI baseline |
+| Local DSL Flow (3 steps) | 691,578 flows/s | Typed DSL with state threading, CI baseline |
+| CQRS + Flow + transport workflow | 642,741 workflows/s | End-to-end critical path, CI baseline |
+| NATS JetStream publish/receive/ack | 2,278 msg/s | Durable, 256B payload, Docker CI baseline |
 
 Run all benchmarks:
 
@@ -191,12 +191,25 @@ serial (concurrency=1) throughput. Redis avoids it because its persistence is
 asynchronous, and SQLite avoids it because the WAL journal only syncs on
 checkpoint.
 
-The serial number is a worst case, not the deployment reality. Two observations
-isolate the fsync cost. All Catga SQL store constructors now enable SQLite WAL
-with `synchronous=NORMAL`, and the same-host SQLite FlowStore lifecycle rises
-from ~416 to ~2,100 ops/s (about 5x) purely from skipping the per-commit fsync.
-Disabling durability on the network databases (a diagnostic, not a
-recommendation) confirms the same cause:
+The serial number is a worst case, not the deployment reality. The same CI run
+also measures bounded concurrency with a 16-connection benchmark pool. It
+shows durable group-commit scaling without changing the library's default
+connection policy (applications choose their own pool or
+`SqlFlowStoreOptions`):
+
+| Backend | c=1 lifecycle/s | c=16 lifecycle/s | Scaling |
+| --- | ---: | ---: | ---: |
+| MySQL | 372 | 1,885 | 5.1x |
+| PostgreSQL | 759 | 2,221 | 2.9x |
+| SQL Server | 299 | 1,263 | 4.2x |
+| Redis | 2,108 | 14,493 | 6.9x |
+
+Each lifecycle contains create, read, and compare-and-swap update, so these are
+not raw SQL statement rates. The sample count is deliberately small enough for
+release CI; use the JSON artifact for exact percentiles and repeat the run on
+production-like hardware before setting a capacity target. Disabling durability
+on the network databases (a diagnostic, not a recommendation) confirms the
+same fsync cause:
 
 | Backend | Durable default (c=1) | Durability disabled (c=1) | Isolated fsync cost |
 | --- | ---: | ---: | ---: |
@@ -209,11 +222,10 @@ The fsync cost is amortized, not eliminated, by the levers below; all of them
 keep every commit fully durable.
 
 - **Concurrency drives database group commit.** The engine coalesces the fsyncs
-  of concurrent transactions into fewer disk syncs. Measured with full
-  durability at concurrency=16, MySQL reaches ~547 ops/s and PostgreSQL ~1,591
-  ops/s — both *higher* than the durability-disabled serial numbers above. Real
-  workloads run many concurrent flow workers, so they benefit from this without
-  any configuration change.
+  of concurrent transactions into fewer disk syncs. In the CI baseline above,
+  MySQL reaches 1,885 and PostgreSQL 2,221 complete lifecycles/s at c=16 while
+  retaining durable defaults. Real workloads run many concurrent flow workers,
+  so they benefit without a hidden Catga pool setting.
 - **Batch writes into fewer transactions.** Committing N flow-state changes in
   one transaction pays one fsync for all N records. This is the application-level
   lever for low-concurrency writers and preserves durability completely.
