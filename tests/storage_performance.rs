@@ -14,6 +14,7 @@ use catga_flow::{FlowState, FlowStore};
 use catga_flow_store::{SqlFlowStore, SqlFlowStoreOptions};
 use catga_redis::RedisFlows;
 use futures::{StreamExt, TryStreamExt, stream};
+use sqlx::{Row, mysql::MySqlPoolOptions, postgres::PgPoolOptions};
 
 #[path = "support/performance_report.rs"]
 mod performance_report;
@@ -64,6 +65,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         .migrate()
         .await
         .map_err(performance_report::debug_error)?;
+    let mysql_metrics_before = capture_mysql_metrics(&mysql_url).await?;
     results.extend(
         measure_store_variants(
             &mysql,
@@ -77,6 +79,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         )
         .await?,
     );
+    let mysql_metrics_after = capture_mysql_metrics(&mysql_url).await?;
 
     let postgres_url = required_service_url("CATGA_POSTGRES_URL")?;
     let postgres = SqlFlowStore::connect_postgres_with_options(
@@ -89,6 +92,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         .migrate()
         .await
         .map_err(performance_report::debug_error)?;
+    let postgres_metrics_before = capture_postgres_metrics(&postgres_url).await?;
     results.extend(
         measure_store_variants(
             &postgres,
@@ -102,6 +106,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         )
         .await?,
     );
+    let postgres_metrics_after = capture_postgres_metrics(&postgres_url).await?;
 
     let mssql_url = required_service_url("CATGA_MSSQL_URL")?;
     let mssql = SqlFlowStore::connect_mssql_with_options(
@@ -114,6 +119,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         .migrate()
         .await
         .map_err(performance_report::debug_error)?;
+    let mssql_metrics_before = capture_mssql_metrics(&mssql_url).await?;
     results.extend(
         measure_store_variants(
             &mssql,
@@ -127,6 +133,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         )
         .await?,
     );
+    let mssql_metrics_after = capture_mssql_metrics(&mssql_url).await?;
 
     let redis_url = required_service_url("CATGA_REDIS_URL")?;
     let redis = RedisFlows::connect(&redis_url, format!("catga:performance:{}", suffix("redis")))
@@ -146,11 +153,26 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         .await?,
     );
 
+    let mut metric_deltas = Vec::new();
+    metric_deltas.extend(database_metric_deltas(
+        mysql_metrics_before,
+        mysql_metrics_after,
+    )?);
+    metric_deltas.extend(database_metric_deltas(
+        postgres_metrics_before,
+        postgres_metrics_after,
+    )?);
+    metric_deltas.extend(database_metric_deltas(
+        mssql_metrics_before,
+        mssql_metrics_after,
+    )?);
+
     let report = performance_report::PerformanceReport {
-        schema_version: 1,
+        schema_version: 2,
         source: "Storage backends: SQLite, MySQL, PostgreSQL, SQL Server, Redis",
         environment: performance_report::environment(),
         results,
+        database_metric_deltas: metric_deltas,
     };
     performance_report::write_report_if_configured(&report)?;
     println!(
@@ -235,14 +257,16 @@ where
     for sequence in 0..OPERATION_COUNT {
         latencies.push(execute_lifecycle(store, backend, sequence).await?);
     }
-    Ok(performance_report::measured(
+    let mut result = performance_report::measured(
         name,
         Some(PAYLOAD_BYTES),
         started.elapsed(),
-        latencies,
+        latencies.iter().map(|latency| latency.total).collect(),
         latency_scope,
         rss_before_bytes,
-    ))
+    );
+    result.phase_latencies = lifecycle_phase_latencies(&latencies);
+    Ok(result)
 }
 
 async fn measure_store_bounded<S>(
@@ -262,17 +286,56 @@ where
         .buffer_unordered(concurrency)
         .try_collect::<Vec<_>>()
         .await?;
-    Ok(performance_report::measured(
+    let mut result = performance_report::measured(
         name,
         Some(PAYLOAD_BYTES),
         started.elapsed(),
-        latencies,
+        latencies.iter().map(|latency| latency.total).collect(),
         latency_scope,
         rss_before_bytes,
-    ))
+    );
+    result.phase_latencies = lifecycle_phase_latencies(&latencies);
+    Ok(result)
 }
 
-async fn execute_lifecycle<S>(store: &S, backend: &str, sequence: u64) -> Result<Duration, String>
+struct LifecycleLatency {
+    total: Duration,
+    create: Duration,
+    get: Duration,
+    update: Duration,
+}
+
+fn lifecycle_phase_latencies(
+    latencies: &[LifecycleLatency],
+) -> Vec<performance_report::PhaseLatency> {
+    [
+        (
+            "create",
+            latencies.iter().map(|latency| latency.create).collect(),
+        ),
+        ("get", latencies.iter().map(|latency| latency.get).collect()),
+        (
+            "update",
+            latencies.iter().map(|latency| latency.update).collect(),
+        ),
+    ]
+    .into_iter()
+    .map(
+        |(phase, latencies): (&'static str, Vec<Duration>)| performance_report::PhaseLatency {
+            phase,
+            p50_ns: performance_report::percentile_nanoseconds(&latencies, 50),
+            p95_ns: performance_report::percentile_nanoseconds(&latencies, 95),
+            p99_ns: performance_report::percentile_nanoseconds(&latencies, 99),
+        },
+    )
+    .collect()
+}
+
+async fn execute_lifecycle<S>(
+    store: &S,
+    backend: &str,
+    sequence: u64,
+) -> Result<LifecycleLatency, String>
 where
     S: FlowStore + Sync,
 {
@@ -284,6 +347,7 @@ where
         vec![0xA5; PAYLOAD_BYTES],
         "benchmark",
     );
+    let create_started = Instant::now();
     if !store
         .create(state.clone())
         .await
@@ -291,6 +355,8 @@ where
     {
         return Err(format!("{backend} did not create {id}"));
     }
+    let create = create_started.elapsed();
+    let get_started = Instant::now();
     let persisted = store
         .get(&id)
         .await
@@ -299,9 +365,11 @@ where
     if persisted.data() != state.data() || persisted.version() != 0 {
         return Err(format!("{backend} changed {id} during create/read"));
     }
+    let get = get_started.elapsed();
     let next = persisted
         .next_version()
         .map_err(performance_report::debug_error)?;
+    let update_started = Instant::now();
     if !store
         .update(0, next)
         .await
@@ -309,7 +377,257 @@ where
     {
         return Err(format!("{backend} did not update {id}"));
     }
-    Ok(operation_started.elapsed())
+    Ok(LifecycleLatency {
+        total: operation_started.elapsed(),
+        create,
+        get,
+        update: update_started.elapsed(),
+    })
+}
+
+struct DatabaseMetricSnapshot {
+    backend: &'static str,
+    values: Vec<DatabaseMetricValue>,
+}
+
+struct DatabaseMetricValue {
+    metric: &'static str,
+    unit: &'static str,
+    value: u64,
+}
+
+#[test]
+fn database_metric_deltas_preserve_counter_resets() {
+    let before = DatabaseMetricSnapshot::new(
+        "mysql",
+        vec![DatabaseMetricValue {
+            metric: "innodb_data_writes",
+            unit: "operations",
+            value: 12,
+        }],
+    );
+    let after = DatabaseMetricSnapshot::new(
+        "mysql",
+        vec![DatabaseMetricValue {
+            metric: "innodb_data_writes",
+            unit: "operations",
+            value: 3,
+        }],
+    );
+
+    let deltas = database_metric_deltas(before, after).expect("matching counter snapshots");
+
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].delta, -9);
+}
+
+impl DatabaseMetricSnapshot {
+    fn new(backend: &'static str, values: Vec<DatabaseMetricValue>) -> Self {
+        Self { backend, values }
+    }
+}
+
+fn database_metric_deltas(
+    before: DatabaseMetricSnapshot,
+    after: DatabaseMetricSnapshot,
+) -> Result<Vec<performance_report::DatabaseMetricDelta>, String> {
+    if before.backend != after.backend {
+        return Err(format!(
+            "cannot compare {} counters to {} counters",
+            before.backend, after.backend
+        ));
+    }
+    before
+        .values
+        .into_iter()
+        .map(|before_value| {
+            let after_value = after
+                .values
+                .iter()
+                .find(|value| value.metric == before_value.metric)
+                .ok_or_else(|| {
+                    format!(
+                        "{} did not return a second value for {}",
+                        before.backend, before_value.metric
+                    )
+                })?;
+            if before_value.unit != after_value.unit {
+                return Err(format!(
+                    "{} changed the unit of {} from {} to {}",
+                    before.backend, before_value.metric, before_value.unit, after_value.unit
+                ));
+            }
+            Ok(performance_report::DatabaseMetricDelta {
+                backend: before.backend,
+                metric: before_value.metric,
+                unit: before_value.unit,
+                before: before_value.value,
+                after: after_value.value,
+                delta: after_value.value as i128 - before_value.value as i128,
+            })
+        })
+        .collect()
+}
+
+async fn capture_mysql_metrics(url: &str) -> Result<DatabaseMetricSnapshot, String> {
+    let pool = MySqlPoolOptions::new()
+        .max_connections(1)
+        .connect(url)
+        .await
+        .map_err(performance_report::debug_error)?;
+    let rows = sqlx::query(
+        "SHOW GLOBAL STATUS WHERE Variable_name IN (\
+         'Innodb_buffer_pool_reads', 'Innodb_data_reads', 'Innodb_data_writes', \
+         'Innodb_os_log_written', 'Threads_connected', 'Threads_running')",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(performance_report::debug_error)?;
+    pool.close().await;
+
+    let values = rows
+        .into_iter()
+        .map(|row| {
+            let name = row
+                .try_get::<String, _>("Variable_name")
+                .map_err(performance_report::debug_error)?;
+            let value = row
+                .try_get::<String, _>("Value")
+                .map_err(performance_report::debug_error)?
+                .parse::<u64>()
+                .map_err(performance_report::debug_error)?;
+            Ok((name, value))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
+    mysql_snapshot(&values)
+}
+
+fn mysql_snapshot(
+    values: &std::collections::BTreeMap<String, u64>,
+) -> Result<DatabaseMetricSnapshot, String> {
+    const METRICS: [(&str, &str, &str); 6] = [
+        (
+            "Innodb_buffer_pool_reads",
+            "innodb_buffer_pool_reads",
+            "operations",
+        ),
+        ("Innodb_data_reads", "innodb_data_reads", "operations"),
+        ("Innodb_data_writes", "innodb_data_writes", "operations"),
+        ("Innodb_os_log_written", "innodb_redo_bytes", "bytes"),
+        ("Threads_connected", "threads_connected", "connections"),
+        ("Threads_running", "threads_running", "connections"),
+    ];
+    METRICS
+        .into_iter()
+        .map(|(native_name, metric, unit)| {
+            values
+                .get(native_name)
+                .copied()
+                .map(|value| DatabaseMetricValue {
+                    metric,
+                    unit,
+                    value,
+                })
+                .ok_or_else(|| format!("MySQL did not return global status {native_name}"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|values| DatabaseMetricSnapshot::new("mysql", values))
+}
+
+async fn capture_postgres_metrics(url: &str) -> Result<DatabaseMetricSnapshot, String> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url)
+        .await
+        .map_err(performance_report::debug_error)?;
+    let row = sqlx::query(
+        "SELECT xact_commit, tup_returned, tup_fetched, tup_inserted, tup_updated, \
+         blks_read, blks_hit, temp_bytes, COALESCE(wal_bytes, 0)::BIGINT AS wal_bytes \
+         FROM pg_stat_database WHERE datname = current_database()",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(performance_report::debug_error)?;
+    pool.close().await;
+    const METRICS: [(&str, &str); 9] = [
+        ("xact_commit", "operations"),
+        ("tup_returned", "rows"),
+        ("tup_fetched", "rows"),
+        ("tup_inserted", "rows"),
+        ("tup_updated", "rows"),
+        ("blks_read", "blocks"),
+        ("blks_hit", "blocks"),
+        ("temp_bytes", "bytes"),
+        ("wal_bytes", "bytes"),
+    ];
+    let values = METRICS
+        .into_iter()
+        .map(|(metric, unit)| {
+            row.try_get::<i64, _>(metric)
+                .map_err(performance_report::debug_error)
+                .and_then(|value| u64::try_from(value).map_err(performance_report::debug_error))
+                .map(|value| DatabaseMetricValue {
+                    metric,
+                    unit,
+                    value,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(DatabaseMetricSnapshot::new("postgres", values))
+}
+
+async fn capture_mssql_metrics(url: &str) -> Result<DatabaseMetricSnapshot, String> {
+    let manager =
+        bb8_tiberius::ConnectionManager::build(url).map_err(performance_report::debug_error)?;
+    let pool = bb8::Pool::builder()
+        .max_size(1)
+        .build(manager)
+        .await
+        .map_err(performance_report::debug_error)?;
+    let mut connection = pool.get().await.map_err(performance_report::debug_error)?;
+    let row = connection
+        .simple_query(
+            "SELECT SUM(num_of_reads) AS read_operations, \
+                    SUM(num_of_bytes_read) AS read_bytes, \
+                    SUM(io_stall_read_ms) AS read_stall_ms, \
+                    SUM(num_of_writes) AS write_operations, \
+                    SUM(num_of_bytes_written) AS write_bytes, \
+                    SUM(io_stall_write_ms) AS write_stall_ms \
+             FROM sys.dm_io_virtual_file_stats(DB_ID(), NULL)",
+        )
+        .await
+        .map_err(performance_report::debug_error)?
+        .into_row()
+        .await
+        .map_err(performance_report::debug_error)?
+        .ok_or_else(|| "SQL Server did not return virtual file statistics".to_owned())?;
+    const METRICS: [(&str, &str); 6] = [
+        ("read_operations", "operations"),
+        ("read_bytes", "bytes"),
+        ("read_stall_ms", "milliseconds"),
+        ("write_operations", "operations"),
+        ("write_bytes", "bytes"),
+        ("write_stall_ms", "milliseconds"),
+    ];
+    let values = METRICS
+        .into_iter()
+        .map(|(metric, unit)| {
+            row.try_get::<i64, _>(metric)
+                .map_err(performance_report::debug_error)
+                .and_then(|value| {
+                    value.ok_or_else(|| {
+                        format!("SQL Server returned NULL for virtual file metric {metric}")
+                    })
+                })
+                .and_then(|value| u64::try_from(value).map_err(performance_report::debug_error))
+                .map(|value| DatabaseMetricValue {
+                    metric,
+                    unit,
+                    value,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(DatabaseMetricSnapshot::new("mssql", values))
 }
 
 fn required_service_url(name: &str) -> Result<String, String> {

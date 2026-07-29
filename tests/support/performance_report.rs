@@ -31,6 +31,39 @@ pub struct BenchmarkResult {
     pub rss_after_bytes: Option<u64>,
     /// Process peak resident set size, when Linux exposes it.
     pub rss_peak_bytes: Option<u64>,
+    /// Per-phase latency distributions measured within each lifecycle operation.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub phase_latencies: Vec<PhaseLatency>,
+}
+
+/// One lifecycle phase's nearest-rank latency distribution.
+#[derive(Serialize)]
+pub struct PhaseLatency {
+    /// Stable lifecycle phase identifier.
+    pub phase: &'static str,
+    /// Nearest-rank latency percentile for the phase.
+    pub p50_ns: u64,
+    /// Nearest-rank latency percentile for the phase.
+    pub p95_ns: u64,
+    /// Nearest-rank latency percentile for the phase.
+    pub p99_ns: u64,
+}
+
+/// Delta of a monotonic database-native counter sampled around the storage benchmark.
+#[derive(Serialize)]
+pub struct DatabaseMetricDelta {
+    /// Database backend that exposed the counter.
+    pub backend: &'static str,
+    /// Driver-independent name assigned to the native counter.
+    pub metric: &'static str,
+    /// Unit represented by the sampled counter.
+    pub unit: &'static str,
+    /// Counter value sampled before the benchmark interval.
+    pub before: u64,
+    /// Counter value sampled after the benchmark interval.
+    pub after: u64,
+    /// Signed difference between the two samples; a negative value exposes a counter reset.
+    pub delta: i128,
 }
 
 /// Machine-readable report emitted by one benchmark executable.
@@ -44,6 +77,9 @@ pub struct PerformanceReport {
     pub environment: Environment,
     /// All measurements produced by this executable.
     pub results: Vec<BenchmarkResult>,
+    /// Database-native counter deltas collected around this benchmark, when applicable.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub database_metric_deltas: Vec<DatabaseMetricDelta>,
 }
 
 /// Environment metadata that makes host-only memory data unambiguous.
@@ -78,6 +114,7 @@ pub fn measured(
         rss_before_bytes,
         rss_after_bytes: current_rss_bytes(),
         rss_peak_bytes: peak_rss_bytes(),
+        phase_latencies: Vec::new(),
     }
 }
 

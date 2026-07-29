@@ -80,6 +80,7 @@ async fn nats_jetstream_publish_receive_ack_benchmark() -> Result<(), String> {
             "message round trip",
             rss_before_bytes,
         )],
+        database_metric_deltas: Vec::new(),
     };
     performance_report::write_report_if_configured(&report)?;
     println!(

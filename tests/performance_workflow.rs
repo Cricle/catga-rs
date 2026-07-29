@@ -166,3 +166,36 @@ fn storage_benchmark_reports_pool_concurrency_capacity() {
         "server FlowStore constructors must expose user-configurable pool options"
     );
 }
+
+#[test]
+fn storage_benchmark_reports_lifecycle_phases_and_database_counter_deltas() {
+    for field in ["phase_latencies", "database_metric_deltas"] {
+        assert!(
+            include_str!("support/performance_report.rs").contains(field),
+            "the structured performance report must retain {field}"
+        );
+    }
+    for helper in [
+        "capture_mysql_metrics",
+        "capture_postgres_metrics",
+        "capture_mssql_metrics",
+        "database_metric_deltas",
+    ] {
+        assert!(
+            STORAGE_BENCHMARK.contains(helper),
+            "storage benchmark must collect {helper}"
+        );
+    }
+    for phase in ["create", "get", "update"] {
+        assert!(
+            STORAGE_BENCHMARK.contains(phase),
+            "storage benchmark must report {phase} latency separately"
+        );
+    }
+    for field in ["phase_latencies", "database_metric_deltas"] {
+        assert!(
+            PERFORMANCE_RUNNER.contains(field),
+            "the published performance summary must render {field}"
+        );
+    }
+}

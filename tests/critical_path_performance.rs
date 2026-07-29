@@ -104,6 +104,7 @@ async fn critical_application_path_throughput_benchmark() -> CatgaResult<()> {
             "workflow",
             rss_before_bytes,
         )],
+        database_metric_deltas: Vec::new(),
     };
     performance_report::write_report_if_configured(&report)
         .map_err(|error| catga_core::CatgaError::new(catga_core::ErrorCode::Internal, error))?;

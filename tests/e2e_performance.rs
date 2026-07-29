@@ -146,6 +146,7 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
                 nats_rss_before_bytes,
             ),
         ],
+        database_metric_deltas: Vec::new(),
     };
     performance_report::write_report_if_configured(&report)?;
     println!(

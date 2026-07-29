@@ -242,6 +242,30 @@ jq -r -s '
         (.rss_peak_bytes | cell)
       ]
     | "| " + join(" | ") + " |"
+  ),
+  "",
+  "## FlowStore lifecycle phase latency",
+  "",
+  "| Source | Benchmark | Phase | p50 (ns) | p95 (ns) | p99 (ns) |",
+  "| --- | --- | --- | ---: | ---: | ---: |",
+  (
+    [ .[] | .source as $source | .results[]? | .name as $name | .phase_latencies[]? | . + { source: $source, name: $name } ]
+    | .[]
+    | [ .source, .name, .phase, (.p50_ns | cell), (.p95_ns | cell), (.p99_ns | cell) ]
+    | "| " + join(" | ") + " |"
+  ),
+  "",
+  "## Database-native counter deltas",
+  "",
+  "These counters are sampled immediately before and after the isolated storage benchmark. A negative delta indicates a counter reset.",
+  "",
+  "| Backend | Counter | Unit | Before | After | Delta |",
+  "| --- | --- | --- | ---: | ---: | ---: |",
+  (
+    [ .[] | .database_metric_deltas[]? ]
+    | .[]
+    | [ .backend, .metric, .unit, (.before | cell), (.after | cell), (.delta | cell) ]
+    | "| " + join(" | ") + " |"
   )
 ' "$output_directory/memory-performance.json" \
     "$output_directory/critical-performance.json" \
@@ -253,7 +277,11 @@ jq -r -s '
 
 jq -r -s '
   "Catga performance measurements", "",
-  ([.[] | .source as $source | .results[]? | "\($source) / \(.name): operations=\(.operations), elapsed_ns=\(.elapsed_nanoseconds), operations_per_second=\(.operations_per_second)"] | .[])
+  ([.[] | .source as $source | .results[]? | "\($source) / \(.name): operations=\(.operations), elapsed_ns=\(.elapsed_nanoseconds), operations_per_second=\(.operations_per_second)"] | .[]),
+  "", "FlowStore lifecycle phase latency",
+  ([.[] | .source as $source | .results[]? | .name as $name | .phase_latencies[]? | "\($source) / \($name) / \(.phase): p50_ns=\(.p50_ns), p95_ns=\(.p95_ns), p99_ns=\(.p99_ns)"] | .[]),
+  "", "Database-native counter deltas",
+  ([.[] | .database_metric_deltas[]? | "\(.backend) / \(.metric): unit=\(.unit), before=\(.before), after=\(.after), delta=\(.delta)"] | .[])
 ' "$output_directory/memory-performance.json" \
     "$output_directory/critical-performance.json" \
     "$output_directory/mediator-performance.json" \
