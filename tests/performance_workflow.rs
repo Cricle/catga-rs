@@ -186,6 +186,10 @@ fn storage_benchmark_reports_lifecycle_phases_and_database_counter_deltas() {
             "storage benchmark must collect {helper}"
         );
     }
+    assert!(
+        STORAGE_BENCHMARK.contains("pg_stat_wal"),
+        "PostgreSQL WAL bytes must be collected from pg_stat_wal rather than pg_stat_database"
+    );
     for phase in ["create", "get", "update"] {
         assert!(
             STORAGE_BENCHMARK.contains(phase),

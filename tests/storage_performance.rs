@@ -541,9 +541,12 @@ async fn capture_postgres_metrics(url: &str) -> Result<DatabaseMetricSnapshot, S
         .await
         .map_err(performance_report::debug_error)?;
     let row = sqlx::query(
-        "SELECT xact_commit, tup_returned, tup_fetched, tup_inserted, tup_updated, \
-         blks_read, blks_hit, temp_bytes, COALESCE(wal_bytes, 0)::BIGINT AS wal_bytes \
-         FROM pg_stat_database WHERE datname = current_database()",
+        "SELECT database_stats.xact_commit, database_stats.tup_returned, \
+         database_stats.tup_fetched, database_stats.tup_inserted, database_stats.tup_updated, \
+         database_stats.blks_read, database_stats.blks_hit, database_stats.temp_bytes, \
+         wal_stats.wal_bytes::BIGINT AS wal_bytes \
+         FROM pg_stat_database AS database_stats CROSS JOIN pg_stat_wal AS wal_stats \
+         WHERE database_stats.datname = current_database()",
     )
     .fetch_one(&pool)
     .await
