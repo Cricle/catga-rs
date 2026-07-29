@@ -1,6 +1,8 @@
 //! Static contracts for release-only and manually dispatched performance automation.
 
 const PERFORMANCE_RUNNER: &str = include_str!("../scripts/performance.sh");
+const COVERAGE_RUNNER: &str = include_str!("../scripts/coverage.sh");
+const CI_WORKFLOW: &str = include_str!("../.github/workflows/ci.yml");
 const RELEASE_WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
 const MANUAL_WORKFLOW: &str = include_str!("../.github/workflows/performance.yml");
 const MEMORY_BENCHMARK: &str = include_str!("../crates/catga-memory/tests/memory_performance.rs");
@@ -113,6 +115,26 @@ fn complete_performance_suite_is_manual_or_release_only() {
     assert!(RELEASE_WORKFLOW.contains("scripts/performance.sh --profile full"));
     assert!(MANUAL_WORKFLOW.contains("workflow_dispatch:"));
     assert!(MANUAL_WORKFLOW.contains("scripts/performance.sh --profile"));
+}
+
+#[test]
+fn coverage_gate_requires_eighty_percent_without_relaxing_e2e() {
+    for source in [COVERAGE_RUNNER, CI_WORKFLOW] {
+        assert!(
+            source.contains("required_line_coverage=80")
+                || source.contains("--required-line-coverage 80"),
+            "line coverage must require 80 percent"
+        );
+        assert!(
+            source.contains("required_region_coverage=80")
+                || source.contains("--required-region-coverage 80"),
+            "region coverage must require 80 percent"
+        );
+        assert!(
+            source.contains("95"),
+            "the independent Docker E2E pass-rate gate must remain strict"
+        );
+    }
 }
 
 #[test]

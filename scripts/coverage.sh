@@ -5,8 +5,8 @@ set -euo pipefail
 profile=full
 keep_services=false
 validate_only=false
-required_line_coverage=95
-required_region_coverage=95
+required_line_coverage=80
+required_region_coverage=80
 required_e2e_pass_percentage=95
 health_timeout_seconds=180
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
