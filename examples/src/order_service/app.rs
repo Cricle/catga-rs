@@ -11,7 +11,7 @@ use catga_axum::CatgaApplication;
 use catga_cluster::{MemoryCluster, MemoryClusterNode, cluster_health};
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, EventStore, MediatorHandle, MessageTransport,
-    command_handler, event_handler, request_handler,
+    command_handler_with, event_handler_with, request_handler_with,
 };
 use catga_memory::{MemoryEventStore, MemoryOutbox, MemoryTransport};
 use serde::{Deserialize, Serialize};
@@ -160,22 +160,10 @@ impl OrderService {
         let application = catga_axum::catga_application! {
             mediator_handle = runtime.mediator;
             handlers {
-                request PlaceOrder => request_handler({
-                    let runtime = Arc::clone(&runtime);
-                    move |order| super::handlers::place_order(Arc::clone(&runtime), order)
-                });
-                request GetOrder => request_handler({
-                    let runtime = Arc::clone(&runtime);
-                    move |order| super::handlers::get_order(Arc::clone(&runtime), order)
-                });
-                command RecordOrder => command_handler({
-                    let runtime = Arc::clone(&runtime);
-                    move |order| super::handlers::record_order(Arc::clone(&runtime), order)
-                });
-                event OrderCompleted => [event_handler({
-                    let runtime = Arc::clone(&runtime);
-                    move |event| super::handlers::project_completed(Arc::clone(&runtime), event)
-                })];
+                request PlaceOrder => request_handler_with(Arc::clone(&runtime), super::handlers::place_order);
+                request GetOrder => request_handler_with(Arc::clone(&runtime), super::handlers::get_order);
+                command RecordOrder => command_handler_with(Arc::clone(&runtime), super::handlers::record_order);
+                event OrderCompleted => [event_handler_with(Arc::clone(&runtime), super::handlers::project_completed)];
             }
             routes {
                 requests { @post "/orders" => PlaceOrder }

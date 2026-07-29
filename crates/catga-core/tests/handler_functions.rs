@@ -7,7 +7,7 @@ use std::sync::{
 
 use catga_core::{
     CatgaResult, Command, Event, Mediator, Message, Registry, Request, command_handler,
-    event_handler, request_handler,
+    command_handler_with, event_handler, event_handler_with, request_handler, request_handler_with,
 };
 
 struct Double(u64);
@@ -64,5 +64,39 @@ async fn closure_handlers_register_through_the_typed_registry() -> CatgaResult<(
     mediator.publish(Counted).await?;
     assert_eq!(commands.load(Ordering::Acquire), 1);
     assert_eq!(events.load(Ordering::Acquire), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn contextual_closure_handlers_keep_dependencies_explicit() -> CatgaResult<()> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry.register_request::<Double, _>(request_handler_with(
+        Arc::clone(&calls),
+        |calls, request: Double| async move {
+            calls.fetch_add(1, Ordering::AcqRel);
+            Ok(request.0.saturating_mul(2))
+        },
+    ))?;
+    registry.register_command::<Increment, _>(command_handler_with(
+        Arc::clone(&calls),
+        |calls, _: Increment| async move {
+            calls.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        },
+    ))?;
+    registry.register_event::<Counted, _>(event_handler_with(
+        Arc::clone(&calls),
+        |calls, _: Counted| async move {
+            calls.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        },
+    ));
+
+    let mediator = Mediator::new(registry);
+    assert_eq!(mediator.send(Double(21)).await?, 42);
+    mediator.send_command(Increment).await?;
+    mediator.publish(Counted).await?;
+    assert_eq!(calls.load(Ordering::Acquire), 3);
     Ok(())
 }

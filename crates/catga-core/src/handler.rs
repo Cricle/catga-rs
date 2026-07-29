@@ -70,6 +70,41 @@ where
     }
 }
 
+/// Builds a request handler from explicit cloneable context and an async function.
+///
+/// Use this when several handlers share an application-owned dependency such as an `Arc` to a
+/// store or gateway. The dependency remains visible at composition time, while each dispatch
+/// receives its own clone without handwritten capture closures:
+///
+/// ```
+/// use std::sync::Arc;
+/// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler_with};
+///
+/// struct Double(u64);
+/// impl Message for Double {}
+/// impl Request for Double { type Response = u64; }
+///
+/// async fn double(factor: Arc<u64>, value: Double) -> CatgaResult<u64> {
+///     Ok(value.0.saturating_mul(*factor))
+/// }
+///
+/// # async fn run() -> CatgaResult<()> {
+/// let mut registry = Registry::new();
+/// registry.register_request::<Double, _>(request_handler_with(Arc::new(2), double))?;
+/// assert_eq!(Mediator::new(registry).send(Double(21)).await?, 42);
+/// # Ok(())
+/// # }
+/// ```
+pub fn request_handler_with<Context, M, F, Fut>(context: Context, handler: F) -> impl Handler<M>
+where
+    Context: Clone + Send + Sync + 'static,
+    M: Request,
+    F: Fn(Context, M) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = CatgaResult<M::Response>> + Send,
+{
+    request_handler(move |message| handler(context.clone(), message))
+}
+
 #[async_trait]
 impl<M, F, Fut> Handler<M> for RequestHandlerFn<M, F>
 where
@@ -106,6 +141,23 @@ where
     }
 }
 
+/// Builds a command handler from explicit cloneable context and an async function.
+///
+/// This has the same explicit dependency model as [`request_handler_with`], for commands whose
+/// handler returns no response.
+pub fn command_handler_with<Context, C, F, Fut>(
+    context: Context,
+    handler: F,
+) -> impl CommandHandler<C>
+where
+    Context: Clone + Send + Sync + 'static,
+    C: Command,
+    F: Fn(Context, C) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = CatgaResult<()>> + Send,
+{
+    command_handler(move |command| handler(context.clone(), command))
+}
+
 #[async_trait]
 impl<C, F, Fut> CommandHandler<C> for CommandHandlerFn<C, F>
 where
@@ -140,6 +192,20 @@ where
         handler,
         marker: PhantomData,
     }
+}
+
+/// Builds an event handler from explicit cloneable context and an async function.
+///
+/// This has the same explicit dependency model as [`request_handler_with`], while allowing a
+/// registry to attach the resulting handler alongside other handlers for the same event.
+pub fn event_handler_with<Context, E, F, Fut>(context: Context, handler: F) -> impl EventHandler<E>
+where
+    Context: Clone + Send + Sync + 'static,
+    E: Event,
+    F: Fn(Context, E) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = CatgaResult<()>> + Send,
+{
+    event_handler(move |event| handler(context.clone(), event))
 }
 
 #[async_trait]

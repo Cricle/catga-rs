@@ -207,7 +207,8 @@ pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
 pub use handler::{
     CommandHandler, CommandHandlerFn, EventHandler, EventHandlerFn, Handler, RequestHandlerFn,
-    command_handler, event_handler, request_handler,
+    command_handler, command_handler_with, event_handler, event_handler_with, request_handler,
+    request_handler_with,
 };
 pub use lease::LeaseStore;
 pub use lifecycle::{
