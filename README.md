@@ -59,40 +59,43 @@ where the application crosses that boundary.
 
 ## Performance snapshot
 
-The latest complete release-mode Docker run is available as the
-[performance artifact](https://github.com/Cricle/catga-rs/suites/82436920246/artifacts/8709395607).
+The latest complete release-mode Docker run is available from the
+[performance workflow](https://github.com/Cricle/catga-rs/actions/runs/30416325626).
 It ran the functional E2E preflight and every manual benchmark on commit
-[`76d49dc`](https://github.com/Cricle/catga-rs/commit/76d49dc81b62598ceec9e7a825575e3a3a71b889).
+[`497042c`](https://github.com/Cricle/catga-rs/commit/497042c1849f2fb4bb9a1fe7166f133d2b59a80d).
 The figures below are observations from that shared CI runner, not performance
 thresholds or hardware-independent guarantees.
 
-That historical artifact predates the structured storage benchmark. The next
-manual or release run writes one complete JSON report per benchmark, including
-SQLite, MySQL, PostgreSQL, SQL Server, and Redis FlowStore lifecycles, then
-renders their payload sizes, latency scope, p50/p95/p99, process RSS, and Docker
-container statistics into the published artifact.
+Every benchmark now emits machine-readable payload size, operation scope,
+nearest-rank p50/p95/p99, and Linux process RSS; the artifact also contains
+Docker container statistics. Storage rows measure the same 256-byte FlowStore
+create, read, and optimistic-update lifecycle.
 
-| Source | Benchmark | Operations | Throughput (ops/s) | p50 | p95 | p99 | RSS before / after / peak |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Memory | Tokio mpsc round-trip lower bound | 4,096 | 3,318,426 | 230ns | 281ns | 431ns | 3.10 / 3.17 / 3.17 MiB |
-| Memory | Catga publish / receive / ack | 4,096 | 967,975 | 962ns | 1.03µs | 1.24µs | 3.20 / 3.20 / 3.20 MiB |
-| Memory | Mediator request | 4,096 | 3,058,275 | 281ns | 291ns | 331ns | 3.20 / 3.20 / 3.20 MiB |
-| Memory | Three-step local Flow | 4,096 | 3,847,089 | 200ns | 221ns | 241ns | 3.80 / 3.71 / 3.86 MiB |
-| Memory | Retain 4,096 outbox records (256B payload) | 4,096 | 1,013,808 | 511ns | 3.77µs | 5.22µs | 3.71 / 6.45 / 6.45 MiB |
-| In-process | CQRS + Flow + transport workflow | 4,096 | 452,452 | — | — | — | — |
-| In-process | Bounded mediator batch scheduler | 4,096 | 1,725,882 | — | — | — | — |
-| In-process | Local Flow execution | 4,096 | 3,072,480 | — | — | — | — |
-| In-process | Local DSL Flow execution | 4,096 | 577,910 | — | — | — | — |
-| NATS JetStream | Durable publish / receive / ack | 1,000 | 2,040 | — | — | — | — |
-| Docker E2E | Axum HTTP quote | 512 | 15,028 | 61.3µs | 89.8µs | 118.6µs | — |
-| Docker E2E | NATS JetStream round-trip | 512 | 2,065 | 472.3µs | 553.3µs | 646.4µs | — |
+| Source | Benchmark | Throughput (ops/s) | p50 | p95 | p99 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Memory | Tokio mpsc round-trip lower bound | 3,017,307 | 260ns | 301ns | 451ns |
+| Memory | Catga publish / receive / ack | 946,038 | 962ns | 1.05µs | 1.58µs |
+| Memory | Mediator request | 2,987,781 | 281ns | 291ns | 361ns |
+| Memory | Three-step local Flow | 3,863,579 | 200ns | 211ns | 320ns |
+| Memory | Retain 4,096 outbox records | 1,098,454 | 441ns | 3.74µs | 4.98µs |
+| In-process | CQRS + Flow + transport workflow | 557,414 | 1.67µs | 1.82µs | 2.93µs |
+| In-process | Bounded mediator batch scheduler (batch) | 1,814 | 538.1µs | 590.8µs | 590.8µs |
+| In-process | Local Flow execution | 2,723,667 | 290ns | 440ns | 571ns |
+| In-process | Local DSL Flow execution | 581,837 | 1.71µs | 1.96µs | 2.19µs |
+| NATS JetStream | Durable publish / receive / ack | 2,009 | 484.7µs | 617.2µs | 791.6µs |
+| SQLite | FlowStore lifecycle | 863 | 1.19ms | 1.52ms | 3.21ms |
+| MySQL | FlowStore lifecycle | 334 | 2.76ms | 4.29ms | 6.56ms |
+| PostgreSQL | FlowStore lifecycle | 513 | 1.71ms | 3.08ms | 5.00ms |
+| SQL Server | FlowStore lifecycle | 240 | 3.97ms | 5.00ms | 6.67ms |
+| Redis | FlowStore lifecycle | 1,830 | 527.6µs | 636.9µs | 787.3µs |
+| Docker E2E | Axum HTTP quote | 15,158 | 61.4µs | 93.1µs | 108.5µs |
+| Docker E2E | NATS JetStream round-trip | 2,046 | 477.3µs | 560.0µs | 836.9µs |
 
 The Tokio row is deliberately only a lower bound: it does not include Catga's
 delivery acknowledgement, lifecycle-drain tracking, bounded telemetry, or
 typed error contract. The outbox row retains 1MiB of payload plus record and
 index metadata. Run `scripts/performance.sh --profile full` manually or from a
-release workflow to produce the current machine-readable JSON reports and the
-complete Markdown total table.
+release workflow to produce the JSON reports and complete Markdown total table.
 
 ## Quick start
 
