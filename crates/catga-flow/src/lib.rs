@@ -173,6 +173,79 @@ macro_rules! flow_definition {
     }};
 }
 
+/// Builds a local compensating [`Flow`] whose steps share one explicit cloneable context.
+///
+/// The macro makes sequential business operations and their compensations easy to scan. It
+/// evaluates `context` once, then gives every listed action and compensation its own clone. It
+/// does not add retries, tasks, persistence, branching, or parallelism; use [`DslFlow`] or a
+/// [`FlowDefinition`] when those semantics are required.
+///
+/// ```
+/// use std::sync::{Arc, Mutex};
+/// use catga_core::CatgaResult;
+/// use catga_flow::compensating_flow;
+///
+/// #[derive(Clone)]
+/// struct Reservation(Arc<Mutex<Vec<&'static str>>>);
+/// impl Reservation {
+///     async fn reserve(self) -> CatgaResult<()> {
+///         self.0.lock().expect("log lock").push("reserve");
+///         Ok(())
+///     }
+///     async fn release(self) -> CatgaResult<()> {
+///         self.0.lock().expect("log lock").push("release");
+///         Ok(())
+///     }
+/// }
+///
+/// let log = Arc::new(Mutex::new(Vec::new()));
+/// let flow = compensating_flow! {
+///     "reserve-order";
+///     context = Reservation(Arc::clone(&log));
+///     steps {
+///         reserve => release;
+///     }
+/// };
+/// # let _ = flow;
+/// ```
+///
+/// The `steps` form calls consuming async methods on the context and is usually the clearest
+/// choice for domain code. The `action => compensation` form also accepts explicit async
+/// functions when a shared context type is not appropriate.
+#[macro_export]
+macro_rules! compensating_flow {
+    (
+        $name:expr;
+        context = $context:expr;
+        steps {
+            $($run:ident => $compensate:ident;)+
+        }
+    ) => {{
+        let __catga_flow_context = $context;
+        let __catga_flow = $crate::Flow::new($name);
+        $(let __catga_flow = __catga_flow.step_with(
+            __catga_flow_context.clone(),
+            |context| context.$run(),
+            |context| context.$compensate(),
+        );)+
+        __catga_flow
+    }};
+    (
+        $name:expr;
+        context = $context:expr;
+        $($run:expr => $compensate:expr);+ $(;)?
+    ) => {{
+        let __catga_flow_context = $context;
+        let __catga_flow = $crate::Flow::new($name);
+        $(let __catga_flow = __catga_flow.step_with(
+            __catga_flow_context.clone(),
+            $run,
+            $compensate,
+        );)+
+        __catga_flow
+    }};
+}
+
 /// Converts a typed async callback closure into one that returns a boxed future.
 ///
 /// This removes the repetitive `Box::pin(async move { ... })` wrapper required by callback APIs

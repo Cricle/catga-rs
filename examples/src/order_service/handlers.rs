@@ -5,7 +5,7 @@ use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, EventStore, MessageMetadata, OutboxMessage,
     OutboxProcessor, OutboxStore,
 };
-use catga_flow::Flow;
+use catga_flow::compensating_flow;
 
 use super::{
     app::OrderRuntime,
@@ -49,19 +49,16 @@ pub(super) async fn record_order(
             "checkout must execute on the elected order-service leader",
         ));
     }
-    let result = Flow::new("order-checkout")
-        .step_with(
-            (Arc::clone(&runtime), command.order_id.clone()),
-            |(runtime, order_id)| async move { runtime.reserve_inventory(&order_id) },
-            |(runtime, order_id)| async move { runtime.release_inventory(&order_id) },
-        )
-        .step_with(
-            (Arc::clone(&runtime), command.order_id.clone()),
-            |(runtime, order_id)| async move { runtime.capture_payment(&order_id) },
-            |(runtime, order_id)| async move { runtime.refund_payment(&order_id) },
-        )
-        .run()
-        .await;
+    let result = compensating_flow! {
+        "order-checkout";
+        context = Checkout::new(Arc::clone(&runtime), command.order_id.clone());
+        steps {
+            reserve_inventory => release_inventory;
+            capture_payment => refund_payment;
+        }
+    }
+    .run()
+    .await;
     if let Some(error) = result.error() {
         return Err(error.clone());
     }
@@ -92,6 +89,35 @@ pub(super) async fn record_order(
     .flush_once()
     .await?;
     Ok(())
+}
+
+/// The checkout business context shared by every forward action and compensation.
+#[derive(Clone)]
+struct Checkout {
+    runtime: Arc<OrderRuntime>,
+    order_id: Box<str>,
+}
+
+impl Checkout {
+    fn new(runtime: Arc<OrderRuntime>, order_id: Box<str>) -> Self {
+        Self { runtime, order_id }
+    }
+
+    async fn reserve_inventory(self) -> CatgaResult<()> {
+        self.runtime.reserve_inventory(&self.order_id)
+    }
+
+    async fn release_inventory(self) -> CatgaResult<()> {
+        self.runtime.release_inventory(&self.order_id)
+    }
+
+    async fn capture_payment(self) -> CatgaResult<()> {
+        self.runtime.capture_payment(&self.order_id)
+    }
+
+    async fn refund_payment(self) -> CatgaResult<()> {
+        self.runtime.refund_payment(&self.order_id)
+    }
 }
 
 pub(super) async fn get_order(
