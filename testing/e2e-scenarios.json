@@ -225,7 +225,7 @@
     {
       "id": "scheduler-cron-lifecycle",
       "package": "catga-scheduler-tokio-cron",
-      "target": "cron",
+      "target": "cron_runtime",
       "profile": "core",
       "critical": true,
       "testArguments": []
