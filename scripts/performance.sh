@@ -9,7 +9,9 @@ validate_only=false
 health_timeout_seconds=180
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 compose_file="$repository_root/testing/docker/compose.yaml"
-compose_project=catga-e2e
+# Functional E2E uses its own `catga-e2e` project. Benchmarks intentionally use a separate
+# project so E2E migrations, writes, and background checkpoints cannot contaminate measurements.
+compose_project=catga-performance
 services_started=false
 
 usage() {
@@ -70,6 +72,34 @@ set_connection_environment() {
     if (( $(profile_rank "$profile") >= $(profile_rank full) )); then
         export CATGA_MSSQL_URL="server=tcp:127.0.0.1,$(published_port mssql 1433);User Id=sa;Password=Catga_e2e_password_2026!;TrustServerCertificate=true;Database=master"
     fi
+}
+
+wait_for_health() {
+    local service=$1 id health deadline
+    id=$(container_id "$service")
+    deadline=$((SECONDS + health_timeout_seconds))
+    while (( SECONDS < deadline )); do
+        health=$(docker inspect --format '{{.State.Health.Status}}' "$id") ||
+            die "could not inspect benchmark service '$service'"
+        case "$health" in
+            healthy) return 0 ;;
+            unhealthy) die "benchmark service '$service' reported unhealthy" ;;
+        esac
+        sleep 1
+    done
+    die "benchmark service '$service' did not become healthy within ${health_timeout_seconds}s"
+}
+
+start_benchmark_services() {
+    docker compose --project-name "$compose_project" -f "$compose_file" \
+        "${compose_profile_args[@]}" up --detach
+    services_started=true
+    for service in nats redis; do wait_for_health "$service"; done
+    if (( $(profile_rank "$profile") >= $(profile_rank sql) )); then
+        for service in mysql postgres; do wait_for_health "$service"; done
+    fi
+    if (( $(profile_rank "$profile") >= $(profile_rank full) )); then wait_for_health mssql; fi
+    set_connection_environment
 }
 
 copy_diagnostics() {
@@ -137,17 +167,16 @@ mkdir -p "$output_directory"
 trap cleanup EXIT
 
 set +e
-bash "$repository_root/scripts/e2e.sh" --profile "$profile" --keep-services \
+bash "$repository_root/scripts/e2e.sh" --profile "$profile" \
     --health-timeout-seconds "$health_timeout_seconds" \
     --results-path "$output_directory/functional-e2e-results.json" 2>&1 | tee "$output_directory/functional-e2e.log"
 functional_exit_code=${PIPESTATUS[0]}
 set -e
-services_started=true
 if (( functional_exit_code != 0 )); then
     die "functional Docker E2E preflight failed with exit code $functional_exit_code"
 fi
 
-set_connection_environment
+start_benchmark_services
 run_benchmark() {
     local name=$1 report=$2
     shift 2

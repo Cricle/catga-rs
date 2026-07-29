@@ -93,6 +93,22 @@ fn complete_performance_suite_is_manual_or_release_only() {
 }
 
 #[test]
+fn storage_benchmark_uses_fresh_services_after_the_functional_e2e_gate() {
+    assert!(
+        PERFORMANCE_RUNNER.contains("compose_project=catga-performance"),
+        "storage benchmarks must use a dedicated Compose project and volume set"
+    );
+    assert!(
+        PERFORMANCE_RUNNER.contains("start_benchmark_services"),
+        "the performance runner must start fresh services after functional E2E completes"
+    );
+    assert!(
+        !PERFORMANCE_RUNNER.contains("--profile \"$profile\" --keep-services"),
+        "functional E2E must clean up before the benchmark services start"
+    );
+}
+
+#[test]
 fn memory_benchmark_uses_the_complete_report_schema() {
     for field in [
         "source: \"in-process memory\"",
