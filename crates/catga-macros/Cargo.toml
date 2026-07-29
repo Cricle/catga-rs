@@ -19,5 +19,5 @@ syn = { version = "3", features = ["full"] }
 
 [dev-dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core", version = "0.1.0" }
+catga-core = { path = "../catga-core" }
 trybuild = "1.0"
