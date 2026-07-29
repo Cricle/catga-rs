@@ -185,7 +185,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "catga-codec-memorypack"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "ahash",
  "async-trait",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "catga-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "catga-macros"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1112,13 +1112,13 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "2.7.1"
+version = "2.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6328af13490e73a9b4694030fafd93f8c8c6a9dede33e821c3fc63eddf8042ba"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]

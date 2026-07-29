@@ -1,10 +1,11 @@
 [package]
 name = "catga-cluster"
-version = "0.1.0"
+version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description.workspace = true
 
 [lints]
 workspace = true
@@ -12,7 +13,7 @@ workspace = true
 [dependencies]
 arc-swap = "1"
 async-trait = "0.1"
-catga-core = { path = "../catga-core", version = "0.1.0" }
+catga-core = { path = "../catga-core", version = "0.0.1" }
 metrics = "0.24"
 parking_lot = "0.12"
 raft = { version = "0.7", default-features = false, features = ["protobuf-codec"] }

@@ -1,10 +1,11 @@
 [package]
 name = "catga-flow-store"
-version = "0.1.0"
+version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description.workspace = true
 
 [lints]
 workspace = true
@@ -22,10 +23,10 @@ tls-rustls = ["sqlx?/tls-rustls-ring-webpki", "bb8-tiberius?/tls"]
 async-trait = "0.1"
 bb8 = { version = "0.9", optional = true }
 bb8-tiberius = { version = "0.16", default-features = false, features = ["tds73", "with-tokio"], optional = true }
-catga-core = { path = "../catga-core", version = "0.1.0" }
-catga-codec-memorypack = { path = "../catga-codec-memorypack", version = "0.1.0" }
-catga-flow = { path = "../catga-flow", version = "0.1.0" }
-catga-redis = { path = "../catga-redis", version = "0.1.0", optional = true }
+catga-core = { path = "../catga-core", version = "0.0.1" }
+catga-codec-memorypack = { path = "../catga-codec-memorypack", version = "0.0.1" }
+catga-flow = { path = "../catga-flow", version = "0.0.1" }
+catga-redis = { path = "../catga-redis", version = "0.0.1", optional = true }
 sha2 = "0.11"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"], optional = true }
 tiberius = { version = "0.12", default-features = false, optional = true }

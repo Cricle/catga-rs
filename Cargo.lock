@@ -641,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "catga-axum"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "catga-cluster"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "catga-codec-bincode"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bincode-next",
  "catga-core",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "catga-codec-memorypack"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "catga-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "catga-flow"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "catga-codec-memorypack",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "catga-flow-store"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "bb8",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "catga-macros"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "catga-core",
@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "catga-memory"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "catga-nats"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-nats 0.50.0",
  "async-trait",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "catga-redis"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "catga-codec-memorypack",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "catga-robustmq"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "catga-codec-memorypack",
@@ -869,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "catga-scheduler-tokio-cron"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "catga-core",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "catga-testing"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "catga-core",

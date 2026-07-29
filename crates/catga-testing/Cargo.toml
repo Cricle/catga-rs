@@ -1,18 +1,19 @@
 [package]
 name = "catga-testing"
-version = "0.1.0"
+version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core", version = "0.1.0" }
-catga-flow = { path = "../catga-flow", version = "0.1.0" }
-catga-memory = { path = "../catga-memory", version = "0.1.0" }
+catga-core = { path = "../catga-core", version = "0.0.1" }
+catga-flow = { path = "../catga-flow", version = "0.0.1" }
+catga-memory = { path = "../catga-memory", version = "0.0.1" }
 dashmap = "6"
 futures = "0.3"
