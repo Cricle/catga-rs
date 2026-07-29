@@ -1,3 +1,5 @@
+//! Checkout command workflow, compensation actions, and event projection.
+
 use std::{sync::Arc, sync::atomic::Ordering};
 
 use catga_cluster::ClusterCoordinator;
@@ -8,8 +10,8 @@ use catga_core::{
 use catga_flow::compensating_flow;
 
 use super::{
-    app::OrderRuntime,
     domain::{GetOrder, OrderAccepted, OrderCompleted, PlaceOrder, RecordOrder},
+    in_memory::OrderRuntime,
 };
 
 pub(super) async fn place_order(

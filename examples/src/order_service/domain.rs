@@ -1,3 +1,5 @@
+//! Order messages and the HTTP response model.
+
 use serde::{Deserialize, Serialize};
 
 use catga_core::{Command, Event, Message, Request};

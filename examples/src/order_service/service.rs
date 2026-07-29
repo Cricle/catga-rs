@@ -1,22 +1,20 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-};
+//! Public service composition and its HTTP-facing observability helpers.
+
+use std::sync::{Arc, atomic::Ordering};
 
 use axum::{Json, Router, routing::get};
 use catga_axum::CatgaApplication;
 use catga_cluster::{MemoryCluster, MemoryClusterNode, cluster_health};
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, EventStore, MediatorHandle, MessageTransport,
-    command_handler_with, event_handler_with, request_handler_with,
+    CatgaError, CatgaResult, ErrorCode, EventStore, MessageTransport, command_handler_with,
+    event_handler_with, request_handler_with,
 };
-use catga_memory::{MemoryEventStore, MemoryOutbox, MemoryTransport};
 use serde::{Deserialize, Serialize};
 
-use super::domain::{GetOrder, OrderAccepted, OrderCompleted, PlaceOrder, RecordOrder};
+use super::{
+    domain::{GetOrder, OrderAccepted, OrderCompleted, PlaceOrder, RecordOrder},
+    in_memory::OrderRuntime,
+};
 
 /// Startup options for the runnable in-memory order service.
 ///
@@ -95,20 +93,6 @@ pub struct OrderService {
     runtime: Arc<OrderRuntime>,
 }
 
-pub(super) struct OrderRuntime {
-    pub(super) mediator: MediatorHandle,
-    pub(super) node: Arc<MemoryClusterNode>,
-    pub(super) event_store: Arc<MemoryEventStore>,
-    pub(super) outbox: Arc<MemoryOutbox>,
-    pub(super) transport: Arc<MemoryTransport>,
-    orders: Mutex<HashMap<Box<str>, OrderAccepted>>,
-    inventory: Mutex<HashSet<Box<str>>>,
-    payments: Mutex<HashSet<Box<str>>>,
-    pub(super) accepts_payments: bool,
-    pub(super) next_order_id: AtomicU64,
-    pub(super) completed_handlers: AtomicUsize,
-}
-
 impl OrderService {
     /// Constructs the complete application with in-memory cluster, event, outbox, and transport adapters.
     ///
@@ -144,26 +128,17 @@ impl OrderService {
                 "the order-service local node is not addressable in the configured cluster",
             )
         })?;
-        let runtime = Arc::new(OrderRuntime {
-            mediator: MediatorHandle::new(),
-            node: Arc::clone(&node),
-            event_store: Arc::new(MemoryEventStore::default()),
-            outbox: Arc::new(MemoryOutbox::default()),
-            transport: Arc::new(MemoryTransport::new(32)?),
-            orders: Mutex::new(HashMap::new()),
-            inventory: Mutex::new(HashSet::new()),
-            payments: Mutex::new(HashSet::new()),
-            accepts_payments: options.accepts_payments,
-            next_order_id: AtomicU64::new(0),
-            completed_handlers: AtomicUsize::new(0),
-        });
+        let runtime = Arc::new(OrderRuntime::new(
+            Arc::clone(&node),
+            options.accepts_payments,
+        )?);
         let application = catga_axum::catga_application! {
             mediator_handle = runtime.mediator;
             handlers {
-                request PlaceOrder => request_handler_with(Arc::clone(&runtime), super::handlers::place_order);
-                request GetOrder => request_handler_with(Arc::clone(&runtime), super::handlers::get_order);
-                command RecordOrder => command_handler_with(Arc::clone(&runtime), super::handlers::record_order);
-                event OrderCompleted => [event_handler_with(Arc::clone(&runtime), super::handlers::project_completed)];
+                request PlaceOrder => request_handler_with(Arc::clone(&runtime), super::checkout::place_order);
+                request GetOrder => request_handler_with(Arc::clone(&runtime), super::checkout::get_order);
+                command RecordOrder => command_handler_with(Arc::clone(&runtime), super::checkout::record_order);
+                event OrderCompleted => [event_handler_with(Arc::clone(&runtime), super::checkout::project_completed)];
             }
             routes {
                 requests { @post "/orders" => PlaceOrder }
@@ -270,93 +245,6 @@ impl OrderService {
     /// Returns how many `OrderCompleted` events passed through the CQRS event handler.
     pub fn handled_completion_count(&self) -> usize {
         self.runtime.completed_handlers.load(Ordering::Acquire)
-    }
-}
-
-impl OrderRuntime {
-    pub(super) fn lock_orders(
-        &self,
-    ) -> CatgaResult<MutexGuard<'_, HashMap<Box<str>, OrderAccepted>>> {
-        self.orders.lock().map_err(|_| {
-            CatgaError::new(
-                ErrorCode::Internal,
-                "order-service read model lock is poisoned",
-            )
-        })
-    }
-
-    pub(super) fn reserve_inventory(&self, order_id: &str) -> CatgaResult<()> {
-        let inserted = self
-            .inventory
-            .lock()
-            .map_err(|_| {
-                CatgaError::new(
-                    ErrorCode::Internal,
-                    "order-service inventory lock is poisoned",
-                )
-            })?
-            .insert(order_id.into());
-        if inserted {
-            Ok(())
-        } else {
-            Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "inventory is already reserved for this order",
-            ))
-        }
-    }
-
-    pub(super) fn release_inventory(&self, order_id: &str) -> CatgaResult<()> {
-        self.inventory
-            .lock()
-            .map_err(|_| {
-                CatgaError::new(
-                    ErrorCode::Internal,
-                    "order-service inventory lock is poisoned",
-                )
-            })?
-            .remove(order_id);
-        Ok(())
-    }
-
-    pub(super) fn capture_payment(&self, order_id: &str) -> CatgaResult<()> {
-        if !self.accepts_payments {
-            return Err(CatgaError::new(
-                ErrorCode::Unavailable,
-                "payment provider declined the charge",
-            ));
-        }
-        self.payments
-            .lock()
-            .map_err(|_| {
-                CatgaError::new(
-                    ErrorCode::Internal,
-                    "order-service payment lock is poisoned",
-                )
-            })?
-            .insert(order_id.into());
-        Ok(())
-    }
-
-    pub(super) fn refund_payment(&self, order_id: &str) -> CatgaResult<()> {
-        self.payments
-            .lock()
-            .map_err(|_| {
-                CatgaError::new(
-                    ErrorCode::Internal,
-                    "order-service payment lock is poisoned",
-                )
-            })?
-            .remove(order_id);
-        Ok(())
-    }
-
-    fn inventory_len(&self) -> usize {
-        self.inventory.lock().map_or(0, |inventory| inventory.len())
-    }
-
-    fn payment_len(&self) -> usize {
-        self.payments.lock().map_or(0, |payments| payments.len())
     }
 }
 

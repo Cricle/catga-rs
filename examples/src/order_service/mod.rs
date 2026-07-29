@@ -13,9 +13,10 @@
 //! coordinator with durable deployment adapters before treating the application as production
 //! infrastructure.
 
-mod app;
+mod checkout;
 mod domain;
-mod handlers;
+mod in_memory;
+mod service;
 
-pub use app::{OrderService, OrderServiceHealth, OrderServiceOptions};
 pub use domain::OrderAccepted;
+pub use service::{OrderService, OrderServiceHealth, OrderServiceOptions};
