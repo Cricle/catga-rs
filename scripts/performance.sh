@@ -241,7 +241,7 @@ jq -r -s '
     "",
     "| Source | Benchmark | Operations | Throughput (ops/s) | p50 (ns) | p95 (ns) | p99 (ns) | RSS before (bytes) | RSS after (bytes) | RSS peak (bytes) |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-  ],
+  ][],
   (
     [
       (.[0].results[]? | . + { source: "memory" }),

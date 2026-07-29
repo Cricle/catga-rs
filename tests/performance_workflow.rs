@@ -36,6 +36,10 @@ fn performance_runner_publishes_a_total_table_with_memory_metrics() {
         PERFORMANCE_RUNNER.contains("summary.md"),
         "performance runner must publish a Markdown total table"
     );
+    assert!(
+        PERFORMANCE_RUNNER.contains("  ][],\n  ("),
+        "the Markdown header must be emitted as lines rather than a JSON array"
+    );
     for report in [
         "memory-performance.json",
         "in-process-performance.json",
