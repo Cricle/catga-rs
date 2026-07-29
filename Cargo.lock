@@ -692,12 +692,12 @@ dependencies = [
  "async-trait",
  "byteorder",
  "catga-core",
+ "catga-memorypack-derive",
  "chrono",
  "futures",
  "glam",
  "half",
  "hashbrown 0.17.1",
- "memorypack-derive",
  "num-bigint 0.5.1",
  "num-complex",
  "rust_decimal",
@@ -811,6 +811,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "catga-memorypack-derive"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2532,15 +2541,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "memorypack-derive"
-version = "1.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]

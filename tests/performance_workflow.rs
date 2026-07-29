@@ -11,6 +11,10 @@ const MYSQL_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/mysq
 const POSTGRES_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/postgres.rs");
 const MSSQL_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/mssql.rs");
 const STORAGE_BENCHMARK: &str = include_str!("storage_performance.rs");
+const MEMORYPACK_CODEC_MANIFEST: &str =
+    include_str!("../crates/catga-codec-memorypack/Cargo.toml");
+const MEMORYPACK_DERIVE_MANIFEST: &str =
+    include_str!("../crates/catga-codec-memorypack/memorypack-derive/Cargo.toml");
 
 #[test]
 fn performance_runner_executes_every_manual_benchmark_class() {
@@ -106,6 +110,28 @@ fn release_publishes_and_summarizes_the_complete_performance_report() {
         assert!(
             RELEASE_WORKFLOW.contains(release_body_update),
             "the release workflow must publish the performance table in the release body"
+        );
+    }
+}
+
+#[test]
+fn release_uses_catga_owned_memorypack_derive_and_safe_registry_checks() {
+    assert!(
+        MEMORYPACK_DERIVE_MANIFEST.contains("name = \"catga-memorypack-derive\""),
+        "the vendored derive macro must use a Catga-owned registry name"
+    );
+    assert!(
+        MEMORYPACK_CODEC_MANIFEST.contains("catga-memorypack-derive"),
+        "the packaged codec must depend on the Catga-owned derive macro"
+    );
+    assert!(
+        RELEASE_WORKFLOW.contains("catga-memorypack-derive"),
+        "the derive macro must publish before the codec that depends on it"
+    );
+    for registry_safety_check in ["--user-agent", "http_status", "404"] {
+        assert!(
+            RELEASE_WORKFLOW.contains(registry_safety_check),
+            "release registry checks must handle {registry_safety_check} explicitly"
         );
     }
 }

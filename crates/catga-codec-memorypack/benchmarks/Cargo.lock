@@ -191,7 +191,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "catga-core",
- "memorypack-derive",
+ "catga-memorypack-derive",
  "serde",
  "simdutf8",
  "thiserror",
@@ -219,6 +219,15 @@ dependencies = [
 
 [[package]]
 name = "catga-macros"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "catga-memorypack-derive"
 version = "0.0.1"
 dependencies = [
  "proc-macro2",
@@ -685,15 +694,6 @@ dependencies = [
  "catga-codec-memorypack",
  "criterion",
  "dhat",
-]
-
-[[package]]
-name = "memorypack-derive"
-version = "1.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]

@@ -66,7 +66,7 @@ pub use traits::{NullableString, NullableVec};
 pub use traits::MultiDimArray;
 
 #[cfg(feature = "derive")]
-pub use memorypack_derive::MemoryPackable;
+pub use catga_memorypack_derive::MemoryPackable;
 
 /// Common MemoryPack types and traits for application models.
 pub mod prelude {
@@ -77,5 +77,5 @@ pub mod prelude {
     pub use crate::writer::MemoryPackWriter;
 
     #[cfg(feature = "derive")]
-    pub use memorypack_derive::MemoryPackable;
+    pub use catga_memorypack_derive::MemoryPackable;
 }

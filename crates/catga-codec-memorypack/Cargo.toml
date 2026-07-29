@@ -14,7 +14,7 @@ workspace = true
 async-trait = "0.1"
 catga-core = { path = "../catga-core", version = "0.0.1" }
 byteorder = { version = "1.5.0", features = ["i128"] }
-memorypack-derive = { version = "1.1.0", path = "memorypack-derive", optional = true }
+catga-memorypack-derive = { version = "0.0.1", path = "memorypack-derive", optional = true }
 simdutf8 = "0.1.5"
 thiserror = "2.0"
 
@@ -37,5 +37,5 @@ trybuild = "1.0"
 
 [features]
 default = ["derive", "serde"]
-derive = ["dep:memorypack-derive"]
+derive = ["dep:catga-memorypack-derive"]
 extended_types = ["uuid", "rust_decimal", "rust_decimal_macros", "half", "num-bigint", "chrono", "glam", "num-complex", "url"]

@@ -86,13 +86,24 @@ jobs:
       - run: cargo test --doc --workspace --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: |
-          for package in catga-macros catga-core catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
+          for package in catga-macros catga-core catga-memorypack-derive catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
             version="$(cargo pkgid -p "$package")"
             version="${version##*#}"
-            if curl --fail --silent --show-error "https://crates.io/api/v1/crates/$package/$version" > /dev/null; then
-              echo "$package v$version is already published; skipping"
-              continue
-            fi
+            http_status="$(curl --silent --show-error --location --retry 3 \
+              --user-agent 'catga-release/0.0.1 (https://github.com/Cricle/catga-rs)' \
+              --output /dev/null --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/$package/$version")"
+            case "$http_status" in
+              200)
+                echo "$package v$version is already published; skipping"
+                continue
+                ;;
+              404) ;;
+              *)
+                echo "unexpected crates.io status $http_status for $package v$version" >&2
+                exit 1
+                ;;
+            esac
 
             cargo publish --dry-run -p "$package"
             cargo publish -p "$package"
