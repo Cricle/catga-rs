@@ -1,6 +1,9 @@
-use std::{collections::BinaryHeap, sync::Arc, time::SystemTime};
+use std::{
+    collections::BinaryHeap,
+    sync::{Arc, RwLock},
+    time::SystemTime,
+};
 
-use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, EventPage, EventStore, EventStream, StoredEvent,
@@ -9,19 +12,32 @@ use catga_core::{
 use dashmap::DashMap;
 
 /// A lock-free snapshot event store for development and deterministic tests.
+///
+/// ```
+/// use catga_memory::MemoryEventStore;
+///
+/// let store = MemoryEventStore::default();
+/// // Empty store has no streams.
+/// # let _ = store;
+/// ```
 #[derive(Default)]
 pub struct MemoryEventStore {
     streams: DashMap<Box<str>, Arc<MemoryEventStream>>,
 }
 
 struct MemoryEventStream {
-    events: ArcSwap<Vec<StoredEvent>>,
+    /// Append-optimized event storage.
+    ///
+    /// Writers take the write lock and push in place (amortized O(1) per event) instead of
+    /// copying the whole history through a compare-and-swap loop. Readers take the read lock
+    /// only long enough to clone the requested page of `Arc`-shared events.
+    events: RwLock<Vec<StoredEvent>>,
 }
 
 impl Default for MemoryEventStream {
     fn default() -> Self {
         Self {
-            events: ArcSwap::from_pointee(Vec::new()),
+            events: RwLock::new(Vec::new()),
         }
     }
 }
@@ -36,7 +52,10 @@ impl MemoryEventStore {
         let Some(stream) = self.streams.get(stream_id) else {
             return Ok(EventStream::new(stream_id, -1, Vec::new()));
         };
-        let snapshot = stream.events.load_full();
+        let snapshot = stream
+            .events
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let start = usize::try_from(from_version).unwrap_or(usize::MAX);
         let events = snapshot
             .get(start..)
@@ -74,7 +93,13 @@ impl EventStore for MemoryEventStore {
         Self::record("append", || {
             if events.is_empty() {
                 return self.streams.get(stream_id).map_or(Ok(-1), |stream| {
-                    event_stream_version(stream.events.load().len())
+                    event_stream_version(
+                        stream
+                            .events
+                            .read()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .len(),
+                    )
                 });
             }
             let stream = self.streams.entry(stream_id.into()).or_default().clone();
@@ -103,7 +128,13 @@ impl EventStore for MemoryEventStore {
     async fn version(&self, stream_id: &str) -> CatgaResult<i64> {
         Self::record("version", || {
             self.streams.get(stream_id).map_or(Ok(-1), |stream| {
-                event_stream_version(stream.events.load().len())
+                event_stream_version(
+                    stream
+                        .events
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .len(),
+                )
             })
         })
     }
@@ -237,46 +268,36 @@ impl EventStore for MemoryEventStore {
 
 impl MemoryEventStream {
     fn append(&self, events: Vec<Envelope>, expected_version: Option<i64>) -> CatgaResult<i64> {
-        loop {
-            let current = self.events.load_full();
-            let mut version = event_stream_version(current.len())?;
-            if expected_version.is_some_and(|expected| expected != version) {
-                return Err(CatgaError::new(
-                    ErrorCode::Conflict,
-                    "event stream version conflict",
-                ));
-            }
-            let appended_version = checked_appended_event_version(version, events.len())?;
-            let timestamp = SystemTime::now();
-            let next_len = current.len().checked_add(events.len()).ok_or_else(|| {
-                CatgaError::new(
-                    ErrorCode::Internal,
-                    "event stream length exceeds memory range",
-                )
-            })?;
-            let mut next = Vec::new();
-            next.try_reserve_exact(next_len).map_err(|_| {
-                CatgaError::new(
-                    ErrorCode::Internal,
-                    "event stream allocation exceeds memory range",
-                )
-            })?;
-            next.extend(current.iter().cloned());
-            for envelope in &events {
-                version = version.checked_add(1).ok_or_else(|| {
-                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
-                })?;
-                next.push(StoredEvent::new(
-                    version,
-                    Arc::new(envelope.clone()),
-                    timestamp,
-                ));
-            }
-            let previous = self.events.compare_and_swap(&current, Arc::new(next));
-            if Arc::ptr_eq(&*previous, &current) {
-                return Ok(appended_version);
-            }
+        let mut stored = self
+            .events
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut version = event_stream_version(stored.len())?;
+        if expected_version.is_some_and(|expected| expected != version) {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "event stream version conflict",
+            ));
         }
+        let appended_version = checked_appended_event_version(version, events.len())?;
+        let timestamp = SystemTime::now();
+        stored.try_reserve_exact(events.len()).map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "event stream allocation exceeds memory range",
+            )
+        })?;
+        for envelope in &events {
+            version = version.checked_add(1).ok_or_else(|| {
+                CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+            })?;
+            stored.push(StoredEvent::new(
+                version,
+                Arc::new(envelope.clone()),
+                timestamp,
+            ));
+        }
+        Ok(appended_version)
     }
 }
 

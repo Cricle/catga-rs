@@ -166,6 +166,15 @@ pub trait BatchOptionsProvider {
 }
 
 /// Delivery guarantee requested for a transported message.
+///
+/// ```
+/// use catga_core::QualityOfService;
+///
+/// assert_eq!(QualityOfService::AtLeastOnce.as_tag(), "AtLeastOnce");
+/// assert!(QualityOfService::AtLeastOnce.requires_ack());
+/// assert!(!QualityOfService::AtMostOnce.requires_ack());
+/// assert!(QualityOfService::ExactlyOnce.requires_deduplication());
+/// ```
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[repr(u8)]
 pub enum QualityOfService {
@@ -226,6 +235,18 @@ pub enum MessagePriority {
 }
 
 /// Identifiers propagated with a message through a distributed operation.
+///
+/// ```
+/// use catga_core::{MessageMetadata, MessagePriority, QualityOfService};
+///
+/// let metadata = MessageMetadata::new(1, Some(42))
+///     .with_priority(MessagePriority::High)
+///     .with_quality_of_service(QualityOfService::ExactlyOnce);
+/// assert_eq!(metadata.message_id(), 1);
+/// assert_eq!(metadata.correlation_id(), Some(42));
+/// assert_eq!(metadata.priority(), MessagePriority::High);
+/// assert!(metadata.not_before_unix_ms().is_none());
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MessageMetadata {
     message_id: u64,

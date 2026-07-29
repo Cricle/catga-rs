@@ -32,6 +32,21 @@ const HALF_OPEN: u8 = 2;
 /// `max_concurrent + max_queued` calls are retained. The timeout applies to
 /// each attempt; retryable errors other than `Cancelled` are retried or counted
 /// by the circuit breaker.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_core::ResilienceOptions;
+///
+/// let options = ResilienceOptions {
+///     max_concurrent: 10,
+///     max_queued: 50,
+///     timeout: Duration::from_secs(5),
+///     max_retries: 3,
+///     retry_delay: Duration::from_millis(100),
+///     ..ResilienceOptions::default()
+/// };
+/// assert_eq!(options.max_retries, 3);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResilienceOptions {
     /// Operations allowed to execute at once; zero disables admission limiting.

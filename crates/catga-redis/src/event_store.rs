@@ -70,6 +70,8 @@ pub struct RedisEventStore {
     connection: ConnectionManager,
     prefix: Box<str>,
     codec: MemoryPackCodec,
+    /// Pre-hashed append script; avoids recomputing the SHA-1 digest on every append.
+    append_script: Script,
 }
 
 impl RedisEventStore {
@@ -98,6 +100,7 @@ impl RedisEventStore {
             connection,
             prefix: prefix.into(),
             codec: MemoryPackCodec::default(),
+            append_script: Script::new(APPEND),
         })
     }
 
@@ -209,11 +212,10 @@ impl EventStore for RedisEventStore {
                 .collect();
             let payloads = payloads?;
             let mut connection = self.connection.clone();
-            let script = Script::new(APPEND);
             let version_key = self.version_key(stream_id);
             let stream_key = self.stream_key(stream_id);
             let ids_key = self.ids_key();
-            let mut invocation = script.key(&version_key);
+            let mut invocation = self.append_script.key(&version_key);
             invocation
                 .key(&stream_key)
                 .key(&ids_key)

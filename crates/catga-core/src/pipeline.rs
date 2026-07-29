@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -14,15 +14,46 @@ pub const MAX_PIPELINE_DEPTH: usize = 100;
 type Continuation<M> =
     dyn Fn(M) -> BoxFuture<'static, CatgaResult<<M as Request>::Response>> + Send + Sync;
 
+/// Internal position of one pipeline dispatch.
+///
+/// `Terminal` holds the registered handler continuation. `Chain` shares the immutable behavior
+/// slice and the current depth, so cloning a [`Next`] or wrapping a pipeline performs cheap
+/// reference-count increments instead of allocating a fresh closure chain per dispatch.
+enum NextInner<M: Request> {
+    Terminal(Arc<Continuation<M>>),
+    Chain {
+        behaviors: Arc<[Arc<dyn Behavior<M>>]>,
+        index: usize,
+        terminal: Arc<Continuation<M>>,
+    },
+}
+
+impl<M: Request> Clone for NextInner<M> {
+    fn clone(&self) -> Self {
+        match self {
+            NextInner::Terminal(continuation) => NextInner::Terminal(Arc::clone(continuation)),
+            NextInner::Chain {
+                behaviors,
+                index,
+                terminal,
+            } => NextInner::Chain {
+                behaviors: Arc::clone(behaviors),
+                index: *index,
+                terminal: Arc::clone(terminal),
+            },
+        }
+    }
+}
+
 /// Invokes the next behavior or the registered request handler in a pipeline.
 pub struct Next<M: Request> {
-    continuation: Arc<Continuation<M>>,
+    inner: NextInner<M>,
 }
 
 impl<M: Request> Clone for Next<M> {
     fn clone(&self) -> Self {
         Self {
-            continuation: Arc::clone(&self.continuation),
+            inner: self.inner.clone(),
         }
     }
 }
@@ -32,13 +63,33 @@ impl<M: Request> Next<M> {
         continuation: impl Fn(M) -> BoxFuture<'static, CatgaResult<M::Response>> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            continuation: Arc::new(continuation),
+            inner: NextInner::Terminal(Arc::new(continuation)),
         }
     }
 
     /// Continues request processing with the supplied message.
     pub fn run(&self, message: M) -> BoxFuture<'static, CatgaResult<M::Response>> {
-        (self.continuation)(message)
+        match &self.inner {
+            NextInner::Terminal(continuation) => continuation(message),
+            NextInner::Chain {
+                behaviors,
+                index,
+                terminal,
+            } => {
+                let Some(behavior) = behaviors.get(*index) else {
+                    return terminal(message);
+                };
+                let behavior = Arc::clone(behavior);
+                let next = Next {
+                    inner: NextInner::Chain {
+                        behaviors: Arc::clone(behaviors),
+                        index: *index + 1,
+                        terminal: Arc::clone(terminal),
+                    },
+                };
+                Box::pin(async move { behavior.handle(message, next).await })
+            }
+        }
     }
 }
 
@@ -50,14 +101,36 @@ pub trait Behavior<M: Request>: Send + Sync {
 }
 
 /// An immutable, typed sequence of request behaviors built during application startup.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_core::{Pipeline, RetryBehavior, TimeoutBehavior, Message, Request};
+///
+/// #[derive(Clone)]
+/// struct MyRequest;
+/// impl Message for MyRequest {}
+/// impl Request for MyRequest { type Response = (); }
+///
+/// let pipeline: Pipeline<MyRequest> = Pipeline::new()
+///     .with(RetryBehavior::new(2, Duration::from_millis(10)))
+///     .with(TimeoutBehavior::new(Duration::from_secs(1)));
+/// assert_eq!(pipeline.len(), 2);
+/// assert!(!pipeline.is_empty());
+/// ```
 pub struct Pipeline<M: Request> {
     behaviors: Vec<Arc<dyn Behavior<M>>>,
+    /// Shared behavior chain materialized lazily on the first dispatch.
+    ///
+    /// Wrapping the pipeline into a [`Next`] clones only this slice's reference count, so
+    /// per-request dispatch does not reallocate the behavior chain.
+    chain: OnceLock<Arc<[Arc<dyn Behavior<M>>]>>,
 }
 
 impl<M: Request> Default for Pipeline<M> {
     fn default() -> Self {
         Self {
             behaviors: Vec::new(),
+            chain: OnceLock::new(),
         }
     }
 }
@@ -118,31 +191,64 @@ impl<M: Request> Pipeline<M> {
     }
 
     pub(crate) fn wrap(&self, terminal: Next<M>) -> Next<M> {
-        self.behaviors
-            .iter()
-            .rev()
-            .fold(terminal, |next, behavior| {
-                let behavior = Arc::clone(behavior);
-                Next::new(move |message| {
-                    let behavior = Arc::clone(&behavior);
-                    let next = next.clone();
-                    Box::pin(async move { behavior.handle(message, next).await })
-                })
-            })
+        let behaviors = Arc::clone(self.chain.get_or_init(|| Arc::from(self.behaviors.clone())));
+        if behaviors.is_empty() {
+            return terminal;
+        }
+        let terminal = match terminal.inner {
+            NextInner::Terminal(continuation) => continuation,
+            NextInner::Chain { .. } => Arc::new(move |message| terminal.run(message)),
+        };
+        Next {
+            inner: NextInner::Chain {
+                behaviors,
+                index: 0,
+                terminal,
+            },
+        }
     }
 }
 
 type CommandContinuation<C> = dyn Fn(C) -> BoxFuture<'static, CatgaResult<()>> + Send + Sync;
 
+/// Internal position of one command pipeline dispatch.
+enum CommandNextInner<C: Command> {
+    Terminal(Arc<CommandContinuation<C>>),
+    Chain {
+        behaviors: Arc<[Arc<dyn CommandBehavior<C>>]>,
+        index: usize,
+        terminal: Arc<CommandContinuation<C>>,
+    },
+}
+
+impl<C: Command> Clone for CommandNextInner<C> {
+    fn clone(&self) -> Self {
+        match self {
+            CommandNextInner::Terminal(continuation) => {
+                CommandNextInner::Terminal(Arc::clone(continuation))
+            }
+            CommandNextInner::Chain {
+                behaviors,
+                index,
+                terminal,
+            } => CommandNextInner::Chain {
+                behaviors: Arc::clone(behaviors),
+                index: *index,
+                terminal: Arc::clone(terminal),
+            },
+        }
+    }
+}
+
 /// Invokes the next behavior or the registered command handler in a command pipeline.
 pub struct CommandNext<C: Command> {
-    continuation: Arc<CommandContinuation<C>>,
+    inner: CommandNextInner<C>,
 }
 
 impl<C: Command> Clone for CommandNext<C> {
     fn clone(&self) -> Self {
         Self {
-            continuation: Arc::clone(&self.continuation),
+            inner: self.inner.clone(),
         }
     }
 }
@@ -152,13 +258,33 @@ impl<C: Command> CommandNext<C> {
         continuation: impl Fn(C) -> BoxFuture<'static, CatgaResult<()>> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            continuation: Arc::new(continuation),
+            inner: CommandNextInner::Terminal(Arc::new(continuation)),
         }
     }
 
     /// Continues command processing with the supplied command.
     pub fn run(&self, command: C) -> BoxFuture<'static, CatgaResult<()>> {
-        (self.continuation)(command)
+        match &self.inner {
+            CommandNextInner::Terminal(continuation) => continuation(command),
+            CommandNextInner::Chain {
+                behaviors,
+                index,
+                terminal,
+            } => {
+                let Some(behavior) = behaviors.get(*index) else {
+                    return terminal(command);
+                };
+                let behavior = Arc::clone(behavior);
+                let next = CommandNext {
+                    inner: CommandNextInner::Chain {
+                        behaviors: Arc::clone(behaviors),
+                        index: *index + 1,
+                        terminal: Arc::clone(terminal),
+                    },
+                };
+                Box::pin(async move { behavior.handle(command, next).await })
+            }
+        }
     }
 }
 
@@ -176,12 +302,15 @@ pub trait CommandBehavior<C: Command>: Send + Sync {
 /// An immutable, typed sequence of command behaviors built during application startup.
 pub struct CommandPipeline<C: Command> {
     behaviors: Vec<Arc<dyn CommandBehavior<C>>>,
+    /// Shared command behavior chain materialized lazily on the first dispatch.
+    chain: OnceLock<Arc<[Arc<dyn CommandBehavior<C>>]>>,
 }
 
 impl<C: Command> Default for CommandPipeline<C> {
     fn default() -> Self {
         Self {
             behaviors: Vec::new(),
+            chain: OnceLock::new(),
         }
     }
 }
@@ -238,16 +367,20 @@ impl<C: Command> CommandPipeline<C> {
     }
 
     pub(crate) fn wrap(&self, terminal: CommandNext<C>) -> CommandNext<C> {
-        self.behaviors
-            .iter()
-            .rev()
-            .fold(terminal, |next, behavior| {
-                let behavior = Arc::clone(behavior);
-                CommandNext::new(move |command| {
-                    let behavior = Arc::clone(&behavior);
-                    let next = next.clone();
-                    Box::pin(async move { behavior.handle(command, next).await })
-                })
-            })
+        let behaviors = Arc::clone(self.chain.get_or_init(|| Arc::from(self.behaviors.clone())));
+        if behaviors.is_empty() {
+            return terminal;
+        }
+        let terminal = match terminal.inner {
+            CommandNextInner::Terminal(continuation) => continuation,
+            CommandNextInner::Chain { .. } => Arc::new(move |command| terminal.run(command)),
+        };
+        CommandNext {
+            inner: CommandNextInner::Chain {
+                behaviors,
+                index: 0,
+                terminal,
+            },
+        }
     }
 }

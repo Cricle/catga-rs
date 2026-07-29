@@ -10,7 +10,7 @@ use crate::{
     state_codec::{decode_state, encode_state},
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{FlowState, FlowStatus};
+use catga_flow::{FlowState, FlowStatus, validate_flow_batch_size};
 use sqlx::{PgPool, Row};
 use std::time::{Duration, SystemTime};
 
@@ -67,6 +67,60 @@ pub(crate) async fn create(pool: &PgPool, state: FlowState) -> CatgaResult<bool>
             "SHA-256 collision between SQL FlowStore identities",
         ))
     }
+}
+
+/// Inserts many flow states in one transaction so the whole batch pays a single WAL flush.
+pub(crate) async fn create_batch(pool: &PgPool, states: Vec<FlowState>) -> CatgaResult<Vec<bool>> {
+    validate_flow_batch_size(states.len())?;
+    if states.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| database_error("begin PostgreSQL flow batch", error))?;
+    let mut created = Vec::with_capacity(states.len());
+    for state in &states {
+        let key = flow_key(state.id());
+        let result = sqlx::query(statement("INSERT INTO catga_flow_states (flow_key, flow_id, flow_type, status, version, heartbeat_ms, revision, payload) VALUES (?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING", PG))
+            .bind(key.as_slice()).bind(state.id()).bind(state.flow_type()).bind(status_code(state.status())).bind(state.version()).bind(unix_millis(state.heartbeat())?).bind(encode_state(state)?)
+            .execute(&mut *tx).await.map_err(|error| database_error("create PostgreSQL flow state in batch", error))?;
+        if result.rows_affected() == 1 {
+            created.push(true);
+            continue;
+        }
+        let row = sqlx::query(statement(
+            "SELECT flow_id FROM catga_flow_states WHERE flow_key = ?",
+            PG,
+        ))
+        .bind(key.as_slice())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| {
+            database_error("read conflicting PostgreSQL flow state in batch", error)
+        })?;
+        let Some(row) = row else {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "PostgreSQL flow state disappeared after a conflicting create",
+            ));
+        };
+        let existing: String = row
+            .try_get("flow_id")
+            .map_err(|error| database_error("decode PostgreSQL flow identity in batch", error))?;
+        if existing == state.id() {
+            created.push(false);
+        } else {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "SHA-256 collision between SQL FlowStore identities",
+            ));
+        }
+    }
+    tx.commit()
+        .await
+        .map_err(|error| database_error("commit PostgreSQL flow batch", error))?;
+    Ok(created)
 }
 
 /// Loads one flow state by both its fixed key and raw identity.

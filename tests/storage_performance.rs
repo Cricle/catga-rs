@@ -53,119 +53,125 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
         ],
     )
     .await?;
-
-    let mysql_url = required_service_url("CATGA_MYSQL_URL")?;
-    let mysql = SqlFlowStore::connect_mysql_with_options(
-        &mysql_url,
-        SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
-    )
-    .await
-    .map_err(performance_report::debug_error)?;
-    mysql
-        .migrate()
-        .await
-        .map_err(performance_report::debug_error)?;
-    let mysql_metrics_before = capture_mysql_metrics(&mysql_url).await?;
-    results.extend(
-        measure_store_variants(
-            &mysql,
-            "mysql",
-            [
-                "mysql_flow_store_lifecycle",
-                "mysql_flow_store_lifecycle_bounded_concurrency_4",
-                "mysql_flow_store_lifecycle_bounded_concurrency_8",
-                "mysql_flow_store_lifecycle_bounded_concurrency_16",
-            ],
-        )
-        .await?,
-    );
-    let mysql_metrics_after = capture_mysql_metrics(&mysql_url).await?;
-
-    let postgres_url = required_service_url("CATGA_POSTGRES_URL")?;
-    let postgres = SqlFlowStore::connect_postgres_with_options(
-        &postgres_url,
-        SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
-    )
-    .await
-    .map_err(performance_report::debug_error)?;
-    postgres
-        .migrate()
-        .await
-        .map_err(performance_report::debug_error)?;
-    let postgres_metrics_before = capture_postgres_metrics(&postgres_url).await?;
-    results.extend(
-        measure_store_variants(
-            &postgres,
-            "postgres",
-            [
-                "postgres_flow_store_lifecycle",
-                "postgres_flow_store_lifecycle_bounded_concurrency_4",
-                "postgres_flow_store_lifecycle_bounded_concurrency_8",
-                "postgres_flow_store_lifecycle_bounded_concurrency_16",
-            ],
-        )
-        .await?,
-    );
-    let postgres_metrics_after = capture_postgres_metrics(&postgres_url).await?;
-
-    let mssql_url = required_service_url("CATGA_MSSQL_URL")?;
-    let mssql = SqlFlowStore::connect_mssql_with_options(
-        &mssql_url,
-        SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
-    )
-    .await
-    .map_err(performance_report::debug_error)?;
-    mssql
-        .migrate()
-        .await
-        .map_err(performance_report::debug_error)?;
-    let mssql_metrics_before = capture_mssql_metrics(&mssql_url).await?;
-    results.extend(
-        measure_store_variants(
-            &mssql,
-            "mssql",
-            [
-                "mssql_flow_store_lifecycle",
-                "mssql_flow_store_lifecycle_bounded_concurrency_4",
-                "mssql_flow_store_lifecycle_bounded_concurrency_8",
-                "mssql_flow_store_lifecycle_bounded_concurrency_16",
-            ],
-        )
-        .await?,
-    );
-    let mssql_metrics_after = capture_mssql_metrics(&mssql_url).await?;
-
-    let redis_url = required_service_url("CATGA_REDIS_URL")?;
-    let redis = RedisFlows::connect(&redis_url, format!("catga:performance:{}", suffix("redis")))
-        .await
-        .map_err(performance_report::debug_error)?;
-    results.extend(
-        measure_store_variants(
-            &redis,
-            "redis",
-            [
-                "redis_flow_store_lifecycle",
-                "redis_flow_store_lifecycle_bounded_concurrency_4",
-                "redis_flow_store_lifecycle_bounded_concurrency_8",
-                "redis_flow_store_lifecycle_bounded_concurrency_16",
-            ],
-        )
-        .await?,
-    );
+    results.extend(measure_sqlite_batch_comparison(&sqlite).await?);
 
     let mut metric_deltas = Vec::new();
-    metric_deltas.extend(database_metric_deltas(
-        mysql_metrics_before,
-        mysql_metrics_after,
-    )?);
-    metric_deltas.extend(database_metric_deltas(
-        postgres_metrics_before,
-        postgres_metrics_after,
-    )?);
-    metric_deltas.extend(database_metric_deltas(
-        mssql_metrics_before,
-        mssql_metrics_after,
-    )?);
+
+    if let Some(mysql_url) = optional_service_url("CATGA_MYSQL_URL")? {
+        let mysql = SqlFlowStore::connect_mysql_with_options(
+            &mysql_url,
+            SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
+        )
+        .await
+        .map_err(performance_report::debug_error)?;
+        mysql
+            .migrate()
+            .await
+            .map_err(performance_report::debug_error)?;
+        let mysql_metrics_before = capture_mysql_metrics(&mysql_url).await?;
+        results.extend(
+            measure_store_variants(
+                &mysql,
+                "mysql",
+                [
+                    "mysql_flow_store_lifecycle",
+                    "mysql_flow_store_lifecycle_bounded_concurrency_4",
+                    "mysql_flow_store_lifecycle_bounded_concurrency_8",
+                    "mysql_flow_store_lifecycle_bounded_concurrency_16",
+                ],
+            )
+            .await?,
+        );
+        let mysql_metrics_after = capture_mysql_metrics(&mysql_url).await?;
+        metric_deltas.extend(database_metric_deltas(
+            mysql_metrics_before,
+            mysql_metrics_after,
+        )?);
+    }
+
+    if let Some(postgres_url) = optional_service_url("CATGA_POSTGRES_URL")? {
+        let postgres = SqlFlowStore::connect_postgres_with_options(
+            &postgres_url,
+            SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
+        )
+        .await
+        .map_err(performance_report::debug_error)?;
+        postgres
+            .migrate()
+            .await
+            .map_err(performance_report::debug_error)?;
+        let postgres_metrics_before = capture_postgres_metrics(&postgres_url).await?;
+        results.extend(
+            measure_store_variants(
+                &postgres,
+                "postgres",
+                [
+                    "postgres_flow_store_lifecycle",
+                    "postgres_flow_store_lifecycle_bounded_concurrency_4",
+                    "postgres_flow_store_lifecycle_bounded_concurrency_8",
+                    "postgres_flow_store_lifecycle_bounded_concurrency_16",
+                ],
+            )
+            .await?,
+        );
+        let postgres_metrics_after = capture_postgres_metrics(&postgres_url).await?;
+        metric_deltas.extend(database_metric_deltas(
+            postgres_metrics_before,
+            postgres_metrics_after,
+        )?);
+    }
+
+    if let Some(mssql_url) = optional_service_url("CATGA_MSSQL_URL")? {
+        let mssql = SqlFlowStore::connect_mssql_with_options(
+            &mssql_url,
+            SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
+        )
+        .await
+        .map_err(performance_report::debug_error)?;
+        mssql
+            .migrate()
+            .await
+            .map_err(performance_report::debug_error)?;
+        let mssql_metrics_before = capture_mssql_metrics(&mssql_url).await?;
+        results.extend(
+            measure_store_variants(
+                &mssql,
+                "mssql",
+                [
+                    "mssql_flow_store_lifecycle",
+                    "mssql_flow_store_lifecycle_bounded_concurrency_4",
+                    "mssql_flow_store_lifecycle_bounded_concurrency_8",
+                    "mssql_flow_store_lifecycle_bounded_concurrency_16",
+                ],
+            )
+            .await?,
+        );
+        let mssql_metrics_after = capture_mssql_metrics(&mssql_url).await?;
+        metric_deltas.extend(database_metric_deltas(
+            mssql_metrics_before,
+            mssql_metrics_after,
+        )?);
+    }
+
+    if let Some(redis_url) = optional_service_url("CATGA_REDIS_URL")? {
+        let redis =
+            RedisFlows::connect(&redis_url, format!("catga:performance:{}", suffix("redis")))
+                .await
+                .map_err(performance_report::debug_error)?;
+        results.extend(
+            measure_store_variants(
+                &redis,
+                "redis",
+                [
+                    "redis_flow_store_lifecycle",
+                    "redis_flow_store_lifecycle_bounded_concurrency_4",
+                    "redis_flow_store_lifecycle_bounded_concurrency_8",
+                    "redis_flow_store_lifecycle_bounded_concurrency_16",
+                ],
+            )
+            .await?,
+        );
+    }
 
     let report = performance_report::PerformanceReport {
         schema_version: 2,
@@ -296,6 +302,74 @@ where
     );
     result.phase_latencies = lifecycle_phase_latencies(&latencies);
     Ok(result)
+}
+
+/// Compares creating the same number of flows one transaction at a time versus one batched
+/// transaction, isolating how much the per-commit durability flush amortizes across a batch.
+async fn measure_sqlite_batch_comparison(
+    store: &SqlFlowStore,
+) -> Result<Vec<performance_report::BenchmarkResult>, String> {
+    const FLOW_COUNT: usize = 256;
+    let mut results = Vec::new();
+
+    let rss_before_bytes = performance_report::current_rss_bytes();
+    let started = Instant::now();
+    let mut latencies = Vec::with_capacity(FLOW_COUNT);
+    for sequence in 0..FLOW_COUNT {
+        let operation_started = Instant::now();
+        store
+            .create(batch_flow_state("sequential", sequence))
+            .await
+            .map_err(performance_report::debug_error)?;
+        latencies.push(operation_started.elapsed());
+    }
+    results.push(performance_report::measured(
+        "sqlite_flow_create_sequential",
+        Some(PAYLOAD_BYTES),
+        started.elapsed(),
+        latencies,
+        "one transaction per create",
+        rss_before_bytes,
+    ));
+
+    let states: Vec<FlowState> = (0..FLOW_COUNT)
+        .map(|sequence| batch_flow_state("batched", sequence))
+        .collect();
+    let rss_before_bytes = performance_report::current_rss_bytes();
+    let started = Instant::now();
+    let created = store
+        .create_batch(states)
+        .await
+        .map_err(performance_report::debug_error)?;
+    let batch_elapsed = started.elapsed();
+    if created
+        .into_iter()
+        .filter(|was_created| *was_created)
+        .count()
+        != FLOW_COUNT
+    {
+        return Err("SQLite batch did not create every flow".to_owned());
+    }
+    let amortized = batch_elapsed / u32::try_from(FLOW_COUNT).unwrap_or(u32::MAX);
+    results.push(performance_report::measured(
+        "sqlite_flow_create_batched",
+        Some(PAYLOAD_BYTES),
+        batch_elapsed,
+        vec![amortized; FLOW_COUNT],
+        "one transaction for the whole batch (amortized per flow)",
+        rss_before_bytes,
+    ));
+
+    Ok(results)
+}
+
+fn batch_flow_state(tag: &str, sequence: usize) -> FlowState {
+    FlowState::new(
+        format!("batch-{tag}-{}-{sequence}", suffix("flow")).as_str(),
+        "performance",
+        vec![0xA5; PAYLOAD_BYTES],
+        "benchmark",
+    )
 }
 
 struct LifecycleLatency {
@@ -633,15 +707,18 @@ async fn capture_mssql_metrics(url: &str) -> Result<DatabaseMetricSnapshot, Stri
     Ok(DatabaseMetricSnapshot::new("mssql", values))
 }
 
-fn required_service_url(name: &str) -> Result<String, String> {
+/// Returns a service URL when configured, or `None` to let a local run skip that backend.
+///
+/// CI sets `CATGA_REQUIRE_EXTERNAL_SERVICES`, which turns an absent URL into an error so the
+/// full profile never silently drops a backend. Local runs without that variable measure only
+/// the backends whose URLs are present (SQLite always runs because it needs no service).
+fn optional_service_url(name: &str) -> Result<Option<String>, String> {
     match env::var(name) {
-        Ok(url) if !url.trim().is_empty() => Ok(url),
+        Ok(url) if !url.trim().is_empty() => Ok(Some(url)),
         _ if env::var_os("CATGA_REQUIRE_EXTERNAL_SERVICES").is_some() => Err(format!(
             "{name} must be configured when CI executes storage performance tests"
         )),
-        _ => Err(format!(
-            "{name} is required for the manual full performance profile"
-        )),
+        _ => Ok(None),
     }
 }
 

@@ -14,6 +14,14 @@ pub const MAX_EVENT_STORE_PAGE_SIZE: usize = 1_024;
 ///
 /// Backends call this before allocating a result page so every implementation shares the same
 /// memory bound.
+///
+/// ```
+/// use catga_core::{validate_event_store_page_size, MAX_EVENT_STORE_PAGE_SIZE};
+///
+/// assert!(validate_event_store_page_size(100).is_ok());
+/// assert!(validate_event_store_page_size(0).is_err());
+/// assert!(validate_event_store_page_size(MAX_EVENT_STORE_PAGE_SIZE + 1).is_err());
+/// ```
 pub fn validate_event_store_page_size(max_count: usize) -> CatgaResult<()> {
     if max_count == 0 || max_count > MAX_EVENT_STORE_PAGE_SIZE {
         return Err(CatgaError::new(

@@ -198,6 +198,12 @@ where
         })
     }
 
+    /// Opens a dedicated connection without response timeout for one blocking `XREAD`.
+    ///
+    /// Each concurrent receiver owns its connection because Redis serializes commands per
+    /// connection: a pending `XREAD BLOCK` would otherwise hold up every other receiver sharing
+    /// the same multiplexed connection. The connection is established per receive so abandoned
+    /// or cancelled blocking reads never leave a reused connection in an inconsistent state.
     async fn blocking_connection(&self) -> CatgaResult<MultiplexedConnection> {
         self.client
             .get_multiplexed_async_connection_with_config(
@@ -516,6 +522,9 @@ impl InFlight {
     }
 
     fn stream(&self, stream: &str) -> Arc<InFlightStream> {
+        if let Some(existing) = self.streams.get(stream) {
+            return existing.clone();
+        }
         self.streams
             .entry(stream.into())
             .or_insert_with(|| {

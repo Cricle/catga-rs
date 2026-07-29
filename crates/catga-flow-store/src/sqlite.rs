@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{FlowState, FlowStatus};
+use catga_flow::{FlowState, FlowStatus, validate_flow_batch_size};
 use sqlx::{Row, SqlitePool};
 
 use crate::{
@@ -100,6 +100,78 @@ pub(crate) async fn create(pool: &SqlitePool, state: FlowState) -> CatgaResult<b
             "SHA-256 collision between SQL FlowStore identities",
         ))
     }
+}
+
+/// Inserts many flow states in one transaction so the whole batch pays a single durability flush.
+///
+/// Per-row conflict handling mirrors [`create`]: a row whose identity already exists yields
+/// `false`, while a fixed-width key collision returns an internal error.
+pub(crate) async fn create_batch(
+    pool: &SqlitePool,
+    states: Vec<FlowState>,
+) -> CatgaResult<Vec<bool>> {
+    validate_flow_batch_size(states.len())?;
+    if states.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| database_error("begin SQLite flow batch", error))?;
+    let mut created = Vec::with_capacity(states.len());
+    for state in &states {
+        let key = flow_key(state.id());
+        let frame = encode_state(state)?;
+        let heartbeat = unix_millis(state.heartbeat())?;
+        let result = sqlx::query(
+            "INSERT INTO catga_flow_states \
+             (flow_key, flow_id, flow_type, status, version, heartbeat_ms, revision, payload) \
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?) \
+             ON CONFLICT(flow_key) DO NOTHING",
+        )
+        .bind(key.as_slice())
+        .bind(state.id())
+        .bind(state.flow_type())
+        .bind(status_code(state.status()))
+        .bind(state.version())
+        .bind(heartbeat)
+        .bind(frame)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_error("create SQLite flow state in batch", error))?;
+        if result.rows_affected() == 1 {
+            created.push(true);
+            continue;
+        }
+        let existing = sqlx::query("SELECT flow_id FROM catga_flow_states WHERE flow_key = ?")
+            .bind(key.as_slice())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|error| {
+                database_error("read conflicting SQLite flow state in batch", error)
+            })?;
+        let Some(existing) = existing else {
+            return Err(CatgaError::new(
+                ErrorCode::Transient,
+                "SQLite flow state disappeared after a conflicting create",
+            ));
+        };
+        let existing_id: String = existing
+            .try_get("flow_id")
+            .map_err(|error| database_error("decode SQLite flow identity in batch", error))?;
+        if existing_id == state.id() {
+            created.push(false);
+        } else {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "SHA-256 collision between SQL FlowStore identities",
+            ));
+        }
+    }
+    tx.commit()
+        .await
+        .map_err(|error| database_error("commit SQLite flow batch", error))?;
+    Ok(created)
 }
 
 /// Loads and validates one state by its unhashed identity.

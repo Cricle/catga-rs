@@ -18,7 +18,7 @@ catga-flow = { path = "../crates/catga-flow" }
 catga-memory = { path = "../crates/catga-memory" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "net", "rt"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "signal"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

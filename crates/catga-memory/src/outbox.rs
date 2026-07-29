@@ -32,6 +32,13 @@ struct PublishedRecord {
 }
 
 /// A shard-locked, process-local outbox for development and deterministic tests.
+///
+/// ```
+/// use catga_memory::MemoryOutbox;
+///
+/// let outbox = MemoryOutbox::default();
+/// # let _ = outbox;
+/// ```
 pub struct MemoryOutbox {
     messages: DashMap<u64, StoredMessage>,
     published: DashMap<u64, PublishedRecord>,

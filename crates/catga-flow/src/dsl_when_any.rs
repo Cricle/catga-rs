@@ -5,9 +5,9 @@ use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 
 use crate::{
-    dsl::{CloneState, MergeWinner},
     dsl_checkpoint::{CheckpointFrame, CheckpointLevel, CheckpointWork},
     dsl_recovery::{CheckpointContext, persist_checkpoint_payload},
+    dsl_step::{CloneState, MergeWinner},
 };
 
 pub(super) fn run_checkpointed_when_any<'a, S, C, P>(

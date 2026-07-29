@@ -25,6 +25,14 @@ const DEFAULT_READ_MODEL_PAGE_SIZE: usize = 256;
 ///
 /// Trackers must call this before allocating a pending-change page so all implementations share
 /// the same bound.
+///
+/// ```
+/// use catga_core::{validate_read_model_page_size, MAX_READ_MODEL_PAGE_SIZE};
+///
+/// assert!(validate_read_model_page_size(256).is_ok());
+/// assert!(validate_read_model_page_size(0).is_err());
+/// assert!(validate_read_model_page_size(MAX_READ_MODEL_PAGE_SIZE + 1).is_err());
+/// ```
 pub fn validate_read_model_page_size(max_count: usize) -> CatgaResult<()> {
     if max_count == 0 || max_count > MAX_READ_MODEL_PAGE_SIZE {
         return Err(CatgaError::new(

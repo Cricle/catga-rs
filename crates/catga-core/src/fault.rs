@@ -5,6 +5,15 @@ use std::time::SystemTime;
 use crate::{CatgaError, Event, Message, current_correlation_id};
 
 /// An event describing one request failure.
+///
+/// ```
+/// use catga_core::{CatgaError, ErrorCode, Fault};
+///
+/// let fault = Fault::new("order-42", CatgaError::new(ErrorCode::HandlerFailed, "timeout"));
+/// assert_eq!(*fault.message(), "order-42");
+/// assert_eq!(fault.error().code(), ErrorCode::HandlerFailed);
+/// assert!(!fault.host().is_empty());
+/// ```
 #[derive(Clone)]
 pub struct Fault<M> {
     message: M,

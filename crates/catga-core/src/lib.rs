@@ -153,6 +153,7 @@ mod resilient_transport;
 mod retry_jitter;
 mod routing;
 mod scheduler;
+pub mod sealed_dispatch;
 mod security;
 mod snapshot;
 mod snapshot_codec;
@@ -165,6 +166,7 @@ mod transport;
 mod transport_batching;
 mod typed_transport;
 mod upgrading_event_store;
+mod validation;
 mod versioned_transport;
 
 pub use aggregate::{
@@ -183,7 +185,7 @@ pub use behaviors::{
 };
 pub use cache::CachedResultCodec;
 pub use cancellation::{current_cancellation, scope_cancellation};
-pub use catga_macros::{Message, catga_handlers};
+pub use catga_macros::{Message, catga_handlers, catga_typed_mediator};
 pub use codec::{EnvelopeCodec, PayloadDecoder, PayloadEncoder};
 pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
@@ -191,9 +193,9 @@ pub use compression::{
 };
 pub use consumer::{CompetingConsumer, ConsumerRun, DeliveryHandler};
 pub use correlation::{
-    Correlated, TransportContext, current_correlation_id, current_correlation_value,
-    current_transport_context, scope_correlation_id, scope_correlation_value,
-    scope_transport_context,
+    CORRELATION_ID_HEADER, Correlated, TransportContext, current_correlation_id,
+    current_correlation_value, current_transport_context, scope_correlation_id,
+    scope_correlation_value, scope_transport_context, scope_transport_context_value,
 };
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
@@ -287,6 +289,10 @@ pub use transport::{
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
 pub use typed_transport::{TypedDelivery, TypedProcessOutcome, TypedTransport};
 pub use upgrading_event_store::UpgradingEventStore;
+pub use validation::{
+    EndpointValidation, validate_max_length, validate_min_count, validate_min_length,
+    validate_not_empty, validate_positive, validate_range, validate_required,
+};
 pub use versioned_transport::VersionedMessageTransport;
 
 /// Builds a typed, bounded [`Pipeline`] during application startup.

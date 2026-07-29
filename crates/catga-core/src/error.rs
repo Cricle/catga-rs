@@ -6,6 +6,15 @@ use serde::{Deserialize, Serialize, de};
 pub const MAX_ERROR_DETAILS_BYTES: usize = 1024;
 
 /// Categories used to classify framework failures.
+///
+/// ```
+/// use catga_core::ErrorCode;
+///
+/// assert_eq!(ErrorCode::Validation.as_stable_str(), "validation");
+/// assert_eq!(ErrorCode::from_stable_str("conflict"), Some(ErrorCode::Conflict));
+/// assert!(ErrorCode::Transient.is_retryable());
+/// assert!(!ErrorCode::Validation.is_retryable());
+/// ```
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ErrorCode {
     /// Input does not meet the handler's validation rules.
@@ -149,6 +158,30 @@ impl ErrorCode {
                 | Self::Unavailable
         )
     }
+
+    /// Returns the conventional HTTP status code for this error category as a `u16`.
+    ///
+    /// This is framework-agnostic: any HTTP adapter (Axum, Actix, Poem, etc.) converts
+    /// the returned value to its own status-code type without duplicating the mapping.
+    pub const fn http_status_u16(self) -> u16 {
+        match self {
+            Self::Validation => 422,
+            Self::HandlerFailed
+            | Self::PipelineFailed
+            | Self::SerializationFailed
+            | Self::FlowFailed
+            | Self::FlowCompensating => 400,
+            Self::HandlerNotFound | Self::NotFound => 404,
+            Self::PersistenceFailed | Self::LockFailed | Self::TransportFailed => 503,
+            Self::Conflict => 409,
+            Self::Unauthorized => 401,
+            Self::Forbidden => 403,
+            Self::Cancelled | Self::Timeout | Self::FlowCancelled | Self::FlowTimeout => 408,
+            Self::Unsupported => 501,
+            Self::Transient | Self::Unavailable => 503,
+            Self::Internal => 500,
+        }
+    }
 }
 
 /// A structured Catga failure.
@@ -159,6 +192,17 @@ impl ErrorCode {
 /// binary formats for a borrowed string, so transport frames do not allocate an unbounded remote
 /// detail string before the limit is applied. Protocol-specific compatibility for legacy error
 /// layouts belongs to the relevant codec boundary rather than this type's deserializer.
+///
+/// ```
+/// use catga_core::{CatgaError, ErrorCode};
+///
+/// let error = CatgaError::new(ErrorCode::Validation, "field is required")
+///     .with_details("input: {}");
+/// assert_eq!(error.code(), ErrorCode::Validation);
+/// assert_eq!(error.message(), "field is required");
+/// assert_eq!(error.details(), Some("input: {}"));
+/// assert!(!error.is_retryable());
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CatgaError {
     code: ErrorCode,

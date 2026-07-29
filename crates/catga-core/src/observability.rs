@@ -5,6 +5,12 @@ use std::time::Duration;
 use crate::{CatgaResult, Message, Request, current_correlation_id};
 
 /// The tracing target used by every Catga framework event and span.
+///
+/// ```
+/// use catga_core::TRACING_TARGET;
+///
+/// assert_eq!(TRACING_TARGET, "catga");
+/// ```
 pub const TRACING_TARGET: &str = "catga";
 
 pub(crate) fn request_span(request_type: &'static str) -> tracing::Span {

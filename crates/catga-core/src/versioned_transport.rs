@@ -12,6 +12,16 @@ use crate::{CatgaResult, Delivery, Envelope, EventVersionRegistry, MessageTransp
 /// [`Envelope`] when they construct it. Receive-side upgrades preserve the
 /// backend acknowledgement token, so the wrapped transport keeps its delivery
 /// semantics unchanged.
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use catga_core::{EventVersionRegistry, VersionedMessageTransport, MessageTransport};
+///
+/// # fn example<T: MessageTransport + 'static>(transport: Arc<T>) {
+/// let versions = Arc::new(EventVersionRegistry::default());
+/// let versioned = VersionedMessageTransport::new(transport, versions);
+/// # }
+/// ```
 pub struct VersionedMessageTransport<T> {
     inner: Arc<T>,
     versions: Arc<EventVersionRegistry>,

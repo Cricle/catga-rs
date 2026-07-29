@@ -37,6 +37,26 @@ pub use flow::FlowTestContext;
 pub use harness::{CatgaTestHarness, RunningCatgaTestHarness};
 
 /// A request-handler wrapper that retains received messages for assertions.
+///
+/// ```no_run
+/// use catga_testing::HandlerSpy;
+/// use catga_core::{CatgaResult, Handler, Message, Request};
+/// use async_trait::async_trait;
+///
+/// #[derive(Clone)]
+/// struct Ping;
+/// impl Message for Ping {}
+/// impl Request for Ping { type Response = &'static str; }
+///
+/// struct PingHandler;
+/// #[async_trait]
+/// impl Handler<Ping> for PingHandler {
+///     async fn handle(&self, _: Ping) -> CatgaResult<&'static str> { Ok("pong") }
+/// }
+///
+/// let spy: HandlerSpy<Ping, _> = HandlerSpy::new(PingHandler);
+/// assert_eq!(spy.call_count(), 0);
+/// ```
 pub struct HandlerSpy<M, H> {
     inner: H,
     calls: Arc<DashMap<u64, M>>,

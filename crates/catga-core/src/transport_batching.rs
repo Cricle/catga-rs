@@ -20,6 +20,19 @@ type FlushFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// Each limit is validated during construction. The queue bounds admitted but
 /// unstarted publications; `publish_concurrency` is passed unchanged to the
 /// underlying [`MessageTransport::publish_batch_with_concurrency`] call.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_core::TransportBatchOptions;
+///
+/// let options = TransportBatchOptions {
+///     max_batch_size: 50,
+///     batch_timeout: Duration::from_millis(200),
+///     ..TransportBatchOptions::default()
+/// };
+/// assert_eq!(options.max_batch_size, 50);
+/// assert_eq!(options.max_queue_length, 10_000);
+/// ```
 #[derive(Clone, Debug)]
 pub struct TransportBatchOptions {
     /// Number of envelopes that immediately starts a batch publication.

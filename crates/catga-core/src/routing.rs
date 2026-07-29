@@ -20,6 +20,16 @@ pub struct MessageRouter {
 /// consumers. Resolution performs no allocation or locking and returns a borrow of the stored
 /// destination. The expected number of application message types is small, making an ordered
 /// vector more compact and predictable than a per-message hash lookup.
+///
+/// ```
+/// use catga_core::{Destination, MessageDestinationRouter};
+///
+/// let mut router = MessageDestinationRouter::new();
+/// let dest = Destination::parse("orders-stream").expect("valid");
+/// router.add_route("orders::OrderCreated", dest).expect("valid");
+/// assert!(router.resolve("orders::OrderCreated").is_some());
+/// assert!(router.resolve("unknown::Type").is_none());
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct MessageDestinationRouter {
     routes: Vec<MessageTypeRoute>,

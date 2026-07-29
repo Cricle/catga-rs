@@ -24,6 +24,14 @@ pub const MAX_SCHEDULED_TASK_ID_BYTES: usize = 256;
 /// Catga currently standardizes cron expressions because the provided scheduler adapter is based
 /// on `tokio-cron-scheduler`. The expression is retained unchanged; its grammar and timezone
 /// semantics are defined by the selected [`TaskScheduler`] implementation.
+///
+/// ```
+/// use catga_core::TaskSchedule;
+///
+/// let schedule = TaskSchedule::cron("0 */5 * * * *").expect("valid cron");
+/// assert_eq!(schedule.as_cron(), "0 */5 * * * *");
+/// assert!(TaskSchedule::cron("").is_err());
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskSchedule {
     cron: Box<str>,

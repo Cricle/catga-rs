@@ -186,7 +186,8 @@ impl Flow {
         let mut completed = Vec::with_capacity(self.steps.len());
         for (index, step) in self.steps.iter().enumerate().skip(start_step) {
             if cancellation.is_some_and(CancellationToken::is_cancelled) {
-                self.compensate(completed, max_compensations).await;
+                Self::compensate_steps(&self.steps, &self.name, &completed, max_compensations)
+                    .await;
                 return FlowResult::failure(
                     u32::try_from(index).unwrap_or(u32::MAX),
                     CatgaError::new(ErrorCode::Cancelled, "local flow execution was cancelled"),
@@ -209,7 +210,8 @@ impl Flow {
             match result {
                 Ok(()) => completed.push(index),
                 Err(error) => {
-                    self.compensate(completed, max_compensations).await;
+                    Self::compensate_steps(&self.steps, &self.name, &completed, max_compensations)
+                        .await;
                     return FlowResult::failure(u32::try_from(index).unwrap_or(u32::MAX), error)
                         .with_elapsed(started.elapsed());
                 }
@@ -219,11 +221,16 @@ impl Flow {
             .with_elapsed(started.elapsed())
     }
 
-    async fn compensate(&self, completed: Vec<usize>, max_compensations: usize) {
-        for index in completed.into_iter().rev().take(max_compensations) {
-            if let Err(compensation_error) = (self.steps[index].compensate)().await {
+    async fn compensate_steps(
+        steps: &[FlowStep],
+        name: &str,
+        completed: &[usize],
+        max_compensations: usize,
+    ) {
+        for index in completed.iter().rev().take(max_compensations) {
+            if let Err(compensation_error) = (steps[*index].compensate)().await {
                 tracing::warn!(
-                    flow = self.name.as_ref(),
+                    flow = name,
                     error = compensation_error.message(),
                     "flow compensation failed"
                 );

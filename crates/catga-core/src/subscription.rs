@@ -15,6 +15,15 @@ use crate::{
 const DEFAULT_BATCH_SIZE: usize = 256;
 
 /// Timing configuration for a caller-owned continuous subscription loop.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_core::SubscriptionLoopOptions;
+///
+/// let options = SubscriptionLoopOptions::new(Duration::from_millis(500)).expect("nonzero");
+/// assert_eq!(options.poll_interval(), Duration::from_millis(500));
+/// assert!(SubscriptionLoopOptions::new(Duration::ZERO).is_err());
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SubscriptionLoopOptions {
     poll_interval: Duration,

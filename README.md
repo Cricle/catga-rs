@@ -14,6 +14,7 @@ your control.
 | If you need to… | Start here | Then add |
 | --- | --- | --- |
 | Send a typed command or query in one process | [`mediator`](examples/src/bin/mediator.rs) | `catga-core` handlers and optional pipelines |
+| Maximum-throughput dispatch (zero allocation) | [`typed_mediator`](examples/src/bin/typed_mediator.rs) | `catga_typed_mediator!` for compile-time monomorphized dispatch |
 | Run a compensating sequence of local steps | [`flow`](examples/src/bin/flow.rs) | `catga-flow` and a durable `FlowStore` when restarts matter |
 | Publish and acknowledge messages locally | [`memory_transport`](examples/src/bin/memory_transport.rs) | NATS, Redis, RobustMQ, or an application transport implementation |
 | Build a complete HTTP checkout service | [`order_service`](examples/src/bin/order_service.rs) | durable stores, outbox worker, and a production cluster deployment |
@@ -47,6 +48,7 @@ The repository keeps the introductory programs small and runnable:
 
 ```bash
 cargo run -p catga-examples --bin mediator
+cargo run -p catga-examples --bin typed_mediator
 cargo run -p catga-examples --bin flow
 cargo run -p catga-examples --bin memory_transport
 cargo run -p catga-examples --bin order_service
@@ -96,6 +98,143 @@ delivery acknowledgement, lifecycle-drain tracking, bounded telemetry, or
 typed error contract. The outbox row retains 1MiB of payload plus record and
 index metadata. Run `scripts/performance.sh --profile full` manually or from a
 release workflow to produce the JSON reports and complete Markdown total table.
+
+### Mediator dispatch micro-benchmarks
+
+The following numbers measure pure in-process dispatch with no tracing
+subscriber attached (the `span.is_disabled()` fast path). They reflect the
+Vec-slot registry optimization that replaced `HashMap<TypeId>` with a
+contiguous linear scan. Run locally with:
+
+```bash
+cargo test --release -p catga-tests --test mediator_pure_throughput -- --ignored --nocapture
+```
+
+| Path | Mode | Throughput | Avg latency |
+| --- | --- | ---: | ---: |
+| Request `send` | Concurrent (16 tasks) | 7.92 M msg/s | 126 ns |
+| Request `send` | Sequential | 3.53 M msg/s | 283 ns |
+| Request `send_batch` | 1024-batch, 64 concurrency | 2.48 M msg/s | 402 ns |
+| Event `publish` | Concurrent (16 tasks, 1 handler) | 9.68 M events/s | 103 ns |
+| Event `publish` | Sequential (1 handler) | 3.79 M events/s | 263 ns |
+| Event `publish` | Sequential (3 handlers fan-out) | 2.63 M events/s | 379 ns |
+
+Event publish is faster than request dispatch because it skips the response
+`Box<dyn Any>` downcast. The 3-handler fan-out adds ~30% overhead from two
+extra event clones.
+
+These were observed on a Windows 11 workstation (4 tokio worker threads,
+100,000 operations per measurement). They are not hardware-independent
+guarantees; use them as a relative baseline for regression detection.
+
+### Typed mediator (zero-allocation dispatch)
+
+`catga_typed_mediator!` generates a concrete struct with typed handler fields.
+Dispatch is monomorphized per message type at compile time — no `Box<dyn Any>`,
+no `downcast`, no vtable indirection. Use it on the hot path when the handler
+set is known at startup:
+
+```rust,ignore
+catga_typed_mediator! {
+    pub struct AppMediator;
+    request GetOrder => GetOrderHandler;
+    command ShipOrder => ShipOrderHandler;
+    event OrderCreated => [ProjectionHandler, AuditHandler];
+}
+
+let mediator = AppMediator::new(
+    GetOrderHandler,
+    ShipOrderHandler,
+    [ProjectionHandler, AuditHandler],
+);
+let order = mediator.send(GetOrder { id: 1 }).await?;
+```
+
+| Path | Mode | Throughput | Avg latency |
+| --- | --- | ---: | ---: |
+| Request `send` | Concurrent (16 tasks) | 55.73 M msg/s | 17 ns |
+| Request `send` | Sequential | 20.34 M msg/s | 49 ns |
+| Event `publish` | Sequential (1 handler) | 16.18 M events/s | 61 ns |
+
+Compared to the dynamic `Mediator` (Vec-slot registry), the typed mediator is
+5.8× faster sequential and 7.0× faster concurrent. The dynamic mediator remains
+the right choice when handlers are registered at runtime or when `Arc<Mediator>`
+must be shared across heterogeneous boundaries.
+
+### Flow and workflow benchmarks
+
+| Benchmark | Throughput | Notes |
+| --- | ---: | --- |
+| Local Flow (3 steps) | 1,555,640 flows/s | Compensating sequence, in-memory |
+| Local DSL Flow (3 steps) | 601,195 flows/s | Typed DSL with state threading |
+| CQRS + Flow + transport workflow | 447,587 workflows/s | End-to-end critical path |
+| NATS JetStream publish/receive/ack | 1,436 msg/s | Durable, 256B payload, Podman |
+
+Run all benchmarks:
+
+```bash
+cargo test --release -p catga-tests --test mediator_pure_throughput --test typed_mediator_bench --test flow_performance --test critical_path_performance -- --ignored --nocapture
+```
+
+### Why the network database rows look slow
+
+The FlowStore lifecycle (create + read + optimistic update) is dominated by
+**per-commit durability fsync**, not client overhead. The client already issues
+the minimal statements: the optimistic update is a single conditional `UPDATE`
+with no pre-read round trip (a contract checked by `tests/performance_workflow.rs`).
+
+Every SQL backend flushes its write-ahead or redo log to disk on each commit in
+its default configuration (MySQL `innodb_flush_log_at_trx_commit=1`, PostgreSQL
+`synchronous_commit=on`, SQL Server full recovery with a per-commit log flush).
+On a virtualized or shared disk that flush costs roughly 1-10ms, which caps
+serial (concurrency=1) throughput. Redis avoids it because its persistence is
+asynchronous, and SQLite avoids it because the WAL journal only syncs on
+checkpoint.
+
+The serial number is a worst case, not the deployment reality. Two observations
+isolate the fsync cost. All Catga SQL store constructors now enable SQLite WAL
+with `synchronous=NORMAL`, and the same-host SQLite FlowStore lifecycle rises
+from ~416 to ~2,100 ops/s (about 5x) purely from skipping the per-commit fsync.
+Disabling durability on the network databases (a diagnostic, not a
+recommendation) confirms the same cause:
+
+| Backend | Durable default (c=1) | Durability disabled (c=1) | Isolated fsync cost |
+| --- | ---: | ---: | ---: |
+| MySQL | 85 ops/s | 424 ops/s (`innodb_flush_log_at_trx_commit=2`, `sync_binlog=0`) | ~5x |
+| PostgreSQL | 219 ops/s | 577 ops/s (`synchronous_commit=off`) | ~2.6x |
+
+### Durability need not be sacrificed
+
+The fsync cost is amortized, not eliminated, by the levers below; all of them
+keep every commit fully durable.
+
+- **Concurrency drives database group commit.** The engine coalesces the fsyncs
+  of concurrent transactions into fewer disk syncs. Measured with full
+  durability at concurrency=16, MySQL reaches ~547 ops/s and PostgreSQL ~1,591
+  ops/s — both *higher* than the durability-disabled serial numbers above. Real
+  workloads run many concurrent flow workers, so they benefit from this without
+  any configuration change.
+- **Batch writes into fewer transactions.** Committing N flow-state changes in
+  one transaction pays one fsync for all N records. This is the application-level
+  lever for low-concurrency writers and preserves durability completely.
+- **Tune group commit, still durably.** PostgreSQL `commit_delay`/`commit_siblings`
+  and MySQL `binlog_group_commit_sync_delay` briefly wait to merge more fsyncs,
+  trading a little latency for throughput with no loss of durability.
+- **Use faster durable storage.** NVMe with a battery-backed write-back cache
+  makes each fsync microseconds instead of milliseconds while remaining
+  power-loss safe. The virtualized disk under a local podman/WSL VM is the main
+  reason the local numbers above are far below a production NVMe host.
+
+Relaxing durability (the diagnostic table) is therefore a last resort, not the
+intended tuning path. To reproduce these numbers locally with podman (no Docker
+Desktop required), use:
+
+```powershell
+# Durable defaults for every backend.
+./scripts/performance-local.ps1
+# Reproduce the fsync-isolation experiment for MySQL and PostgreSQL.
+./scripts/performance-local.ps1 -Backends postgres,mysql -RelaxedDurability
+```
 
 ## Quick start
 

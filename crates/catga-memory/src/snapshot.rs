@@ -6,6 +6,13 @@ use catga_core::{CatgaError, CatgaResult, ErrorCode, Snapshot, SnapshotStore};
 use dashmap::DashMap;
 
 /// A lock-free, single-latest-snapshot store for development and deterministic tests.
+///
+/// ```
+/// use catga_memory::MemorySnapshots;
+///
+/// let store = MemorySnapshots::default();
+/// # let _ = store;
+/// ```
 #[derive(Default)]
 pub struct MemorySnapshots {
     streams: DashMap<Box<str>, Arc<MemorySnapshotSlot>>,

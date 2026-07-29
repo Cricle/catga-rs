@@ -21,6 +21,18 @@ pub const MAX_TRACEPARENT_BYTES: usize = 512;
 /// The context intentionally retains only the W3C header values. It neither
 /// installs an OpenTelemetry provider nor uses mutable global state, allowing
 /// applications to choose their own tracing/exporter integration.
+///
+/// ```
+/// use catga_core::TraceContext;
+///
+/// let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+/// let context = TraceContext::parse(parent, Some("congo=t61rcWkgMzE")).expect("valid");
+/// assert_eq!(context.traceparent(), parent);
+/// assert_eq!(context.tracestate(), Some("congo=t61rcWkgMzE"));
+///
+/// // Invalid traceparent is rejected.
+/// assert!(TraceContext::parse("invalid", None).is_none());
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceContext {
     traceparent: Box<str>,
@@ -90,6 +102,22 @@ impl TraceContext {
             entries.push((TRACESTATE_HEADER, tracestate));
         }
         EnvelopeHeaders::try_new(entries)
+    }
+
+    /// Converts this validated trace context directly into a [`crate::TransportContext`] for scoping.
+    ///
+    /// This avoids the intermediate `Vec` allocation of [`Self::inject_into_envelope_headers`]
+    /// when no pre-existing headers need merging. It is the fastest path for HTTP boundaries
+    /// that only carry W3C trace headers.
+    pub fn to_transport_context(&self) -> CatgaResult<crate::TransportContext> {
+        let headers = match self.tracestate() {
+            Some(tracestate) => EnvelopeHeaders::try_new([
+                (TRACEPARENT_HEADER, self.traceparent()),
+                (TRACESTATE_HEADER, tracestate),
+            ])?,
+            None => EnvelopeHeaders::try_new([(TRACEPARENT_HEADER, self.traceparent())])?,
+        };
+        Ok(crate::TransportContext::from_headers(headers))
     }
 }
 

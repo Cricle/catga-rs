@@ -648,11 +648,14 @@ dependencies = [
  "catga-cluster",
  "catga-core",
  "futures",
+ "http",
  "protobuf",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]

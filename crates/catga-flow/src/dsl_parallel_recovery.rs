@@ -9,10 +9,9 @@ use tokio::sync::Mutex;
 
 use crate::{
     DslFlow, DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore,
-    dsl::MAX_DSL_PARALLEL_BRANCHES,
-    dsl::{CloneState, Merge},
     dsl_checkpoint::{CheckpointFrame, CheckpointLevel, CheckpointWork, ParallelBranchProgress},
     dsl_recovery::{CheckpointContext, persist_checkpoint_payload},
+    dsl_step::{CloneState, MAX_DSL_PARALLEL_BRANCHES, Merge},
 };
 
 const MAX_PARALLEL_BRANCH_PAYLOAD_BYTES: usize = 1024 * 1024;

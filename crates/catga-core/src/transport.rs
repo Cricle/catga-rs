@@ -14,6 +14,14 @@ pub const DEFAULT_TRANSPORT_BATCH_CONCURRENCY: usize = 100;
 /// backend's configured topic operation, whereas sending to a destination is a durable queue
 /// operation.  Construct values with [`Self::parse`] so invalid names become
 /// [`ErrorCode::Validation`] instead of an unchecked backend request.
+///
+/// ```
+/// use catga_core::Destination;
+///
+/// let dest = Destination::parse("order-queue").expect("valid name");
+/// assert_eq!(dest.as_str(), "order-queue");
+/// assert!(Destination::parse("  ").is_err());
+/// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Destination(Box<str>);
 

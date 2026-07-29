@@ -11,6 +11,10 @@ const DEFAULT_ELECTION_TIMEOUT_MS: u64 = 150;
 const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 50;
 
 /// Validated tick-derived Raft timing used to build a node and runtime.
+///
+/// Obtain a timing through [`RaftClusterConfig::raft_timing`] or
+/// [`RaftClusterConfig::open_node`]; direct construction is intentionally
+/// not public so timing validation remains centralized.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RaftTiming {
     tick_interval: Duration,

@@ -42,6 +42,16 @@ pub trait SnapshotStrategy: Send + Sync {
 }
 
 /// Takes a snapshot after a fixed number of newly applied events.
+///
+/// ```
+/// use catga_core::{EventCountSnapshotStrategy, SnapshotStrategy};
+///
+/// let strategy = EventCountSnapshotStrategy::new(10).expect("nonzero interval");
+/// assert_eq!(strategy.interval().get(), 10);
+/// assert!(!strategy.should_snapshot(5, 0));
+/// assert!(strategy.should_snapshot(10, 0));
+/// assert!(strategy.should_snapshot(15, 5));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EventCountSnapshotStrategy {
     interval: NonZeroUsize,
@@ -67,6 +77,16 @@ impl SnapshotStrategy for EventCountSnapshotStrategy {
 }
 
 /// Decides whether a snapshot is due after a fixed elapsed interval.
+///
+/// ```
+/// use std::time::{Duration, SystemTime};
+/// use catga_core::TimeBasedSnapshotStrategy;
+///
+/// let strategy = TimeBasedSnapshotStrategy::new(Duration::from_secs(60));
+/// let base = SystemTime::UNIX_EPOCH;
+/// assert!(!strategy.should_snapshot(base, base + Duration::from_secs(30)));
+/// assert!(strategy.should_snapshot(base, base + Duration::from_secs(60)));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TimeBasedSnapshotStrategy {
     interval: Duration,
@@ -89,6 +109,23 @@ impl TimeBasedSnapshotStrategy {
 }
 
 /// Combines event-count and elapsed-time snapshot decisions.
+///
+/// ```
+/// use std::time::{Duration, SystemTime};
+/// use catga_core::{CompositeSnapshotStrategy, EventCountSnapshotStrategy, TimeBasedSnapshotStrategy};
+///
+/// let events = EventCountSnapshotStrategy::new(100).expect("nonzero");
+/// let time = TimeBasedSnapshotStrategy::new(Duration::from_secs(30));
+/// let composite = CompositeSnapshotStrategy::new(events, time);
+///
+/// let base = SystemTime::UNIX_EPOCH;
+/// // Neither threshold met.
+/// assert!(!composite.should_snapshot(5, 0, base, base + Duration::from_secs(10)));
+/// // Time threshold met.
+/// assert!(composite.should_snapshot(5, 0, base, base + Duration::from_secs(30)));
+/// // Event threshold met.
+/// assert!(composite.should_snapshot(100, 0, base, base));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompositeSnapshotStrategy {
     events: EventCountSnapshotStrategy,

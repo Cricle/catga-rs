@@ -9,6 +9,15 @@ use crate::{CatgaResult, EventStore, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent};
 const DEFAULT_BATCH_SIZE: usize = 256;
 
 /// The durable progress of one projection over one event stream.
+///
+/// ```
+/// use catga_core::ProjectionCheckpoint;
+///
+/// let checkpoint = ProjectionCheckpoint::new("order-totals", "stream-42", 10);
+/// assert_eq!(checkpoint.projection_name(), "order-totals");
+/// assert_eq!(checkpoint.stream_id(), "stream-42");
+/// assert_eq!(checkpoint.version(), 10);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectionCheckpoint {
     projection_name: Box<str>,

@@ -33,6 +33,13 @@ pub struct Mediator {
 /// then call [`Self::bind`] once.  Successful dispatch reads a completed [`OnceLock`] and adds no
 /// allocation, mutex, or global lookup.  Calling [`Self::send`], [`Self::send_command`], or
 /// [`Self::publish`] before binding returns [`ErrorCode::Unavailable`].
+///
+/// ```
+/// use catga_core::MediatorHandle;
+///
+/// let handle = MediatorHandle::new();
+/// assert!(!handle.is_bound());
+/// ```
 #[derive(Clone, Default)]
 pub struct MediatorHandle {
     mediator: Arc<OnceLock<Arc<Mediator>>>,
@@ -135,6 +142,9 @@ impl Mediator {
     pub async fn send<M: Request>(&self, message: M) -> CatgaResult<M::Response> {
         let request_type = std::any::type_name::<M>();
         let span = observability::request_span(request_type);
+        if span.is_disabled() {
+            return isolate_mediator_panic(Self::dispatch(&self.registry, message)).await;
+        }
         observability::record_message_tags(&span, &message);
         let started = Instant::now();
         let result = isolate_mediator_panic(
@@ -168,6 +178,9 @@ impl Mediator {
     pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
         let command_type = std::any::type_name::<C>();
         let span = observability::command_span(command_type);
+        if span.is_disabled() {
+            return isolate_mediator_panic(Self::dispatch_command(&self.registry, command)).await;
+        }
         observability::record_message_tags(&span, &command);
         let started = Instant::now();
         let result = isolate_mediator_panic(
@@ -336,10 +349,15 @@ impl Mediator {
     }
 
     async fn dispatch<M: Request>(registry: &Registry, message: M) -> CatgaResult<M::Response> {
-        let handler = registry.requests.get(&TypeId::of::<M>()).ok_or_else(|| {
-            CatgaError::new(ErrorCode::NotFound, "request handler is not registered")
-        })?;
-        let response = handler.handle(Box::new(message)).await?;
+        let type_id = TypeId::of::<M>();
+        let slot = registry
+            .requests
+            .iter()
+            .find(|slot| slot.type_id == type_id)
+            .ok_or_else(|| {
+                CatgaError::new(ErrorCode::NotFound, "request handler is not registered")
+            })?;
+        let response = slot.handler.handle(Box::new(message)).await?;
         response
             .downcast::<M::Response>()
             .map(|response| *response)
@@ -352,10 +370,15 @@ impl Mediator {
     }
 
     async fn dispatch_command<C: Command>(registry: &Registry, command: C) -> CatgaResult<()> {
-        let handler = registry.commands.get(&TypeId::of::<C>()).ok_or_else(|| {
-            CatgaError::new(ErrorCode::NotFound, "command handler is not registered")
-        })?;
-        handler.handle(Box::new(command)).await
+        let type_id = TypeId::of::<C>();
+        let slot = registry
+            .commands
+            .iter()
+            .find(|slot| slot.type_id == type_id)
+            .ok_or_else(|| {
+                CatgaError::new(ErrorCode::NotFound, "command handler is not registered")
+            })?;
+        slot.handler.handle(Box::new(command)).await
     }
 
     /// Routes a bounded request batch concurrently while preserving input order.
@@ -363,6 +386,9 @@ impl Mediator {
     /// This method retains every response in its returned vector, so it accepts at most
     /// [`MAX_MEDIATOR_BATCH_SIZE`] messages. Larger inputs return [`ErrorCode::Validation`]
     /// before any request is dispatched; use [`Self::send_stream`] for unbounded producers.
+    ///
+    /// Batch dispatch bypasses per-message observability spans for throughput; a single
+    /// batch-level span covers the entire operation when a subscriber is active.
     pub async fn send_batch<M>(
         &self,
         messages: impl IntoIterator<Item = M>,
@@ -392,8 +418,9 @@ impl Mediator {
             ));
         }
 
+        let registry = &self.registry;
         Ok(stream::iter(bounded)
-            .map(|message| self.send(message))
+            .map(|message| isolate_mediator_panic(Self::dispatch(registry, message)))
             .buffered(concurrency_limit)
             .collect()
             .await)
@@ -465,39 +492,59 @@ impl Mediator {
             ));
         }
         let event_type = std::any::type_name::<E>();
+        let event_type_id = TypeId::of::<E>();
         let handler_count = self
             .registry
             .events
-            .get(&TypeId::of::<E>())
-            .map_or(0, Vec::len);
+            .iter()
+            .find(|slot| slot.type_id == event_type_id)
+            .map_or(0, |slot| slot.handlers.len());
         let span = observability::event_span(event_type, handler_count);
+        if span.is_disabled() {
+            return self
+                .publish_concurrency_inner(event, event_type_id, concurrency_limit)
+                .await;
+        }
         observability::record_message_tags(&span, &event);
         let started = Instant::now();
-        let result = async {
-            let Some(handlers) = self.registry.events.get(&TypeId::of::<E>()) else {
-                return Ok(());
-            };
-            let mut deliveries = stream::iter(handlers.iter())
-                .map(|handler| {
-                    isolate_mediator_panic(
-                        handler.handle(Box::new(event.clone()) as Box<dyn Any + Send>),
-                    )
-                })
-                .buffer_unordered(concurrency_limit);
-            let mut first_error = None;
-            while let Some(result) = deliveries.next().await {
-                if let Err(error) = result
-                    && first_error.is_none()
-                {
-                    first_error = Some(error);
-                }
-            }
-            first_error.map_or(Ok(()), Err)
-        }
-        .instrument(span.clone())
-        .await;
+        let result = self
+            .publish_concurrency_inner(event, event_type_id, concurrency_limit)
+            .instrument(span.clone())
+            .await;
         observability::record_event(&span, event_type, started.elapsed(), &result);
         result
+    }
+
+    async fn publish_concurrency_inner<E: Event>(
+        &self,
+        event: E,
+        event_type_id: TypeId,
+        concurrency_limit: usize,
+    ) -> CatgaResult<()> {
+        let Some(slot) = self
+            .registry
+            .events
+            .iter()
+            .find(|slot| slot.type_id == event_type_id)
+        else {
+            return Ok(());
+        };
+        let mut deliveries = stream::iter(slot.handlers.iter())
+            .map(|handler| {
+                isolate_mediator_panic(
+                    handler.handle(Box::new(event.clone()) as Box<dyn Any + Send>),
+                )
+            })
+            .buffer_unordered(concurrency_limit);
+        let mut first_error = None;
+        while let Some(result) = deliveries.next().await {
+            if let Err(error) = result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Delivers an event to every registered handler in registration order.
@@ -507,48 +554,59 @@ impl Mediator {
     /// instance into its handler, avoiding an unnecessary clone for the common small fan-out.
     pub async fn publish<E: Event>(&self, event: E) -> CatgaResult<()> {
         let event_type = std::any::type_name::<E>();
+        let event_type_id = TypeId::of::<E>();
         let handler_count = self
             .registry
             .events
-            .get(&TypeId::of::<E>())
-            .map_or(0, Vec::len);
+            .iter()
+            .find(|slot| slot.type_id == event_type_id)
+            .map_or(0, |slot| slot.handlers.len());
         let span = observability::event_span(event_type, handler_count);
+        if span.is_disabled() {
+            return self.publish_inner(event).await;
+        }
         observability::record_message_tags(&span, &event);
         let started = Instant::now();
-        let result = async {
-            if let Some(handlers) = self.registry.events.get(&TypeId::of::<E>()) {
-                let Some((last_handler, preceding_handlers)) = handlers.split_last() else {
-                    return Ok(());
-                };
-                let mut first_error = None;
-                for handler in preceding_handlers {
-                    if let Err(error) = isolate_mediator_panic(
-                        handler.handle(Box::new(event.clone()) as Box<dyn Any + Send>),
-                    )
-                    .await
-                        && first_error.is_none()
-                    {
-                        first_error = Some(error);
-                    }
-                }
+        let result = self.publish_inner(event).instrument(span.clone()).await;
+        observability::record_event(&span, event_type, started.elapsed(), &result);
+        result
+    }
+
+    async fn publish_inner<E: Event>(&self, event: E) -> CatgaResult<()> {
+        let event_type_id = TypeId::of::<E>();
+        if let Some(slot) = self
+            .registry
+            .events
+            .iter()
+            .find(|slot| slot.type_id == event_type_id)
+        {
+            let handlers = &slot.handlers;
+            let Some((last_handler, preceding_handlers)) = handlers.split_last() else {
+                return Ok(());
+            };
+            let mut first_error = None;
+            for handler in preceding_handlers {
                 if let Err(error) = isolate_mediator_panic(
-                    last_handler.handle(Box::new(event) as Box<dyn Any + Send>),
+                    handler.handle(Box::new(event.clone()) as Box<dyn Any + Send>),
                 )
                 .await
                     && first_error.is_none()
                 {
                     first_error = Some(error);
                 }
-                if let Some(error) = first_error {
-                    return Err(error);
-                }
             }
-            Ok(())
+            if let Err(error) =
+                isolate_mediator_panic(last_handler.handle(Box::new(event) as Box<dyn Any + Send>))
+                    .await
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+            if let Some(error) = first_error {
+                return Err(error);
+            }
         }
-        .instrument(span.clone())
-        .await;
-        observability::record_event(&span, event_type, started.elapsed(), &result);
-        result
+        Ok(())
     }
 
     /// Delivers an event while making `cancellation` available to every handler.

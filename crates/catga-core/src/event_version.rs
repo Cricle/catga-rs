@@ -33,6 +33,14 @@ struct VersionRules {
 }
 
 /// A copy-on-write schema-upgrade registry with lock-free upgrade reads.
+///
+/// ```
+/// use catga_core::EventVersionRegistry;
+///
+/// let registry = EventVersionRegistry::default();
+/// // No upgraders registered; current version defaults to 1.
+/// assert_eq!(registry.current_version("orders::OrderCreated"), 1);
+/// ```
 pub struct EventVersionRegistry {
     rules: ArcSwap<VersionRules>,
 }

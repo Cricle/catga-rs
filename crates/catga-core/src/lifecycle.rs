@@ -46,6 +46,15 @@ pub trait Stoppable: Send + Sync {
 ///
 /// Stopping is one-way for the lifetime of a value. It does not cancel work that was already
 /// accepted, allowing callers to combine this gate with [`Waitable`] for graceful shutdown.
+///
+/// ```
+/// use catga_core::{AcceptanceGate, Stoppable};
+///
+/// let gate = AcceptanceGate::default();
+/// assert!(gate.is_accepting());
+/// gate.stop_accepting();
+/// assert!(!gate.is_accepting());
+/// ```
 #[derive(Clone, Debug)]
 pub struct AcceptanceGate {
     accepting: Arc<AtomicBool>,

@@ -43,8 +43,11 @@ fn performance_runner_publishes_a_total_table_with_memory_metrics() {
         PERFORMANCE_RUNNER.contains("summary.md"),
         "performance runner must publish a Markdown total table"
     );
+    // performance.sh may be checked out with CRLF line endings on Windows; compare on a
+    // normalized view so the assertion is platform-independent.
+    let runner = PERFORMANCE_RUNNER.replace("\r\n", "\n");
     assert!(
-        PERFORMANCE_RUNNER.contains("  ][],\n  ("),
+        runner.contains("  ][],\n  ("),
         "the Markdown header must be emitted as lines rather than a JSON array"
     );
     for report in [

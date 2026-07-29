@@ -315,6 +315,79 @@ async fn mssql_flow_store_and_nats_transport_round_trip() -> CatgaResult<()> {
     transport.ack(delivery).await
 }
 
+#[tokio::test]
+#[ignore = "requires a real MySQL service"]
+async fn mysql_flow_store_create_batch_is_transactional() -> CatgaResult<()> {
+    let Some(mysql_url) = service_url("CATGA_MYSQL_URL")? else {
+        return Ok(());
+    };
+    let store = SqlFlowStore::connect_mysql(&mysql_url).await?;
+    store.migrate().await?;
+    assert_create_batch_contract(&store, &unique_suffix("mysql_batch")).await
+}
+
+#[tokio::test]
+#[ignore = "requires a real PostgreSQL service"]
+async fn postgres_flow_store_create_batch_is_transactional() -> CatgaResult<()> {
+    let Some(postgres_url) = service_url("CATGA_POSTGRES_URL")? else {
+        return Ok(());
+    };
+    let store = SqlFlowStore::connect_postgres(&postgres_url).await?;
+    store.migrate().await?;
+    assert_create_batch_contract(&store, &unique_suffix("postgres_batch")).await
+}
+
+#[tokio::test]
+#[ignore = "requires a real SQL Server service"]
+async fn mssql_flow_store_create_batch_is_transactional() -> CatgaResult<()> {
+    let Some(mssql_url) = service_url("CATGA_MSSQL_URL")? else {
+        return Ok(());
+    };
+    let _schema_guard = mssql_schema_lock().lock().await;
+    let store = SqlFlowStore::connect_mssql(&mssql_url).await?;
+    store.migrate().await?;
+    assert_create_batch_contract(&store, &unique_suffix("mssql_batch")).await
+}
+
+/// Exercises the shared [`FlowStore::create_batch`] contract against one live backend.
+async fn assert_create_batch_contract<S>(store: &S, tag: &str) -> CatgaResult<()>
+where
+    S: FlowStore + ?Sized,
+{
+    let states: Vec<FlowState> = (0..8)
+        .map(|sequence| {
+            FlowState::new(
+                format!("batch-{tag}-{sequence}").as_str(),
+                "cross-backend-batch",
+                format!("payload-{sequence}").into_bytes(),
+                "batch-node",
+            )
+        })
+        .collect();
+
+    let created = store.create_batch(states.clone()).await?;
+    assert_eq!(created.len(), states.len());
+    assert!(created.iter().all(|was_created| *was_created));
+
+    let replayed = store.create_batch(states.clone()).await?;
+    assert!(replayed.iter().all(|was_created| !*was_created));
+
+    let extra_id = format!("batch-{tag}-extra");
+    let mixed = vec![
+        states[0].clone(),
+        FlowState::new(
+            extra_id.as_str(),
+            "cross-backend-batch",
+            b"extra".to_vec(),
+            "batch-node",
+        ),
+    ];
+    let mixed_created = store.create_batch(mixed).await?;
+    assert_eq!(mixed_created, vec![false, true]);
+    assert!(store.get(&extra_id).await?.is_some());
+    Ok(())
+}
+
 fn service_url(name: &str) -> CatgaResult<Option<String>> {
     match env::var(name) {
         Ok(value) if !value.trim().is_empty() => Ok(Some(value)),

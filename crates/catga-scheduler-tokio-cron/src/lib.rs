@@ -50,6 +50,17 @@ pub type JobId = uuid::Uuid;
 /// This adapter owns only the third-party scheduler. It does not persist jobs, install a signal
 /// handler, or infer when an application should start or stop. Use a storage-enabled upstream
 /// scheduler directly when cron job persistence is required.
+///
+/// ```no_run
+/// use catga_scheduler_tokio_cron::CronRuntime;
+///
+/// # async fn run() -> Result<(), catga_core::CatgaError> {
+/// let runtime = CronRuntime::new().await?;
+/// // Add jobs, then explicitly start.
+/// runtime.start().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct CronRuntime {
     scheduler: JobScheduler,
     task_registration: Mutex<TaskRegistration>,

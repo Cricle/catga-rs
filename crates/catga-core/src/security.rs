@@ -23,6 +23,16 @@ tokio::task_local! {
 }
 
 /// An immutable authenticated identity for the current asynchronous request chain.
+///
+/// ```
+/// use catga_core::SecurityIdentity;
+///
+/// let identity = SecurityIdentity::new("user-42", ["admin", "editor"]);
+/// assert_eq!(identity.subject(), "user-42");
+/// assert!(identity.has_role("Admin"));
+/// assert!(!identity.has_role("viewer"));
+/// assert!(identity.claims().as_slice().is_empty());
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SecurityIdentity {
     subject: Arc<str>,
@@ -272,6 +282,17 @@ pub async fn scope_security_identity<T>(
 }
 
 /// Static authorization requirements declared by a request type.
+///
+/// ```
+/// use catga_core::AuthorizationRequirements;
+///
+/// let reqs = AuthorizationRequirements::with_roles(&["admin", "editor"]);
+/// assert_eq!(reqs.roles(), &["admin", "editor"]);
+/// assert!(reqs.policy().is_none());
+///
+/// let policy_reqs = AuthorizationRequirements::with_policy("billing");
+/// assert_eq!(policy_reqs.policy(), Some("billing"));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthorizationRequirements {
     roles: &'static [&'static str],

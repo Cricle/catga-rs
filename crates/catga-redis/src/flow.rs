@@ -65,6 +65,11 @@ pub struct RedisFlows {
     connection: ConnectionManager,
     prefix: Box<str>,
     codec: MemoryPackCodec,
+    /// Pre-hashed lifecycle scripts; avoids recomputing the SHA-1 digest on every call.
+    create_script: Script,
+    update_script: Script,
+    claim_script: Script,
+    heartbeat_script: Script,
 }
 
 impl RedisFlows {
@@ -82,6 +87,10 @@ impl RedisFlows {
             connection,
             prefix: prefix.into(),
             codec: MemoryPackCodec::new(FlowState::memorypack_decode_limits()?),
+            create_script: Script::new(CREATE),
+            update_script: Script::new(UPDATE),
+            claim_script: Script::new(CLAIM),
+            heartbeat_script: Script::new(HEARTBEAT),
         })
     }
 
@@ -112,7 +121,8 @@ impl FlowStore for RedisFlows {
     async fn create(&self, state: FlowState) -> CatgaResult<bool> {
         let (value, heartbeat, status, owner, indexed) = self.fields(&state)?;
         let mut connection = self.connection.clone();
-        let created: i64 = Script::new(CREATE)
+        let created: i64 = self
+            .create_script
             .key(self.record_key(state.id()))
             .key(self.index_key(state.flow_type()))
             .arg(state.version())
@@ -134,7 +144,8 @@ impl FlowStore for RedisFlows {
         }
         let (value, heartbeat, status, owner, indexed) = self.fields(&next)?;
         let mut connection = self.connection.clone();
-        let updated: i64 = Script::new(UPDATE)
+        let updated: i64 = self
+            .update_script
             .key(self.record_key(next.id()))
             .key(self.index_key(next.flow_type()))
             .arg(expected_version)
@@ -190,7 +201,8 @@ impl FlowStore for RedisFlows {
             }
             let next = current.clone().claimed_by(owner).next_version()?;
             let (next_value, heartbeat, status, next_owner, _) = self.fields(&next)?;
-            let claimed: i64 = Script::new(CLAIM)
+            let claimed: i64 = self
+                .claim_script
                 .key(&key)
                 .key(&index)
                 .arg(current.version())
@@ -221,7 +233,8 @@ impl FlowStore for RedisFlows {
         let next = current.heartbeated_at(SystemTime::now());
         let (value, heartbeat, _, _, _) = self.fields(&next)?;
         let mut connection = self.connection.clone();
-        let updated: i64 = Script::new(HEARTBEAT)
+        let updated: i64 = self
+            .heartbeat_script
             .key(self.record_key(id))
             .key(self.index_key(next.flow_type()))
             .arg(version)

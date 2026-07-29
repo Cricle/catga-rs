@@ -7,6 +7,15 @@ use async_trait::async_trait;
 use crate::CatgaResult;
 
 /// An immutable, versioned state snapshot for one event stream.
+///
+/// ```
+/// use catga_core::Snapshot;
+///
+/// let snapshot = Snapshot::new("order-42", vec![1, 2, 3], 5);
+/// assert_eq!(snapshot.stream_id(), "order-42");
+/// assert_eq!(snapshot.version(), 5);
+/// assert_eq!(snapshot.state(), &vec![1, 2, 3]);
+/// ```
 #[derive(Clone, Debug)]
 pub struct Snapshot<S> {
     stream_id: Box<str>,

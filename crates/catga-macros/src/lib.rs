@@ -11,6 +11,7 @@ use syn::{
 };
 
 mod handlers;
+mod typed_mediator;
 
 /// Implements `catga_core::Message` with the fully qualified, monomorphized Rust type name.
 ///
@@ -742,6 +743,37 @@ fn batch_key_impl(input: &DeriveInput, generics: &Generics) -> Result<Option<Tok
 #[proc_macro]
 pub fn catga_handlers(input: TokenStream) -> TokenStream {
     handlers::expand(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Generates a fully monomorphized mediator struct with zero-allocation dispatch.
+///
+/// Unlike `catga_handlers!` which builds a type-erased `Registry`, this macro generates a
+/// concrete struct where each handler is stored as a typed field. Dispatch goes through
+/// sealed traits that the compiler monomorphizes per message type — no `Box<dyn Any>`,
+/// no `downcast`, no vtable indirection on the hot path.
+///
+/// # Example
+///
+/// ```ignore
+/// catga_typed_mediator! {
+///     pub struct AppMediator;
+///     request GetOrder => GetOrderHandler;
+///     command ShipOrder => ShipOrderHandler;
+///     event OrderCreated => [ProjectionHandler, AuditHandler];
+/// }
+///
+/// let mediator = AppMediator::new(
+///     GetOrderHandler,
+///     ShipOrderHandler,
+///     [ProjectionHandler, AuditHandler],
+/// );
+/// let order = mediator.send(GetOrder { id: 1 }).await?;
+/// ```
+#[proc_macro]
+pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
+    typed_mediator::expand(input.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

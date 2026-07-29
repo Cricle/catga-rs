@@ -44,6 +44,18 @@ impl EnvelopeHeader {
 /// envelope that contains them only increments the shared reference count;
 /// no key or value string is copied. Construct values with [`Self::try_new`]
 /// so duplicate keys and resource limits are rejected before transport work.
+///
+/// ```
+/// use catga_core::EnvelopeHeaders;
+///
+/// let headers = EnvelopeHeaders::try_new([
+///     ("tenant", "acme"),
+///     ("region", "eu-west"),
+/// ]).expect("valid headers");
+/// assert_eq!(headers.get("tenant"), Some("acme"));
+/// assert_eq!(headers.len(), 2);
+/// assert!(headers.get("missing").is_none());
+/// ```
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EnvelopeHeaders(Arc<[EnvelopeHeader]>);
 

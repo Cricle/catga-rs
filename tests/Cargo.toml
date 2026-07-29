@@ -52,6 +52,10 @@ name = "documentation"
 path = "documentation.rs"
 
 [[test]]
+name = "flow_store_batch"
+path = "flow_store_batch.rs"
+
+[[test]]
 name = "examples"
 path = "examples.rs"
 
@@ -106,6 +110,10 @@ path = "raft_config.rs"
 [[test]]
 name = "axum"
 path = "axum.rs"
+
+[[test]]
+name = "axum_composable"
+path = "axum_composable.rs"
 
 [[test]]
 name = "application"
@@ -410,3 +418,35 @@ path = "flow/wait_policies.rs"
 [[test]]
 name = "flow_recovery"
 path = "flow/recovery.rs"
+
+[[test]]
+name = "cross_cqrs_flow"
+path = "cross_cqrs_flow.rs"
+
+[[test]]
+name = "cross_cqrs_raft"
+path = "cross_cqrs_raft.rs"
+
+[[test]]
+name = "cross_flow_raft"
+path = "cross_flow_raft.rs"
+
+[[test]]
+name = "cross_cqrs_flow_outbox"
+path = "cross_cqrs_flow_outbox.rs"
+
+[[test]]
+name = "cross_flow_subscription"
+path = "cross_flow_subscription.rs"
+
+[[test]]
+name = "mediator_pure_throughput"
+path = "mediator_pure_throughput.rs"
+
+[[test]]
+name = "dispatch_table"
+path = "dispatch_table.rs"
+
+[[test]]
+name = "typed_mediator_bench"
+path = "typed_mediator_bench.rs"

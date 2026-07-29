@@ -26,6 +26,14 @@ pub const MAX_DEAD_LETTER_DESCRIPTION_BYTES: usize = 1_024;
 pub const MAX_DEAD_LETTER_STAGE_BYTES: usize = 64;
 
 /// Validates a completed-record retention duration.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_core::validate_completed_retention;
+///
+/// assert!(validate_completed_retention(Duration::from_secs(3600)).is_ok());
+/// assert!(validate_completed_retention(Duration::ZERO).is_err());
+/// ```
 pub fn validate_completed_retention(retention: Duration) -> CatgaResult<()> {
     if retention.is_zero() {
         return Err(CatgaError::new(

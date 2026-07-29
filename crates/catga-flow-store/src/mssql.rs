@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{FlowState, FlowStatus};
+use catga_flow::{FlowState, FlowStatus, validate_flow_batch_size};
 use tiberius::{Query, Row};
 
 use crate::{
@@ -175,6 +175,92 @@ pub(crate) async fn create(pool: &MssqlPool, state: FlowState) -> CatgaResult<bo
         return Ok(true);
     }
     collision_result(&mut connection, &key, state.id()).await
+}
+
+/// Inserts many flow states in one transaction so the whole batch pays a single log flush.
+pub(crate) async fn create_batch(
+    pool: &MssqlPool,
+    states: Vec<FlowState>,
+) -> CatgaResult<Vec<bool>> {
+    validate_flow_batch_size(states.len())?;
+    if states.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server batch connection", error))?;
+    connection
+        .simple_query("BEGIN TRANSACTION")
+        .await
+        .map_err(|error| database_error("begin SQL Server flow batch", error))?
+        .into_first_result()
+        .await
+        .map_err(|error| database_error("begin SQL Server flow batch", error))?;
+    let result = async {
+        let mut created = Vec::with_capacity(states.len());
+        for state in &states {
+            let key = flow_key(state.id());
+            let type_key = flow_key(state.flow_type());
+            let frame = encode_state(state)?;
+            let heartbeat = unix_millis(state.heartbeat())?;
+            let mut query = Query::new(
+                "IF NOT EXISTS (SELECT 1 FROM dbo.catga_flow_states WITH (UPDLOCK, HOLDLOCK) \
+                   WHERE flow_key = @P1) BEGIN \
+                   INSERT INTO dbo.catga_flow_states \
+                     (flow_key, flow_id, flow_type, flow_type_key, status, version, heartbeat_ms, revision, payload) \
+                   VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, 0, @P8); \
+                   SELECT CAST(1 AS BIGINT) AS inserted; END \
+                 ELSE SELECT CAST(0 AS BIGINT) AS inserted;",
+            );
+            query.bind(key.as_slice());
+            query.bind(state.id());
+            query.bind(state.flow_type());
+            query.bind(type_key.as_slice());
+            query.bind(status_code(state.status()));
+            query.bind(state.version());
+            query.bind(heartbeat);
+            query.bind(frame.as_slice());
+            let stream = query
+                .query(&mut connection)
+                .await
+                .map_err(|error| database_error("create SQL Server flow state in batch", error))?;
+            let row = stream
+                .into_row()
+                .await
+                .map_err(|error| database_error("read SQL Server batch create result", error))?
+                .ok_or_else(|| missing_column("SQL Server batch create result row"))?;
+            let inserted = required_i64(&row, "inserted", "SQL Server batch create result")? == 1;
+            if inserted {
+                created.push(true);
+            } else {
+                created.push(collision_result(&mut connection, &key, state.id()).await?);
+            }
+        }
+        Ok(created)
+    }
+    .await;
+    match result {
+        Ok(created) => {
+            connection
+                .simple_query("COMMIT TRANSACTION")
+                .await
+                .map_err(|error| database_error("commit SQL Server flow batch", error))?
+                .into_first_result()
+                .await
+                .map_err(|error| database_error("commit SQL Server flow batch", error))?;
+            Ok(created)
+        }
+        Err(error) => {
+            if let Ok(stream) = connection
+                .simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+                .await
+            {
+                let _ = stream.into_first_result().await;
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Loads one state by its fixed key and original identity.

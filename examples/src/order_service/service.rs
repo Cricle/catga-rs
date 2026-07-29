@@ -2,12 +2,16 @@
 
 use std::sync::{Arc, atomic::Ordering};
 
-use axum::{Json, Router, routing::get};
-use catga_axum::CatgaApplication;
+use axum::{
+    Json, Router,
+    extract::Path,
+    routing::{get, post},
+};
+use catga_axum::{CatgaHttpError, CorrelationLayer, MediatorState, TraceContextLayer};
 use catga_cluster::{MemoryCluster, MemoryClusterNode, cluster_health};
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, EventStore, MessageTransport, command_handler_with,
-    event_handler_with, request_handler_with,
+    CatgaError, CatgaResult, ErrorCode, EventStore, Mediator, MessageTransport, Registry,
+    command_handler_with, event_handler_with, request_handler_with,
 };
 use serde::{Deserialize, Serialize};
 
@@ -87,7 +91,7 @@ pub struct OrderServiceHealth {
 /// durable ones.
 #[derive(Clone)]
 pub struct OrderService {
-    application: CatgaApplication,
+    mediator: Arc<Mediator>,
     cluster: Arc<MemoryCluster>,
     node: Arc<MemoryClusterNode>,
     runtime: Arc<OrderRuntime>,
@@ -132,37 +136,57 @@ impl OrderService {
             Arc::clone(&node),
             options.accepts_payments,
         )?);
-        let application = catga_axum::catga_application! {
-            mediator_handle = runtime.mediator;
-            handlers {
-                request PlaceOrder => request_handler_with(Arc::clone(&runtime), super::checkout::place_order);
-                request GetOrder => request_handler_with(Arc::clone(&runtime), super::checkout::get_order);
-                command RecordOrder => command_handler_with(Arc::clone(&runtime), super::checkout::record_order);
-                event OrderCompleted => [event_handler_with(Arc::clone(&runtime), super::checkout::project_completed)];
-            }
-            routes {
-                requests { @post "/orders" => PlaceOrder }
-                events {}
-            }
-        }?;
+
+        // Explicit handler registration — no macro, no hidden discovery.
+        let mut registry = Registry::new();
+        registry.register_request::<PlaceOrder, _>(request_handler_with(
+            Arc::clone(&runtime),
+            super::checkout::place_order,
+        ))?;
+        registry.register_request::<GetOrder, _>(request_handler_with(
+            Arc::clone(&runtime),
+            super::checkout::get_order,
+        ))?;
+        registry.register_command::<RecordOrder, _>(command_handler_with(
+            Arc::clone(&runtime),
+            super::checkout::record_order,
+        ))?;
+        registry.register_event::<OrderCompleted, _>(event_handler_with(
+            Arc::clone(&runtime),
+            super::checkout::project_completed,
+        ));
+
+        let mediator = Arc::new(Mediator::new(registry));
+        runtime.mediator.bind(Arc::clone(&mediator))?;
+
         Ok(Self {
-            application,
+            mediator,
             cluster,
             node,
             runtime,
         })
     }
 
-    /// Builds the typed Axum API and the cluster readiness endpoint.
+    /// Builds the typed Axum API with composable layers and standard handlers.
+    ///
+    /// Routes use [`MediatorState`] extraction and [`CorrelationLayer`]/[`TraceContextLayer`]
+    /// for context propagation. No fixed path patterns or forced response formats.
     pub fn router(&self) -> CatgaResult<Router> {
         let service = self.clone();
-        Ok(self.application.router().route(
-            "/healthz",
-            get(move || {
-                let service = service.clone();
-                async move { Json(service.health()) }
-            }),
-        ))
+        let app = Router::new()
+            .route("/orders", post(place_order_handler))
+            .route("/orders/{id}", get(get_order_handler))
+            .route(
+                "/healthz",
+                get(move || {
+                    let service = service.clone();
+                    async move { Json(service.health()) }
+                }),
+            )
+            .layer(TraceContextLayer::new())
+            .layer(CorrelationLayer::new())
+            .with_state(Arc::clone(&self.mediator));
+        Ok(app)
     }
 
     /// Binds and runs the example's default Axum server.
@@ -281,4 +305,30 @@ impl OrderService {
 
 fn node_id(endpoint: &str) -> &str {
     endpoint.rsplit('/').next().unwrap_or(endpoint)
+}
+
+// ---------------------------------------------------------------------------
+// Standard Axum handlers using MediatorState extraction
+// ---------------------------------------------------------------------------
+
+/// POST /orders — places a new order through the mediator.
+async fn place_order_handler(
+    mediator: MediatorState,
+    Json(command): Json<PlaceOrder>,
+) -> Result<Json<OrderAccepted>, CatgaHttpError> {
+    mediator.send(command).await.map(Json).map_err(Into::into)
+}
+
+/// GET /orders/{id} — retrieves an order by identifier.
+async fn get_order_handler(
+    mediator: MediatorState,
+    Path(id): Path<String>,
+) -> Result<Json<OrderAccepted>, CatgaHttpError> {
+    mediator
+        .send(GetOrder {
+            order_id: id.into(),
+        })
+        .await
+        .map(Json)
+        .map_err(Into::into)
 }

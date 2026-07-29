@@ -1,6 +1,5 @@
 use std::{
     any::{Any, TypeId},
-    collections::HashMap,
     marker::PhantomData,
     sync::Arc,
 };
@@ -98,12 +97,58 @@ where
     }
 }
 
+/// One registered request handler slot in the dispatch table.
+pub(crate) struct RequestSlot {
+    pub(crate) type_id: TypeId,
+    pub(crate) handler: Arc<dyn ErasedRequestHandler>,
+}
+
+/// One registered command handler slot in the dispatch table.
+pub(crate) struct CommandSlot {
+    pub(crate) type_id: TypeId,
+    pub(crate) handler: Arc<dyn ErasedCommandHandler>,
+}
+
+/// One registered event handler slot in the dispatch table.
+pub(crate) struct EventSlot {
+    pub(crate) type_id: TypeId,
+    pub(crate) handlers: Vec<Arc<dyn ErasedEventHandler>>,
+}
+
 /// The explicit startup-time map of request, command, and event handlers.
+///
+/// Internally uses contiguous `Vec` slots instead of `HashMap` for cache-friendly
+/// linear-scan dispatch. For typical applications with 5–30 registered message types,
+/// this outperforms hashing due to contiguous memory layout, zero hash computation,
+/// and predictable branch behavior.
+///
+/// ```no_run
+/// use async_trait::async_trait;
+/// use catga_core::{CatgaResult, Handler, Mediator, Message, Registry, Request};
+///
+/// struct Ping;
+/// impl Message for Ping {}
+/// impl Request for Ping { type Response = &'static str; }
+///
+/// struct PingHandler;
+/// #[async_trait]
+/// impl Handler<Ping> for PingHandler {
+///     async fn handle(&self, _: Ping) -> CatgaResult<&'static str> { Ok("pong") }
+/// }
+///
+/// # async fn run() -> CatgaResult<()> {
+/// let mut registry = Registry::new();
+/// registry.register_request::<Ping, _>(PingHandler)?;
+/// let mediator = Mediator::new(registry);
+/// assert_eq!(mediator.send(Ping).await?, "pong");
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Default)]
 pub struct Registry {
-    pub(crate) requests: HashMap<TypeId, Arc<dyn ErasedRequestHandler>>,
-    pub(crate) commands: HashMap<TypeId, Arc<dyn ErasedCommandHandler>>,
-    pub(crate) events: HashMap<TypeId, Vec<Arc<dyn ErasedEventHandler>>>,
+    pub(crate) requests: Vec<RequestSlot>,
+    pub(crate) commands: Vec<CommandSlot>,
+    pub(crate) events: Vec<EventSlot>,
 }
 
 impl Registry {
@@ -121,19 +166,20 @@ impl Registry {
         M: Request,
         H: Handler<M> + 'static,
     {
-        if self.requests.contains_key(&TypeId::of::<M>()) {
+        let type_id = TypeId::of::<M>();
+        if self.requests.iter().any(|slot| slot.type_id == type_id) {
             return Err(CatgaError::new(
                 ErrorCode::Conflict,
                 "request handler is already registered",
             ));
         }
-        self.requests.insert(
-            TypeId::of::<M>(),
-            Arc::new(RequestHandlerAdapter::<M, H> {
+        self.requests.push(RequestSlot {
+            type_id,
+            handler: Arc::new(RequestHandlerAdapter::<M, H> {
                 handler,
                 marker: PhantomData,
             }),
-        );
+        });
         Ok(())
     }
 
@@ -146,19 +192,20 @@ impl Registry {
         C: Command,
         H: CommandHandler<C> + 'static,
     {
-        if self.commands.contains_key(&TypeId::of::<C>()) {
+        let type_id = TypeId::of::<C>();
+        if self.commands.iter().any(|slot| slot.type_id == type_id) {
             return Err(CatgaError::new(
                 ErrorCode::Conflict,
                 "command handler is already registered",
             ));
         }
-        self.commands.insert(
-            TypeId::of::<C>(),
-            Arc::new(CommandHandlerAdapter::<C, H> {
+        self.commands.push(CommandSlot {
+            type_id,
+            handler: Arc::new(CommandHandlerAdapter::<C, H> {
                 handler,
                 marker: PhantomData,
             }),
-        );
+        });
         Ok(())
     }
 
@@ -168,12 +215,20 @@ impl Registry {
         E: Event,
         H: EventHandler<E> + 'static,
     {
-        self.events
-            .entry(TypeId::of::<E>())
-            .or_default()
-            .push(Arc::new(EventHandlerAdapter::<E, H> {
+        let type_id = TypeId::of::<E>();
+        if let Some(slot) = self.events.iter_mut().find(|slot| slot.type_id == type_id) {
+            slot.handlers.push(Arc::new(EventHandlerAdapter::<E, H> {
                 handler,
                 marker: PhantomData,
             }));
+        } else {
+            self.events.push(EventSlot {
+                type_id,
+                handlers: vec![Arc::new(EventHandlerAdapter::<E, H> {
+                    handler,
+                    marker: PhantomData,
+                })],
+            });
+        }
     }
 }

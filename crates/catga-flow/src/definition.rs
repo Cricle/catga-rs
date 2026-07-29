@@ -13,6 +13,19 @@ type StepHandler =
 type StepCompensation = Box<dyn Fn(FlowState) -> BoxFuture<'static, CatgaResult<()>> + Send + Sync>;
 
 /// The outcome returned by one registered durable flow step.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_flow::FlowStepOutcome;
+///
+/// // Zero delay advances immediately.
+/// assert!(matches!(FlowStepOutcome::delay(Duration::ZERO)?, FlowStepOutcome::Advance));
+/// // Positive delay suspends.
+/// assert!(matches!(FlowStepOutcome::delay(Duration::from_secs(5))?, FlowStepOutcome::SuspendUntil(_)));
+/// // Complete is a terminal success.
+/// assert!(matches!(FlowStepOutcome::complete(), FlowStepOutcome::Complete));
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
 #[derive(Clone, Debug)]
 pub enum FlowStepOutcome {
     /// Continue with the following registered step.

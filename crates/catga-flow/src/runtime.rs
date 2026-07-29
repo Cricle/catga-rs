@@ -8,11 +8,10 @@ use tracing::Instrument;
 
 use crate::{
     FlowChildLauncher, FlowContinuation, FlowDefinition, FlowQuery, FlowScheduler, FlowState,
-    FlowStatus, FlowStepOutcome, FlowTagPolicy, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowStatus, FlowStepOutcome, FlowTagPolicy, SuspendedFlowStore,
     metrics::FlowMetrics,
+    runtime_wait::{MAX_CHILD_LAUNCH_CAS_RETRIES, WaitEvaluation, evaluate_wait, is_stale},
 };
-
-const MAX_CHILD_LAUNCH_CAS_RETRIES: usize = 8;
 
 /// The observable state after starting, resuming, or recording a durable flow trigger.
 #[derive(Clone, Debug)]
@@ -1079,57 +1078,4 @@ where
             ))
         }
     }
-}
-
-enum WaitEvaluation {
-    Pending,
-    Ready,
-    Failed(CatgaError),
-}
-
-fn evaluate_wait(wait: &WaitCondition, now: SystemTime) -> WaitEvaluation {
-    if wait.is_expired_at(now) {
-        return WaitEvaluation::Failed(CatgaError::new(
-            ErrorCode::Timeout,
-            "flow wait condition timed out",
-        ));
-    }
-    match wait.policy() {
-        WaitPolicy::All => {
-            if let Some(error) = wait
-                .results()
-                .iter()
-                .find_map(|result| result.error().cloned())
-            {
-                return WaitEvaluation::Failed(error);
-            }
-            if wait.completed_count() >= wait.expected_count() {
-                WaitEvaluation::Ready
-            } else {
-                WaitEvaluation::Pending
-            }
-        }
-        WaitPolicy::Any => {
-            if wait.results().iter().any(|result| result.is_success()) {
-                return WaitEvaluation::Ready;
-            }
-            if wait.completed_count() >= wait.expected_count() {
-                let error = wait
-                    .results()
-                    .last()
-                    .and_then(|result| result.error().cloned())
-                    .unwrap_or_else(|| {
-                        CatgaError::new(ErrorCode::Transient, "all flow wait children failed")
-                    });
-                WaitEvaluation::Failed(error)
-            } else {
-                WaitEvaluation::Pending
-            }
-        }
-    }
-}
-
-fn is_stale(heartbeat: SystemTime, now: SystemTime, stale_after: Duration) -> bool {
-    now.duration_since(heartbeat)
-        .is_ok_and(|elapsed| elapsed >= stale_after)
 }

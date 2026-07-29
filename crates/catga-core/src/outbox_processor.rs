@@ -41,6 +41,18 @@ impl OutboxRun {
 }
 
 /// Timing configuration for a long-running [`OutboxProcessor`].
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_core::OutboxLoopOptions;
+///
+/// let options = OutboxLoopOptions::new(
+///     Duration::from_secs(1),
+///     Duration::from_millis(500),
+/// ).expect("valid intervals");
+/// assert_eq!(options.scan_interval(), Duration::from_secs(1));
+/// assert!(OutboxLoopOptions::new(Duration::ZERO, Duration::from_secs(1)).is_err());
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OutboxLoopOptions {
     scan_interval: Duration,

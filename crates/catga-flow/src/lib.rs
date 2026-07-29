@@ -95,9 +95,11 @@ mod completion;
 mod definition;
 mod dsl;
 mod dsl_checkpoint;
+mod dsl_lifecycle;
 mod dsl_parallel_recovery;
 mod dsl_progress;
 mod dsl_recovery;
+mod dsl_step;
 mod dsl_when_any;
 mod due_service;
 mod executor;
@@ -106,24 +108,27 @@ mod memorypack;
 mod metrics;
 mod persistence;
 mod runtime;
+mod runtime_wait;
 mod scheduler;
 mod state;
 mod state_machine;
 mod store;
 mod suspension;
 mod suspension_store;
+mod suspension_wire;
 mod tag_policy;
 mod timeout;
 
 pub use child_launch::FlowChildLauncher;
 pub use completion::{FlowCompletion, FlowCompletionAdapter};
 pub use definition::{FlowDefinition, FlowStepOutcome};
-pub use dsl::{
-    DslFlow, DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks,
-    DslFlowLifecycleObserver, DslFlowStepFailedHook, DslFlowStepSucceededHook,
-    DslFlowSucceededHook, DslQueryStep, DslStep, FlowThrottle, MAX_DSL_PARALLEL_BRANCHES,
+pub use dsl::{DslFlow, FlowThrottle};
+pub use dsl_lifecycle::{
+    DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver,
+    DslFlowStepFailedHook, DslFlowStepSucceededHook, DslFlowSucceededHook,
 };
 pub use dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
+pub use dsl_step::{DslQueryStep, DslStep, MAX_DSL_PARALLEL_BRANCHES};
 pub use due_service::{DueFlowOptions, FlowDueService};
 pub use executor::{FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions};
 pub use local::{Flow, FlowResult};
@@ -137,7 +142,7 @@ pub use state_machine::{
     StateMachineState, StateMachineStore, decode_state_machine_snapshot,
     encode_state_machine_snapshot,
 };
-pub use store::FlowStore;
+pub use store::{FlowStore, MAX_FLOW_STORE_BATCH, validate_flow_batch_size};
 pub use suspension::{
     FlowChildLaunch, FlowChildLaunchState, FlowContinuation, MAX_FLOW_COMPENSATIONS,
     MAX_WAIT_CHILDREN, MAX_WAIT_RESULT_BYTES, WaitCondition, WaitPolicy, WaitResult,
