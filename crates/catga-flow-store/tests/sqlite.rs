@@ -253,6 +253,32 @@ async fn sqlite_flow_store_creates_and_loads_a_flow_state() -> CatgaResult<()> {
 }
 
 #[tokio::test]
+async fn sqlite_flow_store_accepts_an_application_owned_pool() -> CatgaResult<()> {
+    use std::str::FromStr;
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    let directory = temporary_directory()?;
+    let database = directory.path().join("application-owned-pool.db");
+    let url = format!("sqlite://{}", database.display());
+    let options = SqliteConnectOptions::from_str(&url)
+        .map_err(|error| CatgaError::new(ErrorCode::Validation, error.to_string()))?
+        .create_if_missing(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(options)
+        .await
+        .map_err(|error| CatgaError::new(ErrorCode::Unavailable, error.to_string()))?;
+    let store = SqlFlowStore::from_sqlite_pool(pool);
+    store.migrate().await?;
+
+    let state = FlowState::new("application-owned-pool", "payment", [], "node-a");
+    assert!(store.create(state.clone()).await?);
+    assert_eq!(store.get(state.id()).await?, Some(state));
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_suspended_store_preserves_wait_results_and_summary_bounds() -> CatgaResult<()> {
     let directory = temporary_directory()?;
     let database = directory.path().join("suspended.db");

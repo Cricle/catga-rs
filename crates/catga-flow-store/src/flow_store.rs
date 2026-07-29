@@ -34,6 +34,9 @@ use catga_flow::{FlowState, FlowStore};
 
 use crate::backend::Backend;
 
+#[cfg(feature = "sqlite")]
+const SQLITE_DEFAULT_WRITE_CONNECTIONS: u32 = 1;
+
 /// A feature-selected SQL implementation of the FlowStore contract.
 ///
 /// Construct the store with the constructor for its enabled backend, then migrate it
@@ -119,7 +122,11 @@ impl SqlFlowStore {
         }
     }
 
-    /// Opens a SQLite store with a bounded pool, WAL journaling, and a five-second busy timeout.
+    /// Opens a SQLite store with one write connection, WAL journaling, and a five-second busy timeout.
+    ///
+    /// SQLite permits one writer at a time. Serializing the default write path at the pool avoids
+    /// lock-contention tail latency under concurrent flow transitions. Applications with a known
+    /// read-heavy workload can configure their own pool and use [`Self::from_sqlite_pool`].
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
         use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -131,7 +138,7 @@ impl SqlFlowStore {
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
-            .max_connections(8)
+            .max_connections(SQLITE_DEFAULT_WRITE_CONNECTIONS)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(options)
             .await
@@ -139,6 +146,18 @@ impl SqlFlowStore {
         Ok(Self {
             backend: Backend::Sqlite(pool),
         })
+    }
+
+    /// Adopts an application-owned SQLite pool.
+    ///
+    /// This is the explicit escape hatch for applications that have measured a read-heavy
+    /// workload and need a different pool capacity than [`Self::connect_sqlite`] uses for its
+    /// single-writer default.
+    #[cfg(feature = "sqlite")]
+    pub fn from_sqlite_pool(pool: sqlx::SqlitePool) -> Self {
+        Self {
+            backend: Backend::Sqlite(pool),
+        }
     }
 
     /// Applies this backend's idempotent FlowStore schema migration.
