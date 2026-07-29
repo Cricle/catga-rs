@@ -11,7 +11,7 @@ use std::{
 };
 
 use catga_flow::{FlowState, FlowStore};
-use catga_flow_store::SqlFlowStore;
+use catga_flow_store::{SqlFlowStore, SqlFlowStoreOptions};
 use catga_redis::RedisFlows;
 use futures::{StreamExt, TryStreamExt, stream};
 
@@ -20,7 +20,8 @@ mod performance_report;
 
 const OPERATION_COUNT: u64 = 256;
 const PAYLOAD_BYTES: usize = 256;
-const CONCURRENCY_LEVELS: [usize; 2] = [4, 8];
+const CONCURRENCY_LEVELS: [usize; 3] = [4, 8, 16];
+const SERVER_BENCHMARK_CONNECTIONS: u32 = 16;
 static UNIQUE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Measures a comparable create/read/update lifecycle for SQLite and all configured services.
@@ -47,14 +48,18 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
             "sqlite_flow_store_lifecycle",
             "sqlite_flow_store_lifecycle_bounded_concurrency_4",
             "sqlite_flow_store_lifecycle_bounded_concurrency_8",
+            "sqlite_flow_store_lifecycle_bounded_concurrency_16",
         ],
     )
     .await?;
 
     let mysql_url = required_service_url("CATGA_MYSQL_URL")?;
-    let mysql = SqlFlowStore::connect_mysql(&mysql_url)
-        .await
-        .map_err(performance_report::debug_error)?;
+    let mysql = SqlFlowStore::connect_mysql_with_options(
+        &mysql_url,
+        SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
+    )
+    .await
+    .map_err(performance_report::debug_error)?;
     mysql
         .migrate()
         .await
@@ -67,15 +72,19 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
                 "mysql_flow_store_lifecycle",
                 "mysql_flow_store_lifecycle_bounded_concurrency_4",
                 "mysql_flow_store_lifecycle_bounded_concurrency_8",
+                "mysql_flow_store_lifecycle_bounded_concurrency_16",
             ],
         )
         .await?,
     );
 
     let postgres_url = required_service_url("CATGA_POSTGRES_URL")?;
-    let postgres = SqlFlowStore::connect_postgres(&postgres_url)
-        .await
-        .map_err(performance_report::debug_error)?;
+    let postgres = SqlFlowStore::connect_postgres_with_options(
+        &postgres_url,
+        SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
+    )
+    .await
+    .map_err(performance_report::debug_error)?;
     postgres
         .migrate()
         .await
@@ -88,15 +97,19 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
                 "postgres_flow_store_lifecycle",
                 "postgres_flow_store_lifecycle_bounded_concurrency_4",
                 "postgres_flow_store_lifecycle_bounded_concurrency_8",
+                "postgres_flow_store_lifecycle_bounded_concurrency_16",
             ],
         )
         .await?,
     );
 
     let mssql_url = required_service_url("CATGA_MSSQL_URL")?;
-    let mssql = SqlFlowStore::connect_mssql(&mssql_url)
-        .await
-        .map_err(performance_report::debug_error)?;
+    let mssql = SqlFlowStore::connect_mssql_with_options(
+        &mssql_url,
+        SqlFlowStoreOptions::new().max_connections(SERVER_BENCHMARK_CONNECTIONS),
+    )
+    .await
+    .map_err(performance_report::debug_error)?;
     mssql
         .migrate()
         .await
@@ -109,6 +122,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
                 "mssql_flow_store_lifecycle",
                 "mssql_flow_store_lifecycle_bounded_concurrency_4",
                 "mssql_flow_store_lifecycle_bounded_concurrency_8",
+                "mssql_flow_store_lifecycle_bounded_concurrency_16",
             ],
         )
         .await?,
@@ -126,6 +140,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
                 "redis_flow_store_lifecycle",
                 "redis_flow_store_lifecycle_bounded_concurrency_4",
                 "redis_flow_store_lifecycle_bounded_concurrency_8",
+                "redis_flow_store_lifecycle_bounded_concurrency_16",
             ],
         )
         .await?,
@@ -148,7 +163,7 @@ async fn flow_store_lifecycle_reports_every_supported_backend() -> Result<(), St
 async fn measure_store_variants<S>(
     store: &S,
     backend: &str,
-    names: [&'static str; 3],
+    names: [&'static str; 4],
 ) -> Result<Vec<performance_report::BenchmarkResult>, String>
 where
     S: FlowStore + Sync,
@@ -195,6 +210,7 @@ where
                 match concurrency {
                     4 => "create + read + optimistic update; bounded_concurrency=4",
                     8 => "create + read + optimistic update; bounded_concurrency=8",
+                    16 => "create + read + optimistic update; bounded_concurrency=16",
                     _ => unreachable!("only declared concurrency levels are benchmarked"),
                 },
             )

@@ -3,11 +3,20 @@
 use std::time::Duration;
 
 use catga_core::{
-    DeadLetter, DeadLetterDiagnostics, Envelope, ErrorCode, InboxClaim,
+    CatgaError, DeadLetter, DeadLetterDiagnostics, Envelope, ErrorCode, InboxClaim,
     MAX_DEAD_LETTER_DESCRIPTION_BYTES, MAX_DEAD_LETTER_STAGE_BYTES, MAX_RETENTION_CLEANUP_LIMIT,
     MessageMetadata, inbox_claim_expires_at, validate_completed_retention,
     validate_inbox_claim_lease, validate_retention_cleanup_limit,
 };
+
+#[test]
+fn catga_errors_integrate_with_standard_error_handling_without_exposing_details() {
+    let error = CatgaError::new(ErrorCode::Validation, "invalid order")
+        .with_details("customer account must remain diagnostic-only");
+    let standard: Box<dyn std::error::Error> = Box::new(error);
+
+    assert_eq!(standard.to_string(), "invalid order");
+}
 
 fn envelope() -> Envelope {
     Envelope::new(

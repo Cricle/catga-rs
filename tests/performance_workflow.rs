@@ -140,4 +140,13 @@ fn storage_benchmark_reports_pool_concurrency_capacity() {
         STORAGE_BENCHMARK.contains("bounded_concurrency"),
         "storage performance reports must identify their concurrency level"
     );
+    assert!(
+        STORAGE_BENCHMARK.contains("16"),
+        "storage performance reports must measure the server-pool saturation point"
+    );
+    assert!(
+        include_str!("../crates/catga-flow-store/src/flow_store.rs")
+            .contains("SqlFlowStoreOptions"),
+        "server FlowStore constructors must expose user-configurable pool options"
+    );
 }

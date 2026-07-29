@@ -768,6 +768,10 @@ impl<S> Layer<S> for TraceTagLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        Some(LevelFilter::DEBUG)
+    }
+
     fn register_callsite(&self, _: &'static tracing::Metadata<'static>) -> Interest {
         // The assertions install a thread-local collector. Explicitly retain
         // interest in debug events so a concurrent test cannot permanently

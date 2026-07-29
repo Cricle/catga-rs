@@ -35,6 +35,29 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Application-owned pools
+//!
+//! Production applications can reuse an existing driver pool instead of letting each store create
+//! its own: `SqlFlowStore::from_mysql_pool`, `SqlFlowStore::from_postgres_pool`,
+//! `SqlFlowStore::from_mssql_pool`, and `SqlFlowStore::from_sqlite_pool`. This keeps the
+//! database connection budget under application control. When exposing driver pool types is not
+//! desirable, use [`SqlFlowStoreOptions`] with a `connect_*_with_options` constructor.
+//!
+//! ```no_run
+//! use catga_flow_store::SqlFlowStore;
+//! use sqlx::sqlite::SqlitePoolOptions;
+//!
+//! # async fn connect() -> Result<(), Box<dyn std::error::Error>> {
+//! let pool = SqlitePoolOptions::new()
+//!     .max_connections(12)
+//!     .connect("sqlite:catga.db")
+//!     .await?;
+//! let store = SqlFlowStore::from_sqlite_pool(pool);
+//! store.migrate().await?;
+//! # Ok(())
+//! # }
+//! ```
 
 mod backend;
 #[cfg(any(
@@ -155,7 +178,7 @@ mod state_machine_store;
 mod suspended_store;
 
 pub use dsl_progress_store::SqlDslStepProgressStore;
-pub use flow_store::SqlFlowStore;
+pub use flow_store::{SqlFlowStore, SqlFlowStoreOptions};
 pub use scheduler_store::SqlFlowScheduler;
 pub use state_machine_store::SqlStateMachineStore;
 pub use suspended_store::SqlSuspendedFlowStore;

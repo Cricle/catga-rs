@@ -23,7 +23,7 @@ use async_trait::async_trait;
     feature = "postgres",
     feature = "mssql"
 ))]
-use catga_core::CatgaResult;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 #[cfg(any(
     feature = "sqlite",
     feature = "mysql",
@@ -36,6 +36,52 @@ use crate::backend::Backend;
 
 #[cfg(feature = "sqlite")]
 const SQLITE_DEFAULT_WRITE_CONNECTIONS: u32 = 1;
+#[cfg(any(feature = "mysql", feature = "postgres", feature = "mssql"))]
+const SERVER_DEFAULT_CONNECTIONS: u32 = 8;
+
+/// Optional pool settings for one [`SqlFlowStore`] connection constructor.
+///
+/// The default keeps the adapter's backend-specific conservative capacity. Set an explicit
+/// capacity when application load tests establish the appropriate database connection budget.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SqlFlowStoreOptions {
+    connection_limit: Option<u32>,
+}
+
+impl SqlFlowStoreOptions {
+    /// Creates options that retain the constructor's backend-specific default capacity.
+    pub const fn new() -> Self {
+        Self {
+            connection_limit: None,
+        }
+    }
+
+    /// Selects the maximum number of connections owned by this store's pool.
+    ///
+    /// The value must be greater than zero; constructors reject zero before network I/O.
+    #[must_use]
+    pub const fn max_connections(mut self, connection_limit: u32) -> Self {
+        self.connection_limit = Some(connection_limit);
+        self
+    }
+
+    #[cfg(any(
+        feature = "sqlite",
+        feature = "mysql",
+        feature = "postgres",
+        feature = "mssql"
+    ))]
+    fn resolve(self, default_limit: u32) -> CatgaResult<u32> {
+        let connection_limit = self.connection_limit.unwrap_or(default_limit);
+        if connection_limit == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "SQL FlowStore pool capacity must be greater than zero",
+            ));
+        }
+        Ok(connection_limit)
+    }
+}
 
 /// A feature-selected SQL implementation of the FlowStore contract.
 ///
@@ -59,10 +105,19 @@ impl SqlFlowStore {
     /// Opens a SQL Server store with a bounded bb8/Tiberius pool.
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql(url: &str) -> CatgaResult<Self> {
+        Self::connect_mssql_with_options(url, SqlFlowStoreOptions::default()).await
+    }
+
+    /// Opens a SQL Server store with an explicit pool capacity.
+    #[cfg(feature = "mssql")]
+    pub async fn connect_mssql_with_options(
+        url: &str,
+        options: SqlFlowStoreOptions,
+    ) -> CatgaResult<Self> {
         let manager = bb8_tiberius::ConnectionManager::build(url)
             .map_err(|error| crate::error::database_error("parse SQL Server URL", error))?;
         let pool = bb8::Pool::builder()
-            .max_size(8)
+            .max_size(options.resolve(SERVER_DEFAULT_CONNECTIONS)?)
             .connection_timeout(Duration::from_secs(5))
             .build(manager)
             .await
@@ -81,10 +136,19 @@ impl SqlFlowStore {
     /// Opens a MySQL 8 store with a bounded SQLx pool.
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql(url: &str) -> CatgaResult<Self> {
+        Self::connect_mysql_with_options(url, SqlFlowStoreOptions::default()).await
+    }
+
+    /// Opens a MySQL 8 store with an explicit pool capacity.
+    #[cfg(feature = "mysql")]
+    pub async fn connect_mysql_with_options(
+        url: &str,
+        options: SqlFlowStoreOptions,
+    ) -> CatgaResult<Self> {
         use sqlx::mysql::MySqlPoolOptions;
 
         let pool = MySqlPoolOptions::new()
-            .max_connections(8)
+            .max_connections(options.resolve(SERVER_DEFAULT_CONNECTIONS)?)
             .acquire_timeout(Duration::from_secs(5))
             .connect(url)
             .await
@@ -103,10 +167,19 @@ impl SqlFlowStore {
     /// Opens a PostgreSQL store with a bounded SQLx pool.
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres(url: &str) -> CatgaResult<Self> {
+        Self::connect_postgres_with_options(url, SqlFlowStoreOptions::default()).await
+    }
+
+    /// Opens a PostgreSQL store with an explicit pool capacity.
+    #[cfg(feature = "postgres")]
+    pub async fn connect_postgres_with_options(
+        url: &str,
+        options: SqlFlowStoreOptions,
+    ) -> CatgaResult<Self> {
         use sqlx::postgres::PgPoolOptions;
 
         let pool = PgPoolOptions::new()
-            .max_connections(8)
+            .max_connections(options.resolve(SERVER_DEFAULT_CONNECTIONS)?)
             .acquire_timeout(Duration::from_secs(5))
             .connect(url)
             .await
@@ -126,21 +199,31 @@ impl SqlFlowStore {
     ///
     /// SQLite permits one writer at a time. Serializing the default write path at the pool avoids
     /// lock-contention tail latency under concurrent flow transitions. Applications with a known
-    /// read-heavy workload can configure their own pool and use [`Self::from_sqlite_pool`].
+    /// read-heavy workload can configure the capacity with [`Self::connect_sqlite_with_options`]
+    /// or provide a pool through [`Self::from_sqlite_pool`].
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
+        Self::connect_sqlite_with_options(url, SqlFlowStoreOptions::default()).await
+    }
+
+    /// Opens a SQLite store with an explicit pool capacity.
+    #[cfg(feature = "sqlite")]
+    pub async fn connect_sqlite_with_options(
+        url: &str,
+        options: SqlFlowStoreOptions,
+    ) -> CatgaResult<Self> {
         use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-        let options = SqliteConnectOptions::from_str(url)
+        let connect_options = SqliteConnectOptions::from_str(url)
             .map_err(|error| crate::error::database_error("parse SQLite URL", error))?
             .create_if_missing(true)
             .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
-            .max_connections(SQLITE_DEFAULT_WRITE_CONNECTIONS)
+            .max_connections(options.resolve(SQLITE_DEFAULT_WRITE_CONNECTIONS)?)
             .acquire_timeout(Duration::from_secs(5))
-            .connect_with(options)
+            .connect_with(connect_options)
             .await
             .map_err(|error| crate::error::database_error("connect SQLite", error))?;
         Ok(Self {

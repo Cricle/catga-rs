@@ -281,6 +281,14 @@ impl CatgaError {
     }
 }
 
+impl fmt::Display for CatgaError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl std::error::Error for CatgaError {}
+
 fn bounded_details(details: &str) -> Box<str> {
     let mut end = details.len().min(MAX_ERROR_DETAILS_BYTES);
     while end > 0 && !details.is_char_boundary(end) {

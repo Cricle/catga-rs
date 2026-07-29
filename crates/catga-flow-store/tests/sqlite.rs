@@ -12,8 +12,8 @@ use catga_flow::{
     WaitPolicy, encode_continuation,
 };
 use catga_flow_store::{
-    SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlStateMachineStore,
-    SqlSuspendedFlowStore,
+    SqlDslStepProgressStore, SqlFlowScheduler, SqlFlowStore, SqlFlowStoreOptions,
+    SqlStateMachineStore, SqlSuspendedFlowStore,
 };
 
 #[path = "../../../tests/flow/timeout_store_contract.rs"]
@@ -276,6 +276,37 @@ async fn sqlite_flow_store_accepts_an_application_owned_pool() -> CatgaResult<()
     assert!(store.create(state.clone()).await?);
     assert_eq!(store.get(state.id()).await?, Some(state));
     Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_flow_store_applies_an_explicit_pool_capacity() -> CatgaResult<()> {
+    let directory = temporary_directory()?;
+    let database = directory.path().join("explicit-pool-capacity.db");
+    let url = format!("sqlite://{}", database.display());
+    let store = SqlFlowStore::connect_sqlite_with_options(
+        &url,
+        SqlFlowStoreOptions::new().max_connections(2),
+    )
+    .await?;
+    store.migrate().await?;
+
+    let state = FlowState::new("explicit-pool-capacity", "payment", [], "node-a");
+    assert!(store.create(state.clone()).await?);
+    assert_eq!(store.get(state.id()).await?, Some(state));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_flow_store_rejects_zero_pool_capacity_before_connecting() {
+    let result = SqlFlowStore::connect_sqlite_with_options(
+        "sqlite://not-opened.db",
+        SqlFlowStoreOptions::new().max_connections(0),
+    )
+    .await;
+    let Err(error) = result else {
+        panic!("zero capacity must be rejected before opening SQLite");
+    };
+    assert_eq!(error.code(), ErrorCode::Validation);
 }
 
 #[tokio::test]
