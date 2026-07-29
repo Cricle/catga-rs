@@ -11,8 +11,7 @@ const MYSQL_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/mysq
 const POSTGRES_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/postgres.rs");
 const MSSQL_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/mssql.rs");
 const STORAGE_BENCHMARK: &str = include_str!("storage_performance.rs");
-const MEMORYPACK_CODEC_MANIFEST: &str =
-    include_str!("../crates/catga-codec-memorypack/Cargo.toml");
+const MEMORYPACK_CODEC_MANIFEST: &str = include_str!("../crates/catga-codec-memorypack/Cargo.toml");
 const MEMORYPACK_DERIVE_MANIFEST: &str =
     include_str!("../crates/catga-codec-memorypack/memorypack-derive/Cargo.toml");
 
