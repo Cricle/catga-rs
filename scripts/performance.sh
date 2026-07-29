@@ -198,6 +198,10 @@ run_benchmark critical-performance critical-performance.json \
     cargo test --release -p catga-tests --all-features --test critical_path_performance -- --ignored --nocapture
 run_benchmark mediator-performance mediator-performance.json \
     cargo test --release -p catga-tests --all-features --test mediator_performance -- --ignored --nocapture
+run_benchmark mediator-pure-performance mediator-pure-performance.json \
+    cargo test --release -p catga-tests --all-features --test mediator_pure_throughput -- --ignored --nocapture --test-threads=1
+run_benchmark typed-mediator-performance typed-mediator-performance.json \
+    cargo test --release -p catga-tests --all-features --test typed_mediator_bench -- --ignored --nocapture --test-threads=1
 run_benchmark flow-performance flow-performance.json \
     cargo test --release -p catga-tests --all-features --test flow_performance -- --ignored --nocapture
 run_benchmark nats-performance nats-performance.json \
@@ -270,6 +274,8 @@ jq -r -s '
 ' "$output_directory/memory-performance.json" \
     "$output_directory/critical-performance.json" \
     "$output_directory/mediator-performance.json" \
+    "$output_directory/mediator-pure-performance.json" \
+    "$output_directory/typed-mediator-performance.json" \
     "$output_directory/flow-performance.json" \
     "$output_directory/nats-performance.json" \
     "$output_directory/storage-performance.json" \
@@ -285,6 +291,8 @@ jq -r -s '
 ' "$output_directory/memory-performance.json" \
     "$output_directory/critical-performance.json" \
     "$output_directory/mediator-performance.json" \
+    "$output_directory/mediator-pure-performance.json" \
+    "$output_directory/typed-mediator-performance.json" \
     "$output_directory/flow-performance.json" \
     "$output_directory/nats-performance.json" \
     "$output_directory/storage-performance.json" \

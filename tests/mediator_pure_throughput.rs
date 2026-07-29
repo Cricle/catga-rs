@@ -7,6 +7,9 @@ use std::time::Instant;
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Event, EventHandler, Handler, Mediator, Message, Registry, Request};
 
+#[path = "support/performance_report.rs"]
+mod performance_report;
+
 const MESSAGE_COUNT: usize = 100_000;
 const EVENT_COUNT: usize = 100_000;
 
@@ -26,7 +29,6 @@ impl Handler<Ping> for PingHandler {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct Tick(u64);
 impl Message for Tick {}
 impl Event for Tick {}
@@ -35,9 +37,37 @@ struct TickHandler;
 
 #[async_trait]
 impl EventHandler<Tick> for TickHandler {
-    async fn handle(&self, _: Tick) -> CatgaResult<()> {
+    async fn handle(&self, message: Tick) -> CatgaResult<()> {
+        let _ = message.0;
         Ok(())
     }
+}
+
+fn write_workload_report(
+    name: &'static str,
+    operations: usize,
+    elapsed: std::time::Duration,
+    rss_before_bytes: Option<u64>,
+) -> CatgaResult<()> {
+    let mut result = performance_report::measured(
+        name,
+        None,
+        elapsed,
+        vec![elapsed],
+        "whole workload",
+        rss_before_bytes,
+    );
+    result.operations = operations as u64;
+    result.operations_per_second = operations as f64 / elapsed.as_secs_f64();
+    let report = performance_report::PerformanceReport {
+        schema_version: 1,
+        source: "in-process pure mediator",
+        environment: performance_report::environment(),
+        results: vec![result],
+        database_metric_deltas: Vec::new(),
+    };
+    performance_report::write_report_if_configured(&report)
+        .map_err(|error| catga_core::CatgaError::new(catga_core::ErrorCode::Internal, error))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -52,6 +82,7 @@ async fn mediator_pure_sequential_send() -> CatgaResult<()> {
         mediator.send(Ping(i)).await?;
     }
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
     for i in 0..MESSAGE_COUNT {
         let result = mediator.send(Ping(i as u64)).await?;
@@ -68,6 +99,12 @@ async fn mediator_pure_sequential_send() -> CatgaResult<()> {
     println!("  avg latency: {p50_approx_ns} ns");
     println!();
 
+    write_workload_report(
+        "mediator_pure_sequential_send",
+        MESSAGE_COUNT,
+        elapsed,
+        rss_before_bytes,
+    )?;
     Ok(())
 }
 
@@ -83,6 +120,7 @@ async fn mediator_pure_concurrent_send() -> CatgaResult<()> {
         mediator.send(Ping(i)).await?;
     }
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
     let mut handles = Vec::with_capacity(16);
     let per_task = MESSAGE_COUNT / 16;
@@ -111,6 +149,12 @@ async fn mediator_pure_concurrent_send() -> CatgaResult<()> {
     );
     println!();
 
+    write_workload_report(
+        "mediator_pure_concurrent_send_16",
+        MESSAGE_COUNT,
+        elapsed,
+        rss_before_bytes,
+    )?;
     Ok(())
 }
 
@@ -124,6 +168,7 @@ async fn mediator_batch_no_yield() -> CatgaResult<()> {
     // Warmup
     let _: Vec<_> = mediator.send_batch((0..100).map(Ping), 64).await?;
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
     let mut total = 0usize;
     for batch_start in (0..MESSAGE_COUNT).step_by(1024) {
@@ -147,6 +192,12 @@ async fn mediator_batch_no_yield() -> CatgaResult<()> {
     );
     println!();
 
+    write_workload_report(
+        "mediator_pure_batch_send",
+        MESSAGE_COUNT,
+        elapsed,
+        rss_before_bytes,
+    )?;
     Ok(())
 }
 
@@ -161,6 +212,7 @@ async fn event_publish_sequential() -> CatgaResult<()> {
         mediator.publish(Tick(i)).await?;
     }
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
     for i in 0..EVENT_COUNT {
         mediator.publish(Tick(i as u64)).await?;
@@ -178,6 +230,12 @@ async fn event_publish_sequential() -> CatgaResult<()> {
     );
     println!();
 
+    write_workload_report(
+        "mediator_pure_event_publish",
+        EVENT_COUNT,
+        elapsed,
+        rss_before_bytes,
+    )?;
     Ok(())
 }
 
@@ -194,6 +252,7 @@ async fn event_publish_fan_out_3() -> CatgaResult<()> {
         mediator.publish(Tick(i)).await?;
     }
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
     for i in 0..EVENT_COUNT {
         mediator.publish(Tick(i as u64)).await?;
@@ -211,6 +270,12 @@ async fn event_publish_fan_out_3() -> CatgaResult<()> {
     );
     println!();
 
+    write_workload_report(
+        "mediator_pure_event_fan_out_3",
+        EVENT_COUNT,
+        elapsed,
+        rss_before_bytes,
+    )?;
     Ok(())
 }
 
@@ -225,6 +290,7 @@ async fn event_publish_concurrent_16_tasks() -> CatgaResult<()> {
         mediator.publish(Tick(i)).await?;
     }
 
+    let rss_before_bytes = performance_report::current_rss_bytes();
     let started = Instant::now();
     let mut handles = Vec::with_capacity(16);
     let per_task = EVENT_COUNT / 16;
@@ -253,5 +319,11 @@ async fn event_publish_concurrent_16_tasks() -> CatgaResult<()> {
     );
     println!();
 
+    write_workload_report(
+        "mediator_pure_event_concurrent_16",
+        EVENT_COUNT,
+        elapsed,
+        rss_before_bytes,
+    )?;
     Ok(())
 }

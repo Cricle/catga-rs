@@ -46,11 +46,25 @@ jobs:
       - name: Upload performance diagnostics to the draft release
         if: ${{ always() }}
         run: |
+          shopt -s nullglob
           assets=("target/catga-e2e-performance-${GITHUB_REF_NAME}.tar.gz")
-          for result in target/release-performance/performance.json target/release-performance/summary.txt; do
+          assets+=(target/release-performance/*.json)
+          for result in target/release-performance/summary.md target/release-performance/summary.txt; do
             [[ -f "$result" ]] && assets+=("$result")
           done
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          if [[ "${{ steps.performance.outcome }}" == 'success' ]]; then
+            notes='target/release-performance/release-notes.md'
+            base_notes='target/release-performance/release-notes-base.md'
+            gh release view "$GITHUB_REF_NAME" --json body --jq .body >"$notes"
+            awk '/<!-- catga-performance-summary -->/{exit} {print}' "$notes" >"$base_notes"
+            {
+              cat "$base_notes"
+              printf '\n\n<!-- catga-performance-summary -->\n\n'
+              cat target/release-performance/summary.md
+            } >"$notes"
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$notes"
+          fi
       - name: Fail the release gate when E2E performance fails
         if: ${{ steps.performance.outcome != 'success' }}
         run: exit 1

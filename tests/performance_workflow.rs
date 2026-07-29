@@ -15,6 +15,8 @@ fn performance_runner_executes_every_manual_benchmark_class() {
     for benchmark in [
         "critical_path_performance",
         "mediator_performance",
+        "mediator_pure_throughput",
+        "typed_mediator_bench",
         "flow_performance",
         "memory_performance",
         "nats_performance",
@@ -54,6 +56,8 @@ fn performance_runner_publishes_a_total_table_with_memory_metrics() {
         "memory-performance.json",
         "critical-performance.json",
         "mediator-performance.json",
+        "mediator-pure-performance.json",
+        "typed-mediator-performance.json",
         "flow-performance.json",
         "nats-performance.json",
         "performance.json",
@@ -84,6 +88,22 @@ fn performance_runner_publishes_a_total_table_with_memory_metrics() {
         assert!(
             PERFORMANCE_RUNNER.contains(backend),
             "total table must identify the {backend} storage benchmark"
+        );
+    }
+}
+
+#[test]
+fn release_publishes_and_summarizes_the_complete_performance_report() {
+    for asset in ["summary.md", "summary.txt", "*.json"] {
+        assert!(
+            RELEASE_WORKFLOW.contains(asset),
+            "the release workflow must upload the complete performance asset set including {asset}"
+        );
+    }
+    for release_body_update in ["--notes-file", "catga-performance-summary"] {
+        assert!(
+            RELEASE_WORKFLOW.contains(release_body_update),
+            "the release workflow must publish the performance table in the release body"
         );
     }
 }
