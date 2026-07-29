@@ -118,18 +118,7 @@ pub(crate) async fn update(
     if !FlowState::is_next_version(expected_version, next.version()) {
         return Ok(false);
     }
-    for _ in 0..MAX_CAS_RETRIES {
-        let Some(current) = load(pool, next.id()).await? else {
-            return Ok(false);
-        };
-        if current.state.version() != expected_version {
-            return Ok(false);
-        }
-        if replace(pool, &current, &next).await? {
-            return Ok(true);
-        }
-    }
-    Err(cas_error("update SQLite flow state"))
+    replace_business_version(pool, expected_version, &next).await
 }
 
 /// Claims one stale running state of `flow_type` using bounded indexed candidates.
@@ -256,6 +245,36 @@ async fn replace(pool: &SqlitePool, current: &StoredState, next: &FlowState) -> 
     .execute(pool)
     .await
     .map_err(|error| database_error("replace SQLite flow state", error))?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Applies one business-version transition without first reading the physical revision.
+///
+/// Business versions advance exactly once, so the version predicate is an atomic CAS fence for
+/// competing transitions. Heartbeats retain their stricter physical-revision fence in [`replace`]
+/// because they intentionally preserve the same business version.
+async fn replace_business_version(
+    pool: &SqlitePool,
+    expected_version: i64,
+    next: &FlowState,
+) -> CatgaResult<bool> {
+    let key = flow_key(next.id());
+    let result = sqlx::query(
+        "UPDATE catga_flow_states SET \
+             flow_type = ?, status = ?, version = ?, heartbeat_ms = ?, payload = ?, revision = revision + 1 \
+         WHERE flow_key = ? AND flow_id = ? AND version = ?",
+    )
+    .bind(next.flow_type())
+    .bind(status_code(next.status()))
+    .bind(next.version())
+    .bind(unix_millis(next.heartbeat())?)
+    .bind(encode_state(next)?)
+    .bind(key.as_slice())
+    .bind(next.id())
+    .bind(expected_version)
+    .execute(pool)
+    .await
+    .map_err(|error| database_error("update SQLite flow state", error))?;
     Ok(result.rows_affected() == 1)
 }
 

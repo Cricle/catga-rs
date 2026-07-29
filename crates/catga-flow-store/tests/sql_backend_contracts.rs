@@ -144,6 +144,26 @@ where
     assert!(store.update(initial.version(), progressed.clone()).await?);
     assert!(!store.update(initial.version(), progressed).await?);
 
+    // The business version is the public transition fence: a direct CAS implementation must
+    // still admit exactly one of two concurrent transitions without first loading a revision.
+    let racing_id = format!("{prefix}/racing");
+    let racing = FlowState::new(racing_id.as_str(), flow_type.as_str(), [], "node-a");
+    assert!(store.create(racing.clone()).await?);
+    let racing_next = racing.clone().next_version()?;
+    let (first, second) = tokio::join!(
+        store.update(racing.version(), racing_next.clone()),
+        store.update(racing.version(), racing_next),
+    );
+    assert_eq!(usize::from(first?) + usize::from(second?), 1);
+    assert_eq!(
+        store
+            .get(racing_id.as_str())
+            .await?
+            .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "racing flow disappeared"))?
+            .version(),
+        1
+    );
+
     let fresh_id = format!("{prefix}/fresh");
     assert!(
         store

@@ -193,18 +193,7 @@ pub(crate) async fn update(
     if !FlowState::is_next_version(expected_version, next.version()) {
         return Ok(false);
     }
-    for _ in 0..MAX_CAS_RETRIES {
-        let Some(current) = load(pool, next.id()).await? else {
-            return Ok(false);
-        };
-        if current.state.version() != expected_version {
-            return Ok(false);
-        }
-        if replace(pool, &current, &next).await? {
-            return Ok(true);
-        }
-    }
-    Err(cas_error("update SQL Server flow state"))
+    replace_business_version(pool, expected_version, &next).await
 }
 
 /// Claims one of at most eight indexed stale candidates with revision fencing.
@@ -369,6 +358,40 @@ async fn replace_revision(pool: &MssqlPool, next: &FlowState, revision: i64) -> 
         .await
         .map_err(|error| database_error("acquire SQL Server update connection", error))?;
     replace_revision_on_connection(&mut connection, next, revision).await
+}
+
+/// Applies one business-version transition without a preliminary physical-revision read.
+async fn replace_business_version(
+    pool: &MssqlPool,
+    expected_version: i64,
+    next: &FlowState,
+) -> CatgaResult<bool> {
+    let mut connection = pool
+        .get()
+        .await
+        .map_err(|error| database_error("acquire SQL Server update connection", error))?;
+    let key = flow_key(next.id());
+    let type_key = flow_key(next.flow_type());
+    let frame = encode_state(next)?;
+    let mut query = Query::new(
+        "UPDATE dbo.catga_flow_states SET flow_type = @P1, flow_type_key = @P2, status = @P3, version = @P4, \
+           heartbeat_ms = @P5, payload = @P6, revision = revision + 1 \
+         WHERE flow_key = @P7 AND flow_id = @P8 AND version = @P9",
+    );
+    query.bind(next.flow_type());
+    query.bind(type_key.as_slice());
+    query.bind(status_code(next.status()));
+    query.bind(next.version());
+    query.bind(unix_millis(next.heartbeat())?);
+    query.bind(frame.as_slice());
+    query.bind(key.as_slice());
+    query.bind(next.id());
+    query.bind(expected_version);
+    query
+        .execute(&mut connection)
+        .await
+        .map(|result| result.total() == 1)
+        .map_err(|error| database_error("update SQL Server flow state", error))
 }
 
 async fn replace_revision_on_connection(

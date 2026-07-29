@@ -111,18 +111,7 @@ pub(crate) async fn update(
     if !FlowState::is_next_version(expected_version, next.version()) {
         return Ok(false);
     }
-    for _ in 0..MAX_CAS_RETRIES {
-        let Some(current) = load(pool, next.id()).await? else {
-            return Ok(false);
-        };
-        if current.state.version() != expected_version {
-            return Ok(false);
-        }
-        if replace(pool, &current, &next).await? {
-            return Ok(true);
-        }
-    }
-    Err(cas_error("update MySQL flow state"))
+    replace_business_version(pool, expected_version, &next).await
 }
 
 /// Takes one bounded stale claim in an indexed `FOR UPDATE SKIP LOCKED` transaction.
@@ -256,5 +245,35 @@ async fn replace(pool: &MySqlPool, current: &StoredState, next: &FlowState) -> C
         .bind(next.flow_type()).bind(flow_key(next.flow_type()).as_slice()).bind(status_code(next.status())).bind(next.version()).bind(unix_millis(next.heartbeat())?).bind(encode_state(next)?)
         .bind(key.as_slice()).bind(next.id()).bind(current.revision).execute(pool).await
         .map_err(|error| database_error("replace MySQL flow state", error))?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Applies one business-version transition with one atomic database compare-and-swap.
+///
+/// A transition increments the public version, so matching that version prevents competing
+/// updates without the extra read used by heartbeat's physical-revision fence.
+async fn replace_business_version(
+    pool: &MySqlPool,
+    expected_version: i64,
+    next: &FlowState,
+) -> CatgaResult<bool> {
+    let key = flow_key(next.id());
+    let result = sqlx::query(statement(
+        "UPDATE catga_flow_states SET flow_type = ?, flow_type_key = ?, status = ?, version = ?, heartbeat_ms = ?, payload = ?, revision = revision + 1 \
+         WHERE flow_key = ? AND flow_id = ? AND version = ?",
+        false,
+    ))
+    .bind(next.flow_type())
+    .bind(flow_key(next.flow_type()).as_slice())
+    .bind(status_code(next.status()))
+    .bind(next.version())
+    .bind(unix_millis(next.heartbeat())?)
+    .bind(encode_state(next)?)
+    .bind(key.as_slice())
+    .bind(next.id())
+    .bind(expected_version)
+    .execute(pool)
+    .await
+    .map_err(|error| database_error("update MySQL flow state", error))?;
     Ok(result.rows_affected() == 1)
 }

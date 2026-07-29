@@ -4,6 +4,11 @@ const PERFORMANCE_RUNNER: &str = include_str!("../scripts/performance.sh");
 const RELEASE_WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
 const MANUAL_WORKFLOW: &str = include_str!("../.github/workflows/performance.yml");
 const MEMORY_BENCHMARK: &str = include_str!("../crates/catga-memory/tests/memory_performance.rs");
+const SQLITE_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/sqlite.rs");
+const MYSQL_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/mysql.rs");
+const POSTGRES_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/postgres.rs");
+const MSSQL_FLOW_STORE: &str = include_str!("../crates/catga-flow-store/src/mssql.rs");
+const STORAGE_BENCHMARK: &str = include_str!("storage_performance.rs");
 
 #[test]
 fn performance_runner_executes_every_manual_benchmark_class() {
@@ -99,4 +104,40 @@ fn memory_benchmark_uses_the_complete_report_schema() {
             "memory benchmark must emit the complete report field {field}"
         );
     }
+}
+
+#[test]
+fn sql_flow_updates_use_one_business_version_compare_and_swap() {
+    for (backend, source) in [
+        ("sqlite", SQLITE_FLOW_STORE),
+        ("mysql", MYSQL_FLOW_STORE),
+        ("postgres", POSTGRES_FLOW_STORE),
+        ("mssql", MSSQL_FLOW_STORE),
+    ] {
+        let update = source
+            .split("pub(crate) async fn update")
+            .nth(1)
+            .and_then(|body| body.split("async fn").next())
+            .expect("FlowStore update implementation must exist");
+        assert!(
+            !update.contains("load(pool"),
+            "{backend} updates must avoid the extra pre-read round trip"
+        );
+        assert!(
+            update.contains("expected_version"),
+            "{backend} updates must retain the public business-version CAS fence"
+        );
+    }
+}
+
+#[test]
+fn storage_benchmark_reports_pool_concurrency_capacity() {
+    assert!(
+        STORAGE_BENCHMARK.contains("CONCURRENCY_LEVELS"),
+        "storage performance reports must measure bounded pool concurrency"
+    );
+    assert!(
+        STORAGE_BENCHMARK.contains("bounded_concurrency"),
+        "storage performance reports must identify their concurrency level"
+    );
 }
