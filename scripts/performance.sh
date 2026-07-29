@@ -148,7 +148,16 @@ if (( functional_exit_code != 0 )); then
 fi
 
 set_connection_environment
-export CATGA_PERFORMANCE_RESULTS="$output_directory/performance.json"
+export CATGA_PERFORMANCE_RESULTS="$output_directory/memory-performance.json"
+set +e
+cargo test --release -p catga-memory --test memory_performance -- --ignored --nocapture \
+    2>&1 | tee "$output_directory/memory-performance.log"
+memory_exit_code=${PIPESTATUS[0]}
+set -e
+if (( memory_exit_code != 0 )); then
+    die "memory performance test failed with exit code $memory_exit_code"
+fi
+
 set +e
 cargo test --release -p catga-tests --all-features \
     --test critical_path_performance \
@@ -171,7 +180,44 @@ if (( nats_exit_code != 0 )); then
     die "NATS JetStream performance test failed with exit code $nats_exit_code"
 fi
 
+extract_throughput() {
+    local log_file=$1 metric_name=$2
+    local value
+    value=$(grep -E "^${metric_name}:" "$log_file" | tail -n1 | sed -E 's/.*_per_second=([0-9.]+).*/\1/')
+    [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "could not read $metric_name throughput from $log_file"
+    printf '%s\n' "$value"
+}
+
+write_in_process_results() {
+    local critical mediator flow dsl nats
+    critical=$(extract_throughput "$output_directory/in-process-performance.log" critical_application_path)
+    mediator=$(extract_throughput "$output_directory/in-process-performance.log" mediator_batch_scheduler_throughput)
+    flow=$(extract_throughput "$output_directory/in-process-performance.log" local_flow_execution_throughput)
+    dsl=$(extract_throughput "$output_directory/in-process-performance.log" local_dsl_flow_execution_throughput)
+    nats=$(extract_throughput "$output_directory/nats-performance.log" nats_jetstream_publish_receive_ack)
+
+    jq -n \
+        --argjson critical "$critical" \
+        --argjson mediator "$mediator" \
+        --argjson flow "$flow" \
+        --argjson dsl "$dsl" \
+        '{ schema_version: 1, source: "in-process", results: [
+            { name: "critical_application_path", operations: 4096, operations_per_second: $critical },
+            { name: "mediator_batch_scheduler", operations: 4096, operations_per_second: $mediator },
+            { name: "local_flow_execution", operations: 4096, operations_per_second: $flow },
+            { name: "local_dsl_flow_execution", operations: 4096, operations_per_second: $dsl }
+        ] }' >"$output_directory/in-process-performance.json"
+    jq -n \
+        --argjson nats "$nats" \
+        '{ schema_version: 1, source: "NATS JetStream", results: [
+            { name: "nats_jetstream_publish_receive_ack", operations: 1000, operations_per_second: $nats }
+        ] }' >"$output_directory/nats-performance.json"
+}
+
+write_in_process_results
+
 set +e
+export CATGA_PERFORMANCE_RESULTS="$output_directory/performance.json"
 cargo test --release -p catga-tests --all-features --test e2e_performance -- --ignored --nocapture \
     2>&1 | tee "$output_directory/e2e-performance.log"
 e2e_performance_exit_code=${PIPESTATUS[0]}
@@ -188,6 +234,40 @@ jq -r '
   "", "Functional Docker E2E timings", "",
   (.scenarios[] | "\(.id): succeeded=\(.succeeded), duration_ms=\(.durationMilliseconds)")
 ' "$output_directory/functional-e2e-results.json" >>"$output_directory/summary.txt"
+jq -r -s '
+  def cell: if . == null then "—" else tostring end;
+  [
+    "# Catga performance total table",
+    "",
+    "| Source | Benchmark | Operations | Throughput (ops/s) | p50 (ns) | p95 (ns) | p99 (ns) | RSS before (bytes) | RSS after (bytes) | RSS peak (bytes) |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+  ],
+  (
+    [
+      (.[0].results[]? | . + { source: "memory" }),
+      (.[1].results[]? | . + { source: "in-process" }),
+      (.[2].results[]? | . + { source: "NATS JetStream" }),
+      (.[3].results[]? | . + { source: "Docker E2E" })
+    ]
+    | .[]
+    | [
+        .source,
+        .name,
+        (.operations | cell),
+        (.operations_per_second | cell),
+        (.p50_ns | cell),
+        (.p95_ns | cell),
+        (.p99_ns | cell),
+        (.rss_before_bytes | cell),
+        (.rss_after_bytes | cell),
+        (.rss_peak_bytes | cell)
+      ]
+    | "| " + join(" | ") + " |"
+  )
+' "$output_directory/memory-performance.json" \
+    "$output_directory/in-process-performance.json" \
+    "$output_directory/nats-performance.json" \
+    "$output_directory/performance.json" >"$output_directory/summary.md"
 printf '\nIn-process and JetStream benchmark timings\n\n' >>"$output_directory/summary.txt"
 grep -hE '^(critical_application_path|mediator_batch_scheduler_throughput|local_(dsl_)?flow_execution_throughput|nats_jetstream_publish_receive_ack):' \
     "$output_directory/in-process-performance.log" \

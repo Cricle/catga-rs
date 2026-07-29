@@ -30,7 +30,6 @@ are opt-in implementations and integrations.
 
 ```toml
 [dependencies]
-async-trait = "0.1"
 catga-core = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -70,8 +69,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```rust,no_run
-use async_trait::async_trait;
-use catga_core::{CatgaResult, Handler, Mediator, Request, catga_handlers};
+use catga_core::{CatgaResult, Mediator, Request, catga_handlers, request_handler};
 
 struct Double(u64);
 impl catga_core::Message for Double {}
@@ -79,18 +77,11 @@ impl Request for Double {
     type Response = u64;
 }
 
-struct DoubleHandler;
-
-#[async_trait]
-impl Handler<Double> for DoubleHandler {
-    async fn handle(&self, request: Double) -> CatgaResult<u64> {
-        Ok(request.0 * 2)
-    }
-}
-
 #[tokio::main]
 async fn main() -> CatgaResult<()> {
-    let mediator = Mediator::new(catga_handlers! { request Double => DoubleHandler }?);
+    let mediator = Mediator::new(catga_handlers! {
+        request Double => request_handler(|request: Double| async move { Ok(request.0 * 2) })
+    }?);
     let result = mediator.send(Double(21)).await?;
     assert_eq!(result, 42);
     Ok(())

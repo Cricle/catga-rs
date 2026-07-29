@@ -40,23 +40,16 @@
 //! application supplies its own Tokio runtime and `async-trait` dependency.
 //!
 //! ```no_run
-//! use async_trait::async_trait;
-//! use catga_core::{CatgaResult, Handler, Mediator, Request, catga_handlers};
+//! use catga_core::{CatgaResult, Mediator, Request, catga_handlers, request_handler};
 //!
 //! struct Double(u64);
 //! impl catga_core::Message for Double {}
 //! impl Request for Double { type Response = u64; }
 //!
-//! struct DoubleHandler;
-//! #[async_trait]
-//! impl Handler<Double> for DoubleHandler {
-//!     async fn handle(&self, message: Double) -> CatgaResult<u64> {
-//!         Ok(message.0 * 2)
-//!     }
-//! }
-//!
 //! # async fn run() -> CatgaResult<()> {
-//! let mediator = Mediator::new(catga_handlers! { request Double => DoubleHandler }?);
+//! let mediator = Mediator::new(catga_handlers! {
+//!     request Double => request_handler(|message: Double| async move { Ok(message.0 * 2) })
+//! }?);
 //! assert_eq!(mediator.send(Double(21)).await?, 42);
 //! # Ok(())
 //! # }
@@ -212,7 +205,10 @@ pub use event_store::{
 };
 pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
-pub use handler::{CommandHandler, EventHandler, Handler};
+pub use handler::{
+    CommandHandler, CommandHandlerFn, EventHandler, EventHandlerFn, Handler, RequestHandlerFn,
+    command_handler, event_handler, request_handler,
+};
 pub use lease::LeaseStore;
 pub use lifecycle::{
     AcceptanceGate, AsyncInitializable, AutoRecoveryOptions, HealthCheckable, OperationGuard,

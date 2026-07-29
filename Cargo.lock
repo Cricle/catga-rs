@@ -804,6 +804,8 @@ dependencies = [
  "catga-core",
  "catga-flow",
  "dashmap",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
 ]

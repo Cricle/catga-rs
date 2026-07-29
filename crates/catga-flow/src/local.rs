@@ -101,6 +101,46 @@ impl Flow {
         self
     }
 
+    /// Appends a forward action and compensation that share cloneable caller-owned context.
+    ///
+    /// This is equivalent to [`Self::step`], but clones `context` for each forward or
+    /// compensation invocation. It keeps a local flow's resource ownership explicit while
+    /// avoiding repeated `Arc::clone` plumbing in application code that uses the same state for
+    /// both operations.
+    ///
+    /// ```
+    /// use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    /// use catga_flow::Flow;
+    ///
+    /// let reserved = Arc::new(AtomicBool::new(false));
+    /// let flow = Flow::new("reserve")
+    ///     .step_with(
+    ///         Arc::clone(&reserved),
+    ///         |reserved| async move { reserved.store(true, Ordering::Release); Ok(()) },
+    ///         |reserved| async move { reserved.store(false, Ordering::Release); Ok(()) },
+    ///     );
+    /// # let _ = flow;
+    /// ```
+    pub fn step_with<Context, Run, Compensate, RunFuture, CompensateFuture>(
+        self,
+        context: Context,
+        run: Run,
+        compensate: Compensate,
+    ) -> Self
+    where
+        Context: Clone + Send + Sync + 'static,
+        Run: Fn(Context) -> RunFuture + Send + Sync + 'static,
+        Compensate: Fn(Context) -> CompensateFuture + Send + Sync + 'static,
+        RunFuture: Future<Output = CatgaResult<()>> + Send + 'static,
+        CompensateFuture: Future<Output = CatgaResult<()>> + Send + 'static,
+    {
+        let run_context = context.clone();
+        self.step(
+            move || run(run_context.clone()),
+            move || compensate(context.clone()),
+        )
+    }
+
     /// Executes forward actions and compensates completed actions after a failure.
     pub async fn run(self) -> FlowResult {
         self.run_from(0, usize::MAX).await

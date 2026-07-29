@@ -55,6 +55,9 @@ struct PerformanceResult {
     operations: u64,
     elapsed_nanoseconds: u128,
     operations_per_second: f64,
+    p50_ns: u64,
+    p95_ns: u64,
+    p99_ns: u64,
 }
 
 #[derive(Serialize)]
@@ -93,8 +96,11 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
 
     send_price(&client, &endpoint).await?;
     let http_started = Instant::now();
+    let mut http_latencies = Vec::with_capacity(HTTP_REQUEST_COUNT as usize);
     for _ in 0..HTTP_REQUEST_COUNT {
+        let operation_started = Instant::now();
         send_price(&client, &endpoint).await?;
+        http_latencies.push(operation_started.elapsed());
     }
     let http_elapsed = http_started.elapsed();
     server.abort();
@@ -117,7 +123,9 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
         .await
         .map_err(debug_error)?;
     let nats_started = Instant::now();
+    let mut nats_latencies = Vec::with_capacity(NATS_MESSAGE_COUNT as usize);
     for id in 1..=NATS_MESSAGE_COUNT {
+        let operation_started = Instant::now();
         transport
             .publish(performance_envelope(id))
             .await
@@ -125,6 +133,7 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
         let delivery = transport.receive().await.map_err(debug_error)?;
         assert_eq!(delivery.envelope().id(), id);
         transport.ack(delivery).await.map_err(debug_error)?;
+        nats_latencies.push(operation_started.elapsed());
     }
     let nats_elapsed = nats_started.elapsed();
 
@@ -132,11 +141,17 @@ async fn docker_backed_http_and_nats_performance() -> Result<(), String> {
         schema_version: 1,
         environment: "docker-compose",
         results: vec![
-            measured("axum_http_quote", HTTP_REQUEST_COUNT, http_elapsed),
+            measured(
+                "axum_http_quote",
+                HTTP_REQUEST_COUNT,
+                http_elapsed,
+                http_latencies,
+            ),
             measured(
                 "nats_jetstream_round_trip",
                 NATS_MESSAGE_COUNT,
                 nats_elapsed,
+                nats_latencies,
             ),
         ],
     };
@@ -187,13 +202,41 @@ fn measured(
     name: &'static str,
     operations: u64,
     elapsed: std::time::Duration,
+    latencies: Vec<std::time::Duration>,
 ) -> PerformanceResult {
     PerformanceResult {
         name,
         operations,
         elapsed_nanoseconds: elapsed.as_nanos(),
         operations_per_second: operations as f64 / elapsed.as_secs_f64(),
+        p50_ns: percentile_nanoseconds(&latencies, 50),
+        p95_ns: percentile_nanoseconds(&latencies, 95),
+        p99_ns: percentile_nanoseconds(&latencies, 99),
     }
+}
+
+fn percentile_nanoseconds(latencies: &[std::time::Duration], percentile: usize) -> u64 {
+    assert!(!latencies.is_empty());
+    assert!((1..=100).contains(&percentile));
+    let mut nanoseconds = latencies
+        .iter()
+        .map(|latency| u64::try_from(latency.as_nanos()).unwrap_or(u64::MAX))
+        .collect::<Vec<_>>();
+    nanoseconds.sort_unstable();
+    let rank = (nanoseconds.len() * percentile)
+        .div_ceil(100)
+        .saturating_sub(1);
+    nanoseconds[rank]
+}
+
+#[test]
+fn latency_percentiles_use_nearest_rank() {
+    let samples = (1..=100)
+        .map(std::time::Duration::from_nanos)
+        .collect::<Vec<_>>();
+    assert_eq!(percentile_nanoseconds(&samples, 50), 50);
+    assert_eq!(percentile_nanoseconds(&samples, 95), 95);
+    assert_eq!(percentile_nanoseconds(&samples, 99), 99);
 }
 
 fn unique_suffix() -> String {
