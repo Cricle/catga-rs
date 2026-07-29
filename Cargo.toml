@@ -5,6 +5,7 @@ members = [
     "crates/catga-flow-store",
     "crates/catga-codec-bincode",
     "crates/catga-codec-memorypack",
+    "crates/catga-codec-memorypack/memorypack-derive",
     "crates/catga-axum",
     "crates/catga-cluster",
     "crates/catga-macros",

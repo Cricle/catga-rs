@@ -87,7 +87,8 @@ jobs:
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: |
           for package in catga-macros catga-core catga-memorypack-derive catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
-            version="$(cargo pkgid -p "$package")"
+            package_id="$(cargo pkgid -p "$package")"
+            version="${package_id##*@}"
             version="${version##*#}"
             http_status="$(curl --silent --show-error --location --retry 3 \
               --user-agent 'catga-release/0.0.1 (https://github.com/Cricle/catga-rs)' \

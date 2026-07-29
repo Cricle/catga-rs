@@ -133,6 +133,10 @@ fn release_uses_catga_owned_memorypack_derive_and_safe_registry_checks() {
             "release registry checks must handle {registry_safety_check} explicitly"
         );
     }
+    assert!(
+        RELEASE_WORKFLOW.contains("version=\"${package_id##*@}\""),
+        "release registry checks must extract the pure SemVer suffix from every Cargo package ID"
+    );
 }
 
 #[test]
