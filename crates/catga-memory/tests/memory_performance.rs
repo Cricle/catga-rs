@@ -35,11 +35,13 @@ impl Request for MemoryRequest {
 struct MemoryPerformanceResult {
     name: &'static str,
     operations: u64,
+    payload_bytes: Option<usize>,
     elapsed_nanoseconds: u64,
     operations_per_second: f64,
     p50_ns: u64,
     p95_ns: u64,
     p99_ns: u64,
+    latency_scope: &'static str,
     rss_before_bytes: u64,
     rss_after_bytes: u64,
     rss_peak_bytes: u64,
@@ -48,6 +50,7 @@ struct MemoryPerformanceResult {
 #[derive(Serialize)]
 struct MemoryPerformanceReport {
     schema_version: u8,
+    source: &'static str,
     environment: MemoryEnvironment,
     results: Vec<MemoryPerformanceResult>,
 }
@@ -80,6 +83,7 @@ async fn memory_performance_report() -> CatgaResult<()> {
     let outbox_result = measure_outbox_retention().await?;
     let report = MemoryPerformanceReport {
         schema_version: 1,
+        source: "in-process memory",
         environment: MemoryEnvironment {
             operating_system: "linux",
             rss_source: "/proc/self/status (VmRSS and VmHWM)",
@@ -122,8 +126,10 @@ async fn measure_memory_transport(
     }
     measured(
         "memory_transport_round_trip",
+        Some(PAYLOAD_BYTES),
         started.elapsed(),
         latencies,
+        "message round trip",
         rss_before_bytes,
     )
 }
@@ -157,8 +163,10 @@ async fn measure_tokio_mpsc() -> CatgaResult<MemoryPerformanceResult> {
     }
     measured(
         "tokio_mpsc_round_trip_lower_bound",
+        Some(PAYLOAD_BYTES),
         started.elapsed(),
         latencies,
+        "message round trip",
         rss_before_bytes,
     )
 }
@@ -174,8 +182,10 @@ async fn measure_mediator(mediator: &Mediator) -> CatgaResult<MemoryPerformanceR
     }
     measured(
         "mediator_request",
+        None,
         started.elapsed(),
         latencies,
+        "request",
         rss_before_bytes,
     )
 }
@@ -194,8 +204,10 @@ async fn measure_flow() -> CatgaResult<MemoryPerformanceResult> {
     }
     measured(
         "flow_execution",
+        None,
         started.elapsed(),
         latencies,
+        "flow execution",
         rss_before_bytes,
     )
 }
@@ -214,8 +226,10 @@ async fn measure_outbox_retention() -> CatgaResult<MemoryPerformanceResult> {
     }
     measured(
         "memory_outbox_retained_records",
+        Some(PAYLOAD_BYTES),
         started.elapsed(),
         latencies,
+        "enqueue",
         rss_before_bytes,
     )
 }
@@ -243,8 +257,10 @@ fn memory_envelope(id: u64) -> Envelope {
 
 fn measured(
     name: &'static str,
+    payload_bytes: Option<usize>,
     elapsed: Duration,
     latencies: Vec<Duration>,
+    latency_scope: &'static str,
     rss_before_bytes: u64,
 ) -> CatgaResult<MemoryPerformanceResult> {
     let operations = u64::try_from(latencies.len()).map_err(debug_error)?;
@@ -254,11 +270,13 @@ fn measured(
     Ok(MemoryPerformanceResult {
         name,
         operations,
+        payload_bytes,
         elapsed_nanoseconds,
         operations_per_second: operations as f64 / elapsed.as_secs_f64(),
         p50_ns: percentile_nanoseconds(&latencies, 50),
         p95_ns: percentile_nanoseconds(&latencies, 95),
         p99_ns: percentile_nanoseconds(&latencies, 99),
+        latency_scope,
         rss_before_bytes,
         rss_after_bytes,
         rss_peak_bytes,

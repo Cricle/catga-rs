@@ -3,6 +3,7 @@
 const PERFORMANCE_RUNNER: &str = include_str!("../scripts/performance.sh");
 const RELEASE_WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
 const MANUAL_WORKFLOW: &str = include_str!("../.github/workflows/performance.yml");
+const MEMORY_BENCHMARK: &str = include_str!("../crates/catga-memory/tests/memory_performance.rs");
 
 #[test]
 fn performance_runner_executes_every_manual_benchmark_class() {
@@ -84,4 +85,18 @@ fn complete_performance_suite_is_manual_or_release_only() {
     assert!(RELEASE_WORKFLOW.contains("scripts/performance.sh --profile full"));
     assert!(MANUAL_WORKFLOW.contains("workflow_dispatch:"));
     assert!(MANUAL_WORKFLOW.contains("scripts/performance.sh --profile"));
+}
+
+#[test]
+fn memory_benchmark_uses_the_complete_report_schema() {
+    for field in [
+        "source: \"in-process memory\"",
+        "payload_bytes",
+        "latency_scope",
+    ] {
+        assert!(
+            MEMORY_BENCHMARK.contains(field),
+            "memory benchmark must emit the complete report field {field}"
+        );
+    }
 }
