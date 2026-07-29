@@ -3,15 +3,11 @@
 //! Run it with `cargo run -p catga-examples --bin axum_checkout`, then submit a request:
 //! `curl -sS -X POST http://127.0.0.1:3000/orders -H 'content-type: application/json' \
 //!   -d '{"quantity":2,"unit_price_cents":1299}'`.
-//! The route is declared with [`catga_axum::catga_routes!`], so changing the request type or
-//! handler registration remains a compile-time checked startup operation.
-
-use std::sync::Arc;
+//! The application is declared with [`catga_axum::catga_application!`], so changing the request
+//! type or handler registration remains a compile-time checked startup operation.
 
 use async_trait::async_trait;
-use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, Handler, Mediator, Message, Request, catga_handlers,
-};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Handler, Message, Request};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -56,14 +52,14 @@ impl Handler<CreateOrder> for CreateOrderHandler {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {
-    let mediator = Arc::new(Mediator::new(
-        catga_handlers! { request CreateOrder => CreateOrderHandler }?,
-    ));
-    let app = catga_axum::catga_routes! {
-        mediator = mediator;
-        requests { @post "/orders" => CreateOrder }
-        events {}
-    }?;
+    let app = catga_axum::catga_application! {
+        handlers { request CreateOrder => CreateOrderHandler; }
+        routes {
+            requests { @post "/orders" => CreateOrder }
+            events {}
+        }
+    }?
+    .router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
         .map_err(|error| {

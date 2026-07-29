@@ -16,6 +16,7 @@ your control.
 | Send a typed command or query in one process | [`mediator`](examples/src/bin/mediator.rs) | `catga-core` handlers and optional pipelines |
 | Run a compensating sequence of local steps | [`flow`](examples/src/bin/flow.rs) | `catga-flow` and a durable `FlowStore` when restarts matter |
 | Publish and acknowledge messages locally | [`memory_transport`](examples/src/bin/memory_transport.rs) | NATS, Redis, RobustMQ, or an application transport implementation |
+| Build a complete HTTP checkout service | [`order_service`](examples/src/bin/order_service.rs) | durable stores, outbox worker, and a production cluster deployment |
 
 Each example is runnable without Docker or credentials. They demonstrate the
 same public traits used in production, so moving from local development to a
@@ -49,6 +50,7 @@ The repository keeps the introductory programs small and runnable:
 cargo run -p catga-examples --bin mediator
 cargo run -p catga-examples --bin flow
 cargo run -p catga-examples --bin memory_transport
+cargo run -p catga-examples --bin order_service
 ```
 
 Their source lives in [`examples/src/bin`](examples/src/bin).

@@ -84,6 +84,37 @@ pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
 /// snapshot must use the snapshot transport rather than bypassing this bounded route.
 pub const MAX_RAFT_MESSAGE_BYTES: usize = 1024 * 1024;
 
+/// An immutable, explicitly composed typed HTTP application.
+///
+/// Construct this with [`catga_application!`] when an application has one mediator and a static
+/// set of typed Axum routes. The type owns no runtime, background task, storage connection, or
+/// configuration discovery; callers retain those deployment decisions and can clone the router
+/// for the server they own.
+#[derive(Clone)]
+pub struct CatgaApplication {
+    mediator: Arc<Mediator>,
+    router: Router,
+}
+
+impl CatgaApplication {
+    /// Combines an already constructed mediator and static Axum router.
+    #[must_use]
+    pub const fn new(mediator: Arc<Mediator>, router: Router) -> Self {
+        Self { mediator, router }
+    }
+
+    /// Returns the application mediator for explicit in-process dispatch.
+    #[must_use]
+    pub fn mediator(&self) -> Arc<Mediator> {
+        Arc::clone(&self.mediator)
+    }
+
+    /// Returns a clone of the application router for an application-owned Axum server.
+    pub fn router(&self) -> Router {
+        self.router.clone()
+    }
+}
+
 /// Adds the current task's correlation identifier to an outgoing HTTP header map.
 ///
 /// A caller-supplied correlation header is preserved, allowing an explicit
@@ -535,6 +566,100 @@ macro_rules! catga_routes {
                 )?);
             )*
             Ok(router)
+        })()
+    }};
+}
+
+/// Composes handler registration, mediator binding, and typed Axum routes during startup.
+///
+/// The macro constructs the registry and mediator and returns a [`CatgaApplication`]. For the
+/// usual single-hop handler, omit `mediator_handle` entirely. Handlers that dispatch nested
+/// messages can instead supply an explicit [`catga_core::MediatorHandle`]; the macro binds it
+/// exactly once. Neither form creates a runtime, task, store, transport, or listener, preserving
+/// the same explicit ownership as the lower-level APIs.
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use async_trait::async_trait;
+/// # use catga_core::{CatgaResult, Handler, MediatorHandle, Message, Request};
+/// # #[derive(serde::Deserialize)]
+/// # struct Ping;
+/// # impl Message for Ping {}
+/// # impl Request for Ping { type Response = (); }
+/// # struct PingHandler;
+/// # #[async_trait]
+/// # impl Handler<Ping> for PingHandler {
+/// #     async fn handle(&self, _: Ping) -> CatgaResult<()> { Ok(()) }
+/// # }
+/// let handle = MediatorHandle::new();
+/// let application = catga_axum::catga_application! {
+///     mediator_handle = handle;
+///     handlers { request Ping => PingHandler; }
+///     routes {
+///         requests { @post "/ping" => Ping }
+///         events {}
+///     }
+/// }?;
+/// assert!(handle.is_bound());
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
+///
+/// A handler that does not dispatch nested work needs no handle:
+///
+/// ```
+/// # use async_trait::async_trait;
+/// # use catga_core::{CatgaResult, Handler, Message, Request};
+/// # #[derive(serde::Deserialize)]
+/// # struct Health;
+/// # impl Message for Health {}
+/// # impl Request for Health { type Response = (); }
+/// # struct HealthHandler;
+/// # #[async_trait]
+/// # impl Handler<Health> for HealthHandler {
+/// #     async fn handle(&self, _: Health) -> CatgaResult<()> { Ok(()) }
+/// # }
+/// let application = catga_axum::catga_application! {
+///     handlers { request Health => HealthHandler; }
+///     routes {
+///         requests { @post "/health" => Health }
+///         events {}
+///     }
+/// }?;
+/// # let _ = application;
+/// # Ok::<(), catga_core::CatgaError>(())
+/// ```
+#[macro_export]
+macro_rules! catga_application {
+    (
+        handlers { $($handler:tt)* }
+        routes { $($route:tt)* }
+        $(,)?
+    ) => {{
+        (|| -> ::catga_core::CatgaResult<$crate::CatgaApplication> {
+            let registry = ::catga_core::catga_handlers! { $($handler)* }?;
+            let mediator = ::std::sync::Arc::new(::catga_core::Mediator::new(registry));
+            let router = $crate::catga_routes! {
+                mediator = ::std::sync::Arc::clone(&mediator);
+                $($route)*
+            }?;
+            Ok($crate::CatgaApplication::new(mediator, router))
+        })()
+    }};
+    (
+        mediator_handle = $mediator_handle:expr;
+        handlers { $($handler:tt)* }
+        routes { $($route:tt)* }
+        $(,)?
+    ) => {{
+        (|| -> ::catga_core::CatgaResult<$crate::CatgaApplication> {
+            let registry = ::catga_core::catga_handlers! { $($handler)* }?;
+            let mediator = ::std::sync::Arc::new(::catga_core::Mediator::new(registry));
+            let router = $crate::catga_routes! {
+                mediator = ::std::sync::Arc::clone(&mediator);
+                $($route)*
+            }?;
+            ($mediator_handle).bind(::std::sync::Arc::clone(&mediator))?;
+            Ok($crate::CatgaApplication::new(mediator, router))
         })()
     }};
 }

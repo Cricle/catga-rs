@@ -15,6 +15,7 @@
 
 mod app;
 mod domain;
+mod handlers;
 
 pub use app::{OrderService, OrderServiceHealth, OrderServiceOptions};
 pub use domain::OrderAccepted;

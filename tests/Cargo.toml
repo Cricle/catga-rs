@@ -105,6 +105,10 @@ name = "axum"
 path = "axum.rs"
 
 [[test]]
+name = "application"
+path = "application.rs"
+
+[[test]]
 name = "state_machine"
 path = "state_machine.rs"
 

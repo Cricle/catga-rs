@@ -6,19 +6,19 @@ use std::{
     },
 };
 
-use async_trait::async_trait;
 use axum::{Json, Router, routing::get};
-use catga_cluster::{ClusterCoordinator, MemoryCluster, MemoryClusterNode, cluster_health};
+use catga_axum::CatgaApplication;
+use catga_cluster::{MemoryCluster, MemoryClusterNode, cluster_health};
 use catga_core::{
-    CatgaError, CatgaResult, CommandHandler, Envelope, ErrorCode, EventHandler, EventStore,
-    Handler, Mediator, MediatorHandle, MessageMetadata, MessageTransport, OutboxMessage,
-    OutboxProcessor, OutboxStore, catga_handlers,
+    CatgaError, CatgaResult, ErrorCode, EventStore, MediatorHandle, MessageTransport,
 };
-use catga_flow::Flow;
 use catga_memory::{MemoryEventStore, MemoryOutbox, MemoryTransport};
 use serde::{Deserialize, Serialize};
 
 use super::domain::{GetOrder, OrderAccepted, OrderCompleted, PlaceOrder, RecordOrder};
+use super::handlers::{
+    GetOrderHandler, OrderCompletedHandler, PlaceOrderHandler, RecordOrderHandler,
+};
 
 /// Startup options for the runnable in-memory order service.
 ///
@@ -87,43 +87,28 @@ pub struct OrderServiceHealth {
 /// The application demonstrates explicit startup registration and no hidden background tasks.
 /// Successful commands append an event and enqueue it in the outbox; this sample immediately
 /// invokes a single outbox flush to make its local delivery observable. Production applications
-/// should supervise an [`OutboxProcessor`] worker and replace memory adapters with durable ones.
+/// should supervise an [`catga_core::OutboxProcessor`] worker and replace memory adapters with
+/// durable ones.
 #[derive(Clone)]
 pub struct OrderService {
-    mediator: Arc<Mediator>,
+    application: CatgaApplication,
     cluster: Arc<MemoryCluster>,
     node: Arc<MemoryClusterNode>,
     runtime: Arc<OrderRuntime>,
 }
 
-struct OrderRuntime {
-    mediator: MediatorHandle,
-    node: Arc<MemoryClusterNode>,
-    event_store: Arc<MemoryEventStore>,
-    outbox: Arc<MemoryOutbox>,
-    transport: Arc<MemoryTransport>,
+pub(super) struct OrderRuntime {
+    pub(super) mediator: MediatorHandle,
+    pub(super) node: Arc<MemoryClusterNode>,
+    pub(super) event_store: Arc<MemoryEventStore>,
+    pub(super) outbox: Arc<MemoryOutbox>,
+    pub(super) transport: Arc<MemoryTransport>,
     orders: Mutex<HashMap<Box<str>, OrderAccepted>>,
     inventory: Mutex<HashSet<Box<str>>>,
     payments: Mutex<HashSet<Box<str>>>,
-    accepts_payments: bool,
-    next_order_id: AtomicU64,
-    completed_handlers: AtomicUsize,
-}
-
-struct PlaceOrderHandler {
-    runtime: Arc<OrderRuntime>,
-}
-
-struct RecordOrderHandler {
-    runtime: Arc<OrderRuntime>,
-}
-
-struct GetOrderHandler {
-    runtime: Arc<OrderRuntime>,
-}
-
-struct OrderCompletedHandler {
-    runtime: Arc<OrderRuntime>,
+    pub(super) accepts_payments: bool,
+    pub(super) next_order_id: AtomicU64,
+    pub(super) completed_handlers: AtomicUsize,
 }
 
 impl OrderService {
@@ -174,16 +159,21 @@ impl OrderService {
             next_order_id: AtomicU64::new(0),
             completed_handlers: AtomicUsize::new(0),
         });
-        let registry = catga_handlers! {
-            request PlaceOrder => PlaceOrderHandler { runtime: Arc::clone(&runtime) };
-            request GetOrder => GetOrderHandler { runtime: Arc::clone(&runtime) };
-            command RecordOrder => RecordOrderHandler { runtime: Arc::clone(&runtime) };
-            event OrderCompleted => [OrderCompletedHandler { runtime: Arc::clone(&runtime) }];
+        let application = catga_axum::catga_application! {
+            mediator_handle = runtime.mediator;
+            handlers {
+                request PlaceOrder => PlaceOrderHandler { runtime: Arc::clone(&runtime) };
+                request GetOrder => GetOrderHandler { runtime: Arc::clone(&runtime) };
+                command RecordOrder => RecordOrderHandler { runtime: Arc::clone(&runtime) };
+                event OrderCompleted => [OrderCompletedHandler { runtime: Arc::clone(&runtime) }];
+            }
+            routes {
+                requests { @post "/orders" => PlaceOrder }
+                events {}
+            }
         }?;
-        let mediator = Arc::new(Mediator::new(registry));
-        runtime.mediator.bind(Arc::clone(&mediator))?;
         Ok(Self {
-            mediator,
+            application,
             cluster,
             node,
             runtime,
@@ -193,12 +183,7 @@ impl OrderService {
     /// Builds the typed Axum API and the cluster readiness endpoint.
     pub fn router(&self) -> CatgaResult<Router> {
         let service = self.clone();
-        let routes = catga_axum::catga_routes! {
-            mediator = Arc::clone(&self.mediator);
-            requests { @post "/orders" => PlaceOrder }
-            events {}
-        }?;
-        Ok(routes.route(
+        Ok(self.application.router().route(
             "/healthz",
             get(move || {
                 let service = service.clone();
@@ -290,137 +275,10 @@ impl OrderService {
     }
 }
 
-#[async_trait]
-impl Handler<PlaceOrder> for PlaceOrderHandler {
-    async fn handle(&self, order: PlaceOrder) -> CatgaResult<OrderAccepted> {
-        if order.quantity == 0 {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "an order must contain at least one item",
-            ));
-        }
-        let total_cents = order
-            .unit_price_cents
-            .checked_mul(u64::from(order.quantity))
-            .ok_or_else(|| CatgaError::new(ErrorCode::Validation, "order total overflows u64"))?;
-        let sequence = self.runtime.next_order_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let order_id: Box<str> = format!("order-{sequence}").into();
-        self.runtime
-            .mediator
-            .send_command(RecordOrder {
-                order_id: order_id.clone(),
-                quantity: order.quantity,
-                total_cents,
-            })
-            .await?;
-        self.runtime.mediator.send(GetOrder { order_id }).await
-    }
-}
-
-#[async_trait]
-impl CommandHandler<RecordOrder> for RecordOrderHandler {
-    async fn handle(&self, command: RecordOrder) -> CatgaResult<()> {
-        if !self.runtime.node.is_leader() {
-            return Err(CatgaError::new(
-                ErrorCode::Unavailable,
-                "checkout must execute on the elected order-service leader",
-            ));
-        }
-        let order_id = command.order_id.clone();
-        let release_order_id = command.order_id.clone();
-        let payment_order_id = command.order_id.clone();
-        let refund_order_id = command.order_id.clone();
-        let reservation_runtime = Arc::clone(&self.runtime);
-        let release_runtime = Arc::clone(&self.runtime);
-        let payment_runtime = Arc::clone(&self.runtime);
-        let refund_runtime = Arc::clone(&self.runtime);
-        let flow = Flow::new("order-checkout")
-            .step(
-                move || {
-                    let runtime = Arc::clone(&reservation_runtime);
-                    let order_id = order_id.clone();
-                    async move { runtime.reserve_inventory(&order_id) }
-                },
-                move || {
-                    let runtime = Arc::clone(&release_runtime);
-                    let order_id = release_order_id.clone();
-                    async move { runtime.release_inventory(&order_id) }
-                },
-            )
-            .step(
-                move || {
-                    let runtime = Arc::clone(&payment_runtime);
-                    let order_id = payment_order_id.clone();
-                    async move { runtime.capture_payment(&order_id) }
-                },
-                move || {
-                    let runtime = Arc::clone(&refund_runtime);
-                    let order_id = refund_order_id.clone();
-                    async move { runtime.refund_payment(&order_id) }
-                },
-            )
-            .run()
-            .await;
-        if let Some(error) = flow.error() {
-            return Err(error.clone());
-        }
-
-        let accepted = OrderAccepted {
-            order_id: command.order_id.clone(),
-            quantity: command.quantity,
-            total_cents: command.total_cents,
-        };
-        let event = OrderCompleted {
-            order_id: command.order_id.clone(),
-            total_cents: command.total_cents,
-        };
-        let envelope = event_envelope(command.order_id.as_ref(), &event)?;
-        self.runtime
-            .event_store
-            .append("orders", vec![envelope.clone()], None)
-            .await?;
-        self.runtime
-            .outbox
-            .enqueue(OutboxMessage::new(envelope))
-            .await?;
-        self.runtime.mediator.publish(event).await?;
-        self.runtime
-            .lock_orders()?
-            .insert(command.order_id, accepted);
-        let processor = OutboxProcessor::new(
-            Arc::clone(&self.runtime.outbox),
-            Arc::clone(&self.runtime.transport),
-            "order-service-inline-flush",
-            1,
-        )?;
-        processor.flush_once().await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Handler<GetOrder> for GetOrderHandler {
-    async fn handle(&self, query: GetOrder) -> CatgaResult<OrderAccepted> {
-        self.runtime
-            .lock_orders()?
-            .get(query.order_id.as_ref())
-            .cloned()
-            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "order read model is missing"))
-    }
-}
-
-#[async_trait]
-impl EventHandler<OrderCompleted> for OrderCompletedHandler {
-    async fn handle(&self, _: OrderCompleted) -> CatgaResult<()> {
-        self.runtime
-            .completed_handlers
-            .fetch_add(1, Ordering::Release);
-        Ok(())
-    }
-}
-
 impl OrderRuntime {
-    fn lock_orders(&self) -> CatgaResult<MutexGuard<'_, HashMap<Box<str>, OrderAccepted>>> {
+    pub(super) fn lock_orders(
+        &self,
+    ) -> CatgaResult<MutexGuard<'_, HashMap<Box<str>, OrderAccepted>>> {
         self.orders.lock().map_err(|_| {
             CatgaError::new(
                 ErrorCode::Internal,
@@ -429,7 +287,7 @@ impl OrderRuntime {
         })
     }
 
-    fn reserve_inventory(&self, order_id: &str) -> CatgaResult<()> {
+    pub(super) fn reserve_inventory(&self, order_id: &str) -> CatgaResult<()> {
         let inserted = self
             .inventory
             .lock()
@@ -450,7 +308,7 @@ impl OrderRuntime {
         }
     }
 
-    fn release_inventory(&self, order_id: &str) -> CatgaResult<()> {
+    pub(super) fn release_inventory(&self, order_id: &str) -> CatgaResult<()> {
         self.inventory
             .lock()
             .map_err(|_| {
@@ -463,7 +321,7 @@ impl OrderRuntime {
         Ok(())
     }
 
-    fn capture_payment(&self, order_id: &str) -> CatgaResult<()> {
+    pub(super) fn capture_payment(&self, order_id: &str) -> CatgaResult<()> {
         if !self.accepts_payments {
             return Err(CatgaError::new(
                 ErrorCode::Unavailable,
@@ -482,7 +340,7 @@ impl OrderRuntime {
         Ok(())
     }
 
-    fn refund_payment(&self, order_id: &str) -> CatgaResult<()> {
+    pub(super) fn refund_payment(&self, order_id: &str) -> CatgaResult<()> {
         self.payments
             .lock()
             .map_err(|_| {
@@ -506,29 +364,4 @@ impl OrderRuntime {
 
 fn node_id(endpoint: &str) -> &str {
     endpoint.rsplit('/').next().unwrap_or(endpoint)
-}
-
-fn event_envelope(order_id: &str, event: &OrderCompleted) -> CatgaResult<Envelope> {
-    let payload = serde_json::to_vec(event).map_err(|error| {
-        CatgaError::new(
-            ErrorCode::SerializationFailed,
-            "serialize completed-order outbox event",
-        )
-        .with_details(error.to_string())
-    })?;
-    let id = order_id
-        .strip_prefix("order-")
-        .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(|| {
-            CatgaError::new(
-                ErrorCode::Internal,
-                "order-service generated an invalid order identifier",
-            )
-        })?;
-    Ok(Envelope::new(
-        id,
-        "order.completed",
-        payload,
-        MessageMetadata::new(id, None),
-    ))
 }
