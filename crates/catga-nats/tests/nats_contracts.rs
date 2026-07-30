@@ -24,7 +24,7 @@ use catga_flow::{
 use catga_nats::{
     NatsConfig, NatsDeadLetters, NatsEnhancedSnapshots, NatsEventStore, NatsFlowScheduler,
     NatsFlows, NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport,
-    NatsRequestClient, NatsSuspendedFlows, NatsTransport,
+    NatsReceiveOptions, NatsRequestClient, NatsSuspendedFlows, NatsTransport,
 };
 use tempfile::TempDir;
 
@@ -218,6 +218,39 @@ async fn durable_transport_uses_public_qos_contracts_and_round_trips_envelopes()
             .is_err()
     );
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn durable_transport_retains_every_delivery_from_a_configured_pull_batch() -> CatgaResult<()>
+{
+    let server = NatsServer::start().await?;
+    let transport = NatsTransport::connect_with_receive_options(
+        NatsConfig {
+            server: server.url().into(),
+            stream: unique("CATGA_BATCHED_TRANSPORT").into(),
+            subject: unique("catga.batched.transport").into(),
+            consumer: unique("CATGA_BATCHED_CONSUMER").into(),
+        },
+        NatsReceiveOptions::default().with_pull_batch_size(2)?,
+    )
+    .await?;
+    let first = envelope(11, QualityOfService::AtLeastOnce);
+    let second = envelope(12, QualityOfService::AtLeastOnce);
+    transport.publish(first.clone()).await?;
+    transport.publish(second.clone()).await?;
+
+    let delivered_first = tokio::time::timeout(Duration::from_secs(2), transport.receive())
+        .await
+        .map_err(|error| test_error("receive first prefetched NATS delivery", error))??;
+    assert_eq!(delivered_first.envelope(), &first);
+    delivered_first.acknowledge().await?;
+
+    let delivered_second = tokio::time::timeout(Duration::from_secs(2), transport.receive())
+        .await
+        .map_err(|error| test_error("receive second prefetched NATS delivery", error))??;
+    assert_eq!(delivered_second.envelope(), &second);
+    delivered_second.acknowledge().await
 }
 
 #[tokio::test]

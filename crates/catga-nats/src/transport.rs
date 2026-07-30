@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use async_nats::jetstream::{
     self,
@@ -14,9 +14,12 @@ use catga_core::{
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 use futures::StreamExt;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{NatsConfig, NatsDestinationConfig, acknowledgement::NatsAcknowledger};
+use crate::{
+    NatsConfig, NatsDestinationConfig, NatsReceiveOptions, acknowledgement::NatsAcknowledger,
+};
 
 /// Counter incremented when JetStream confirms that it suppressed an ExactlyOnce duplicate.
 const NATS_DEDUP_DROPS: &str = "catga.nats.dedup.drops";
@@ -30,6 +33,8 @@ const NATS_DEDUP_DROPS: &str = "catga.nats.dedup.drops";
 /// ephemeral publication. Received JetStream deliveries always expose explicit acknowledgement through
 /// [`MessageTransport::ack`]. The default [`MemoryPackCodec`] preserves the original wire format;
 /// applications with another envelope format can select it through a `*_with_codec` constructor.
+/// Receives pull batches of 64 deliveries by default; use `*_with_receive_options` constructors
+/// and [`NatsReceiveOptions`] to select another bounded prefetch size.
 pub struct NatsTransport<C = MemoryPackCodec>
 where
     C: EnvelopeCodec,
@@ -38,6 +43,8 @@ where
     subject: Box<str>,
     codec: C,
     consumer: consumer::PullConsumer,
+    receive_options: NatsReceiveOptions,
+    consumer_batch: Mutex<Option<pull::Batch>>,
     destinations: DashMap<Destination, NatsDestination>,
     operations: OperationTracker,
     acceptance: AcceptanceGate,
@@ -48,6 +55,7 @@ where
 struct NatsDestination {
     subject: Box<str>,
     consumer: consumer::PullConsumer,
+    batch: Arc<Mutex<Option<pull::Batch>>>,
 }
 
 /// Native NATS publication mechanism chosen from an envelope's delivery guarantee.
@@ -64,7 +72,20 @@ enum NatsPublishMode {
 impl NatsTransport<MemoryPackCodec> {
     /// Connects and idempotently provisions the configured stream and durable consumer.
     pub async fn connect(config: NatsConfig) -> CatgaResult<Self> {
-        Self::connect_with_codec(config, MemoryPackCodec::default()).await
+        Self::connect_with_receive_options(config, NatsReceiveOptions::default()).await
+    }
+
+    /// Connects with caller-selected bounded JetStream pull buffering.
+    pub async fn connect_with_receive_options(
+        config: NatsConfig,
+        receive_options: NatsReceiveOptions,
+    ) -> CatgaResult<Self> {
+        Self::connect_with_codec_and_receive_options(
+            config,
+            MemoryPackCodec::default(),
+            receive_options,
+        )
+        .await
     }
 
     /// Builds a transport from an application-owned NATS client.
@@ -74,7 +95,22 @@ impl NatsTransport<MemoryPackCodec> {
     /// `config`. `config.server` is not opened by this constructor; it remains part of
     /// [`NatsConfig`] for compatibility with [`Self::connect`].
     pub async fn from_client(client: async_nats::Client, config: NatsConfig) -> CatgaResult<Self> {
-        Self::from_client_with_codec(client, config, MemoryPackCodec::default()).await
+        Self::from_client_with_receive_options(client, config, NatsReceiveOptions::default()).await
+    }
+
+    /// Builds a transport from an application-owned client with caller-selected pull buffering.
+    pub async fn from_client_with_receive_options(
+        client: async_nats::Client,
+        config: NatsConfig,
+        receive_options: NatsReceiveOptions,
+    ) -> CatgaResult<Self> {
+        Self::from_client_with_codec_and_receive_options(
+            client,
+            config,
+            MemoryPackCodec::default(),
+            receive_options,
+        )
+        .await
     }
 
     /// Builds a transport from an application-owned NATS client.
@@ -86,7 +122,17 @@ impl NatsTransport<MemoryPackCodec> {
         client: async_nats::Client,
         config: NatsConfig,
     ) -> CatgaResult<Self> {
-        Self::connect_with_client_with_codec(client, config, MemoryPackCodec::default()).await
+        Self::connect_with_client_and_receive_options(client, config, NatsReceiveOptions::default())
+            .await
+    }
+
+    /// Alias for [`Self::from_client_with_receive_options`].
+    pub async fn connect_with_client_and_receive_options(
+        client: async_nats::Client,
+        config: NatsConfig,
+        receive_options: NatsReceiveOptions,
+    ) -> CatgaResult<Self> {
+        Self::from_client_with_receive_options(client, config, receive_options).await
     }
 }
 
@@ -99,11 +145,22 @@ where
     /// The selected codec defines the envelope bytes written to and read from NATS. It must be
     /// compatible with every producer and consumer that shares the configured subjects.
     pub async fn connect_with_codec(config: NatsConfig, codec: C) -> CatgaResult<Self> {
+        Self::connect_with_codec_and_receive_options(config, codec, NatsReceiveOptions::default())
+            .await
+    }
+
+    /// Connects with a caller-provided codec and bounded JetStream pull buffering.
+    pub async fn connect_with_codec_and_receive_options(
+        config: NatsConfig,
+        codec: C,
+        receive_options: NatsReceiveOptions,
+    ) -> CatgaResult<Self> {
         validate_config(&config)?;
         let client = async_nats::connect(config.server.as_ref())
             .await
             .map_err(map_error)?;
-        Self::from_client_with_codec(client, config, codec).await
+        Self::from_client_with_codec_and_receive_options(client, config, codec, receive_options)
+            .await
     }
 
     /// Builds a transport from an application-owned NATS client and caller-provided codec.
@@ -117,7 +174,23 @@ where
         config: NatsConfig,
         codec: C,
     ) -> CatgaResult<Self> {
-        Self::initialize(client, config, codec).await
+        Self::from_client_with_codec_and_receive_options(
+            client,
+            config,
+            codec,
+            NatsReceiveOptions::default(),
+        )
+        .await
+    }
+
+    /// Builds a transport from an application-owned client with a codec and pull buffering.
+    pub async fn from_client_with_codec_and_receive_options(
+        client: async_nats::Client,
+        config: NatsConfig,
+        codec: C,
+        receive_options: NatsReceiveOptions,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config, codec, receive_options).await
     }
 
     /// Builds a transport from an application-owned NATS client and caller-provided codec.
@@ -130,13 +203,31 @@ where
         config: NatsConfig,
         codec: C,
     ) -> CatgaResult<Self> {
-        Self::initialize(client, config, codec).await
+        Self::connect_with_client_with_codec_and_receive_options(
+            client,
+            config,
+            codec,
+            NatsReceiveOptions::default(),
+        )
+        .await
+    }
+
+    /// Alias for [`Self::from_client_with_codec_and_receive_options`].
+    pub async fn connect_with_client_with_codec_and_receive_options(
+        client: async_nats::Client,
+        config: NatsConfig,
+        codec: C,
+        receive_options: NatsReceiveOptions,
+    ) -> CatgaResult<Self> {
+        Self::from_client_with_codec_and_receive_options(client, config, codec, receive_options)
+            .await
     }
 
     async fn initialize(
         client: async_nats::Client,
         config: NatsConfig,
         codec: C,
+        receive_options: NatsReceiveOptions,
     ) -> CatgaResult<Self> {
         validate_config(&config)?;
         let context = jetstream::new(client.clone());
@@ -164,6 +255,8 @@ where
             subject: config.subject,
             codec,
             consumer,
+            receive_options,
+            consumer_batch: Mutex::new(None),
             destinations: DashMap::new(),
             operations: OperationTracker::default(),
             acceptance: AcceptanceGate::default(),
@@ -210,6 +303,7 @@ where
         let resource = NatsDestination {
             subject: config.subject,
             consumer,
+            batch: Arc::new(Mutex::new(None)),
         };
         match self.destinations.entry(destination) {
             Entry::Vacant(entry) => {
@@ -260,16 +354,29 @@ where
         }
     }
 
-    async fn receive_consumer(&self, consumer: &consumer::PullConsumer) -> CatgaResult<Delivery> {
+    async fn receive_consumer(
+        &self,
+        consumer: &consumer::PullConsumer,
+        batch_slot: &Mutex<Option<pull::Batch>>,
+    ) -> CatgaResult<Delivery> {
         loop {
-            let mut batch = consumer
-                .batch()
-                .max_messages(1)
-                .expires(Duration::from_secs(30))
-                .messages()
-                .await
-                .map_err(map_error)?;
-            let Some(message) = batch.next().await else {
+            let mut batch = batch_slot.lock().await;
+            if batch.is_none() {
+                *batch = Some(
+                    consumer
+                        .batch()
+                        .max_messages(self.receive_options.pull_batch_size().get())
+                        .expires(Duration::from_secs(30))
+                        .messages()
+                        .await
+                        .map_err(map_error)?,
+                );
+            }
+            let Some(active_batch) = batch.as_mut() else {
+                continue;
+            };
+            let Some(message) = active_batch.next().await else {
+                *batch = None;
                 continue;
             };
             let message = message.map_err(map_error)?;
@@ -352,7 +459,8 @@ where
 
     async fn receive(&self) -> CatgaResult<Delivery> {
         telemetry::record_message_receive("nats", "jetstream", async {
-            self.receive_consumer(&self.consumer).await
+            self.receive_consumer(&self.consumer, &self.consumer_batch)
+                .await
         })
         .await
     }
@@ -376,7 +484,8 @@ where
     async fn receive_from(&self, destination: &Destination) -> CatgaResult<Delivery> {
         telemetry::record_message_receive("nats", "jetstream_destination", async {
             let resource = self.destination(destination)?;
-            self.receive_consumer(&resource.consumer).await
+            self.receive_consumer(&resource.consumer, resource.batch.as_ref())
+                .await
         })
         .await
     }

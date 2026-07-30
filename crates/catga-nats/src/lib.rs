@@ -49,7 +49,10 @@ mod suspended_flow_timeout;
 pub use catga_codec_memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
 mod transport;
 
-pub use config::{NatsConfig, NatsDestinationConfig, NatsPubSubConfig};
+pub use config::{
+    DEFAULT_NATS_PULL_BATCH_SIZE, NatsConfig, NatsDestinationConfig, NatsPubSubConfig,
+    NatsReceiveOptions,
+};
 pub use dead_letter::NatsDeadLetters;
 pub use dsl_progress::NatsDslStepProgress;
 pub use enhanced_snapshot::NatsEnhancedSnapshots;

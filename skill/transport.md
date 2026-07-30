@@ -54,7 +54,9 @@ transport.ack(delivery).await?;
 两种传输，配置名稳定（重启同一 worker 要继续用同一组 stream/consumer 名）：
 
 ```rust,ignore
-use catga_nats::{NatsConfig, NatsPubSubConfig, NatsPubSubTransport, NatsTransport};
+use catga_nats::{
+    NatsConfig, NatsPubSubConfig, NatsPubSubTransport, NatsReceiveOptions, NatsTransport,
+};
 
 // Core NATS Pub/Sub：无 JetStream 资源，仅在线订阅者可见（ ephemeral ）
 let pubsub = NatsPubSubTransport::connect(NatsPubSubConfig {
@@ -63,13 +65,21 @@ let pubsub = NatsPubSubTransport::connect(NatsPubSubConfig {
 }).await?;
 
 // JetStream 持久化传输：stream + subject + durable pull consumer
-let durable = NatsTransport::connect(NatsConfig {
+let config = NatsConfig {
     server: "nats://127.0.0.1:4222".into(),
     stream: "orders".into(),
     subject: "orders.created".into(),
     consumer: "orders-worker".into(),
-}).await?;
+};
+// NatsTransport::connect(config) 使用默认的 64 条预取。
 // 复用已有连接：from_client(client, config)；自定义编解码：connect_with_codec(config, codec)
+
+// receive() 默认每次向 JetStream 请求 64 条并在 transport 内部逐条交付。
+// 用连接时选项覆盖预取上限；每条 Delivery 仍需独立 ack/nack。
+let durable = NatsTransport::connect_with_receive_options(
+    config,
+    NatsReceiveOptions::default().with_pull_batch_size(128)?,
+).await?;
 ```
 
 - 具名目的地资源用 `NatsDestinationConfig { stream, subject, consumer }` 显式供给——**不会**从目的地名自动推导，保证保留策略与消费者身份可审查。
@@ -138,6 +148,37 @@ let delivery: TypedDelivery<MyMessage> = typed.receive().await?;
 typed.process_next(|message: MyMessage| async move { Ok(()) }).await?;   // → TypedProcessOutcome
 // 具名目的地：receive_from::<M>(destination) / process_next_from(..)
 ```
+
+`process_next` 是一条消息的便利 API，适合测试、命令式工具和调用方自己管理循环的场景。生产消费循环请使用 `CompetingConsumer`：它有界并发、统一 ack/nack，并在取消后完成已接收的 delivery。
+
+```rust,ignore
+use std::sync::Arc;
+use async_trait::async_trait;
+use catga_core::{CatgaResult, CompetingConsumer, TypedDeliveryHandler};
+
+struct OrderCreatedHandler;
+
+#[async_trait]
+impl TypedDeliveryHandler<OrderCreated> for OrderCreatedHandler {
+    async fn handle(&self, order: &OrderCreated) -> CatgaResult<()> {
+        // Only business work belongs here. Catga decodes, acks, nacks, and scopes context.
+        persist_order_projection(order).await
+    }
+}
+
+let consumer = CompetingConsumer::typed(
+    Arc::clone(&transport),
+    Arc::new(OrderCreatedHandler),
+    Arc::new(codec),
+    16,
+)?;
+let shutdown = shutdown_token.clone();
+tokio::spawn(async move { consumer.run_until_cancelled(shutdown).await });
+```
+
+The spawned consumer owns each `Delivery` until Catga resolves it. Applications do not need an
+`Acknowledger: Sync` bound to run this loop in a Tokio task, and retaining exclusive ack ownership
+prevents cross-task double acknowledgement.
 
 消息可用 `#[catga(priority = high)]` 与 `schema_version()` 控制线上元数据（见 [mediator.md](mediator.md)）。
 

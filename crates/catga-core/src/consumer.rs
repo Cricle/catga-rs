@@ -1,6 +1,7 @@
 //! Bounded competing-consumer execution for acknowledged transports.
 
 use std::{
+    marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
 };
@@ -12,8 +13,8 @@ use tracing::Instrument;
 
 use crate::correlation::scope_transport_context_value;
 use crate::{
-    CatgaError, CatgaResult, DeadLetter, DeadLetterStore, Delivery, Envelope, ErrorCode,
-    MessageTransport, TransportContext, observability::TRACING_TARGET,
+    CatgaError, CatgaResult, DeadLetter, DeadLetterStore, Delivery, Envelope, ErrorCode, Message,
+    MessageTransport, PayloadDecoder, TransportContext, observability::TRACING_TARGET,
 };
 
 /// Handles one delivered envelope before the framework acknowledges it.
@@ -30,6 +31,53 @@ pub trait DeliveryHandler: Send + Sync {
     /// it and counts it as rejected work; it does not stop the consumer, because a redelivery is a
     /// normal outcome for at-least-once transports.
     async fn handle(&self, envelope: &Envelope) -> CatgaResult<()>;
+}
+
+/// Handles one decoded message for a [`CompetingConsumer`].
+///
+/// Implement this trait on an application service, then construct the consumer with
+/// [`CompetingConsumer::typed`]. The framework decodes the envelope payload with the supplied
+/// [`PayloadDecoder`], scopes the transport context, and owns acknowledgement. A decoding error
+/// is treated like a handler error and requests redelivery; an application handler cannot
+/// acknowledge a message before its business side effects complete.
+#[async_trait]
+pub trait TypedDeliveryHandler<M>: Send + Sync {
+    /// Processes one decoded application message.
+    async fn handle(&self, message: &M) -> CatgaResult<()>;
+}
+
+/// Adapts a [`TypedDeliveryHandler`] and [`PayloadDecoder`] to [`DeliveryHandler`].
+///
+/// Prefer [`CompetingConsumer::typed`] for normal construction. This type remains public for
+/// applications that need to compose the typed handler with a custom consumer wrapper.
+pub struct TypedDeliveryHandlerAdapter<M, H: ?Sized, C: ?Sized> {
+    handler: Arc<H>,
+    decoder: Arc<C>,
+    message: PhantomData<fn(M)>,
+}
+
+impl<M, H: ?Sized, C: ?Sized> TypedDeliveryHandlerAdapter<M, H, C> {
+    /// Builds a typed handler adapter from application-owned shared dependencies.
+    pub fn new(handler: Arc<H>, decoder: Arc<C>) -> Self {
+        Self {
+            handler,
+            decoder,
+            message: PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<M, H, C> DeliveryHandler for TypedDeliveryHandlerAdapter<M, H, C>
+where
+    M: Message,
+    H: ?Sized + TypedDeliveryHandler<M>,
+    C: ?Sized + PayloadDecoder<M>,
+{
+    async fn handle(&self, envelope: &Envelope) -> CatgaResult<()> {
+        let message = self.decoder.decode_payload(envelope.payload())?;
+        self.handler.handle(&message).await
+    }
 }
 
 /// Counts the delivery outcomes observed by one [`CompetingConsumer`] run.
@@ -80,7 +128,9 @@ impl ConsumerRun {
 /// a stream consumer group and NATS uses a durable JetStream consumer. Creating multiple runners
 /// against the same configured group distributes deliveries without a framework-level broker
 /// abstraction or background task. The caller owns the task and cancellation token, which keeps
-/// shutdown ordering visible and testable.
+/// shutdown ordering visible and testable. The runner is `Send` when its transport and handler
+/// are, so applications may move [`Self::run_until_cancelled`] into `tokio::spawn`; individual
+/// [`Delivery`] values remain uniquely owned and can still be acknowledged only once.
 pub struct CompetingConsumer<T: ?Sized, H: ?Sized> {
     transport: Arc<T>,
     handler: Arc<H>,
@@ -190,6 +240,31 @@ where
             run.record(outcome?);
         }
         Ok(run)
+    }
+}
+
+impl<T: ?Sized, M, H: ?Sized, C: ?Sized> CompetingConsumer<T, TypedDeliveryHandlerAdapter<M, H, C>>
+where
+    T: MessageTransport,
+    M: Message,
+    H: TypedDeliveryHandler<M>,
+    C: PayloadDecoder<M>,
+{
+    /// Creates a competing consumer that decodes envelopes before calling `handler`.
+    ///
+    /// The supplied decoder is shared by every concurrent handler call. Use a codec whose
+    /// implementation is safe for concurrent decoding, as required by [`PayloadDecoder`].
+    pub fn typed(
+        transport: Arc<T>,
+        handler: Arc<H>,
+        decoder: Arc<C>,
+        concurrency: usize,
+    ) -> CatgaResult<Self> {
+        Self::new(
+            transport,
+            Arc::new(TypedDeliveryHandlerAdapter::new(handler, decoder)),
+            concurrency,
+        )
     }
 }
 

@@ -191,7 +191,10 @@ pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
     compress_into, compress_to_slice, decompress, decompress_limited, is_compressed,
 };
-pub use consumer::{CompetingConsumer, ConsumerRun, DeliveryHandler};
+pub use consumer::{
+    CompetingConsumer, ConsumerRun, DeliveryHandler, TypedDeliveryHandler,
+    TypedDeliveryHandlerAdapter,
+};
 pub use correlation::{
     CORRELATION_ID_HEADER, Correlated, TransportContext, current_correlation_id,
     current_correlation_value, current_transport_context, scope_correlation_id,

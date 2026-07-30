@@ -2,8 +2,8 @@
 
 use catga_core::ErrorCode;
 use catga_nats::{
-    NatsConfig, NatsEventStore, NatsPubSubConfig, NatsPubSubTransport, NatsRequestClient,
-    NatsRequestServer, NatsTransport,
+    NatsConfig, NatsEventStore, NatsPubSubConfig, NatsPubSubTransport, NatsReceiveOptions,
+    NatsRequestClient, NatsRequestServer, NatsTransport,
 };
 
 const UNREACHABLE_SERVER: &str = "nats://127.0.0.1:1";
@@ -15,6 +15,21 @@ fn durable_config() -> NatsConfig {
         subject: "orders.created".into(),
         consumer: "catga_orders".into(),
     }
+}
+
+#[test]
+fn nats_receive_options_default_to_a_bounded_pull_batch_and_allow_overrides() {
+    let default_options = NatsReceiveOptions::default();
+    assert_eq!(default_options.pull_batch_size().get(), 64);
+
+    let configured = default_options
+        .with_pull_batch_size(16)
+        .expect("positive receive batch size is valid");
+    assert_eq!(configured.pull_batch_size().get(), 16);
+    assert!(matches!(
+        NatsReceiveOptions::default().with_pull_batch_size(0),
+        Err(error) if error.code() == ErrorCode::Validation
+    ));
 }
 
 #[tokio::test]

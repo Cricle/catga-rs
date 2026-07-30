@@ -12,8 +12,8 @@ use std::{
 use async_trait::async_trait;
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, CompetingConsumer, DeadLetter, DeadLetterStore,
-    Delivery, DeliveryHandler, Envelope, EnvelopeHeaders, ErrorCode, MessageMetadata,
-    MessageTransport, current_transport_context,
+    Delivery, DeliveryHandler, Envelope, EnvelopeHeaders, ErrorCode, Message, MessageMetadata,
+    MessageTransport, PayloadDecoder, TypedDeliveryHandler, current_transport_context,
 };
 use catga_memory::MemoryDeadLetters;
 use tokio::sync::Mutex;
@@ -80,7 +80,7 @@ impl MessageTransport for QueueTransport {
                 Envelope::new(
                     id,
                     "orders.created",
-                    Vec::new(),
+                    vec![u8::try_from(id).unwrap_or_default()],
                     MessageMetadata::new(id, None),
                 ),
                 Box::new(TestAcknowledger {
@@ -91,6 +91,77 @@ impl MessageTransport for QueueTransport {
             None => std::future::pending().await,
         }
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct OrderCreated(u8);
+
+impl Message for OrderCreated {}
+
+struct OrderCreatedCodec;
+
+impl PayloadDecoder<OrderCreated> for OrderCreatedCodec {
+    fn decode_payload(&self, payload: &[u8]) -> CatgaResult<OrderCreated> {
+        payload.first().copied().map(OrderCreated).ok_or_else(|| {
+            CatgaError::new(ErrorCode::SerializationFailed, "order payload is empty")
+        })
+    }
+}
+
+struct OrderCreatedHandler {
+    seen: Arc<StdMutex<Vec<OrderCreated>>>,
+    cancel: CancellationToken,
+}
+
+#[async_trait]
+impl TypedDeliveryHandler<OrderCreated> for OrderCreatedHandler {
+    async fn handle(&self, message: &OrderCreated) -> CatgaResult<()> {
+        self.seen
+            .lock()
+            .expect("typed handler test lock is available")
+            .push(OrderCreated(message.0));
+        self.cancel.cancel();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn typed_competing_consumer_decodes_structured_messages_and_owns_acknowledgement()
+-> CatgaResult<()> {
+    let transport = Arc::new(QueueTransport::new([42]));
+    let cancel = CancellationToken::new();
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let consumer = CompetingConsumer::typed(
+        Arc::clone(&transport),
+        Arc::new(OrderCreatedHandler {
+            seen: Arc::clone(&seen),
+            cancel: cancel.clone(),
+        }),
+        Arc::new(OrderCreatedCodec),
+        1,
+    )?;
+
+    let task = tokio::spawn(async move { consumer.run_until_cancelled(cancel).await });
+    let run = tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "typed consumer did not stop"))?
+        .map_err(|error| {
+            CatgaError::new(ErrorCode::Internal, format!("typed consumer task: {error}"))
+        })??;
+
+    assert_eq!(
+        *seen.lock().expect("typed handler test lock is available"),
+        [OrderCreated(42)]
+    );
+    assert_eq!(run.acknowledged(), 1);
+    assert_eq!(
+        transport
+            .acknowledgements
+            .acknowledged
+            .load(Ordering::Acquire),
+        1
+    );
+    Ok(())
 }
 
 struct ConcurrentHandler {
