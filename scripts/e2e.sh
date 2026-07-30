@@ -172,8 +172,10 @@ while IFS= read -r group; do
     group_id=$(printf 'e2e-group-%03d' "$group_number")
     package=$(jq -r '.package' <<<"$group")
     target=$(jq -r '.target' <<<"$group")
+    filter=$(jq -r '.testFilter // empty' <<<"$group")
     mapfile -t test_arguments < <(jq -r '.testArguments[]' <<<"$group")
     cargo_arguments=(test -p "$package" --all-features --test "$target")
+    [[ -n "$filter" ]] && cargo_arguments+=("$filter")
     if [[ "$coverage" == true ]]; then cargo_arguments=(llvm-cov "${cargo_arguments[@]}" --no-clean); fi
     ((${#test_arguments[@]})) && cargo_arguments+=(-- "${test_arguments[@]}")
     log_path="$log_directory/${group_id}-${package}-${target}.log"
@@ -198,7 +200,15 @@ done < <(jq -c --argjson maximum "$(profile_rank "$profile")" '
   [.scenarios[] | select((if .profile == "core" then 0 elif .profile == "sql" then 1 else 2 end) <= $maximum)]
   | group_by([.package, .target, .testArguments])
   | .[]
-  | {package: .[0].package, target: .[0].target, testArguments: .[0].testArguments, scenarios: .}
+  | if any(.[]; .testFilter == null) then
+      {package: .[0].package, target: .[0].target, testFilter: null,
+       testArguments: .[0].testArguments, scenarios: .}
+    else
+      group_by(.testFilter)
+      | .[]
+      | {package: .[0].package, target: .[0].target, testFilter: .[0].testFilter,
+         testArguments: .[0].testArguments, scenarios: .}
+    end
 ' "$matrix_path")
 
 jq -s --arg profile "$profile" --argjson required "$required_pass_percentage" '
