@@ -204,7 +204,9 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     // erased via a constructor that returns an opaque type.
     //
     // Best approach for stable Rust: generate a struct with named generic parameters.
-    let generic_params: Vec<Ident> = (0..field_index).map(|i| format_ident!("__H{i}")).collect();
+    let generic_params: Vec<Ident> = (0..field_index)
+        .map(|index| format_ident!("Handler{index}"))
+        .collect();
 
     // Rebuild fields with concrete generic names.
     let mut typed_fields = Vec::new();
@@ -410,4 +412,23 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         #(#command_impls)*
         #(#event_impls)*
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+
+    use super::expand;
+
+    #[test]
+    fn generated_mediator_uses_user_facing_handler_generic_names() {
+        let expansion = expand(quote! {
+            pub struct WorkerMediator;
+            request GetWork => GetWorkHandler;
+        })
+        .expect("a valid typed mediator declaration expands");
+        let rendered = expansion.to_string();
+        assert!(rendered.contains("Handler0"));
+        assert!(!rendered.contains("__H0"));
+    }
 }
