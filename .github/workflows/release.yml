@@ -86,6 +86,34 @@ jobs:
       - run: cargo test --doc --workspace --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: |
+          publish_with_rate_limit_retry() {
+            local package="$1"
+            local attempt=1
+            local max_attempts=4
+
+            while (( attempt <= max_attempts )); do
+              local publish_log
+              publish_log="$(mktemp)"
+              if cargo publish -p "$package" >"$publish_log" 2>&1; then
+                cat "$publish_log"
+                rm -f "$publish_log"
+                return 0
+              fi
+
+              cat "$publish_log" >&2
+              if ! grep -Fq "status 429 Too Many Requests" "$publish_log" || (( attempt == max_attempts )); then
+                rm -f "$publish_log"
+                return 1
+              fi
+
+              rm -f "$publish_log"
+              echo "crates.io rate limited $package; retrying in five minutes (attempt $attempt/$max_attempts)"
+              sleep 300
+              ((attempt += 1))
+            done
+          }
+
+          published_new_package=false
           for package in catga-macros catga-core catga-memorypack-derive catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
             package_id="$(cargo pkgid -p "$package")"
             version="${package_id##*@}"
@@ -106,8 +134,13 @@ jobs:
                 ;;
             esac
 
+            if [[ "$published_new_package" == true ]]; then
+              echo "waiting five minutes before publishing $package to respect crates.io new-crate limits"
+              sleep 300
+            fi
             cargo publish --dry-run -p "$package"
-            cargo publish -p "$package"
+            publish_with_rate_limit_retry "$package"
+            published_new_package=true
           done
       - name: Publish the verified GitHub release
         run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

@@ -137,6 +137,16 @@ fn release_uses_catga_owned_memorypack_derive_and_safe_registry_checks() {
         RELEASE_WORKFLOW.contains("version=\"${package_id##*@}\""),
         "release registry checks must extract the pure SemVer suffix from every Cargo package ID"
     );
+    for rate_limit_handling in [
+        "publish_with_rate_limit_retry",
+        "status 429 Too Many Requests",
+        "sleep 300",
+    ] {
+        assert!(
+            RELEASE_WORKFLOW.contains(rate_limit_handling),
+            "release publishing must handle crates.io rate limits with {rate_limit_handling}"
+        );
+    }
 }
 
 #[test]
