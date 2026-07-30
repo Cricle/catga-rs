@@ -181,6 +181,36 @@ fn coverage_gate_requires_eighty_percent_without_relaxing_e2e() {
 }
 
 #[test]
+fn ci_runs_strict_workspace_and_e2e_gates_once() {
+    assert!(
+        COVERAGE_RUNNER.contains("llvm-cov test --workspace --all-features --no-report"),
+        "the coverage job must execute the complete workspace test suite"
+    );
+    assert!(
+        COVERAGE_RUNNER.contains("--profile \"$profile\" --coverage"),
+        "the coverage job must execute the complete Docker E2E scenario matrix"
+    );
+    assert!(
+        !CI_WORKFLOW.contains("\n  e2e:\n"),
+        "CI must not execute the full Docker E2E matrix a second time"
+    );
+    assert!(
+        !CI_WORKFLOW.contains("      - run: cargo test --workspace --all-features"),
+        "CI must not execute the workspace test suite outside the coverage gate"
+    );
+    for artifact in [
+        "name: e2e-results",
+        "target/coverage/e2e-results.json",
+        "target/e2e-logs",
+    ] {
+        assert!(
+            CI_WORKFLOW.contains(artifact),
+            "the consolidated coverage job must retain the {artifact} artifact"
+        );
+    }
+}
+
+#[test]
 fn storage_benchmark_uses_fresh_services_after_the_functional_e2e_gate() {
     assert!(
         PERFORMANCE_RUNNER.contains("compose_project=catga-performance"),

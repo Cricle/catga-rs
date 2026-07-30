@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use crate::{CatgaResult, Message, Request, current_correlation_id};
+use tracing::callsite::Callsite;
 
 /// The tracing target used by every Catga framework event and span.
 ///
@@ -154,7 +155,7 @@ pub(crate) fn record_pipeline<T>(
 /// every tracing/OpenTelemetry bridge without reflection or allocating tag collections. The
 /// `enabled!` guard avoids walking annotated fields when debug tracing is disabled.
 pub(crate) fn record_message_tags<M: Message>(span: &tracing::Span, message: &M) {
-    if !tracing::enabled!(target: TRACING_TARGET, tracing::Level::DEBUG) {
+    if !response_tag_events_enabled() {
         return;
     }
     message.visit_trace_tags(&mut |name, value| {
@@ -193,6 +194,18 @@ pub(crate) fn record_response_tags<M: Request>(
             "catga response trace tag"
         );
     });
+}
+
+fn response_tag_events_enabled() -> bool {
+    static __CALLSITE: tracing::callsite::DefaultCallsite = tracing::callsite2! {
+        name: "catga.response_tag.enabled",
+        kind: tracing::metadata::Kind::EVENT,
+        target: TRACING_TARGET,
+        level: tracing::Level::DEBUG,
+        fields: catga_trace_source, catga_trace_tag, catga_trace_value
+    };
+    let metadata = __CALLSITE.metadata();
+    tracing::dispatcher::get_default(|dispatcher| dispatcher.enabled(metadata))
 }
 
 fn record_result<T>(

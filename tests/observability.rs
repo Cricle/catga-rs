@@ -1141,8 +1141,6 @@ async fn mediator_records_opted_in_message_tags_as_structured_tracing_events() {
 #[tokio::test(flavor = "current_thread")]
 async fn mediator_records_only_opted_in_successful_response_tags_as_structured_tracing_events() {
     let _subscriber_lock = TRACE_SUBSCRIBER_TEST_LOCK.lock().await;
-    let recorder = MetricRecorder::default();
-    let metrics_guard = metrics::set_default_local_recorder(&recorder);
     let tags = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(TraceTagLayer(Arc::clone(&tags)));
     let guard = tracing::subscriber::set_default(subscriber);
@@ -1154,9 +1152,22 @@ async fn mediator_records_only_opted_in_successful_response_tags_as_structured_t
         .register_request::<ResponseTaggedReconcile, _>(ResponseTaggedHandler)
         .expect("one typed handler can be registered");
     let mediator = Mediator::new(registry);
+    let pipeline = Pipeline::new();
 
+    let disabled =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(LevelFilter::INFO));
+    mediator
+        .send_with(ResponseTaggedReconcile, &pipeline)
+        .await
+        .expect("tagged response request succeeds with tracing disabled");
+    drop(disabled);
+    let recorder = MetricRecorder::default();
+    let metrics_guard = metrics::set_default_local_recorder(&recorder);
+
+    // Do not rebuild the process-global cache here. The collector must query its current
+    // dispatcher rather than retain the INFO-only dispatcher's response-tag decision.
     let response = mediator
-        .send(ResponseTaggedReconcile)
+        .send_with(ResponseTaggedReconcile, &pipeline)
         .await
         .expect("tagged response request succeeds");
     drop(guard);
