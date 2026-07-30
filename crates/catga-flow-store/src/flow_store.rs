@@ -1,14 +1,9 @@
 //! The plain durable [`catga_flow::FlowStore`] implementation.
 
+use std::time::Duration;
+
 #[cfg(feature = "sqlite")]
 use std::str::FromStr;
-#[cfg(any(
-    feature = "sqlite",
-    feature = "mysql",
-    feature = "postgres",
-    feature = "mssql"
-))]
-use std::time::Duration;
 
 #[cfg(any(
     feature = "sqlite",

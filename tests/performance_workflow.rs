@@ -137,6 +137,10 @@ fn release_uses_catga_owned_memorypack_derive_and_safe_registry_checks() {
         RELEASE_WORKFLOW.contains("version=\"${package_id##*@}\""),
         "release registry checks must extract the pure SemVer suffix from every Cargo package ID"
     );
+    assert!(
+        RELEASE_WORKFLOW.contains("cargo check --workspace --no-default-features"),
+        "release publishing must verify public APIs without optional backend features"
+    );
     for rate_limit_handling in [
         "publish_with_rate_limit_retry",
         "status 429 Too Many Requests",
