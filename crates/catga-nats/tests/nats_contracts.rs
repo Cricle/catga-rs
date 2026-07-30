@@ -362,7 +362,14 @@ async fn projection_runner_replays_incrementally_and_rebuilds_from_nats_event_hi
 
     let runner =
         NatsProjectionRunner::connect(server.url(), config, ProjectionCounter::new()).await?;
-    assert_eq!(runner.run().await?.applied(), 2);
+    assert_eq!(
+        runner
+            .run()
+            .await
+            .map_err(|error| test_error("initial NATS projection replay", error))?
+            .applied(),
+        2
+    );
     assert_eq!(runner.projection().total(), 43);
 
     events
@@ -372,9 +379,23 @@ async fn projection_runner_replays_incrementally_and_rebuilds_from_nats_event_hi
             Some(1),
         )
         .await?;
-    assert_eq!(runner.run().await?.applied(), 1);
+    assert_eq!(
+        runner
+            .run()
+            .await
+            .map_err(|error| test_error("incremental NATS projection replay", error))?
+            .applied(),
+        1
+    );
     assert_eq!(runner.projection().total(), 66);
-    assert_eq!(runner.rebuild().await?.applied(), 3);
+    assert_eq!(
+        runner
+            .rebuild()
+            .await
+            .map_err(|error| test_error("NATS projection rebuild", error))?
+            .applied(),
+        3
+    );
     assert_eq!(runner.projection().total(), 66);
     Ok(())
 }

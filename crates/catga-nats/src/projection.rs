@@ -78,11 +78,16 @@ impl NatsProjectionCheckpoints {
         }
     }
 
-    async fn create(&self, key: &str, checkpoints: &StoredCheckpoints) -> CatgaResult<bool> {
+    async fn create(
+        &self,
+        key: &str,
+        checkpoints: &StoredCheckpoints,
+        expected_revision: u64,
+    ) -> CatgaResult<bool> {
         let record = create_record(&encode(checkpoints)?);
         match self
             .store
-            .update(key, record.value().to_vec().into(), 0)
+            .update(key, record.value().to_vec().into(), expected_revision)
             .await
         {
             Ok(_) => Ok(true),
@@ -108,7 +113,7 @@ impl ProjectionCheckpointStore for NatsProjectionCheckpoints {
         for _ in 0..MAX_CAS_RETRIES {
             let Some(entry) = self.entry(&key).await? else {
                 if self
-                    .create(&key, &StoredCheckpoints::with(checkpoint.clone()))
+                    .create(&key, &StoredCheckpoints::with(checkpoint.clone()), 0)
                     .await?
                 {
                     return Ok(());
@@ -120,7 +125,11 @@ impl ProjectionCheckpointStore for NatsProjectionCheckpoints {
                 kv::Operation::Delete | kv::Operation::Purge
             ) {
                 if self
-                    .create(&key, &StoredCheckpoints::with(checkpoint.clone()))
+                    .create(
+                        &key,
+                        &StoredCheckpoints::with(checkpoint.clone()),
+                        entry.revision,
+                    )
                     .await?
                 {
                     return Ok(());
