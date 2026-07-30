@@ -94,6 +94,29 @@ pub trait Projection: Send + Sync {
 - `LiveProjection` — 实时投影契约。
 - 投影 runner 同样是**应用拥有的任务**，不是后台守护。
 
+NATS EventStore 的投影可用 `NatsProjectionRunner` 合并连接、KV checkpoint 与 catch-up
+replay；它只读取 EventStore，不消费 transport message，因此不会把 JetStream consumer
+cursor 误当成 read-model 进度：
+
+```rust,ignore
+use catga_nats::{NatsProjectionConfig, NatsProjectionRunner};
+
+let runner = NatsProjectionRunner::connect(
+    "nats://127.0.0.1:4222",
+    NatsProjectionConfig {
+        event_stream: "ORDER_EVENTS".into(),
+        event_subject_prefix: "orders.events".into(),
+        checkpoint_bucket: "ORDER_TOTALS_CHECKPOINTS".into(),
+    },
+    OrderTotalsProjection::default(),
+).await?;
+runner.run().await?;       // 只应用 checkpoint 之后的事件
+// runner.rebuild().await?; // 清空 read model 与 checkpoint 后全量回放
+```
+
+实时通知仍使用 `CompetingConsumer`；将它和 runner 同时运行时，读模型更新必须保持
+幂等，因为实时投递和后续 catch-up 都可能看到同一事件。
+
 ## 7. 读模型同步（ReadModel）
 
 把写侧变更同步到查询侧存储：

@@ -13,8 +13,8 @@ use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore,
     EnhancedSnapshotStore, Envelope, EnvelopeCodec, ErrorCode, EventStore, MessageMetadata,
-    MessageTransport, OutboxMessage, OutboxState, OutboxStore, ProjectionCheckpoint,
-    ProjectionCheckpointStore, QualityOfService, Snapshot, SnapshotStore,
+    MessageTransport, OutboxMessage, OutboxState, OutboxStore, Projection, ProjectionCheckpoint,
+    ProjectionCheckpointStore, QualityOfService, Snapshot, SnapshotStore, StoredEvent,
 };
 use catga_flow::{
     DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
@@ -23,9 +23,9 @@ use catga_flow::{
 };
 use catga_nats::{
     NatsConfig, NatsConsumerOptions, NatsDeadLetters, NatsEnhancedSnapshots, NatsEventStore,
-    NatsFlowScheduler, NatsFlows, NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig,
-    NatsPubSubTransport, NatsReceiveOptions, NatsRequestClient, NatsSuspendedFlows, NatsTransport,
-    NatsTransportOptions,
+    NatsFlowScheduler, NatsFlows, NatsOutbox, NatsProjectionCheckpoints, NatsProjectionConfig,
+    NatsProjectionRunner, NatsPubSubConfig, NatsPubSubTransport, NatsReceiveOptions,
+    NatsRequestClient, NatsSuspendedFlows, NatsTransport, NatsTransportOptions,
 };
 use tempfile::TempDir;
 
@@ -131,6 +131,40 @@ fn envelope(id: u64, quality_of_service: QualityOfService) -> Envelope {
         vec![u8::try_from(id).unwrap_or_default()],
         MessageMetadata::new(id, None).with_quality_of_service(quality_of_service),
     )
+}
+
+struct ProjectionCounter {
+    total: AtomicUsize,
+}
+
+impl ProjectionCounter {
+    const fn new() -> Self {
+        Self {
+            total: AtomicUsize::new(0),
+        }
+    }
+
+    fn total(&self) -> usize {
+        self.total.load(Ordering::Acquire)
+    }
+}
+
+#[async_trait::async_trait]
+impl Projection for ProjectionCounter {
+    fn name(&self) -> &str {
+        "nats-projection-runner-contract"
+    }
+
+    async fn apply(&self, event: &StoredEvent) -> CatgaResult<()> {
+        self.total
+            .fetch_add(usize::from(event.envelope().payload()[0]), Ordering::AcqRel);
+        Ok(())
+    }
+
+    async fn reset(&self) -> CatgaResult<()> {
+        self.total.store(0, Ordering::Release);
+        Ok(())
+    }
 }
 
 fn assert_validation<T>(result: CatgaResult<T>) {
@@ -296,6 +330,52 @@ async fn ephemeral_transport_round_trips_without_creating_the_configured_durable
             .await
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn projection_runner_replays_incrementally_and_rebuilds_from_nats_event_history()
+-> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let config = NatsProjectionConfig {
+        event_stream: unique("CATGA_PROJECTION_EVENTS").into(),
+        event_subject_prefix: unique("catga.projection.events").into(),
+        checkpoint_bucket: unique("CATGA_PROJECTION_CHECKPOINTS").into(),
+    };
+    let events = NatsEventStore::connect(
+        server.url(),
+        config.event_stream.clone(),
+        config.event_subject_prefix.clone(),
+    )
+    .await?;
+    events
+        .append(
+            "order-1",
+            vec![
+                envelope(21, QualityOfService::AtLeastOnce),
+                envelope(22, QualityOfService::AtLeastOnce),
+            ],
+            None,
+        )
+        .await?;
+
+    let runner =
+        NatsProjectionRunner::connect(server.url(), config, ProjectionCounter::new()).await?;
+    assert_eq!(runner.run().await?.applied(), 2);
+    assert_eq!(runner.projection().total(), 43);
+
+    events
+        .append(
+            "order-1",
+            vec![envelope(23, QualityOfService::AtLeastOnce)],
+            Some(1),
+        )
+        .await?;
+    assert_eq!(runner.run().await?.applied(), 1);
+    assert_eq!(runner.projection().total(), 66);
+    assert_eq!(runner.rebuild().await?.applied(), 3);
+    assert_eq!(runner.projection().total(), 66);
     Ok(())
 }
 
