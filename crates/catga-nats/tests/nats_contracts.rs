@@ -8,7 +8,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use async_nats::jetstream::{self, kv};
+use async_nats::jetstream::{self, consumer::pull, kv};
 use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore,
@@ -22,9 +22,10 @@ use catga_flow::{
     WaitPolicy,
 };
 use catga_nats::{
-    NatsConfig, NatsDeadLetters, NatsEnhancedSnapshots, NatsEventStore, NatsFlowScheduler,
-    NatsFlows, NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport,
-    NatsReceiveOptions, NatsRequestClient, NatsSuspendedFlows, NatsTransport,
+    NatsConfig, NatsConsumerOptions, NatsDeadLetters, NatsEnhancedSnapshots, NatsEventStore,
+    NatsFlowScheduler, NatsFlows, NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig,
+    NatsPubSubTransport, NatsReceiveOptions, NatsRequestClient, NatsSuspendedFlows, NatsTransport,
+    NatsTransportOptions,
 };
 use tempfile::TempDir;
 
@@ -251,6 +252,51 @@ async fn durable_transport_retains_every_delivery_from_a_configured_pull_batch()
         .map_err(|error| test_error("receive second prefetched NATS delivery", error))??;
     assert_eq!(delivered_second.envelope(), &second);
     delivered_second.acknowledge().await
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn ephemeral_transport_round_trips_without_creating_the_configured_durable_cursor()
+-> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let config = NatsConfig {
+        server: server.url().into(),
+        stream: unique("CATGA_EPHEMERAL_TRANSPORT").into(),
+        subject: unique("catga.ephemeral.transport").into(),
+        consumer: unique("CATGA_MUST_NOT_BE_DURABLE").into(),
+    };
+    let transport = NatsTransport::connect_with_options(
+        config.clone(),
+        NatsTransportOptions::default().with_consumer(
+            NatsConsumerOptions::ephemeral().with_inactive_threshold(Duration::from_secs(90)),
+        ),
+    )
+    .await?;
+    let message = envelope(13, QualityOfService::AtLeastOnce);
+    transport.publish(message.clone()).await?;
+    let delivery = tokio::time::timeout(Duration::from_secs(2), transport.receive())
+        .await
+        .map_err(|error| test_error("receive ephemeral NATS delivery", error))??;
+    assert_eq!(delivery.envelope(), &message);
+    delivery.acknowledge().await?;
+
+    let context = jetstream::new(async_nats::connect(server.url()).await.map_err(|error| {
+        test_error(
+            "connect inspection client for ephemeral NATS transport",
+            error,
+        )
+    })?);
+    let stream = context
+        .get_stream(config.stream.as_ref())
+        .await
+        .map_err(|error| test_error("inspect ephemeral NATS transport stream", error))?;
+    assert!(
+        stream
+            .get_consumer::<pull::Config>(config.consumer.as_ref())
+            .await
+            .is_err()
+    );
+    Ok(())
 }
 
 #[tokio::test]

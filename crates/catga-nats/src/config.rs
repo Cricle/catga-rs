@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, time::Duration};
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
@@ -46,10 +46,105 @@ impl NatsReceiveOptions {
     }
 }
 
+/// Determines how JetStream retains consumer progress.
+///
+/// [`Self::Durable`] is the default and resumes the named consumer after a worker restart.
+/// [`Self::Ephemeral`] creates a new pull consumer for the current transport instance; use it
+/// for replay jobs or high-churn workers whose cursor must not survive process shutdown.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NatsConsumerMode {
+    /// Persist the configured consumer name and its acknowledged cursor.
+    #[default]
+    Durable,
+    /// Create a server-named consumer without a durable cursor.
+    Ephemeral,
+}
+
+/// Lifecycle settings for a JetStream pull consumer.
+///
+/// The default preserves the original durable-consumer behavior. An inactivity threshold is sent
+/// to JetStream only when the application configures one; otherwise the server chooses its own
+/// default. This prevents the transport from silently imposing a retention policy.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NatsConsumerOptions {
+    mode: NatsConsumerMode,
+    inactive_threshold: Option<Duration>,
+}
+
+impl NatsConsumerOptions {
+    /// Returns lifecycle settings for a durable consumer.
+    pub const fn durable() -> Self {
+        Self {
+            mode: NatsConsumerMode::Durable,
+            inactive_threshold: None,
+        }
+    }
+
+    /// Returns lifecycle settings for a server-named ephemeral consumer.
+    pub const fn ephemeral() -> Self {
+        Self {
+            mode: NatsConsumerMode::Ephemeral,
+            inactive_threshold: None,
+        }
+    }
+
+    /// Returns whether the consumer cursor survives a transport restart.
+    pub const fn mode(self) -> NatsConsumerMode {
+        self.mode
+    }
+
+    /// Returns the caller-selected inactivity cleanup threshold, if any.
+    pub const fn inactive_threshold(self) -> Option<Duration> {
+        self.inactive_threshold
+    }
+
+    /// Sets the broker cleanup threshold for an inactive consumer.
+    pub const fn with_inactive_threshold(mut self, inactive_threshold: Duration) -> Self {
+        self.inactive_threshold = Some(inactive_threshold);
+        self
+    }
+}
+
+/// Aggregates bounded receive buffering and consumer lifecycle settings.
+///
+/// Construct this only when an application needs to override both defaults. The focused
+/// `*_with_receive_options` constructors remain available for pull-buffer tuning alone.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NatsTransportOptions {
+    receive: NatsReceiveOptions,
+    consumer: NatsConsumerOptions,
+}
+
+impl NatsTransportOptions {
+    /// Returns bounded pull-buffer settings.
+    pub const fn receive(self) -> NatsReceiveOptions {
+        self.receive
+    }
+
+    /// Returns JetStream consumer lifecycle settings.
+    pub const fn consumer(self) -> NatsConsumerOptions {
+        self.consumer
+    }
+
+    /// Replaces bounded pull-buffer settings.
+    pub const fn with_receive(mut self, receive: NatsReceiveOptions) -> Self {
+        self.receive = receive;
+        self
+    }
+
+    /// Replaces JetStream consumer lifecycle settings.
+    pub const fn with_consumer(mut self, consumer: NatsConsumerOptions) -> Self {
+        self.consumer = consumer;
+        self
+    }
+}
+
 /// JetStream resources used by one Catga transport instance.
 ///
-/// The four names form the durable delivery identity: keep them stable when
-/// restarting a worker that should resume the same stream and consumer.
+/// In the default durable mode, the four names form the delivery identity: keep them stable when
+/// restarting a worker that should resume the same stream and consumer. When using
+/// [`NatsConsumerOptions::ephemeral`], `consumer` is retained only for source compatibility and
+/// validation; JetStream assigns a transient consumer name instead.
 ///
 /// ```
 /// use catga_nats::NatsConfig;
@@ -70,7 +165,7 @@ pub struct NatsConfig {
     pub stream: Box<str>,
     /// Subject used to publish envelopes.
     pub subject: Box<str>,
-    /// Durable pull consumer name.
+    /// Pull consumer name used by the default durable mode.
     pub consumer: Box<str>,
 }
 

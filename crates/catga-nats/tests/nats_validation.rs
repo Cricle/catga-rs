@@ -1,9 +1,12 @@
 //! Service-free validation contracts for public NATS constructors.
 
+use std::time::Duration;
+
 use catga_core::ErrorCode;
 use catga_nats::{
-    NatsConfig, NatsEventStore, NatsPubSubConfig, NatsPubSubTransport, NatsPublisher,
-    NatsPublisherConfig, NatsReceiveOptions, NatsRequestClient, NatsRequestServer, NatsTransport,
+    NatsConfig, NatsConsumerMode, NatsConsumerOptions, NatsEventStore, NatsPubSubConfig,
+    NatsPubSubTransport, NatsPublisher, NatsPublisherConfig, NatsReceiveOptions, NatsRequestClient,
+    NatsRequestServer, NatsTransport, NatsTransportOptions,
 };
 
 const UNREACHABLE_SERVER: &str = "nats://127.0.0.1:1";
@@ -45,6 +48,22 @@ fn nats_receive_options_default_to_a_bounded_pull_batch_and_allow_overrides() {
     ));
 }
 
+#[test]
+fn nats_transport_options_keep_durable_consumers_by_default_and_allow_ephemeral_cleanup() {
+    let defaults = NatsTransportOptions::default();
+    assert_eq!(defaults.consumer().mode(), NatsConsumerMode::Durable);
+    assert_eq!(defaults.consumer().inactive_threshold(), None);
+
+    let ephemeral =
+        NatsConsumerOptions::ephemeral().with_inactive_threshold(Duration::from_secs(90));
+    let configured = defaults.with_consumer(ephemeral);
+    assert_eq!(configured.consumer().mode(), NatsConsumerMode::Ephemeral);
+    assert_eq!(
+        configured.consumer().inactive_threshold(),
+        Some(Duration::from_secs(90))
+    );
+}
+
 #[tokio::test]
 async fn durable_transport_rejects_blank_resource_names_before_connecting() {
     for invalid in [
@@ -66,6 +85,17 @@ async fn durable_transport_rejects_blank_resource_names_before_connecting() {
         };
         assert_eq!(error.code(), ErrorCode::Validation);
     }
+}
+
+#[tokio::test]
+async fn durable_transport_accepts_explicit_ephemeral_consumer_options() {
+    let options = NatsTransportOptions::default().with_consumer(
+        NatsConsumerOptions::ephemeral().with_inactive_threshold(Duration::from_secs(90)),
+    );
+    let Err(error) = NatsTransport::connect_with_options(durable_config(), options).await else {
+        panic!("an unreachable server must fail after accepting valid consumer options");
+    };
+    assert_ne!(error.code(), ErrorCode::Validation);
 }
 
 #[tokio::test]

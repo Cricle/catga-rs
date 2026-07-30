@@ -18,7 +18,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    NatsConfig, NatsDestinationConfig, NatsReceiveOptions, acknowledgement::NatsAcknowledger,
+    NatsConfig, NatsConsumerMode, NatsConsumerOptions, NatsDestinationConfig, NatsReceiveOptions,
+    NatsTransportOptions, acknowledgement::NatsAcknowledger,
 };
 
 /// Counter incremented when JetStream confirms that it suppressed an ExactlyOnce duplicate.
@@ -70,9 +71,21 @@ enum NatsPublishMode {
 }
 
 impl NatsTransport<MemoryPackCodec> {
-    /// Connects and idempotently provisions the configured stream and durable consumer.
+    /// Connects and idempotently provisions the configured stream and default durable consumer.
     pub async fn connect(config: NatsConfig) -> CatgaResult<Self> {
-        Self::connect_with_receive_options(config, NatsReceiveOptions::default()).await
+        Self::connect_with_options(config, NatsTransportOptions::default()).await
+    }
+
+    /// Connects with caller-selected pull buffering and consumer lifecycle settings.
+    ///
+    /// Use [`NatsConsumerOptions::ephemeral`] for a one-off replay that must not preserve a
+    /// JetStream cursor. The configured consumer name is ignored in that mode; JetStream assigns
+    /// a transient name and removes it after the optional inactivity threshold.
+    pub async fn connect_with_options(
+        config: NatsConfig,
+        options: NatsTransportOptions,
+    ) -> CatgaResult<Self> {
+        Self::connect_with_codec_and_options(config, MemoryPackCodec::default(), options).await
     }
 
     /// Connects with caller-selected bounded JetStream pull buffering.
@@ -80,10 +93,21 @@ impl NatsTransport<MemoryPackCodec> {
         config: NatsConfig,
         receive_options: NatsReceiveOptions,
     ) -> CatgaResult<Self> {
-        Self::connect_with_codec_and_receive_options(
+        Self::connect_with_options(
             config,
-            MemoryPackCodec::default(),
-            receive_options,
+            NatsTransportOptions::default().with_receive(receive_options),
+        )
+        .await
+    }
+
+    /// Connects with caller-selected JetStream consumer lifecycle settings.
+    pub async fn connect_with_consumer_options(
+        config: NatsConfig,
+        consumer_options: NatsConsumerOptions,
+    ) -> CatgaResult<Self> {
+        Self::connect_with_options(
+            config,
+            NatsTransportOptions::default().with_consumer(consumer_options),
         )
         .await
     }
@@ -95,7 +119,22 @@ impl NatsTransport<MemoryPackCodec> {
     /// `config`. `config.server` is not opened by this constructor; it remains part of
     /// [`NatsConfig`] for compatibility with [`Self::connect`].
     pub async fn from_client(client: async_nats::Client, config: NatsConfig) -> CatgaResult<Self> {
-        Self::from_client_with_receive_options(client, config, NatsReceiveOptions::default()).await
+        Self::from_client_with_options(client, config, NatsTransportOptions::default()).await
+    }
+
+    /// Builds a transport from an application-owned client with caller-selected options.
+    pub async fn from_client_with_options(
+        client: async_nats::Client,
+        config: NatsConfig,
+        options: NatsTransportOptions,
+    ) -> CatgaResult<Self> {
+        Self::from_client_with_codec_and_options(
+            client,
+            config,
+            MemoryPackCodec::default(),
+            options,
+        )
+        .await
     }
 
     /// Builds a transport from an application-owned client with caller-selected pull buffering.
@@ -104,11 +143,10 @@ impl NatsTransport<MemoryPackCodec> {
         config: NatsConfig,
         receive_options: NatsReceiveOptions,
     ) -> CatgaResult<Self> {
-        Self::from_client_with_codec_and_receive_options(
+        Self::from_client_with_options(
             client,
             config,
-            MemoryPackCodec::default(),
-            receive_options,
+            NatsTransportOptions::default().with_receive(receive_options),
         )
         .await
     }
@@ -122,8 +160,7 @@ impl NatsTransport<MemoryPackCodec> {
         client: async_nats::Client,
         config: NatsConfig,
     ) -> CatgaResult<Self> {
-        Self::connect_with_client_and_receive_options(client, config, NatsReceiveOptions::default())
-            .await
+        Self::from_client(client, config).await
     }
 
     /// Alias for [`Self::from_client_with_receive_options`].
@@ -155,12 +192,25 @@ where
         codec: C,
         receive_options: NatsReceiveOptions,
     ) -> CatgaResult<Self> {
+        Self::connect_with_codec_and_options(
+            config,
+            codec,
+            NatsTransportOptions::default().with_receive(receive_options),
+        )
+        .await
+    }
+
+    /// Connects with a caller-provided codec plus transport and consumer options.
+    pub async fn connect_with_codec_and_options(
+        config: NatsConfig,
+        codec: C,
+        options: NatsTransportOptions,
+    ) -> CatgaResult<Self> {
         validate_config(&config)?;
         let client = async_nats::connect(config.server.as_ref())
             .await
             .map_err(map_error)?;
-        Self::from_client_with_codec_and_receive_options(client, config, codec, receive_options)
-            .await
+        Self::from_client_with_codec_and_options(client, config, codec, options).await
     }
 
     /// Builds a transport from an application-owned NATS client and caller-provided codec.
@@ -174,11 +224,11 @@ where
         config: NatsConfig,
         codec: C,
     ) -> CatgaResult<Self> {
-        Self::from_client_with_codec_and_receive_options(
+        Self::from_client_with_codec_and_options(
             client,
             config,
             codec,
-            NatsReceiveOptions::default(),
+            NatsTransportOptions::default(),
         )
         .await
     }
@@ -190,7 +240,23 @@ where
         codec: C,
         receive_options: NatsReceiveOptions,
     ) -> CatgaResult<Self> {
-        Self::initialize(client, config, codec, receive_options).await
+        Self::from_client_with_codec_and_options(
+            client,
+            config,
+            codec,
+            NatsTransportOptions::default().with_receive(receive_options),
+        )
+        .await
+    }
+
+    /// Builds a transport from an application-owned client with a codec and full options.
+    pub async fn from_client_with_codec_and_options(
+        client: async_nats::Client,
+        config: NatsConfig,
+        codec: C,
+        options: NatsTransportOptions,
+    ) -> CatgaResult<Self> {
+        Self::initialize(client, config, codec, options).await
     }
 
     /// Builds a transport from an application-owned NATS client and caller-provided codec.
@@ -227,7 +293,7 @@ where
         client: async_nats::Client,
         config: NatsConfig,
         codec: C,
-        receive_options: NatsReceiveOptions,
+        options: NatsTransportOptions,
     ) -> CatgaResult<Self> {
         validate_config(&config)?;
         let context = jetstream::new(client.clone());
@@ -239,23 +305,14 @@ where
             })
             .await
             .map_err(map_error)?;
-        let consumer = stream
-            .get_or_create_consumer(
-                config.consumer.as_ref(),
-                pull::Config {
-                    durable_name: Some(config.consumer.to_string()),
-                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(map_error)?;
+        let consumer =
+            provision_consumer(&stream, config.consumer.as_ref(), options.consumer()).await?;
         Ok(Self {
             context,
             subject: config.subject,
             codec,
             consumer,
-            receive_options,
+            receive_options: options.receive(),
             consumer_batch: Mutex::new(None),
             destinations: DashMap::new(),
             operations: OperationTracker::default(),
@@ -584,6 +641,30 @@ fn validate_destination_config(config: &NatsDestinationConfig) -> CatgaResult<()
         ));
     }
     Ok(())
+}
+
+async fn provision_consumer(
+    stream: &stream::Stream,
+    name: &str,
+    options: NatsConsumerOptions,
+) -> CatgaResult<consumer::PullConsumer> {
+    let mut config = pull::Config {
+        ack_policy: jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+    if let Some(inactive_threshold) = options.inactive_threshold() {
+        config.inactive_threshold = inactive_threshold;
+    }
+    match options.mode() {
+        NatsConsumerMode::Durable => {
+            config.durable_name = Some(name.to_owned());
+            stream
+                .get_or_create_consumer(name, config)
+                .await
+                .map_err(map_error)
+        }
+        NatsConsumerMode::Ephemeral => stream.create_consumer(config).await.map_err(map_error),
+    }
 }
 
 fn validate_config(config: &NatsConfig) -> CatgaResult<()> {

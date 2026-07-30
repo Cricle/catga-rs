@@ -51,7 +51,8 @@ transport.ack(delivery).await?;
 
 ## NATS（`catga-nats`）
 
-两种传输，配置名稳定（重启同一 worker 要继续用同一组 stream/consumer 名）：
+两种传输。默认 JetStream consumer 是 durable：重启同一 worker 要继续用同一组
+stream/consumer 名，才能从已确认的游标继续处理。
 
 ```rust,ignore
 use catga_nats::{
@@ -81,6 +82,26 @@ let durable = NatsTransport::connect_with_receive_options(
     NatsReceiveOptions::default().with_pull_batch_size(128)?,
 ).await?;
 ```
+
+读模型一次性重建或高频临时 worker 不应创造 durable cursor。显式选择 ephemeral，
+并按运维保留策略设置清理时间；此时 `NatsConfig.consumer` 只保留兼容性，不会在
+JetStream 中创建该名称的 consumer：
+
+```rust,ignore
+use std::time::Duration;
+use catga_nats::{NatsConsumerOptions, NatsTransportOptions};
+
+let replay = NatsTransport::connect_with_options(
+    config,
+    NatsTransportOptions::default().with_consumer(
+        NatsConsumerOptions::ephemeral().with_inactive_threshold(Duration::from_secs(300)),
+    ),
+).await?;
+```
+
+不要把 ephemeral cursor 当作投影进度存储：进程重启后它从服务端默认投递位置重新
+开始。需要可恢复的 read model 应保留 durable consumer，或使用
+`ProjectionCheckpointStore` 持久化 EventStore 重放进度。
 
 发布端不消费消息时使用 `NatsPublisher`，它只创建或复用 stream，不会留下闲置 durable consumer：
 

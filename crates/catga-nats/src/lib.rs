@@ -51,8 +51,9 @@ pub use catga_codec_memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse}
 mod transport;
 
 pub use config::{
-    DEFAULT_NATS_PULL_BATCH_SIZE, NatsConfig, NatsDestinationConfig, NatsPubSubConfig,
-    NatsPublisherConfig, NatsReceiveOptions,
+    DEFAULT_NATS_PULL_BATCH_SIZE, NatsConfig, NatsConsumerMode, NatsConsumerOptions,
+    NatsDestinationConfig, NatsPubSubConfig, NatsPublisherConfig, NatsReceiveOptions,
+    NatsTransportOptions,
 };
 pub use dead_letter::NatsDeadLetters;
 pub use dsl_progress::NatsDslStepProgress;
