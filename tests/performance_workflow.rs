@@ -2,6 +2,7 @@
 
 const PERFORMANCE_RUNNER: &str = include_str!("../scripts/performance.sh");
 const COVERAGE_RUNNER: &str = include_str!("../scripts/coverage.sh");
+const E2E_RUNNER: &str = include_str!("../scripts/e2e.sh");
 const CI_WORKFLOW: &str = include_str!("../.github/workflows/ci.yml");
 const RELEASE_WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
 const MANUAL_WORKFLOW: &str = include_str!("../.github/workflows/performance.yml");
@@ -208,6 +209,26 @@ fn ci_runs_strict_workspace_and_e2e_gates_once() {
             "the consolidated coverage job must retain the {artifact} artifact"
         );
     }
+}
+
+#[test]
+fn e2e_runner_groups_equivalent_test_invocations_without_dropping_scenarios() {
+    assert!(
+        E2E_RUNNER.contains("group_by([.package, .target, .testArguments])"),
+        "E2E execution must group equivalent package, target, and test-argument invocations"
+    );
+    assert!(
+        E2E_RUNNER.contains(".scenarios[]"),
+        "the grouped runner must still record one result for every declared scenario"
+    );
+    assert!(
+        E2E_RUNNER.contains("executionGroup"),
+        "the grouped runner must disclose when scenarios share one target execution"
+    );
+    assert!(
+        !E2E_RUNNER.contains("filter=$(jq -r '.testFilter // empty'"),
+        "test filters must not launch duplicate target executions once grouped"
+    );
 }
 
 #[test]

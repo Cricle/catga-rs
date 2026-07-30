@@ -166,31 +166,39 @@ mkdir -p "$log_directory" "$(dirname "$results_path")"
 result_lines=$(mktemp)
 trap 'rm -f "$result_lines"; cleanup' EXIT
 
-while IFS= read -r scenario; do
-    id=$(jq -r '.id' <<<"$scenario")
-    package=$(jq -r '.package' <<<"$scenario")
-    target=$(jq -r '.target' <<<"$scenario")
-    critical=$(jq -r '.critical' <<<"$scenario")
-    filter=$(jq -r '.testFilter // empty' <<<"$scenario")
-    mapfile -t test_arguments < <(jq -r '.testArguments[]' <<<"$scenario")
+group_number=0
+while IFS= read -r group; do
+    ((group_number += 1))
+    group_id=$(printf 'e2e-group-%03d' "$group_number")
+    package=$(jq -r '.package' <<<"$group")
+    target=$(jq -r '.target' <<<"$group")
+    mapfile -t test_arguments < <(jq -r '.testArguments[]' <<<"$group")
     cargo_arguments=(test -p "$package" --all-features --test "$target")
-    [[ -n "$filter" ]] && cargo_arguments+=("$filter")
     if [[ "$coverage" == true ]]; then cargo_arguments=(llvm-cov "${cargo_arguments[@]}" --no-clean); fi
     ((${#test_arguments[@]})) && cargo_arguments+=(-- "${test_arguments[@]}")
-    log_path="$log_directory/${id}.log"
+    log_path="$log_directory/${group_id}-${package}-${target}.log"
     started=$SECONDS
     set +e
     cargo "${cargo_arguments[@]}" 2>&1 | tee "$log_path"
     exit_code=${PIPESTATUS[0]}
     set -e
-    jq -n --arg id "$id" --arg package "$package" --arg target "$target" \
-        --arg log_path "$log_path" --argjson critical "$critical" --argjson exit_code "$exit_code" \
-        --argjson duration "$(( (SECONDS - started) * 1000 ))" \
-        '{id:$id, critical:$critical, package:$package, target:$target,
-          succeeded:($exit_code == 0), exitCode:$exit_code,
-          durationMilliseconds:$duration, logPath:$log_path}' >>"$result_lines"
+    duration="$(( (SECONDS - started) * 1000 ))"
+
+    while IFS= read -r scenario; do
+        id=$(jq -r '.id' <<<"$scenario")
+        critical=$(jq -r '.critical' <<<"$scenario")
+        jq -n --arg id "$id" --arg package "$package" --arg target "$target" \
+            --arg group_id "$group_id" --arg log_path "$log_path" \
+            --argjson critical "$critical" --argjson exit_code "$exit_code" --argjson duration "$duration" \
+            '{id:$id, critical:$critical, package:$package, target:$target,
+              succeeded:($exit_code == 0), exitCode:$exit_code,
+              durationMilliseconds:$duration, executionGroup:$group_id, logPath:$log_path}' >>"$result_lines"
+    done < <(jq -c '.scenarios[]' <<<"$group")
 done < <(jq -c --argjson maximum "$(profile_rank "$profile")" '
-  .scenarios[] | select((if .profile == "core" then 0 elif .profile == "sql" then 1 else 2 end) <= $maximum)
+  [.scenarios[] | select((if .profile == "core" then 0 elif .profile == "sql" then 1 else 2 end) <= $maximum)]
+  | group_by([.package, .target, .testArguments])
+  | .[]
+  | {package: .[0].package, target: .[0].target, testArguments: .[0].testArguments, scenarios: .}
 ' "$matrix_path")
 
 jq -s --arg profile "$profile" --argjson required "$required_pass_percentage" '
