@@ -541,12 +541,15 @@ where
     }
 }
 
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
+pub(crate) fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
 }
 
 /// Delegates envelope encoding to the codec selected when the transport was constructed.
-fn encode_envelope<C: EnvelopeCodec>(codec: &C, envelope: &Envelope) -> CatgaResult<Vec<u8>> {
+pub(crate) fn encode_envelope<C: EnvelopeCodec>(
+    codec: &C,
+    envelope: &Envelope,
+) -> CatgaResult<Vec<u8>> {
     codec.encode(envelope)
 }
 
@@ -560,7 +563,7 @@ fn decode_envelope<C: EnvelopeCodec>(codec: &C, bytes: &[u8]) -> CatgaResult<Env
 /// JetStream retains the deduplication window, so this adapter stores neither a local identity
 /// cache nor an eviction counter. A duplicate acknowledgement is a successful publication: the
 /// broker has already retained the original message under the caller's stable message ID.
-fn record_broker_duplicate(duplicate: bool) {
+pub(crate) fn record_broker_duplicate(duplicate: bool) {
     if duplicate {
         metrics::counter!(NATS_DEDUP_DROPS).increment(1);
         tracing::debug!(

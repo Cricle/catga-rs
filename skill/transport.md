@@ -82,6 +82,19 @@ let durable = NatsTransport::connect_with_receive_options(
 ).await?;
 ```
 
+发布端不消费消息时使用 `NatsPublisher`，它只创建或复用 stream，不会留下闲置 durable consumer：
+
+```rust,ignore
+use catga_nats::{NatsPublisher, NatsPublisherConfig};
+
+let publisher = NatsPublisher::connect(NatsPublisherConfig {
+    server: "nats://127.0.0.1:4222".into(),
+    stream: "orders".into(),
+    subject: "orders.created".into(),
+}).await?;
+publisher.publish(envelope).await?;
+```
+
 - 具名目的地资源用 `NatsDestinationConfig { stream, subject, consumer }` 显式供给——**不会**从目的地名自动推导，保证保留策略与消费者身份可审查。
 - RPC：`NatsRequestClient` / `NatsRequestServer` / `NatsTypedRequestClient`。
 

@@ -74,6 +74,21 @@ pub struct NatsConfig {
     pub consumer: Box<str>,
 }
 
+/// JetStream stream resources used by a publish-only NATS client.
+///
+/// Unlike [`NatsConfig`], this configuration has no consumer name. Constructing a
+/// [`crate::NatsPublisher`] provisions only the stream and never leaves an idle durable consumer
+/// behind on a publisher-only deployment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NatsPublisherConfig {
+    /// NATS server URL.
+    pub server: Box<str>,
+    /// JetStream stream name that retains publications.
+    pub stream: Box<str>,
+    /// Subject used to publish envelopes into the stream.
+    pub subject: Box<str>,
+}
+
 /// Core NATS resources used by one ephemeral Pub/Sub transport instance.
 ///
 /// Unlike [`NatsConfig`], this configuration creates no JetStream resources. Publications are

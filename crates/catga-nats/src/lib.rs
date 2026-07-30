@@ -36,6 +36,7 @@ mod inbox;
 mod lease;
 mod outbox;
 mod projection;
+mod publisher;
 mod pubsub;
 mod record;
 mod rpc;
@@ -51,7 +52,7 @@ mod transport;
 
 pub use config::{
     DEFAULT_NATS_PULL_BATCH_SIZE, NatsConfig, NatsDestinationConfig, NatsPubSubConfig,
-    NatsReceiveOptions,
+    NatsPublisherConfig, NatsReceiveOptions,
 };
 pub use dead_letter::NatsDeadLetters;
 pub use dsl_progress::NatsDslStepProgress;
@@ -63,6 +64,7 @@ pub use inbox::NatsInbox;
 pub use lease::NatsLeases;
 pub use outbox::NatsOutbox;
 pub use projection::NatsProjectionCheckpoints;
+pub use publisher::NatsPublisher;
 pub use pubsub::NatsPubSubTransport;
 pub use rpc::{NatsRequest, NatsRequestClient, NatsRequestServer, NatsTypedRequestClient};
 pub use scheduler::NatsFlowScheduler;

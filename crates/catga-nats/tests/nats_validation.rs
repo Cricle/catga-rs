@@ -2,8 +2,8 @@
 
 use catga_core::ErrorCode;
 use catga_nats::{
-    NatsConfig, NatsEventStore, NatsPubSubConfig, NatsPubSubTransport, NatsReceiveOptions,
-    NatsRequestClient, NatsRequestServer, NatsTransport,
+    NatsConfig, NatsEventStore, NatsPubSubConfig, NatsPubSubTransport, NatsPublisher,
+    NatsPublisherConfig, NatsReceiveOptions, NatsRequestClient, NatsRequestServer, NatsTransport,
 };
 
 const UNREACHABLE_SERVER: &str = "nats://127.0.0.1:1";
@@ -15,6 +15,19 @@ fn durable_config() -> NatsConfig {
         subject: "orders.created".into(),
         consumer: "catga_orders".into(),
     }
+}
+
+#[tokio::test]
+async fn publisher_rejects_blank_stream_configuration_before_connecting() {
+    let invalid = NatsPublisherConfig {
+        server: UNREACHABLE_SERVER.into(),
+        stream: " ".into(),
+        subject: "orders.created".into(),
+    };
+    let Err(error) = NatsPublisher::connect(invalid).await else {
+        panic!("publisher must reject invalid stream configuration before network I/O");
+    };
+    assert_eq!(error.code(), ErrorCode::Validation);
 }
 
 #[test]
