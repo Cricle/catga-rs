@@ -375,6 +375,16 @@ impl EventStore for NatsEventStore {
                     Err(error) => Err(map_append_error(error)),
                 };
                 match result {
+                    Ok(ack) if ack.duplicate => {
+                        // A caller can retry after JetStream committed the batch but its
+                        // acknowledgement was lost. The stable message id makes that retry a
+                        // broker-recognized duplicate; report the persisted stream version
+                        // instead of appending the same logical batch again.
+                        return Ok(self
+                            .current(stream_id)
+                            .await?
+                            .map_or(final_version, |value| value.0));
+                    }
                     Ok(_) => return Ok(final_version),
                     Err(error)
                         if expected_version.is_none() && error.code() == ErrorCode::Conflict =>
@@ -524,7 +534,9 @@ impl EventStore for NatsEventStore {
     ) -> CatgaResult<StreamIdsPage> {
         validate_event_store_page_size(max_count)?;
         telemetry::record_persistence("nats", "event_store", "stream_ids_page", async {
-            self.reconcile_stream_ids().await?;
+            if stream_id_reconciliation_needed(after) {
+                self.reconcile_stream_ids().await?;
+            }
             let keys = self.ids.keys().await.map_err(map_error)?;
             futures::pin_mut!(keys);
             let mut ids = BinaryHeap::with_capacity(max_count);
@@ -575,6 +587,10 @@ impl NatsEventStore {
         }
         Ok(())
     }
+}
+
+fn stream_id_reconciliation_needed(after: Option<&str>) -> bool {
+    after.is_none()
 }
 
 fn validate_subject_prefix(subject_prefix: &str) -> CatgaResult<()> {
@@ -687,15 +703,12 @@ fn message_sequence(message: &async_nats::Message) -> CatgaResult<u64> {
 }
 fn append_message_id(
     subject: &str,
-    first_version: i64,
-    final_version: i64,
+    _first_version: i64,
+    _final_version: i64,
     payload: &[u8],
 ) -> String {
     let digest = Sha256::digest(payload);
-    format!(
-        "catga-event:{subject}:{first_version}:{final_version}:{}",
-        hex::encode(digest)
-    )
+    format!("catga-event:{subject}:{}", hex::encode(digest))
 }
 fn unix_millis(time: SystemTime) -> u64 {
     u64::try_from(
@@ -708,6 +721,7 @@ fn unix_millis(time: SystemTime) -> u64 {
 fn from_unix_millis(millis: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(millis)
 }
+
 fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
 }
@@ -718,5 +732,24 @@ fn map_append_error(error: impl std::fmt::Display) -> CatgaError {
         CatgaError::new(ErrorCode::Conflict, "event stream version conflict")
     } else {
         CatgaError::new(ErrorCode::Transient, message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{append_message_id, stream_id_reconciliation_needed};
+
+    #[test]
+    fn append_message_id_is_stable_when_a_retry_observes_a_newer_version() {
+        assert_eq!(
+            append_message_id("catga.events.orders", 0, 0, b"payload"),
+            append_message_id("catga.events.orders", 1, 1, b"payload"),
+        );
+    }
+
+    #[test]
+    fn stream_id_reconciliation_only_runs_for_the_first_page() {
+        assert!(stream_id_reconciliation_needed(None));
+        assert!(!stream_id_reconciliation_needed(Some("orders-1000")));
     }
 }

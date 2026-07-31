@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+catga-auto = { workspace = true }
 catga-axum = { workspace = true }
 catga-cluster = { workspace = true }
 catga-codec-memorypack = { workspace = true }
@@ -20,8 +21,10 @@ catga-memory = { workspace = true }
 catga-nats = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "net", "rt", "signal", "sync"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

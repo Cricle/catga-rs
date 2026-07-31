@@ -10,10 +10,21 @@
 use std::sync::Arc;
 
 use catga_core::{
-    CatgaResult, Command, CommandHandler, Event, EventHandler, Handler, Mediator, MediatorHandle,
-    Registry, Request,
+    CatgaError, CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler, Handler,
+    Mediator, MediatorHandle, Registry, Request,
 };
 use tokio_util::sync::CancellationToken;
+
+mod bus;
+
+pub use bus::{
+    Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient, FaultPublishingHandler,
+    FilteredHandler, MessageForwarder, PublisherHandle,
+};
+
+/// Re-exports the state-machine Bus adapter when the `flow` feature is enabled.
+#[cfg(feature = "flow")]
+pub use bus::StateMachineHandler;
 
 /// Re-exports Catga's bounded typed competing-consumer runner.
 pub use catga_core::{CompetingConsumer, TypedDeliveryHandler};
@@ -79,6 +90,12 @@ impl AutoAppBuilder {
 
     /// Builds the immutable application graph.
     pub fn build(&mut self) -> CatgaResult<AutoApp> {
+        if self.handle.is_bound() {
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "auto application builder has already been built",
+            ));
+        }
         let mediator = Arc::new(Mediator::new(std::mem::take(&mut self.registry)));
         self.handle.bind(Arc::clone(&mediator))?;
         Ok(AutoApp {
@@ -158,3 +175,45 @@ pub use catga_nats as nats;
 /// Re-exports the optional Redis adapter when the `redis` feature is enabled.
 #[cfg(feature = "redis")]
 pub use catga_redis as redis;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::AutoAppBuilder;
+    use async_trait::async_trait;
+    use catga_core::{CatgaResult, Handler, Mediator, Message, Registry, Request};
+
+    #[derive(Clone)]
+    struct Ping;
+
+    impl Message for Ping {}
+
+    impl Request for Ping {
+        type Response = ();
+    }
+
+    struct PingHandler;
+
+    #[async_trait]
+    impl Handler<Ping> for PingHandler {
+        async fn handle(&self, _: Ping) -> CatgaResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn failed_second_build_preserves_registered_handlers() {
+        let mut builder = AutoAppBuilder::new();
+        builder
+            .register_request::<Ping, _>(PingHandler)
+            .expect("register handler");
+        builder
+            .handle
+            .bind(Arc::new(Mediator::new(Registry::new())))
+            .expect("bind test handle");
+
+        assert!(builder.build().is_err());
+        assert!(builder.register_request::<Ping, _>(PingHandler).is_err());
+    }
+}

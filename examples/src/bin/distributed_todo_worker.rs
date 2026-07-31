@@ -2,13 +2,11 @@
 
 use std::{env, sync::Arc};
 
+use catga_auto::Bus;
 use catga_codec_memorypack::MemoryPackCodec;
-use catga_core::{
-    CatgaError, CatgaResult, CompetingConsumer, ErrorCode, SnowflakeIdGenerator, SnowflakeLayout,
-};
-use catga_examples::distributed_todo::TodoWorker;
+use catga_core::{CatgaError, CatgaResult, ErrorCode, SnowflakeIdGenerator, SnowflakeLayout};
+use catga_examples::distributed_todo::{CreateTodo, TodoWorker};
 use catga_nats::{NatsConfig, NatsEventStore, NatsTransport};
-use tokio_util::sync::CancellationToken;
 
 const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
 const DEFAULT_COMMAND_STREAM: &str = "TODO_COMMANDS";
@@ -75,25 +73,25 @@ async fn main() -> CatgaResult<()> {
             SnowflakeLayout::default(),
         )?),
     ));
-    let consumer = CompetingConsumer::typed(
-        transport,
-        worker,
-        Arc::new(MemoryPackCodec::default()),
-        config.concurrency,
-    )?;
-    let shutdown = CancellationToken::new();
-    let consumer_shutdown = shutdown.clone();
-    let consumer_run = consumer.run_until_cancelled(consumer_shutdown);
-    tokio::pin!(consumer_run);
+    let bus = Bus::builder(transport)
+        .endpoint::<CreateTodo, _, _>(
+            "commands",
+            worker,
+            Arc::new(MemoryPackCodec::default()),
+            config.concurrency,
+        )?
+        .build();
 
     println!("distributed Todo worker is consuming Todo commands");
+    let run = bus.run_until_cancelled();
+    tokio::pin!(run);
     tokio::select! {
-        result = &mut consumer_run => {
+        result = &mut run => {
             result?;
         }
         _ = tokio::signal::ctrl_c() => {
-            shutdown.cancel();
-            consumer_run.await?;
+            bus.shutdown();
+            (&mut run).await?;
         }
     }
     Ok(())

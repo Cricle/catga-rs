@@ -8,17 +8,16 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_QUIET: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      # Test artifacts can be absent for workspace integration-test packages.
-      # Cache dependencies only so a cache restore never fails on a missing target path.
       - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --doc --workspace --all-features
@@ -30,7 +29,7 @@ jobs:
 
   distributed-todo:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
       - name: Run distributed Todo black-box and restart verification
@@ -38,16 +37,29 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: cov
       - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Determine E2E profile
+        id: profile
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "e2e=core" >> "$GITHUB_OUTPUT"
+          else
+            echo "e2e=full" >> "$GITHUB_OUTPUT"
+          fi
       - name: Run strict unit, Docker E2E, and coverage gates
         run: >-
-          bash scripts/coverage.sh --profile full
+          bash scripts/coverage.sh --profile ${{ steps.profile.outputs.e2e }}
           --required-line-coverage 80
           --required-region-coverage 80
           --required-e2e-pass-percentage 95
+          --health-timeout-seconds 60
       - name: Upload coverage report
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

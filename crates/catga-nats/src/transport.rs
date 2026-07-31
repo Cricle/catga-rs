@@ -552,6 +552,17 @@ where
         })
         .await
     }
+
+    fn declare_destination(&self, destination: &Destination) -> CatgaResult<()> {
+        if self.destinations.contains_key(destination) {
+            Ok(())
+        } else {
+            Err(CatgaError::new(
+                ErrorCode::NotFound,
+                "NATS destination is not provisioned; call provision_destination before building routed endpoints",
+            ))
+        }
+    }
 }
 
 impl<C> Stoppable for NatsTransport<C>

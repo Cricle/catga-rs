@@ -187,6 +187,10 @@ impl DestinationTransport for MemoryTransport {
         })
         .await
     }
+
+    fn declare_destination(&self, destination: &Destination) -> CatgaResult<()> {
+        MemoryTransport::declare_destination(self, destination.clone())
+    }
 }
 
 impl Stoppable for MemoryTransport {

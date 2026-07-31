@@ -26,6 +26,14 @@
       "testArguments": ["--ignored"]
     },
     {
+      "id": "auto-bus-nats-integration",
+      "package": "catga-auto",
+      "target": "nats_integration",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
       "id": "redis-contracts",
       "package": "catga-tests",
       "target": "redis",

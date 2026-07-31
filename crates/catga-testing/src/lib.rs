@@ -22,6 +22,7 @@
 //! integration tests.
 
 mod aggregate;
+mod bus_harness;
 mod flow;
 mod harness;
 
@@ -33,6 +34,7 @@ use dashmap::DashMap;
 use futures::future::BoxFuture;
 
 pub use aggregate::{AggregateScenario, ReplayedAggregate};
+pub use bus_harness::{BusTestHarness, ConsumedLog, RunningBusHarness};
 pub use flow::FlowTestContext;
 pub use harness::{CatgaTestHarness, RunningCatgaTestHarness};
 

@@ -356,6 +356,27 @@ async fn event_store_serializes_unconditional_concurrent_appends() -> CatgaResul
 
 #[tokio::test]
 #[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn event_store_deduplicates_a_retried_unconditional_append() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let store = NatsEventStore::connect(
+        server.url(),
+        unique("CATGA_RETRIED_EVENTS"),
+        unique("catga.retried.events"),
+    )
+    .await?;
+    let event = envelope(91, QualityOfService::AtLeastOnce);
+
+    assert_eq!(store.append("orders", vec![event.clone()], None).await?, 0);
+    assert_eq!(store.append("orders", vec![event], None).await?, 0);
+
+    let page = store.read_page("orders", 0, 10).await?;
+    assert_eq!(page.stream().events().len(), 1);
+    assert_eq!(page.stream().events()[0].version(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn event_store_rebuilds_a_missing_stream_id_index_entry() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let stream_name = unique("CATGA_INDEX_REBUILD");

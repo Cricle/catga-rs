@@ -298,4 +298,13 @@ pub trait DestinationTransport: MessageTransport {
     /// [`MessageTransport::ack`] after successful processing; dropping an unacknowledged
     /// delivery leaves durable adapters free to redeliver it.
     async fn receive_from(&self, destination: &Destination) -> CatgaResult<Delivery>;
+
+    /// Provisions a named destination before it is used for send or receive.
+    ///
+    /// Transports that require explicit provisioning (such as the in-memory transport) override
+    /// this. Transports with implicit destination creation keep the default no-op.
+    fn declare_destination(&self, destination: &Destination) -> CatgaResult<()> {
+        let _ = destination;
+        Ok(())
+    }
 }

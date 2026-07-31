@@ -17,6 +17,8 @@ your control.
 | --- | --- | --- |
 | Run an HTTP API and worker as separate durable processes | [`distributed Todo`](examples/distributed-todo/compose.yaml) | JetStream commands, typed competing consumption, event persistence, and replayable read models |
 | Compose a typed application facade | `catga-auto` | Startup-owned CQRS handlers, explicit shutdown, and optional Axum/NATS/Flow/cluster integrations |
+| Route messages by type with publish and consume in one Bus | [`bus_cqrs`](examples/src/bin/bus_cqrs.rs) | `routed_endpoint`, `BusPublisher`, `PublisherHandle` for command→event chains |
+| Observe Bus spans and metrics with OpenTelemetry | [`otel_bus`](examples/src/bin/otel_bus.rs) | `tracing-opentelemetry` exporter for Jaeger/Grafana/Datadog |
 | Send a typed command or query in one process | [`mediator`](examples/src/bin/mediator.rs) | `catga-core` handlers and optional pipelines |
 | Maximum-throughput dispatch (zero allocation) | [`typed_mediator`](examples/src/bin/typed_mediator.rs) | `catga_typed_mediator!` for compile-time monomorphized dispatch |
 | Run a compensating sequence of local steps | [`flow`](examples/src/bin/flow.rs) | `catga-flow` and a durable `FlowStore` when restarts matter |
@@ -55,6 +57,8 @@ The repository keeps the introductory programs small and runnable:
 ```bash
 cargo run -p catga-examples --bin mediator
 cargo run -p catga-examples --bin typed_mediator
+cargo run -p catga-examples --bin bus_cqrs
+cargo run -p catga-examples --bin otel_bus
 cargo run -p catga-examples --bin flow
 cargo run -p catga-examples --bin memory_transport
 cargo run -p catga-examples --bin order_service
@@ -318,6 +322,64 @@ Use `catga_pipeline!` when a request needs explicit retries, timeouts, or
 authorization. Its stages are caller-owned values, so their limits and
 lifecycle are visible at startup.
 
+## Bus
+
+`Bus` composes typed receive endpoints with per-type message routing, unified
+shutdown, and built-in observability. Each `routed_endpoint` owns an isolated
+destination queue; `BusPublisher` routes published messages by type.
+
+```rust,no_run
+use std::sync::Arc;
+use catga_auto::{Bus, PublisherHandle};
+use catga_codec_memorypack::{MemoryPackCodec, MemoryPackable};
+use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
+use catga_memory::MemoryTransport;
+
+#[derive(Clone, MemoryPackable)]
+struct PlaceOrder(u32);
+impl Message for PlaceOrder {}
+
+#[derive(Clone, MemoryPackable)]
+struct OrderPlaced(u32);
+impl Message for OrderPlaced {}
+
+# struct Handler { publisher: PublisherHandle<MemoryTransport, MemoryPackCodec> }
+# #[async_trait::async_trait]
+# impl TypedDeliveryHandler<PlaceOrder> for Handler {
+#     async fn handle(&self, cmd: &PlaceOrder) -> CatgaResult<()> {
+#         self.publisher.publish(&OrderPlaced(cmd.0)).await
+#     }
+# }
+# struct Listener;
+# #[async_trait::async_trait]
+# impl TypedDeliveryHandler<OrderPlaced> for Listener {
+#     async fn handle(&self, _: &OrderPlaced) -> CatgaResult<()> { Ok(()) }
+# }
+# async fn run() -> CatgaResult<()> {
+let transport = Arc::new(MemoryTransport::new(64)?);
+let handle = PublisherHandle::new();
+
+let (bus, publisher) = Bus::builder(transport)
+    .routed_endpoint::<PlaceOrder, _, _>("commands", Arc::new(Handler { publisher: handle.clone() }), Arc::new(MemoryPackCodec::default()), 1)?
+    .routed_endpoint::<OrderPlaced, _, _>("events", Arc::new(Listener), Arc::new(MemoryPackCodec::default()), 1)?
+    .build_with_publisher(MemoryPackCodec::default())?;
+
+handle.bind(publisher);
+handle.publish(&PlaceOrder(1)).await?;
+bus.run_until_cancelled().await?;
+# Ok(())
+# }
+```
+
+Key capabilities:
+
+- **Type-routed endpoints** — `routed_endpoint` declares a destination and registers the route automatically.
+- **Publish from handlers** — `PublisherHandle` uses late binding (`Arc<OnceLock>`) so handlers can publish before the bus is built.
+- **Request/Reply** — `BusRequestClient` resolves destinations from the shared topology router.
+- **Fault publishing** — `FaultPublishingHandler` emits `Fault<M>` best-effort on handler failure.
+- **State machine endpoint** — `StateMachineHandler` (feature `flow`) routes events to a `StateMachineEventRouter`.
+- **Observability** — `catga.bus.run` span with endpoint count, outcome, and duration; per-endpoint consumed counter.
+
 ## Errors and retries
 
 Every fallible API returns `CatgaResult<T>`, an alias for
@@ -433,9 +495,14 @@ Customize behavior at the contracts rather than behind a global runtime:
 - Compose request policy with `catga_pipeline!` and caller-owned `Behavior`
   values; use the built-in retry, timeout, authorization, validation, and
   tracing behaviors where they fit.
-- Implement `MessageTransport`, `EventStore`, `OutboxStore`, or the flow store
-  traits when an adapter must match an existing system. `catga-memory` provides
-  bounded implementations for local composition and deterministic tests.
+- Build a `Bus` with `routed_endpoint` for type-isolated consumption, or
+  `endpoint` for shared-queue competing consumers. Add `FaultPublishingHandler`
+  for automatic fault notification, or `StateMachineHandler` (feature `flow`)
+  to drive a state machine from Bus events.
+- Implement `MessageTransport`, `DestinationTransport`, `EventStore`,
+  `OutboxStore`, or the flow store traits when an adapter must match an
+  existing system. `catga-memory` provides bounded implementations for local
+  composition and deterministic tests.
 
 This boundary keeps connection management, polling, retry policy, and shutdown
 ownership in the application. Adapters expose operations; they do not create a
