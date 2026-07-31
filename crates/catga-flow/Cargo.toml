@@ -1,6 +1,6 @@
 [package]
 name = "catga-flow"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,9 +12,8 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core", version = "0.0.1" }
-catga-codec-memorypack = { path = "../catga-codec-memorypack", version = "0.0.1" }
-dashmap = "6"
+catga-core = { workspace = true }
+catga-codec-memorypack = { workspace = true }
 futures = "0.3"
 metrics = "0.24"
 parking_lot = "0.12"

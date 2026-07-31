@@ -640,8 +640,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "catga-auto"
+version = "0.0.2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "catga-axum",
+ "catga-cluster",
+ "catga-core",
+ "catga-flow",
+ "catga-nats",
+ "catga-redis",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "catga-axum"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -660,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "catga-cluster"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -678,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "catga-codec-bincode"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bincode-next",
  "catga-core",
@@ -686,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "catga-codec-memorypack"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -712,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "catga-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -733,29 +749,31 @@ dependencies = [
 
 [[package]]
 name = "catga-examples"
-version = "0.0.0"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "axum",
  "catga-axum",
  "catga-cluster",
+ "catga-codec-memorypack",
  "catga-core",
  "catga-flow",
  "catga-memory",
+ "catga-nats",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
 name = "catga-flow"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-codec-memorypack",
  "catga-core",
- "dashmap",
  "futures",
  "metrics",
  "parking_lot",
@@ -767,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "catga-flow-store"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "bb8",
@@ -788,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "catga-macros"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-core",
@@ -800,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "catga-memory"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -815,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "catga-memorypack-derive"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -824,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "catga-nats"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-nats 0.50.0",
  "async-trait",
@@ -847,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "catga-redis"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-codec-memorypack",
@@ -866,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "catga-robustmq"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-codec-memorypack",
@@ -878,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "catga-scheduler-tokio-cron"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-core",
@@ -892,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "catga-testing"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-core",
@@ -904,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "catga-tests"
-version = "0.0.0"
+version = "0.0.2"
 dependencies = [
  "async-nats 0.50.0",
  "async-trait",

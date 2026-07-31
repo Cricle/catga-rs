@@ -1,0 +1,33 @@
+[package]
+name = "catga-auto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed application facade for Catga event-driven runtimes"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+axum = ["dep:axum", "dep:catga-axum"]
+nats = ["dep:catga-nats"]
+redis = ["dep:catga-redis"]
+flow = ["dep:catga-flow"]
+cluster = ["dep:catga-cluster"]
+
+[dependencies]
+catga-core = { workspace = true }
+axum = { version = "0.8", optional = true }
+catga-axum = { workspace = true, optional = true }
+catga-cluster = { workspace = true, optional = true }
+catga-flow = { workspace = true, optional = true }
+catga-nats = { workspace = true, optional = true }
+catga-redis = { workspace = true, optional = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt", "time"] }

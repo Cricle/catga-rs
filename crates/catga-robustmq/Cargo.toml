@@ -1,6 +1,6 @@
 [package]
 name = "catga-robustmq"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,8 +12,8 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-codec-memorypack = { path = "../catga-codec-memorypack", version = "0.0.1" }
-catga-core = { path = "../catga-core", version = "0.0.1" }
+catga-codec-memorypack = { workspace = true }
+catga-core = { workspace = true }
 robustmq = "1"
 serde = "1"
 tokio = { version = "1", features = ["sync", "time"] }

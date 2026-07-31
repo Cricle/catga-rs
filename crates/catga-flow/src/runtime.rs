@@ -307,7 +307,23 @@ where
             .record_wait_success(flow_id, continuation.state().version(), child_id, payload)
             .await?
         {
-            return self.current_result(flow_id).await;
+            // A store may have durably recorded the child result and lost the response before
+            // this process could resume the continuation. Reconcile a now-ready wait instead of
+            // returning a permanently suspended flow to the caller.
+            let current = self
+                .store
+                .get(flow_id)
+                .await?
+                .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "flow does not exist"))?;
+            if current.wait().is_some_and(|wait| {
+                matches!(
+                    evaluate_wait(wait, SystemTime::now()),
+                    WaitEvaluation::Ready
+                )
+            }) {
+                return self.resume(flow_id).await;
+            }
+            return Ok(FlowRuntimeResult::new(current.state().clone()));
         }
         self.resume(flow_id).await
     }

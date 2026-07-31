@@ -1,6 +1,6 @@
 [package]
 name = "catga-scheduler-tokio-cron"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,12 +12,12 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core", version = "0.0.1" }
-catga-flow = { path = "../catga-flow", version = "0.0.1" }
+catga-core = { workspace = true }
+catga-flow = { workspace = true }
 tokio-cron-scheduler = { version = "0.15.1", default-features = false }
 tracing = "0.1"
 uuid = "1"
 
 [dev-dependencies]
-catga-memory = { path = "../catga-memory", version = "0.0.1" }
+catga-memory = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

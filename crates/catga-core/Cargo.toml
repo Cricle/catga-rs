@@ -1,6 +1,6 @@
 [package]
 name = "catga-core"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,7 +15,7 @@ arc-swap = "1"
 async-trait = "0.1"
 base64 = "0.23"
 brotli = "8"
-catga-macros = { path = "../catga-macros", version = "0.0.1" }
+catga-macros = { workspace = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures = "0.3"
 hmac = "0.13"

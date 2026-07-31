@@ -11,7 +11,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode,
+    RaftClusterNode, RaftCommittedEntry, RaftMessage, RaftNode, RaftNodeError,
     metrics::{record_failure, record_queue_depth},
 };
 
@@ -98,6 +98,8 @@ pub enum RaftRuntimeError {
     Stopped,
     /// `raft-rs` rejected an operation or an inbound protocol message.
     Raft(raft::Error),
+    /// The application commit queue could not be refilled from durable Raft storage.
+    Node(RaftNodeError),
     /// The configured transport failed while sending an outbound protocol message.
     Transport(RaftTransportError),
     /// The owner task panicked or was aborted.
@@ -112,6 +114,7 @@ impl fmt::Display for RaftRuntimeError {
             }
             Self::Stopped => formatter.write_str("Raft runtime stopped"),
             Self::Raft(error) => error.fmt(formatter),
+            Self::Node(error) => error.fmt(formatter),
             Self::Transport(error) => error.fmt(formatter),
             Self::Task(error) => error.fmt(formatter),
         }
@@ -122,6 +125,7 @@ impl Error for RaftRuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Raft(error) => Some(error),
+            Self::Node(error) => Some(error),
             Self::Transport(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidTickInterval | Self::Stopped => None,
@@ -220,7 +224,7 @@ impl RaftRuntime {
             .send(Command::DrainCommitted(reply))
             .await
             .map_err(|_| RaftRuntimeError::Stopped)?;
-        result.await.map_err(|_| RaftRuntimeError::Stopped)
+        result.await.map_err(|_| RaftRuntimeError::Stopped)?
     }
 
     /// Requests a graceful stop of the owner task.
@@ -258,7 +262,7 @@ impl RaftRuntime {
 enum Command {
     Campaign(oneshot::Sender<Result<(), RaftRuntimeError>>),
     Propose(Vec<u8>, oneshot::Sender<Result<(), RaftRuntimeError>>),
-    DrainCommitted(oneshot::Sender<Vec<RaftCommittedEntry>>),
+    DrainCommitted(oneshot::Sender<Result<Vec<RaftCommittedEntry>, RaftRuntimeError>>),
 }
 
 async fn run(
@@ -309,7 +313,7 @@ async fn run(
                         }
                     }
                     Command::DrainCommitted(reply) => {
-                        let _ = reply.send(node.drain_committed());
+                        let _ = reply.send(node.try_drain_committed().map_err(RaftRuntimeError::Node));
                     }
                 }
             }

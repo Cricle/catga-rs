@@ -28,6 +28,14 @@ jobs:
       - name: Validate Docker Compose E2E runner
         run: bash scripts/e2e.sh --profile full --validate-only
 
+  distributed-todo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run distributed Todo black-box and restart verification
+        run: bash examples/distributed-todo/verify.sh
+
   coverage:
     runs-on: ubuntu-latest
     steps:

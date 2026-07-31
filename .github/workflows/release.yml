@@ -87,6 +87,17 @@ jobs:
       - run: cargo test --doc --workspace --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: |
+          release_version="${GITHUB_REF_NAME#v}"
+          packages=(catga-macros catga-core catga-memorypack-derive catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-auto catga-testing)
+          for package in "${packages[@]}"; do
+            manifest_version="$(cargo pkgid -p "$package")"
+            manifest_version="${manifest_version##*@}"
+            manifest_version="${manifest_version##*#}"
+            test "${release_version}" = "${manifest_version}"
+          done
+          echo "publishing workspace version ${release_version}"
+          crates_user_agent="catga-release/${release_version} (https://github.com/Cricle/catga-rs)"
+
           publish_with_rate_limit_retry() {
             local package="$1"
             local attempt=1
@@ -115,12 +126,12 @@ jobs:
           }
 
           published_new_package=false
-          for package in catga-macros catga-core catga-memorypack-derive catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-testing; do
+          for package in "${packages[@]}"; do
             package_id="$(cargo pkgid -p "$package")"
             version="${package_id##*@}"
             version="${version##*#}"
             http_status="$(curl --silent --show-error --location --retry 3 \
-              --user-agent 'catga-release/0.0.1 (https://github.com/Cricle/catga-rs)' \
+              --user-agent "$crates_user_agent" \
               --output /dev/null --write-out '%{http_code}' \
               "https://crates.io/api/v1/crates/$package/$version")"
             case "$http_status" in

@@ -1,6 +1,6 @@
 [package]
 name = "catga-codec-memorypack"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,9 +12,9 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-core = { path = "../catga-core", version = "0.0.1" }
+catga-core = { workspace = true }
 byteorder = { version = "1.5.0", features = ["i128"] }
-catga-memorypack-derive = { version = "0.0.1", path = "memorypack-derive", optional = true }
+catga-memorypack-derive = { workspace = true, optional = true }
 simdutf8 = "0.1.5"
 thiserror = "2.0"
 

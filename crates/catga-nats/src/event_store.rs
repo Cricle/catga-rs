@@ -2,7 +2,6 @@
 
 use std::{
     collections::BinaryHeap,
-    future::Future,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -19,16 +18,17 @@ use async_trait::async_trait;
 use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
-    EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage, VersionHistoryPage,
-    VersionInfo, telemetry, validate_event_store_page_size,
+    EventStream, MAX_EVENT_STORE_PAGE_SIZE, PayloadDecoder, PayloadEncoder, StoredEvent,
+    StreamIdsPage, VersionHistoryPage, VersionInfo, telemetry, validate_event_store_page_size,
 };
-use futures::{
-    Stream as FuturesStream, StreamExt, TryStream, TryStreamExt, stream as futures_stream,
-};
+use futures::{StreamExt, TryStream, TryStreamExt, stream as futures_stream};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 const VERSION: &str = "Catga-Version";
 const TIMESTAMP: &str = "Catga-Timestamp";
+const BATCH_COUNT: &str = "Catga-Batch-Count";
+const MAX_UNCONDITIONAL_APPEND_RETRIES: usize = 64;
 const MAX_EVENT_STORE_HISTORY_SCAN: usize = MAX_EVENT_STORE_PAGE_SIZE;
 
 /// JetStream-backed event store with optimistic, subject-sequence writes.
@@ -99,18 +99,9 @@ impl NatsEventStore {
         }
         let stream = context.get_stream(&stream_name).await.map_err(map_error)?;
         let bucket = format!("{stream_name}_IDS");
-        let ids = get_or_create_with_reopen(
-            || context.get_key_value(&bucket),
-            || {
-                context.create_key_value(kv::Config {
-                    bucket: bucket.to_string(),
-                    history: 1,
-                    ..Default::default()
-                })
-            },
-        )
-        .await
-        .map_err(map_error)?;
+        let ids = crate::kv::open_or_create(&context, &bucket)
+            .await
+            .map_err(map_error)?;
         Ok(Self {
             client,
             context,
@@ -153,10 +144,28 @@ impl NatsEventStore {
     ) -> CatgaResult<Vec<StoredEvent>> {
         let from_version = i64::try_from(from_version).unwrap_or(i64::MAX);
         let subject = self.subject(stream_id)?;
-        let events = self
+        let messages = self
             .subject_messages(subject)
             .and_then(|message| futures::future::ready(self.decode_message(&message)));
-        take_matching_at_most(events, max_count, |event| event.version() >= from_version).await
+        futures::pin_mut!(messages);
+        let mut events = Vec::with_capacity(max_count);
+        for _ in 0..MAX_EVENT_STORE_HISTORY_SCAN {
+            let Some(message) = messages.next().await else {
+                return Ok(events);
+            };
+            for event in message? {
+                if event.version() >= from_version {
+                    events.push(event);
+                    if events.len() == max_count {
+                        return Ok(events);
+                    }
+                }
+            }
+        }
+        Err(CatgaError::new(
+            ErrorCode::Unavailable,
+            "NATS event history scan limit reached before filling page",
+        ))
     }
 
     fn subject_messages(
@@ -215,12 +224,70 @@ impl NatsEventStore {
         }
     }
 
-    fn decode_message(&self, message: &async_nats::Message) -> CatgaResult<StoredEvent> {
-        Ok(StoredEvent::new(
-            message_version(message)?,
-            Arc::new(self.codec.decode(&message.payload)?),
-            from_unix_millis(message_timestamp(message)?),
-        ))
+    fn decode_message(&self, message: &async_nats::Message) -> CatgaResult<Vec<StoredEvent>> {
+        let final_version = message_version(message)?;
+        let timestamp = from_unix_millis(message_timestamp(message)?);
+        let Some(headers) = message.headers.as_ref() else {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "JetStream event is missing headers",
+            ));
+        };
+        let Some(batch_count) = headers.get(BATCH_COUNT) else {
+            return Ok(vec![StoredEvent::new(
+                final_version,
+                Arc::new(self.codec.decode(&message.payload)?),
+                timestamp,
+            )]);
+        };
+        let batch_count = batch_count.as_str().parse::<usize>().map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Internal,
+                "JetStream event has an invalid batch count",
+            )
+        })?;
+        if batch_count == 0 {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "JetStream event has an empty batch",
+            ));
+        }
+        let first_version = final_version
+            .checked_sub(i64::try_from(batch_count).map_err(|_| {
+                CatgaError::new(ErrorCode::Internal, "JetStream event batch is too large")
+            })?)
+            .and_then(|version| version.checked_add(1))
+            .ok_or_else(|| {
+                CatgaError::new(
+                    ErrorCode::Internal,
+                    "JetStream event batch version overflow",
+                )
+            })?;
+        let payloads: Vec<Vec<u8>> = self.codec.decode_payload(&message.payload)?;
+        if payloads.len() != batch_count {
+            return Err(CatgaError::new(
+                ErrorCode::Internal,
+                "JetStream event batch count does not match its payload",
+            ));
+        }
+        payloads
+            .into_iter()
+            .enumerate()
+            .map(|(offset, payload)| {
+                let version = first_version
+                    .checked_add(i64::try_from(offset).map_err(|_| {
+                        CatgaError::new(ErrorCode::Internal, "JetStream event version overflow")
+                    })?)
+                    .ok_or_else(|| {
+                        CatgaError::new(ErrorCode::Internal, "JetStream event version overflow")
+                    })?;
+                Ok(StoredEvent::new(
+                    version,
+                    Arc::new(self.codec.decode(&payload)?),
+                    timestamp,
+                ))
+            })
+            .collect()
     }
 }
 
@@ -242,56 +309,85 @@ impl EventStore for NatsEventStore {
     ) -> CatgaResult<i64> {
         telemetry::record_persistence("nats", "event_store", "append", async {
             let subject = self.subject(stream_id)?;
-            let current = self.current(stream_id).await?;
             if events.is_empty() {
-                return Ok(current.map_or(-1, |value| value.0));
+                return Ok(self.current(stream_id).await?.map_or(-1, |value| value.0));
             }
-            if expected_version
-                .is_some_and(|expected| current.map_or(-1, |value| value.0) != expected)
-            {
-                return Err(CatgaError::new(
-                    ErrorCode::Conflict,
-                    "event stream version conflict",
-                ));
-            }
-            let mut version = current.map_or(-1, |value| value.0);
-            let final_version = version
-                .checked_add(i64::try_from(events.len()).map_err(|_| {
-                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
-                })?)
-                .ok_or_else(|| {
-                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
-                })?;
-            let mut previous_sequence = current.map_or(0, |value| value.1);
+            let payloads: Vec<Vec<u8>> = events
+                .iter()
+                .map(|event| self.codec.encode(event))
+                .collect::<CatgaResult<_>>()?;
+            let payload = self.codec.encode_payload(&payloads)?;
             let timestamp = unix_millis(SystemTime::now());
-            for event in events {
-                version = version.checked_add(1).ok_or_else(|| {
-                    CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
-                })?;
-                let payload = self.codec.encode(&event)?;
-                let version_text = version.to_string();
-                let timestamp_text = timestamp.to_string();
-                let mut publish = PublishMessage::build()
-                    .payload(payload.into())
-                    .header(VERSION, version_text.as_str())
-                    .header(TIMESTAMP, timestamp_text.as_str());
-                if expected_version.is_some() {
-                    publish = publish.expected_last_subject_sequence(previous_sequence);
+            let retry_limit = if expected_version.is_none() {
+                MAX_UNCONDITIONAL_APPEND_RETRIES
+            } else {
+                1
+            };
+            for _ in 0..retry_limit {
+                let current = self.current(stream_id).await?;
+                if expected_version
+                    .is_some_and(|expected| current.map_or(-1, |value| value.0) != expected)
+                {
+                    return Err(CatgaError::new(
+                        ErrorCode::Conflict,
+                        "event stream version conflict",
+                    ));
                 }
-                let ack = self
-                    .context
-                    .send_publish(subject.clone(), publish)
+                let final_version = current
+                    .map_or(-1, |value| value.0)
+                    .checked_add(i64::try_from(events.len()).map_err(|_| {
+                        CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                    })?)
+                    .ok_or_else(|| {
+                        CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                    })?;
+                let first_version = final_version
+                    .checked_sub(i64::try_from(events.len()).map_err(|_| {
+                        CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                    })?)
+                    .and_then(|version| version.checked_add(1))
+                    .ok_or_else(|| {
+                        CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
+                    })?;
+
+                // Index before the commit: a failed index write cannot hide a committed event
+                // stream from projections. `stream_ids_page` reconciles any harmless phantom
+                // index entries caused by a failed commit.
+                self.ids
+                    .put(stream_id, "".into())
                     .await
-                    .map_err(map_append_error)?
-                    .await
-                    .map_err(map_append_error)?;
-                previous_sequence = ack.sequence;
+                    .map_err(map_error)?;
+
+                let version_text = final_version.to_string();
+                let timestamp_text = timestamp.to_string();
+                let batch_count = events.len().to_string();
+                let message_id =
+                    append_message_id(&subject, first_version, final_version, &payload);
+                let publish = PublishMessage::build()
+                    .payload(payload.clone().into())
+                    .header(VERSION, version_text.as_str())
+                    .header(TIMESTAMP, timestamp_text.as_str())
+                    .header(BATCH_COUNT, batch_count.as_str())
+                    .message_id(message_id)
+                    .expected_last_subject_sequence(current.map_or(0, |value| value.1));
+                let result = match self.context.send_publish(subject.clone(), publish).await {
+                    Ok(ack) => ack.await.map_err(map_append_error),
+                    Err(error) => Err(map_append_error(error)),
+                };
+                match result {
+                    Ok(_) => return Ok(final_version),
+                    Err(error)
+                        if expected_version.is_none() && error.code() == ErrorCode::Conflict =>
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            self.ids
-                .put(stream_id, "".into())
-                .await
-                .map_err(map_error)?;
-            Ok(final_version)
+            Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "event stream append contention exceeded the retry limit",
+            ))
         })
         .await
     }
@@ -428,6 +524,7 @@ impl EventStore for NatsEventStore {
     ) -> CatgaResult<StreamIdsPage> {
         validate_event_store_page_size(max_count)?;
         telemetry::record_persistence("nats", "event_store", "stream_ids_page", async {
+            self.reconcile_stream_ids().await?;
             let keys = self.ids.keys().await.map_err(map_error)?;
             futures::pin_mut!(keys);
             let mut ids = BinaryHeap::with_capacity(max_count);
@@ -456,22 +553,27 @@ impl EventStore for NatsEventStore {
     }
 }
 
-async fn get_or_create_with_reopen<T, GetError, CreateError, Get, Create, GetFuture, CreateFuture>(
-    mut get: Get,
-    create: Create,
-) -> Result<T, GetError>
-where
-    Get: FnMut() -> GetFuture,
-    Create: FnOnce() -> CreateFuture,
-    GetFuture: Future<Output = Result<T, GetError>>,
-    CreateFuture: Future<Output = Result<T, CreateError>>,
-{
-    match get().await {
-        Ok(store) => Ok(store),
-        Err(_) => match create().await {
-            Ok(store) => Ok(store),
-            Err(_) => get().await,
-        },
+impl NatsEventStore {
+    async fn reconcile_stream_ids(&self) -> CatgaResult<()> {
+        let filter = format!("{}.>", self.subject_prefix);
+        let mut subjects = self
+            .stream
+            .info_with_subjects(filter)
+            .await
+            .map_err(map_error)?;
+        while let Some((subject, count)) = subjects.try_next().await.map_err(map_error)? {
+            if count == 0 {
+                continue;
+            }
+            let Some(stream_id) = subject.strip_prefix(&format!("{}.", self.subject_prefix)) else {
+                continue;
+            };
+            self.ids
+                .put(stream_id, "".into())
+                .await
+                .map_err(map_error)?;
+        }
+        Ok(())
     }
 }
 
@@ -583,33 +685,17 @@ fn message_sequence(message: &async_nats::Message) -> CatgaResult<u64> {
             )
         })
 }
-async fn take_matching_at_most<T, S, F>(
-    stream: S,
-    max_count: usize,
-    mut matches: F,
-) -> CatgaResult<Vec<T>>
-where
-    S: FuturesStream<Item = CatgaResult<T>>,
-    F: FnMut(&T) -> bool,
-{
-    futures::pin_mut!(stream);
-    let mut values = Vec::with_capacity(max_count);
-    for _ in 0..MAX_EVENT_STORE_HISTORY_SCAN {
-        let Some(value) = stream.next().await else {
-            return Ok(values);
-        };
-        let value = value?;
-        if matches(&value) {
-            values.push(value);
-            if values.len() == max_count {
-                return Ok(values);
-            }
-        }
-    }
-    Err(CatgaError::new(
-        ErrorCode::Unavailable,
-        "NATS event history scan limit reached before filling page",
-    ))
+fn append_message_id(
+    subject: &str,
+    first_version: i64,
+    final_version: i64,
+    payload: &[u8],
+) -> String {
+    let digest = Sha256::digest(payload);
+    format!(
+        "catga-event:{subject}:{first_version}:{final_version}:{}",
+        hex::encode(digest)
+    )
 }
 fn unix_millis(time: SystemTime) -> u64 {
     u64::try_from(

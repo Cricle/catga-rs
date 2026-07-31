@@ -45,23 +45,9 @@ impl NatsIdempotency {
         validate_completed_retention(retention)?;
         let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
         let bucket = bucket.into();
-        let store = match context.get_key_value(bucket.as_ref()).await {
-            Ok(store) => store,
-            Err(_) => match context
-                .create_key_value(kv::Config {
-                    bucket: bucket.to_string(),
-                    history: 1,
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(store) => store,
-                Err(_) => context
-                    .get_key_value(bucket.as_ref())
-                    .await
-                    .map_err(map_error)?,
-            },
-        };
+        let store = crate::kv::open_or_create(&context, bucket.as_ref())
+            .await
+            .map_err(map_error)?;
         let status = store.status().await.map_err(map_error)?;
         if !status.max_age().is_zero() {
             let mut config = status.info.config.clone();

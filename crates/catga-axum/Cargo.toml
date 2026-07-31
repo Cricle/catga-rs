@@ -1,6 +1,6 @@
 [package]
 name = "catga-axum"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,8 +13,8 @@ workspace = true
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["json"] }
 async-trait = "0.1"
-catga-cluster = { path = "../catga-cluster", version = "0.0.1" }
-catga-core = { path = "../catga-core", version = "0.0.1" }
+catga-cluster = { workspace = true }
+catga-core = { workspace = true }
 futures = "0.3"
 http = "1"
 # Raft 0.7 (the newest compatible Raft release) exposes protobuf 2 message types.

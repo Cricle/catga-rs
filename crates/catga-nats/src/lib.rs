@@ -33,6 +33,7 @@ mod event_store;
 mod flow;
 mod idempotency;
 mod inbox;
+mod kv;
 mod lease;
 mod outbox;
 mod projection;

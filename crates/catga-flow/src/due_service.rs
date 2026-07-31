@@ -132,7 +132,11 @@ where
             let result = match self.resume_with_renewal(schedule, cancellation).await {
                 Ok(Some(result)) => result,
                 Ok(None) => {
-                    self.release_all(&schedules[index..]).await;
+                    // The active resume may have been dropped while cancellation interrupted it.
+                    // Keep its lease and durable schedule until the lease expires so another
+                    // worker can recover it; only release work that was never started.
+                    self.release_all(&schedules[index.saturating_add(1)..])
+                        .await;
                     return Ok(acknowledged);
                 }
                 Err(error) => {

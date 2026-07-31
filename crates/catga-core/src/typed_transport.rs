@@ -367,7 +367,10 @@ where
     /// The handler runs with the immutable delivery transport context scoped to its future.
     /// Success acknowledges the delivery; handler failure requests redelivery and returns a
     /// [`TypedProcessOutcome::Rejected`] containing the original handler error. This facade never
-    /// starts a background task, keeping retry loops and cancellation caller-owned.
+    /// starts a background task, keeping retry loops and cancellation caller-owned. It is intended
+    /// for local composition and tests; production receive loops should use
+    /// [`CompetingConsumer`](crate::CompetingConsumer) so concurrency, cancellation, and
+    /// acknowledgement draining remain bounded.
     pub async fn process_next<M, H>(&self, handler: H) -> CatgaResult<TypedProcessOutcome>
     where
         C: PayloadDecoder<M>,
@@ -694,6 +697,8 @@ where
     /// returns [`TypedProcessOutcome::Rejected`] with the original application error; a failed
     /// negative acknowledgement remains the outer result because ownership is unresolved. This
     /// facade starts no background work, so callers retain control of polling and cancellation.
+    /// It is a single-delivery convenience API; use [`CompetingConsumer`](crate::CompetingConsumer)
+    /// for bounded production receive loops.
     pub async fn process_next_from<M, H>(
         &self,
         destination: impl Into<Box<str>>,

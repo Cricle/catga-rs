@@ -1,8 +1,10 @@
-# Catga for Rust
+# Catga: Rust Event-Driven Distributed Runtime
 
-Catga is a pure-Rust CQRS, event-sourcing, workflow, and distributed-runtime
-workspace. Applications compose typed, bounded components explicitly: there is
-no reflection, service locator, hidden worker, or unbounded queue.
+Catga is a pure-Rust runtime for event-driven distributed systems. CQRS,
+event-sourcing, workflows, queues, RPC, competing consumers, durable outbox
+and inbox processing, Raft coordination, and cron scheduling are composable
+parts of one explicit runtime. Applications compose typed, bounded components:
+there is no reflection, service locator, hidden worker, or unbounded queue.
 
 Start with a small in-memory program, then replace only the boundary that needs
 to become durable or distributed. This keeps ordinary application code short
@@ -13,15 +15,18 @@ your control.
 
 | If you need to… | Start here | Then add |
 | --- | --- | --- |
+| Run an HTTP API and worker as separate durable processes | [`distributed Todo`](examples/distributed-todo/compose.yaml) | JetStream commands, typed competing consumption, event persistence, and replayable read models |
+| Compose a typed application facade | `catga-auto` | Startup-owned CQRS handlers, explicit shutdown, and optional Axum/NATS/Flow/cluster integrations |
 | Send a typed command or query in one process | [`mediator`](examples/src/bin/mediator.rs) | `catga-core` handlers and optional pipelines |
 | Maximum-throughput dispatch (zero allocation) | [`typed_mediator`](examples/src/bin/typed_mediator.rs) | `catga_typed_mediator!` for compile-time monomorphized dispatch |
 | Run a compensating sequence of local steps | [`flow`](examples/src/bin/flow.rs) | `catga-flow` and a durable `FlowStore` when restarts matter |
 | Publish and acknowledge messages locally | [`memory_transport`](examples/src/bin/memory_transport.rs) | NATS, Redis, RobustMQ, or an application transport implementation |
 | Build a complete HTTP checkout service | [`order_service`](examples/src/bin/order_service.rs) | durable stores, outbox worker, and a production cluster deployment |
 
-Each example is runnable without Docker or credentials. They demonstrate the
-same public traits used in production, so moving from local development to a
-real service does not require changing the application model.
+The introductory programs run without Docker or credentials. The distributed
+Todo example runs the same topology in containers that a service uses in
+production, so moving from local development to durable infrastructure does
+not require changing the application model.
 
 ## Install and run
 
@@ -31,7 +36,8 @@ are opt-in implementations and integrations.
 
 ```toml
 [dependencies]
-catga-core = "0.1"
+catga-auto = "0.0.2"
+catga-core = "0.0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -39,9 +45,9 @@ Add capabilities explicitly as the application needs them:
 
 | Need | Dependency |
 | --- | --- |
-| Compensating or durable flows | `catga-flow = "0.1"` |
-| Bounded local adapters and deterministic tests | `catga-memory = "0.1"` |
-| SQL- or Redis-backed durable flow state | `catga-flow-store = { version = "0.1", features = ["sqlite"] }` (select the backend feature) |
+| Compensating or durable flows | `catga-flow = "0.0.2"` |
+| Bounded local adapters and deterministic tests | `catga-memory = "0.0.2"` |
+| SQL- or Redis-backed durable flow state | `catga-flow-store = { version = "0.0.2", features = ["sqlite"] }` (select the backend feature) |
 | NATS, Redis, RobustMQ, cluster, Axum, or cron integration | Add the matching opt-in `catga-*` crate |
 
 The repository keeps the introductory programs small and runnable:
@@ -56,8 +62,36 @@ cargo run -p catga-examples --bin order_service
 
 Their source lives in [`examples/src/bin`](examples/src/bin).
 
-They are deliberately in-memory. Select a production transport or store only
-where the application crosses that boundary.
+For a complete multi-process reference application, run:
+
+```bash
+docker compose --file examples/distributed-todo/compose.yaml up --build
+```
+
+It starts an Axum API, a typed competing-consumer worker, and NATS JetStream.
+`POST /todos` publishes a durable `CreateTodo` command; the worker appends a
+`TodoCreated` event; `GET /todos` catches the read model up through its durable
+event-store checkpoint. The API is publish-only and therefore creates no idle
+JetStream consumer. The worker's delivery cursor and the projection checkpoint
+are intentionally separate, so command acknowledgement and event replay retain
+their own recovery semantics. Because the sample read model is in memory, the
+API rebuilds it from durable events on startup; restarting the API does not erase
+accepted Todos.
+
+Run the external black-box verification with:
+
+```bash
+examples/distributed-todo/verify.sh
+```
+
+All resource names and runtime settings have environment-variable defaults for
+the Compose topology: `CATGA_NATS_URL`, `CATGA_TODO_COMMAND_STREAM`,
+`CATGA_TODO_COMMAND_SUBJECT`, `CATGA_TODO_COMMAND_CONSUMER`,
+`CATGA_TODO_EVENT_STREAM`, `CATGA_TODO_EVENT_PREFIX`,
+`CATGA_TODO_CHECKPOINT_BUCKET`, `CATGA_TODO_API_ADDR`,
+`CATGA_TODO_API_ID_WORKER`, `CATGA_TODO_WORKER_ID`, and
+`CATGA_TODO_WORKER_CONCURRENCY`. Set application-owned names and IDs in a real
+deployment rather than relying on these sample defaults.
 
 ## Performance snapshot
 
@@ -255,7 +289,8 @@ Start with `catga-core` and register handlers during application startup:
 ```toml
 [dependencies]
 async-trait = "0.1"
-catga-core = "0.1"
+catga-auto = "0.0.2"
+catga-core = "0.0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -320,8 +355,8 @@ choose a caller-owned `FlowStore` for durable work:
 
 ```toml
 [dependencies]
-catga-core = "0.1"
-catga-flow = "0.1"
+catga-core = "0.0.2"
+catga-flow = "0.0.2"
 ```
 
 ```rust,no_run
@@ -357,7 +392,7 @@ your deployment:
 
 | Backend | Dependency feature | Notes |
 | --- | --- | --- |
-| SQLite | `catga-flow-store = { version = "0.1", features = ["sqlite"] }` | Embedded SQL store. |
+| SQLite | `catga-flow-store = { version = "0.0.2", features = ["sqlite"] }` | Embedded SQL store. |
 | MySQL | `features = ["mysql"]` | Uses a native SQLx MySQL pool. |
 | PostgreSQL | `features = ["postgres"]` | Uses a native SQLx PostgreSQL pool. |
 | SQL Server | `features = ["mssql"]` | Uses a bounded Tiberius pool. |
@@ -378,6 +413,16 @@ background worker.
 - `catga-nats`, `catga-redis`, `catga-robustmq`, `catga-cluster`,
   `catga-axum`, and `catga-scheduler-tokio-cron` are opt-in adapters. Their
   external connection settings are always explicit.
+
+## Scope Compared With `cqrs-es`
+
+`cqrs-es` is the more mature choice for aggregate-centric CQRS/event sourcing:
+its repository, upcaster, view-store, SQL adapters, and testing guide are
+focused on that model. Catga does not claim to replace it. Catga targets the
+broader distributed runtime around a domain model: NATS/Redis transports,
+typed competing consumers, Flow compensation, Outbox/Inbox, Raft, leases,
+cron scheduling, and explicit lifecycle ownership. Use `catga-auto` when that
+composition should be concise while keeping each durable boundary visible.
 
 ## Extension points
 

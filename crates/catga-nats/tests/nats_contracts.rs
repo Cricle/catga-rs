@@ -8,7 +8,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use async_nats::jetstream::{self, consumer::pull, kv};
+use async_nats::jetstream::{self, consumer::pull, stream};
 use catga_codec_memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore,
@@ -251,6 +251,182 @@ async fn durable_transport_uses_public_qos_contracts_and_round_trips_envelopes()
         tokio::time::timeout(Duration::from_millis(150), transport.receive())
             .await
             .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn durable_transport_filters_unrelated_subjects_in_a_shared_stream() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let stream_name = unique("CATGA_SHARED_SUBJECTS");
+    let subject = format!("catga.shared.{}.created", unique("subject"));
+    let unrelated_subject = format!("catga.shared.{}.other", unique("subject"));
+    let client = async_nats::connect(server.url())
+        .await
+        .map_err(|error| test_error("connect shared-subject NATS client", error))?;
+    let context = jetstream::new(client);
+    context
+        .get_or_create_stream(jetstream::stream::Config {
+            name: stream_name.clone(),
+            subjects: vec![subject.clone(), unrelated_subject.clone()],
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| test_error("create shared-subject NATS stream", error))?;
+    let transport = NatsTransport::connect(NatsConfig {
+        server: server.url().into(),
+        stream: stream_name.into(),
+        subject: subject.clone().into(),
+        consumer: unique("CATGA_SHARED_SUBJECT_CONSUMER").into(),
+    })
+    .await?;
+
+    for (subject, id) in [(subject, 31_u64), (unrelated_subject, 32_u64)] {
+        context
+            .publish(
+                subject,
+                MemoryPackCodec::default()
+                    .encode(&envelope(id, QualityOfService::AtLeastOnce))?
+                    .into(),
+            )
+            .await
+            .map_err(|error| test_error("begin shared-subject NATS publish", error))?
+            .await
+            .map_err(|error| test_error("confirm shared-subject NATS publish", error))?;
+    }
+
+    let delivery = tokio::time::timeout(Duration::from_secs(2), transport.receive())
+        .await
+        .map_err(|error| test_error("receive filtered NATS delivery", error))??;
+    assert_eq!(delivery.envelope().id(), 31);
+    delivery.acknowledge().await?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), transport.receive())
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn event_store_serializes_unconditional_concurrent_appends() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let store = Arc::new(
+        NatsEventStore::connect(
+            server.url(),
+            unique("CATGA_CONCURRENT_EVENTS"),
+            unique("catga.concurrent.events"),
+        )
+        .await?,
+    );
+    let barrier = Arc::new(tokio::sync::Barrier::new(8));
+    let mut tasks = Vec::new();
+    for id in 0..8_u64 {
+        let store = Arc::clone(&store);
+        let barrier = Arc::clone(&barrier);
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store
+                .append(
+                    "orders",
+                    vec![envelope(id, QualityOfService::AtLeastOnce)],
+                    None,
+                )
+                .await
+        }));
+    }
+    for task in tasks {
+        task.await
+            .map_err(|error| test_error("join concurrent event append", error))??;
+    }
+
+    let page = store.read_page("orders", 0, 16).await?;
+    let mut versions: Vec<_> = page
+        .stream()
+        .events()
+        .iter()
+        .map(StoredEvent::version)
+        .collect();
+    versions.sort_unstable();
+    assert_eq!(versions, (0_i64..8).collect::<Vec<_>>());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn event_store_rebuilds_a_missing_stream_id_index_entry() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let stream_name = unique("CATGA_INDEX_REBUILD");
+    let stream_id = "orders";
+    let subject_prefix = unique("catga.index.events");
+    let store =
+        NatsEventStore::connect(server.url(), stream_name.clone(), subject_prefix.clone()).await?;
+    store
+        .append(
+            stream_id,
+            vec![envelope(91, QualityOfService::AtLeastOnce)],
+            None,
+        )
+        .await?;
+
+    let client = async_nats::connect(server.url())
+        .await
+        .map_err(|error| test_error("connect index inspection client", error))?;
+    let ids = jetstream::new(client)
+        .get_key_value(&format!("{stream_name}_IDS"))
+        .await
+        .map_err(|error| test_error("open event-store identifier index", error))?;
+    ids.delete(stream_id)
+        .await
+        .map_err(|error| test_error("delete event-store identifier index entry", error))?;
+
+    let reopened = NatsEventStore::connect(server.url(), stream_name, subject_prefix).await?;
+    let page = reopened.stream_ids_page(None, 10).await?;
+    assert_eq!(page.ids(), &[stream_id.to_owned()]);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a real JetStream server; run in the E2E job"]
+async fn event_store_commits_each_multi_event_append_as_one_jetstream_record() -> CatgaResult<()> {
+    let server = NatsServer::start().await?;
+    let stream_name = unique("CATGA_ATOMIC_EVENTS");
+    let store = NatsEventStore::connect(
+        server.url(),
+        stream_name.clone(),
+        unique("catga.atomic.events"),
+    )
+    .await?;
+
+    store
+        .append(
+            "orders",
+            vec![
+                envelope(81, QualityOfService::AtLeastOnce),
+                envelope(82, QualityOfService::AtLeastOnce),
+                envelope(83, QualityOfService::AtLeastOnce),
+            ],
+            None,
+        )
+        .await?;
+
+    let client = async_nats::connect(server.url())
+        .await
+        .map_err(|error| test_error("connect atomic event-store inspection client", error))?;
+    let mut stream = jetstream::new(client)
+        .get_stream(stream_name)
+        .await
+        .map_err(|error| test_error("open atomic event-store stream", error))?;
+    assert_eq!(
+        stream
+            .info()
+            .await
+            .map_err(|error| test_error("read atomic event-store stream state", error))?
+            .state
+            .messages,
+        1
     );
     Ok(())
 }
@@ -918,14 +1094,23 @@ async fn outbox_persists_published_messages_and_recovers_legacy_records() -> Cat
             .await
             .map_err(|error| test_error("connect legacy outbox publisher", error))?,
     );
-    let raw_store = context
-        .create_key_value(kv::Config {
-            bucket: bucket.clone(),
-            history: 1,
+    context
+        .create_stream(stream::Config {
+            name: format!("KV_{bucket}"),
+            subjects: vec![format!("$KV.{bucket}.>")],
+            max_messages_per_subject: 1,
+            discard: stream::DiscardPolicy::New,
+            allow_rollup: true,
+            deny_delete: true,
+            allow_direct: true,
             ..Default::default()
         })
         .await
         .map_err(|error| test_error("create legacy outbox bucket", error))?;
+    let raw_store = context
+        .get_key_value(bucket.clone())
+        .await
+        .map_err(|error| test_error("open legacy outbox bucket", error))?;
     let legacy_envelope = envelope(9, QualityOfService::AtLeastOnce);
     let payload = MemoryPackCodec::default().encode(&legacy_envelope)?;
     let owner = b"legacy-worker";

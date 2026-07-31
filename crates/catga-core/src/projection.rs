@@ -4,7 +4,9 @@ use std::{num::NonZeroUsize, time::SystemTime};
 
 use async_trait::async_trait;
 
-use crate::{CatgaResult, EventStore, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent};
+use crate::{
+    CatgaError, CatgaResult, ErrorCode, EventStore, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent,
+};
 
 const DEFAULT_BATCH_SIZE: usize = 256;
 
@@ -231,15 +233,14 @@ where
             .checkpoints
             .load(self.projection.name(), stream_id)
             .await?;
-        let mut next_version = checkpoint.map_or(0, |checkpoint| checkpoint.version() + 1);
+        let mut next_version = checkpoint
+            .map(|checkpoint| next_version_after(checkpoint.version()))
+            .transpose()?
+            .unwrap_or(0);
         loop {
             let page = self
                 .events
-                .read_page(
-                    stream_id,
-                    u64::try_from(next_version).unwrap_or(0),
-                    self.batch_size.get(),
-                )
+                .read_page(stream_id, next_version, self.batch_size.get())
                 .await?;
             if page.stream().events().is_empty() {
                 return Ok(());
@@ -253,12 +254,39 @@ where
                         event.version(),
                     ))
                     .await?;
-                next_version = event.version() + 1;
+                next_version = next_version_after(event.version())?;
                 run.applied += 1;
             }
             if page.next_version().is_none() {
                 return Ok(());
             }
         }
+    }
+}
+
+fn next_version_after(version: i64) -> CatgaResult<u64> {
+    let next = version.checked_add(1).ok_or_else(|| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "projection checkpoint version cannot advance beyond i64::MAX",
+        )
+    })?;
+    u64::try_from(next).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "projection checkpoint version cannot be negative",
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_version_after;
+    use crate::ErrorCode;
+
+    #[test]
+    fn projection_version_overflow_is_a_validation_error() {
+        let error = next_version_after(i64::MAX).expect_err("max version must not wrap");
+        assert_eq!(error.code(), ErrorCode::Validation);
     }
 }

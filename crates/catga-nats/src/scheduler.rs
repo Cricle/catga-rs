@@ -462,20 +462,9 @@ impl DueFlowScheduler for NatsFlowScheduler {
 }
 
 async fn open_bucket(context: &jetstream::Context, bucket: &str) -> CatgaResult<kv::Store> {
-    match context.get_key_value(bucket).await {
-        Ok(store) => Ok(store),
-        Err(_) => match context
-            .create_key_value(kv::Config {
-                bucket: bucket.to_owned(),
-                history: 1,
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(store) => Ok(store),
-            Err(_) => context.get_key_value(bucket).await.map_err(map_error),
-        },
-    }
+    crate::kv::open_or_create(context, bucket)
+        .await
+        .map_err(map_error)
 }
 
 async fn create<T: MemoryPackSerialize>(

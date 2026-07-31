@@ -1,6 +1,6 @@
 [package]
 name = "catga-memory"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,8 +16,8 @@ test-hooks = []
 [dependencies]
 async-trait = "0.1"
 arc-swap = "1"
-catga-core = { path = "../catga-core", version = "0.0.1" }
-catga-flow = { path = "../catga-flow", version = "0.0.1" }
+catga-core = { workspace = true }
+catga-flow = { workspace = true }
 dashmap = "6"
 tokio = { version = "1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }

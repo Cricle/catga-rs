@@ -7,3 +7,6 @@
 
 /// A modular checkout application showing Catga's core composition boundaries.
 pub mod order_service;
+
+/// Shared domain types for the runnable API and worker Todo example.
+pub mod distributed_todo;

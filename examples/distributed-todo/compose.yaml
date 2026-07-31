@@ -1,0 +1,40 @@
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222", "-sd", "/data"]
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  api:
+    image: catga-distributed-todo:local
+    build:
+      context: ../..
+      dockerfile: examples/distributed-todo/Dockerfile
+    command: ["/usr/local/bin/distributed_todo_api"]
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      CATGA_NATS_URL: nats://nats:4222
+      CATGA_TODO_API_ADDR: 0.0.0.0:3000
+    ports:
+      - "3000:3000"
+    restart: on-failure
+
+  worker:
+    image: catga-distributed-todo:local
+    command: ["/usr/local/bin/distributed_todo_worker"]
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      CATGA_NATS_URL: nats://nats:4222
+    restart: on-failure
+
+volumes:
+  nats-data:

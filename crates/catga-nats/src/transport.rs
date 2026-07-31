@@ -305,8 +305,13 @@ where
             })
             .await
             .map_err(map_error)?;
-        let consumer =
-            provision_consumer(&stream, config.consumer.as_ref(), options.consumer()).await?;
+        let consumer = provision_consumer(
+            &stream,
+            config.subject.as_ref(),
+            config.consumer.as_ref(),
+            options.consumer(),
+        )
+        .await?;
         Ok(Self {
             context,
             subject: config.subject,
@@ -351,6 +356,7 @@ where
                 config.consumer.as_ref(),
                 pull::Config {
                     durable_name: Some(config.consumer.to_string()),
+                    filter_subject: config.subject.to_string(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     ..Default::default()
                 },
@@ -645,10 +651,12 @@ fn validate_destination_config(config: &NatsDestinationConfig) -> CatgaResult<()
 
 async fn provision_consumer(
     stream: &stream::Stream,
+    subject: &str,
     name: &str,
     options: NatsConsumerOptions,
 ) -> CatgaResult<consumer::PullConsumer> {
     let mut config = pull::Config {
+        filter_subject: subject.to_owned(),
         ack_policy: jetstream::consumer::AckPolicy::Explicit,
         ..Default::default()
     };
