@@ -8,6 +8,7 @@ keep_services=false
 validate_only=false
 required_pass_percentage=95
 health_timeout_seconds=180
+parallel_jobs=1
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 matrix_path="$repository_root/testing/e2e-scenarios.json"
 results_path="$repository_root/target/e2e-results.json"
@@ -25,6 +26,7 @@ Usage: scripts/e2e.sh [options]
   --validate-only                      Validate Docker Compose and the scenario matrix
   --required-pass-percentage NUMBER    Required scenario pass rate (default: 95)
   --health-timeout-seconds NUMBER      Per-service health timeout (default: 180)
+  --jobs NUMBER                        Concurrent Cargo test groups (default: 1)
   --matrix-path PATH                   Scenario matrix path
   --results-path PATH                  Result JSON path
 EOF
@@ -113,12 +115,15 @@ while (($#)); do
         --validate-only) validate_only=true; shift ;;
         --required-pass-percentage) required_pass_percentage=${2:?missing percentage}; shift 2 ;;
         --health-timeout-seconds) health_timeout_seconds=${2:?missing timeout}; shift 2 ;;
+        --jobs) parallel_jobs=${2:?missing jobs}; shift 2 ;;
         --matrix-path) matrix_path=${2:?missing matrix path}; shift 2 ;;
         --results-path) results_path=${2:?missing result path}; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) die "unknown argument '$1'" ;;
     esac
 done
+
+[[ "$parallel_jobs" =~ ^[1-9][0-9]*$ ]] || die '--jobs must be a positive integer'
 
 command -v docker >/dev/null || die 'Docker must be available on PATH'
 command -v cargo >/dev/null || die 'Cargo must be available on PATH'
@@ -163,12 +168,16 @@ set_connection_environment
 
 log_directory="$repository_root/target/e2e-logs"
 mkdir -p "$log_directory" "$(dirname "$results_path")"
-result_lines=$(mktemp)
-trap 'rm -f "$result_lines"; cleanup' EXIT
+result_directory=$(mktemp -d)
+trap 'rm -rf "$result_directory"; cleanup' EXIT
 
-group_number=0
-while IFS= read -r group; do
-    ((group_number += 1))
+run_group() {
+    local group_number=$1
+    local group=$2
+    local result_path=$3
+    local group_id package target filter log_path started duration exit_code
+    local -a cargo_arguments test_arguments
+
     group_id=$(printf 'e2e-group-%03d' "$group_number")
     package=$(jq -r '.package' <<<"$group")
     target=$(jq -r '.target' <<<"$group")
@@ -179,12 +188,12 @@ while IFS= read -r group; do
     if [[ "$coverage" == true ]]; then cargo_arguments=(llvm-cov "${cargo_arguments[@]}" --no-clean); fi
     ((${#test_arguments[@]})) && cargo_arguments+=(-- "${test_arguments[@]}")
     log_path="$log_directory/${group_id}-${package}-${target}.log"
-    started=$SECONDS
+    started=$(date +%s%3N)
     set +e
     cargo "${cargo_arguments[@]}" 2>&1 | tee "$log_path"
     exit_code=${PIPESTATUS[0]}
     set -e
-    duration="$(( (SECONDS - started) * 1000 ))"
+    duration="$(( $(date +%s%3N) - started ))"
 
     while IFS= read -r scenario; do
         id=$(jq -r '.id' <<<"$scenario")
@@ -194,8 +203,20 @@ while IFS= read -r group; do
             --argjson critical "$critical" --argjson exit_code "$exit_code" --argjson duration "$duration" \
             '{id:$id, critical:$critical, package:$package, target:$target,
               succeeded:($exit_code == 0), exitCode:$exit_code,
-              durationMilliseconds:$duration, executionGroup:$group_id, logPath:$log_path}' >>"$result_lines"
+              durationMilliseconds:$duration, executionGroup:$group_id, logPath:$log_path}' >>"$result_path"
     done < <(jq -c '.scenarios[]' <<<"$group")
+}
+
+group_number=0
+group_pids=()
+while IFS= read -r group; do
+    ((group_number += 1))
+    run_group "$group_number" "$group" "$result_directory/$group_number.json" &
+    group_pids+=("$!")
+    if ((${#group_pids[@]} >= parallel_jobs)); then
+        for pid in "${group_pids[@]}"; do wait "$pid"; done
+        group_pids=()
+    fi
 done < <(jq -c --argjson maximum "$(profile_rank "$profile")" '
   [.scenarios[] | select((if .profile == "core" then 0 elif .profile == "sql" then 1 else 2 end) <= $maximum)]
   | group_by([.package, .target, .testArguments])
@@ -211,13 +232,15 @@ done < <(jq -c --argjson maximum "$(profile_rank "$profile")" '
     end
 ' "$matrix_path")
 
+for pid in "${group_pids[@]}"; do wait "$pid"; done
+
 jq -s --arg profile "$profile" --argjson required "$required_pass_percentage" '
   {schemaVersion: 1, profile:$profile, requiredPassPercentage:$required,
    declaredScenarios:length, passedScenarios:([.[] | select(.succeeded)] | length),
    failedCriticalScenarios:([.[] | select(.critical and (.succeeded | not))] | length), scenarios:.} |
   .passPercentage = (if .declaredScenarios == 0 then 0 else ((100 * .passedScenarios / .declaredScenarios * 100 | round) / 100) end) |
   .succeeded = (.passPercentage >= .requiredPassPercentage and .failedCriticalScenarios == 0)
-' "$result_lines" >"$results_path"
+' "$result_directory"/*.json >"$results_path"
 
 if [[ $(jq -r '.succeeded' "$results_path") != true ]]; then
     cat "$results_path" >&2
