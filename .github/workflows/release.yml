@@ -18,11 +18,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
+      - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Create a draft release for performance assets
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --generate-notes
           fi
+      - name: Run strict workspace and Docker E2E coverage gates
+        run: >-
+          bash scripts/coverage.sh --profile full
+          --e2e-jobs 1
+          --required-line-coverage 80
+          --required-region-coverage 80
+          --required-e2e-pass-percentage 95
       - name: Run Docker E2E performance suite
         id: performance
         continue-on-error: true

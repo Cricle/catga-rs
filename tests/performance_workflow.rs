@@ -167,18 +167,10 @@ fn complete_performance_suite_is_manual_or_release_only() {
 
 #[test]
 fn coverage_gate_requires_eighty_percent_without_relaxing_e2e_capability() {
-    for source in [COVERAGE_RUNNER, CI_WORKFLOW] {
-        assert!(
-            source.contains("required_line_coverage=80")
-                || source.contains("--required-line-coverage 80"),
-            "line coverage must require 80 percent"
-        );
-        assert!(
-            source.contains("required_region_coverage=80")
-                || source.contains("--required-region-coverage 80"),
-            "region coverage must require 80 percent"
-        );
-    }
+    assert!(COVERAGE_RUNNER.contains("required_line_coverage=80"));
+    assert!(COVERAGE_RUNNER.contains("required_region_coverage=80"));
+    assert!(RELEASE_WORKFLOW.contains("bash scripts/coverage.sh --profile full"));
+    assert!(MANUAL_WORKFLOW.contains("bash scripts/coverage.sh --profile"));
     assert!(
         COVERAGE_RUNNER.contains("required_e2e_pass_percentage=95"),
         "the optional Docker E2E coverage mode must retain its 95 percent scenario gate"
@@ -186,7 +178,7 @@ fn coverage_gate_requires_eighty_percent_without_relaxing_e2e_capability() {
 }
 
 #[test]
-fn ci_runs_workspace_coverage_without_the_docker_e2e_matrix() {
+fn ci_runs_quality_without_a_coverage_or_docker_e2e_gate() {
     assert!(
         COVERAGE_RUNNER.contains("llvm-cov test --workspace --all-features --no-report"),
         "the coverage job must execute the complete workspace test suite"
@@ -197,24 +189,24 @@ fn ci_runs_workspace_coverage_without_the_docker_e2e_matrix() {
         "the complete workspace command already executes catga-testing integration targets"
     );
     assert!(
-        COVERAGE_RUNNER.contains("--profile \"$profile\" --coverage"),
-        "the coverage runner must retain an opt-in instrumented Docker E2E mode"
+        !CI_WORKFLOW.contains("bash scripts/coverage.sh"),
+        "ordinary CI must not execute the coverage runner"
     );
     assert!(
-        CI_WORKFLOW.contains("--skip-e2e"),
-        "ordinary CI coverage must skip the Docker E2E matrix"
+        !CI_WORKFLOW.contains("examples/distributed-todo/verify.sh"),
+        "ordinary CI must not execute the Docker distributed Todo E2E"
     );
     assert!(
-        !CI_WORKFLOW.contains("--e2e-jobs 1"),
-        "ordinary CI must not configure Docker E2E workers"
+        !CI_WORKFLOW.contains("docker compose"),
+        "ordinary CI must not invoke Docker Compose E2E services"
+    );
+    assert!(
+        !CI_WORKFLOW.contains("\n  coverage:"),
+        "ordinary CI must not define a coverage gate"
     );
     assert!(
         !CI_WORKFLOW.contains("      - run: cargo test --workspace --all-features"),
         "CI must not execute the workspace test suite outside the coverage gate"
-    );
-    assert!(
-        !CI_WORKFLOW.contains("target/coverage/e2e-results.json"),
-        "ordinary CI must not upload absent Docker E2E artifacts"
     );
 }
 

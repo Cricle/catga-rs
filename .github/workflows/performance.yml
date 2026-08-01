@@ -14,7 +14,36 @@ permissions:
   contents: read
 
 jobs:
+  strict-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: cov
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run strict workspace and Docker E2E coverage gates
+        run: >-
+          bash scripts/coverage.sh --profile "${{ inputs.profile }}"
+          --e2e-jobs 1
+          --required-line-coverage 80
+          --required-region-coverage 80
+          --required-e2e-pass-percentage 95
+      - name: Upload coverage and E2E diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ inputs.profile }}-${{ github.run_id }}
+          path: |
+            target/coverage
+            target/e2e-logs
+          if-no-files-found: warn
+          retention-days: 90
+
   complete-performance:
+    needs: strict-coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
