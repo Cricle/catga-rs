@@ -8,10 +8,12 @@ codecs, IDs, stores, and lifecycle.
 
 ## Breaking API Changes
 
-`NatsPublisher` becomes a `MessageTransport` implementation. Its inherent
-`publish(Envelope)` method remains available, but typed applications can wrap
-an application-owned publisher with `TypedTransport` through a discoverable
-`typed(ids, codec)` constructor helper.
+`catga-core` adds a small `EnvelopePublisher` contract for publish-only
+backends. `NatsPublisher` implements this contract without pretending to be a
+consumer. `TypedPublisher<T, C>` wraps an application-owned publisher, ID
+generator, and payload codec; `MessageTransport` gets a blanket adapter to the
+same contract. A discoverable `NatsPublisher::typed(ids, codec)` helper returns
+the typed facade without changing NATS lifecycle semantics.
 
 `catga-core` adds `TypedEventStore<S, C>`. It accepts an application-owned
 `EventStore`, distributed ID generator, and payload codec. `append_event` builds
@@ -27,7 +29,7 @@ registry discovery.
 
 ## Ownership and Performance
 
-`TypedTransport` and `TypedEventStore` hold `Arc` references supplied by the
+`TypedPublisher` and `TypedEventStore` hold `Arc` references supplied by the
 application. Encoding and envelope creation stay on the existing synchronous
 hot path, with no additional dynamic registry or per-message configuration
 lookup. Applications can inject custom codecs, ID generators, transports, and
