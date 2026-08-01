@@ -188,6 +188,11 @@ fn ci_runs_strict_workspace_and_e2e_gates_once() {
         "the coverage job must execute workspace library tests before the E2E matrix"
     );
     assert!(
+        COVERAGE_RUNNER
+            .contains("llvm-cov test -p catga-testing --all-features --tests --no-report"),
+        "the coverage job must execute the public Catga testing-harness contracts"
+    );
+    assert!(
         COVERAGE_RUNNER.contains("--profile \"$profile\" --coverage"),
         "the coverage job must execute the complete Docker E2E scenario matrix with instrumentation"
     );
