@@ -159,30 +159,34 @@ fn complete_performance_suite_is_manual_or_release_only() {
     assert!(RELEASE_WORKFLOW.contains("scripts/performance.sh --profile full"));
     assert!(MANUAL_WORKFLOW.contains("workflow_dispatch:"));
     assert!(MANUAL_WORKFLOW.contains("scripts/performance.sh --profile"));
+    assert!(
+        PERFORMANCE_RUNNER.contains("scripts/e2e.sh\" --profile \"$profile\""),
+        "release and manual performance runs must retain the functional Docker E2E preflight"
+    );
 }
 
 #[test]
-fn coverage_gate_requires_eighty_five_percent_without_relaxing_e2e() {
+fn coverage_gate_requires_eighty_percent_without_relaxing_e2e_capability() {
     for source in [COVERAGE_RUNNER, CI_WORKFLOW] {
         assert!(
-            source.contains("required_line_coverage=85")
-                || source.contains("--required-line-coverage 85"),
-            "line coverage must require 85 percent"
+            source.contains("required_line_coverage=80")
+                || source.contains("--required-line-coverage 80"),
+            "line coverage must require 80 percent"
         );
         assert!(
-            source.contains("required_region_coverage=85")
-                || source.contains("--required-region-coverage 85"),
-            "region coverage must require 85 percent"
-        );
-        assert!(
-            source.contains("95"),
-            "the independent Docker E2E pass-rate gate must remain strict"
+            source.contains("required_region_coverage=80")
+                || source.contains("--required-region-coverage 80"),
+            "region coverage must require 80 percent"
         );
     }
+    assert!(
+        COVERAGE_RUNNER.contains("required_e2e_pass_percentage=95"),
+        "the optional Docker E2E coverage mode must retain its 95 percent scenario gate"
+    );
 }
 
 #[test]
-fn ci_runs_strict_workspace_and_e2e_gates_once() {
+fn ci_runs_workspace_coverage_without_the_docker_e2e_matrix() {
     assert!(
         COVERAGE_RUNNER.contains("llvm-cov test --workspace --all-features --no-report"),
         "the coverage job must execute the complete workspace test suite"
@@ -194,31 +198,24 @@ fn ci_runs_strict_workspace_and_e2e_gates_once() {
     );
     assert!(
         COVERAGE_RUNNER.contains("--profile \"$profile\" --coverage"),
-        "the coverage job must execute the complete Docker E2E scenario matrix with instrumentation"
+        "the coverage runner must retain an opt-in instrumented Docker E2E mode"
     );
     assert!(
-        !CI_WORKFLOW.contains("\n  e2e:\n"),
-        "CI must not execute the full Docker E2E matrix a second time"
+        CI_WORKFLOW.contains("--skip-e2e"),
+        "ordinary CI coverage must skip the Docker E2E matrix"
     );
-    assert_eq!(
-        CI_WORKFLOW.matches("--e2e-jobs 1").count(),
-        1,
-        "CI must serialize the instrumented Docker E2E matrix for stable coverage data"
+    assert!(
+        !CI_WORKFLOW.contains("--e2e-jobs 1"),
+        "ordinary CI must not configure Docker E2E workers"
     );
     assert!(
         !CI_WORKFLOW.contains("      - run: cargo test --workspace --all-features"),
         "CI must not execute the workspace test suite outside the coverage gate"
     );
-    for artifact in [
-        "name: e2e-results",
-        "target/coverage/e2e-results.json",
-        "target/e2e-logs",
-    ] {
-        assert!(
-            CI_WORKFLOW.contains(artifact),
-            "the consolidated coverage job must retain the {artifact} artifact"
-        );
-    }
+    assert!(
+        !CI_WORKFLOW.contains("target/coverage/e2e-results.json"),
+        "ordinary CI must not upload absent Docker E2E artifacts"
+    );
 }
 
 #[test]

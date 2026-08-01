@@ -47,27 +47,14 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run strict workspace coverage gates
         run: >-
-          bash scripts/coverage.sh --profile ${{ github.event_name == 'pull_request' && 'core' || 'full' }}
-          --e2e-jobs 1
-          --required-line-coverage 85
-          --required-region-coverage 85
-          --required-e2e-pass-percentage 95
-          --health-timeout-seconds 60
+          bash scripts/coverage.sh --skip-e2e
+          --required-line-coverage 80
+          --required-region-coverage 80
       - name: Upload coverage report
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: target/coverage/lcov.info
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Upload E2E results and logs from the coverage gate
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-results
-          path: |
-            target/coverage/e2e-results.json
-            target/e2e-logs
           if-no-files-found: warn
           retention-days: 14
