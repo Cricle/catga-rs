@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    CatgaResult, DistributedIdGenerator, Envelope, Event, EventStore,
-    PayloadEncoder, build_publish_metadata,
+    CatgaResult, DistributedIdGenerator, Envelope, Event, EventStore, PayloadEncoder,
+    build_publish_metadata,
 };
 
 /// Appends typed events to an application-owned event store.

@@ -42,9 +42,8 @@ use tokio_util::sync::CancellationToken;
 mod bus;
 
 pub use bus::{
-    Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient,
-    DeliveryMessageOf, FaultPublishingHandler, FilteredHandler, MessageForwarder,
-    PublisherHandle,
+    Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient, DeliveryMessageOf,
+    FaultPublishingHandler, FilteredHandler, MessageForwarder, PublisherHandle,
 };
 
 /// Re-exports the state-machine Bus adapter when the `flow` feature is enabled.
@@ -324,9 +323,7 @@ mod tests {
             Ok(())
         }
 
-        let app = AutoAppBuilder::new()
-            .handler(ping_handler)?
-            .build()?;
+        let app = AutoAppBuilder::new().handler(ping_handler)?.build()?;
         assert!(app.handle().is_bound());
         Ok(())
     }

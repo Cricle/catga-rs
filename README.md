@@ -49,8 +49,7 @@ async fn main() -> CatgaResult<()> {
 }
 ```
 
-The complete ordered path, prerequisites, and commands are in
-[Examples](docs/examples.md).
+The complete ordered path, prerequisites, and commands are in the examples directory.
 
 ## Install
 
@@ -134,9 +133,7 @@ documented `CATGA_TODO_*` environment variables.
 
 ## Performance
 
-The current release-mode benchmark table, measurement scope, database durability
-analysis, and reproduction commands live in [Performance](docs/performance.md).
-Release artifacts contain the complete machine-readable JSON reports.
+The current release-mode benchmark table and measurement scope are in the crate's source code documentation.
 
 ## Documentation
 

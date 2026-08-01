@@ -3,8 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
-    CatgaResult, DistributedIdGenerator, Envelope, Message, MessageTransport,
-    PayloadEncoder, TransportContext, build_publish_metadata, current_transport_context,
+    CatgaResult, DistributedIdGenerator, Envelope, Message, MessageTransport, PayloadEncoder,
+    TransportContext, build_publish_metadata, current_transport_context,
 };
 
 /// Publishes caller-owned envelopes without requiring a receive capability.

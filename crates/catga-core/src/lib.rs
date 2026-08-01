@@ -164,8 +164,8 @@ mod time_travel;
 mod trace_context;
 mod transport;
 mod transport_batching;
-mod typed_publisher;
 mod typed_event_store;
+mod typed_publisher;
 mod typed_transport;
 mod upgrading_event_store;
 mod validation;
@@ -292,8 +292,8 @@ pub use transport::{
     MessageTransport,
 };
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
-pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
 pub use typed_event_store::TypedEventStore;
+pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
 pub use typed_transport::{TypedDelivery, TypedProcessOutcome, TypedTransport};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use validation::{
