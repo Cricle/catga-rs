@@ -1,3 +1,26 @@
+//! ## Handler Trait Conformance
+//!
+//! Plain async functions automatically satisfy the handler traits:
+//!
+//! ```
+//! use catga_core::{CatgaResult, Handler, Message, Request};
+//!
+//! struct GetUser;
+//! impl Message for GetUser {}
+//! impl Request for GetUser { type Response = String; }
+//!
+//! // No #[async_trait] needed - just a plain async fn!
+//! async fn get_user_handler(id: GetUser) -> CatgaResult<String> {
+//!     Ok(format!("user-{}", id.0))
+//! }
+//!
+//! // get_user_handler now implements Handler<GetUser>
+//! fn assert_handler<H: Handler<GetUser>>(_: &H) {}
+//! fn check() {
+//!     assert_handler(&get_user_handler);
+//! }
+//! ```
+//!
 use std::{future::Future, marker::PhantomData};
 
 use async_trait::async_trait;
@@ -117,6 +140,19 @@ where
     }
 }
 
+/// Blanket impl allowing plain async functions to satisfy Handler without async_trait.
+#[async_trait]
+impl<M, F, Fut> Handler<M> for F
+where
+    M: Request,
+    F: Fn(M) -> Fut + Send + Sync,
+    Fut: Future<Output = CatgaResult<M::Response>> + Send,
+{
+    async fn handle(&self, message: M) -> CatgaResult<M::Response> {
+        self(message).await
+    }
+}
+
 /// A typed command handler backed by one explicit async closure.
 ///
 /// Construct this with [`command_handler`].
@@ -170,6 +206,19 @@ where
     }
 }
 
+/// Blanket impl allowing plain async functions to satisfy CommandHandler without async_trait.
+#[async_trait]
+impl<C, F, Fut> CommandHandler<C> for F
+where
+    C: Command,
+    F: Fn(C) -> Fut + Send + Sync,
+    Fut: Future<Output = CatgaResult<()>> + Send,
+{
+    async fn handle(&self, command: C) -> CatgaResult<()> {
+        self(command).await
+    }
+}
+
 /// A typed event handler backed by one explicit async closure.
 ///
 /// Construct this with [`event_handler`].
@@ -217,5 +266,18 @@ where
 {
     async fn handle(&self, event: E) -> CatgaResult<()> {
         (self.handler)(event).await
+    }
+}
+
+/// Blanket impl allowing plain async functions to satisfy EventHandler without async_trait.
+#[async_trait]
+impl<E, F, Fut> EventHandler<E> for F
+where
+    E: Event,
+    F: Fn(E) -> Fut + Send + Sync,
+    Fut: Future<Output = CatgaResult<()>> + Send,
+{
+    async fn handle(&self, event: E) -> CatgaResult<()> {
+        self(event).await
     }
 }
