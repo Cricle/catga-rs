@@ -866,7 +866,10 @@ mod tests {
             vec![],
             MessageMetadata::new(1, Some(77)).with_priority(MessagePriority::High),
         )
-        .with_headers(EnvelopeHeaders::try_new([("tenant", "acme")]).unwrap());
+        .with_headers(
+            EnvelopeHeaders::try_new([("tenant", "acme")])
+                .expect("test transport headers are valid"),
+        );
         let response = futures::executor::block_on(scope_transport_context(
             &incoming,
             client.request_default(&TestRequest(7)),

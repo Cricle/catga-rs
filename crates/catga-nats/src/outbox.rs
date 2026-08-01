@@ -733,19 +733,21 @@ mod tests {
         assert_eq!(StoredState::Failed.encode(), 2);
         assert_eq!(StoredState::Published.encode(), 3);
         assert_eq!(
-            StoredState::decode(4).unwrap_err().code(),
+            StoredState::decode(4)
+                .expect_err("unknown state code is rejected")
+                .code(),
             ErrorCode::Internal
         );
 
         let pending = message()
             .with_max_retries(3)
-            .unwrap()
+            .expect("retry limit is valid")
             .with_retry_history(1, Some("retry"));
         let decoded = decode(
             &codec,
-            &encode(&codec, StoredState::Pending, &pending).unwrap(),
+            &encode(&codec, StoredState::Pending, &pending).expect("pending record encodes"),
         )
-        .unwrap();
+        .expect("pending record decodes");
         assert_eq!(decoded.state, StoredState::Pending);
         assert_eq!(decoded.message.retry_count(), 1);
         assert_eq!(decoded.message.last_error(), Some("retry"));
@@ -754,9 +756,9 @@ mod tests {
         claimed.claim_until_with_token("worker", "token", 123);
         let decoded = decode(
             &codec,
-            &encode(&codec, StoredState::Claimed, &claimed).unwrap(),
+            &encode(&codec, StoredState::Claimed, &claimed).expect("claimed record encodes"),
         )
-        .unwrap();
+        .expect("claimed record decodes");
         assert_eq!(decoded.state, StoredState::Claimed);
         assert_eq!(decoded.owner.as_ref(), "worker");
         assert_eq!(decoded.message.claim_token(), Some("token"));
@@ -767,9 +769,9 @@ mod tests {
         published.mark_published(456);
         let decoded = decode(
             &codec,
-            &encode(&codec, StoredState::Published, &published).unwrap(),
+            &encode(&codec, StoredState::Published, &published).expect("published record encodes"),
         )
-        .unwrap();
+        .expect("published record decodes");
         assert_eq!(decoded.state, StoredState::Published);
         assert_eq!(decoded.message.state(), OutboxState::Published);
         assert_eq!(decoded.message.published_at_unix_ms(), Some(456));
@@ -778,16 +780,18 @@ mod tests {
     #[test]
     fn legacy_records_and_malformed_lengths_are_handled_without_panics() {
         let codec = MemoryPackCodec::default();
-        let payload = codec.encode(message().envelope()).unwrap();
+        let payload = codec
+            .encode(message().envelope())
+            .expect("legacy envelope encodes");
         let mut legacy = vec![0, 0];
         legacy.extend_from_slice(&payload);
-        let decoded = decode(&codec, &legacy).unwrap();
+        let decoded = decode(&codec, &legacy).expect("legacy record decodes");
         assert_eq!(decoded.state, StoredState::Pending);
         assert_eq!(decoded.message.id(), 7);
 
         let mut owned = vec![0, 3, b'b', b'a', b'd'];
         owned.extend_from_slice(&payload);
-        let decoded = decode(&codec, &owned).unwrap();
+        let decoded = decode(&codec, &owned).expect("owned legacy record decodes");
         assert_eq!(decoded.state, StoredState::Claimed);
         assert_eq!(decoded.owner.as_ref(), "bad");
 
@@ -803,7 +807,7 @@ mod tests {
         assert_eq!(malformed.code(), ErrorCode::Internal);
         assert_eq!(
             system_time_unix_ms(UNIX_EPOCH - Duration::from_secs(1))
-                .unwrap_err()
+                .expect_err("time before Unix epoch is rejected")
                 .code(),
             ErrorCode::Internal
         );

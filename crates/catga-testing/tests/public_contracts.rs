@@ -49,12 +49,21 @@ impl EventHandler<Doubled> for EventCounter {
 #[tokio::test]
 async fn spies_record_requests_and_events_while_preserving_handlers() {
     let request_spy = HandlerSpy::new(DoubleHandler);
-    assert_eq!(request_spy.handle(Double(21)).await.unwrap(), 42);
+    assert_eq!(
+        request_spy
+            .handle(Double(21))
+            .await
+            .expect("request spy delegates to its handler"),
+        42
+    );
     assert_eq!(request_spy.calls(), [Double(21)]);
 
     let total = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let event_spy = EventHandlerSpy::with_handler(EventCounter(Arc::clone(&total)));
-    event_spy.handle(Doubled(7)).await.unwrap();
+    event_spy
+        .handle(Doubled(7))
+        .await
+        .expect("event spy delegates to its handler");
     assert_eq!(event_spy.calls(), [Doubled(7)]);
     assert_eq!(total.load(std::sync::atomic::Ordering::Relaxed), 7);
 }
@@ -63,11 +72,20 @@ async fn spies_record_requests_and_events_while_preserving_handlers() {
 async fn spy_actions_and_message_capture_preserve_assertion_data() {
     let action_spy =
         HandlerSpy::<Double, _>::with_action(|request| async move { Ok(request.0 + 1) });
-    assert_eq!(action_spy.handle(Double(8)).await.unwrap(), 9);
+    assert_eq!(
+        action_spy
+            .handle(Double(8))
+            .await
+            .expect("action spy returns its result"),
+        9
+    );
     assert_eq!(action_spy.last_call(), Some(Double(8)));
 
     let missing_spy = HandlerSpy::<Double, _>::without_handler();
-    let error = missing_spy.handle(Double(3)).await.unwrap_err();
+    let error = missing_spy
+        .handle(Double(3))
+        .await
+        .expect_err("missing handler reports not found");
     assert_eq!(error.code(), ErrorCode::NotFound);
     assert_eq!(missing_spy.calls(), [Double(3)]);
 
@@ -82,7 +100,10 @@ async fn spy_actions_and_message_capture_preserve_assertion_data() {
             }
         }
     });
-    event_spy.handle(Doubled(5)).await.unwrap();
+    event_spy
+        .handle(Doubled(5))
+        .await
+        .expect("action event spy accepts the event");
     assert_eq!(action_total.load(std::sync::atomic::Ordering::Relaxed), 5);
 
     let capture = MessageCapture::default();
@@ -115,15 +136,26 @@ async fn spy_actions_and_message_capture_preserve_assertion_data() {
 
 #[tokio::test]
 async fn harness_dispatches_and_captures_typed_messages() {
-    let mut harness = CatgaTestHarness::new().unwrap();
+    let mut harness = CatgaTestHarness::new().expect("test harness constructs");
     harness
         .register_captured_request::<Double, _>(DoubleHandler)
-        .unwrap();
+        .expect("request handler registers");
     harness.capture_event::<Doubled>();
     let running = harness.start();
 
-    assert_eq!(running.mediator().send(Double(9)).await.unwrap(), 18);
-    running.mediator().publish(Doubled(18)).await.unwrap();
+    assert_eq!(
+        running
+            .mediator()
+            .send(Double(9))
+            .await
+            .expect("harness dispatches request"),
+        18
+    );
+    running
+        .mediator()
+        .publish(Doubled(18))
+        .await
+        .expect("harness publishes event");
     assert_eq!(running.consumed_of::<Double>(), [Double(9)]);
     assert_eq!(running.published_of::<Doubled>(), [Doubled(18)]);
     running.clear_captures();
@@ -185,15 +217,22 @@ async fn aggregate_and_flow_context_support_deterministic_replays() {
         MessageMetadata::new(1, None),
     )];
     let replay = AggregateScenario::<Balance>::new("account-42")
-        .unwrap()
+        .expect("aggregate scenario constructs")
         .replay(&history)
         .await
-        .unwrap();
+        .expect("history replays");
     assert_eq!(replay.aggregate().total, 5);
-    replay.assert_version(0).unwrap();
-    replay.assert_events(&history).unwrap();
+    replay
+        .assert_version(0)
+        .expect("replayed version matches history");
+    replay
+        .assert_events(&history)
+        .expect("replayed events match history");
     assert_eq!(
-        replay.assert_version(1).unwrap_err().code(),
+        replay
+            .assert_version(1)
+            .expect_err("incorrect version is rejected")
+            .code(),
         ErrorCode::Validation
     );
     assert_eq!(
@@ -212,14 +251,20 @@ async fn aggregate_and_flow_context_support_deterministic_replays() {
             .step("complete", |_| async { Ok(FlowStepOutcome::complete()) }),
         "test-node",
     );
-    assert!(runtime.start("flow-1", vec![]).await.unwrap().is_success());
+    assert!(
+        runtime
+            .start("flow-1", vec![])
+            .await
+            .expect("flow runtime starts")
+            .is_success()
+    );
     assert_eq!(
         context
             .suspended_flows()
             .get("flow-1")
             .await
-            .unwrap()
-            .unwrap()
+            .expect("suspended flow store reads")
+            .expect("completed flow state is stored")
             .state()
             .status(),
         FlowStatus::Done

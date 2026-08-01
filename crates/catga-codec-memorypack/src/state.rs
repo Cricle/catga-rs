@@ -133,11 +133,21 @@ mod tests {
         reader
             .add_object_reference(1, value)
             .expect("reference adds");
-        assert_eq!(reader.get_object_reference::<String>(1).unwrap(), "value");
+        assert_eq!(
+            reader
+                .get_object_reference::<String>(1)
+                .expect("stored string reference"),
+            "value"
+        );
         reader
             .update_object_reference(1, String::from("updated"))
             .expect("existing reference updates");
-        assert_eq!(reader.get_object_reference::<String>(1).unwrap(), "updated");
+        assert_eq!(
+            reader
+                .get_object_reference::<String>(1)
+                .expect("updated string reference"),
+            "updated"
+        );
         assert!(reader.update_object_reference(2, 1_u8).is_err());
         assert!(reader.get_object_reference::<u8>(1).is_err());
         reader.reset();
