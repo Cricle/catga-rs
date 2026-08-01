@@ -12,6 +12,7 @@ use syn::{
 
 mod handlers;
 mod typed_mediator;
+mod auto;
 
 /// Implements `catga_core::Message` with the fully qualified, monomorphized Rust type name.
 ///
@@ -776,4 +777,73 @@ pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
     typed_mediator::expand(input.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// Scans a module for `#[catga_handler]` impl blocks and generates registration code.
+///
+/// The macro scans the module for impl blocks marked with `#[catga_handler]` and
+/// generates a `__catga_auto_register` function that registers all handlers with
+/// a `Registry`. Compilation comments show which handlers were discovered.
+///
+/// # Example
+///
+/// ```ignore
+/// #[catga_auto]
+/// mod handlers {
+///     struct MyService;
+///
+///     #[catga_handler]
+///     impl Handler<Ping> for MyService {
+///         async fn handle(&self, ping: Ping) -> CatgaResult<String> {
+///             Ok("pong".to_string())
+///         }
+///     }
+///
+///     #[catga_handler]
+///     impl Handler<Pong> for MyService {
+///         async fn handle(&self, pong: Pong) -> CatgaResult<String> {
+///             Ok("ping".to_string())
+///         }
+///     }
+/// }
+///
+/// // In your app builder:
+/// let registry = handlers::__catga_auto_register(Registry::new())?;
+/// ```
+#[proc_macro]
+pub fn catga_auto(input: TokenStream) -> TokenStream {
+    auto::expand_auto(input.into())
+}
+
+/// Marks an impl block as a Catga handler for auto-registration.
+///
+/// Use this attribute on `impl Handler<M>`, `impl CommandHandler<C>`, or
+/// `impl EventHandler<E>` blocks inside a `#[catga_auto]` module. The impl
+/// will be automatically registered with the application's `Registry` at
+/// compile time.
+///
+/// ```ignore
+/// #[catga_auto]
+/// mod handlers {
+///     struct MyService;
+///
+///     #[catga_handler]
+///     impl Handler<Ping> for MyService {
+///         async fn handle(&self, ping: Ping) -> CatgaResult<String> {
+///             Ok("pong".to_string())
+///         }
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn catga_handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let impl_item: syn::ItemImpl = match syn::parse2(item.into()) {
+        Ok(item) => item,
+        Err(e) => return e.into_compile_error().into(),
+    };
+
+    match auto::expand_handler(impl_item) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.into_compile_error().into(),
+    }
 }

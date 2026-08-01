@@ -150,6 +150,12 @@ impl AutoAppBuilder {
         self
     }
 
+    /// Uses a pre-built registry (e.g., from `#[catga_auto]` module's `__catga_auto_register`).
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
+        self
+    }
+
     /// Registers one typed request handler.
     pub fn register_request<M, H>(&mut self, handler: H) -> CatgaResult<&mut Self>
     where
@@ -283,7 +289,9 @@ pub use catga_redis as redis;
 mod tests {
     use super::AutoAppBuilder;
     use async_trait::async_trait;
-    use catga_core::{CatgaResult, Handler, Message, Request};
+    use catga_core::{
+        catga_auto, CatgaResult, Handler, Message, Registry, Request,
+    };
 
     #[derive(Clone)]
     struct Ping;
@@ -291,15 +299,15 @@ mod tests {
     impl Message for Ping {}
 
     impl Request for Ping {
-        type Response = ();
+        type Response = String;
     }
 
     struct PingHandler;
 
     #[async_trait]
     impl Handler<Ping> for PingHandler {
-        async fn handle(&self, _: Ping) -> CatgaResult<()> {
-            Ok(())
+        async fn handle(&self, _: Ping) -> CatgaResult<String> {
+            Ok("pong".to_string())
         }
     }
 
@@ -319,12 +327,40 @@ mod tests {
     #[tokio::test]
     async fn handler_method_infers_message_type() -> CatgaResult<()> {
         // Plain async fn - no #[async_trait] needed!
-        async fn ping_handler(_: Ping) -> CatgaResult<()> {
-            Ok(())
+        async fn ping_handler(_: Ping) -> CatgaResult<String> {
+            Ok("pong".to_string())
         }
 
         let app = AutoAppBuilder::new().handler(ping_handler)?.build()?;
         assert!(app.handle().is_bound());
         Ok(())
+    }
+
+    #[test]
+    fn with_registry_accepts_prebuilt_registry() {
+        let registry = Registry::new();
+        let builder = AutoAppBuilder::new().with_registry(registry);
+        let app = builder.build().expect("build with prebuilt registry");
+        assert!(app.handle().is_bound());
+    }
+
+    #[test]
+    fn catga_auto_module_discovers_handlers() {
+        // Test that catga_auto! macro discovers plain async fn handlers
+        catga_auto! {
+            mod auto_handlers {
+                use super::*;
+
+                // Plain async fn - no struct or #[catga_handler] needed!
+                async fn echo_handler(_: Ping) -> CatgaResult<String> {
+                    Ok("echo".to_string())
+                }
+            }
+        }
+
+        let registry = Registry::new();
+        let registry = auto_handlers::__catga_auto_register(registry).expect("auto registration");
+        let app = AutoAppBuilder::new().with_registry(registry).build().expect("build app");
+        assert!(app.handle().is_bound());
     }
 }
