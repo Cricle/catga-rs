@@ -7,20 +7,32 @@
 //! (retry, dead-letter, circuit breaking) stays the responsibility of `catga-core`'s `Behavior`
 //! family rather than a parallel pipe layer.
 //!
+//! # Endpoint Registration
+//!
+//! Each endpoint requires four arguments: a name, a handler, a codec, and concurrency. The handler
+//! must implement [`TypedDeliveryHandler<M>`] where `M` is the message type. Use a struct with
+//! `#[async_trait]` to define the handler, then register it in `Arc`:
+//!
 //! ```no_run
 //! use std::sync::Arc;
 //! use catga_auto::Bus;
 //! use catga_codec_memorypack::MemoryPackCodec;
 //! use catga_memory::MemoryTransport;
-//! # use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
-//! # #[derive(catga_codec_memorypack::MemoryPackable)]
-//! # struct Order;
-//! # impl Message for Order {}
-//! # struct OrderHandler;
-//! # #[async_trait::async_trait]
-//! # impl TypedDeliveryHandler<Order> for OrderHandler {
-//! #     async fn handle(&self, _: &Order) -> CatgaResult<()> { Ok(()) }
-//! # }
+//! use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
+//!
+//! #[derive(catga_codec_memorypack::MemoryPackable)]
+//! struct OrderPlaced { order_id: u32 }
+//! impl Message for OrderPlaced {}
+//!
+//! struct OrderHandler;
+//!
+//! #[async_trait::async_trait]
+//! impl TypedDeliveryHandler<OrderPlaced> for OrderHandler {
+//!     async fn handle(&self, event: &OrderPlaced) -> CatgaResult<()> {
+//!         println!("order {} placed", event.order_id);
+//!         Ok(())
+//!     }
+//! }
 //!
 //! # async fn run() -> CatgaResult<()> {
 //! let transport = Arc::new(MemoryTransport::new(64)?);
