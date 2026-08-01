@@ -21,6 +21,8 @@ const EXAMPLES: [(&str, &str); 11] = [
 ];
 
 const EXAMPLE_GUIDE_PATH: &str = "docs/examples.md";
+const PERFORMANCE_GUIDE_PATH: &str = "docs/performance.md";
+const README_PATH: &str = "README.md";
 
 #[test]
 fn public_examples_are_present() {
@@ -93,6 +95,43 @@ fn example_guide_links_to_grouped_examples() {
         assert!(
             example_guide.contains(source),
             "example guide must link to {source}"
+        );
+    }
+}
+
+#[test]
+fn readme_navigates_to_complete_example_and_performance_guides() {
+    let workspace = workspace_root();
+    let readme = read_workspace_file(workspace, README_PATH);
+    let performance_guide = read_workspace_file(workspace, PERFORMANCE_GUIDE_PATH);
+
+    for heading in [
+        "## Start Here",
+        "## Run An Example",
+        "## Production Boundaries",
+        "## Performance",
+        "## Documentation",
+        "## Verification",
+    ] {
+        assert!(readme.contains(heading), "README is missing {heading}");
+    }
+    for link in [EXAMPLE_GUIDE_PATH, PERFORMANCE_GUIDE_PATH] {
+        assert!(readme.contains(link), "README must link to {link}");
+    }
+    for metric in [
+        "SQLite",
+        "MySQL",
+        "PostgreSQL",
+        "SQL Server",
+        "Redis",
+        "p50",
+        "p95",
+        "p99",
+        "scripts/performance.sh --profile full",
+    ] {
+        assert!(
+            performance_guide.contains(metric),
+            "performance guide must retain {metric}"
         );
     }
 }

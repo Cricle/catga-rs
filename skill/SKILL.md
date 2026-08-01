@@ -130,7 +130,8 @@ async fn main() -> CatgaResult<()> {
 
 ## 仓库内可运行的示例
 
-本仓库自带无需 Docker 即可运行的示例（`examples/src/bin/`），写代码前可参考：
+本仓库自带无需 Docker 即可运行的示例；按场景分组和完整运行说明见
+[`docs/examples.md`](../docs/examples.md)。写代码前可参考：
 
 ```bash
 cargo run -p catga-examples --bin mediator          # 最小 mediator
