@@ -37,7 +37,7 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -47,9 +47,12 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run strict workspace coverage gates
         run: >-
-          bash scripts/coverage.sh --skip-e2e
+          bash scripts/coverage.sh --profile ${{ github.event_name == 'pull_request' && 'core' || 'full' }}
+          --e2e-jobs 2
           --required-line-coverage 80
           --required-region-coverage 80
+          --required-e2e-pass-percentage 95
+          --health-timeout-seconds 60
       - name: Upload coverage report
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -58,36 +61,13 @@ jobs:
           path: target/coverage/lcov.info
           if-no-files-found: warn
           retention-days: 14
-  e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: e2e
-      - name: Determine E2E profile
-        id: profile
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "e2e=core" >> "$GITHUB_OUTPUT"
-          else
-            echo "e2e=full" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Run strict Docker E2E scenarios
-        run: >-
-          bash scripts/e2e.sh --profile ${{ steps.profile.outputs.e2e }}
-          --jobs 2
-          --required-pass-percentage 95
-          --health-timeout-seconds 60
-      - name: Upload E2E results and logs
+      - name: Upload E2E results and logs from the coverage gate
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: e2e-results
           path: |
-            target/e2e-results.json
+            target/coverage/e2e-results.json
             target/e2e-logs
           if-no-files-found: warn
           retention-days: 14

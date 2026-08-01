@@ -6,6 +6,7 @@ profile=full
 keep_services=false
 validate_only=false
 run_e2e=true
+e2e_jobs=1
 required_line_coverage=80
 required_region_coverage=80
 required_e2e_pass_percentage=95
@@ -21,6 +22,7 @@ Usage: scripts/coverage.sh [options]
   --profile core|sql|full
   --keep-services
   --skip-e2e
+  --e2e-jobs NUMBER
   --validate-only
   --required-line-coverage NUMBER
   --required-region-coverage NUMBER
@@ -39,6 +41,7 @@ while (($#)); do
         --profile) profile=${2:?missing profile}; shift 2 ;;
         --keep-services) keep_services=true; shift ;;
         --skip-e2e) run_e2e=false; shift ;;
+        --e2e-jobs) e2e_jobs=${2:?missing E2E jobs}; shift 2 ;;
         --validate-only) validate_only=true; shift ;;
         --required-line-coverage) required_line_coverage=${2:?missing coverage}; shift 2 ;;
         --required-region-coverage) required_region_coverage=${2:?missing coverage}; shift 2 ;;
@@ -50,6 +53,8 @@ while (($#)); do
         *) die "unknown argument '$1'" ;;
     esac
 done
+
+[[ "$e2e_jobs" =~ ^[1-9][0-9]*$ ]] || die '--e2e-jobs must be a positive integer'
 
 command -v cargo >/dev/null || die 'Cargo must be available on PATH'
 command -v cargo-llvm-cov >/dev/null || die 'cargo-llvm-cov must be available on PATH'
@@ -73,7 +78,7 @@ run_coverage llvm-cov clean --workspace
 run_coverage llvm-cov test --workspace --all-features --no-report
 
 if [[ "$run_e2e" == true ]]; then
-    e2e_arguments=(--profile "$profile" --coverage --required-pass-percentage "$required_e2e_pass_percentage"
+    e2e_arguments=(--profile "$profile" --coverage --jobs "$e2e_jobs" --required-pass-percentage "$required_e2e_pass_percentage"
         --health-timeout-seconds "$health_timeout_seconds" --matrix-path "$matrix_path" --results-path "$results_path")
     [[ "$keep_services" == true ]] && e2e_arguments+=(--keep-services)
     bash "$e2e_script" "${e2e_arguments[@]}"
