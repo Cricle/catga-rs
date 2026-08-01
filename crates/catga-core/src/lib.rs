@@ -164,6 +164,8 @@ mod time_travel;
 mod trace_context;
 mod transport;
 mod transport_batching;
+mod typed_publisher;
+mod typed_event_store;
 mod typed_transport;
 mod upgrading_event_store;
 mod validation;
@@ -290,6 +292,8 @@ pub use transport::{
     MessageTransport,
 };
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
+pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
+pub use typed_event_store::TypedEventStore;
 pub use typed_transport::{TypedDelivery, TypedProcessOutcome, TypedTransport};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use validation::{
@@ -297,6 +301,31 @@ pub use validation::{
     validate_not_empty, validate_positive, validate_range, validate_required,
 };
 pub use versioned_transport::VersionedMessageTransport;
+
+/// Builds metadata for typed publish operations.
+///
+/// Combines ID generation, correlation context, and quality-of-service metadata
+/// into a single reusable builder for typed event stores and publishers.
+pub(crate) fn build_publish_metadata<M: Message>(
+    id_generator: &dyn DistributedIdGenerator,
+    message: &M,
+) -> CatgaResult<(u64, MessageMetadata)> {
+    let id = id_generator.next_id()?;
+    let context = current_transport_context();
+    let correlation_id = context.as_ref().map_or_else(
+        || current_correlation_id().unwrap_or(id),
+        |value| value.correlation_id().unwrap_or(id),
+    );
+    let metadata = MessageMetadata::new(id, Some(correlation_id))
+        .with_quality_of_service(QualityOfService::AtLeastOnce)
+        .with_priority(
+            context
+                .as_ref()
+                .map(TransportContext::priority)
+                .unwrap_or_else(|| message.priority()),
+        );
+    Ok((id, metadata))
+}
 
 /// Builds a typed, bounded [`Pipeline`] during application startup.
 ///

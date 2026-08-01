@@ -25,8 +25,8 @@
 //!
 //! # async fn run() -> catga_core::CatgaResult<()> {
 //! let app = AutoApp::builder()
-//!     .request::<Ping, _>(ping_handler)?
-//!     .build();
+//!     .handler(ping_handler)?  // Inferred message type!
+//!     .build()?;
 //! # Ok(())
 //! # }
 //! ```
@@ -42,8 +42,9 @@ use tokio_util::sync::CancellationToken;
 mod bus;
 
 pub use bus::{
-    Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient, FaultPublishingHandler,
-    FilteredHandler, MessageForwarder, PublisherHandle,
+    Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient,
+    DeliveryMessageOf, FaultPublishingHandler, FilteredHandler, MessageForwarder,
+    PublisherHandle,
 };
 
 /// Re-exports the state-machine Bus adapter when the `flow` feature is enabled.
@@ -90,6 +91,39 @@ impl AutoAppBuilder {
     where
         M: Request,
         H: Handler<M> + 'static,
+    {
+        self.registry.register_request(handler)?;
+        Ok(self)
+    }
+
+    /// Registers one typed handler and returns the builder for fluent composition.
+    ///
+    /// The message type is inferred from the handler's signature. Use this for requests,
+    /// commands, and events. For explicit control, use `.request()`, `.command()`, or `.event()`.
+    ///
+    /// ```
+    /// use catga_auto::AutoApp;
+    /// use catga_core::{CatgaResult, Message, Request};
+    ///
+    /// struct Ping;
+    /// impl Message for Ping {}
+    /// impl Request for Ping { type Response = (); }
+    ///
+    /// async fn ping_handler(_: Ping) -> CatgaResult<()> {
+    ///     Ok(())
+    /// }
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let app = AutoApp::builder()
+    ///     .handler(ping_handler)?
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn handler<M, H>(mut self, handler: H) -> CatgaResult<Self>
+    where
+        M: Request,
+        H: Handler<M> + Send + Sync + 'static,
     {
         self.registry.register_request(handler)?;
         Ok(self)
@@ -281,5 +315,19 @@ mod tests {
         let app = builder.build().expect("build application");
         assert!(handle.is_bound());
         assert!(app.handle().is_bound());
+    }
+
+    #[tokio::test]
+    async fn handler_method_infers_message_type() -> CatgaResult<()> {
+        // Plain async fn - no #[async_trait] needed!
+        async fn ping_handler(_: Ping) -> CatgaResult<()> {
+            Ok(())
+        }
+
+        let app = AutoAppBuilder::new()
+            .handler(ping_handler)?
+            .build()?;
+        assert!(app.handle().is_bound());
+        Ok(())
     }
 }

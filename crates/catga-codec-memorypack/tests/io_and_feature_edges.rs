@@ -1,7 +1,7 @@
 //! Public reader/writer and optional-type boundary coverage.
 
 use catga_codec_memorypack::{
-    MemoryPackDecodeLimits, MemoryPackError, MemoryPackReader, MemoryPackSerializer,
+    MemoryPackDecodeLimits, MemoryPackError, MemoryPackReader,
     MemoryPackWriter,
 };
 

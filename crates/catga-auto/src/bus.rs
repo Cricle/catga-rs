@@ -60,6 +60,37 @@ use futures::future::LocalBoxFuture;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+/// Helper trait to extract the message type from a TypedDeliveryHandler.
+///
+/// This trait can be implemented manually for custom handler types to enable
+/// type inference in bus endpoint registration.
+///
+/// # Example
+///
+/// ```
+/// use catga_auto::DeliveryMessageOf;
+/// use catga_core::{TypedDeliveryHandler, Message, CatgaResult};
+/// use async_trait::async_trait;
+///
+/// struct MyHandler;
+/// struct MyMessage;
+///
+/// impl Message for MyMessage {}
+///
+/// #[async_trait]
+/// impl TypedDeliveryHandler<MyMessage> for MyHandler {
+///     async fn handle(&self, msg: &MyMessage) -> CatgaResult<()> { Ok(()) }
+/// }
+///
+/// impl DeliveryMessageOf<MyHandler> for MyHandler {
+///     type Message = MyMessage;
+/// }
+/// ```
+pub trait DeliveryMessageOf<H> {
+    /// The message type this handler delivers.
+    type Message: Message + Send + 'static;
+}
+
 /// A receive endpoint that a [`Bus`] can drive, behind a type-erased boundary.
 ///
 /// The consume loop's future is intentionally not `Send` (the delivery handle is deliberately not

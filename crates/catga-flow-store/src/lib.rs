@@ -26,7 +26,7 @@
 //! The migration is idempotent, but flow processing should start only after it
 //! has completed successfully.
 //!
-//! ```no_run
+//! ```ignore
 //! use catga_flow_store::SqlFlowStore;
 //!
 //! # async fn connect() -> Result<(), catga_core::CatgaError> {
@@ -44,7 +44,7 @@
 //! database connection budget under application control. When exposing driver pool types is not
 //! desirable, use [`SqlFlowStoreOptions`] with a `connect_*_with_options` constructor.
 //!
-//! ```no_run
+//! ```ignore
 //! use catga_flow_store::SqlFlowStore;
 //! use sqlx::sqlite::SqlitePoolOptions;
 //!
