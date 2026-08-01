@@ -20,6 +20,8 @@ const EXAMPLES: [(&str, &str); 11] = [
     ("distributed_todo_worker", "src/distributed/todo_worker.rs"),
 ];
 
+const EXAMPLE_GUIDE_PATH: &str = "docs/examples.md";
+
 #[test]
 fn public_examples_are_present() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -75,6 +77,38 @@ fn public_examples_are_present() {
         bin_sources.is_empty(),
         "examples/src/bin must not contain auto-discovered binaries: {bin_sources:?}"
     );
+}
+
+#[test]
+fn example_guide_links_to_grouped_examples() {
+    let workspace = workspace_root();
+    let example_guide = read_workspace_file(workspace, EXAMPLE_GUIDE_PATH);
+
+    for source in [
+        "examples/src/quickstart/mediator.rs",
+        "examples/src/runtime/bus_cqrs.rs",
+        "examples/src/web/order_service.rs",
+        "examples/distributed-todo/compose.yaml",
+    ] {
+        assert!(
+            example_guide.contains(source),
+            "example guide must link to {source}"
+        );
+    }
+}
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| {
+            panic!("the integration-test crate must live directly below the workspace root")
+        })
+}
+
+fn read_workspace_file(workspace: &Path, path: &str) -> String {
+    std::fs::read_to_string(workspace.join(path)).unwrap_or_else(|error| {
+        panic!("{path} must be readable: {error}");
+    })
 }
 
 fn example_binary_targets(workspace: &Path) -> BTreeSet<(String, PathBuf)> {
