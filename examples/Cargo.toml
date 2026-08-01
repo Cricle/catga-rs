@@ -29,6 +29,14 @@ name = "plain_handler"
 path = "src/quickstart/plain_handler.rs"
 
 [[bin]]
+name = "simple_handler"
+path = "src/quickstart/simple_handler.rs"
+
+[[bin]]
+name = "simple_bus"
+path = "src/runtime/simple_bus.rs"
+
+[[bin]]
 name = "bus_cqrs"
 path = "src/runtime/bus_cqrs.rs"
 

@@ -11,7 +11,7 @@ use catga_core::{
     DistributedIdGenerator, Envelope, EnvelopeHeaders, ErrorCode, Event, Message,
     MessageDestinationRouter, MessageMetadata, MessagePriority, MessageTransport, PayloadDecoder,
     PayloadEncoder, QualityOfService, SnowflakeIdGenerator, SnowflakeLayout, TypedProcessOutcome,
-    TypedTransport,
+    TypedPublisher, TypedTransport,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -328,6 +328,29 @@ fn ids() -> CatgaResult<Arc<dyn DistributedIdGenerator>> {
         1,
         SnowflakeLayout::default(),
     )?))
+}
+
+#[tokio::test]
+async fn typed_publisher_encodes_a_message_for_a_publish_only_backend() -> CatgaResult<()> {
+    let backend = Arc::new(DeliveryTransport::without_delivery());
+    let publisher = TypedPublisher::new_with_codec(Arc::clone(&backend), ids()?, TestCodec);
+
+    publisher.publish(&TestMessage(7)).await?;
+
+    let envelope = backend
+        .published_envelopes()?
+        .pop()
+        .expect("typed publisher must publish one envelope");
+    assert_eq!(
+        envelope.message_type(),
+        std::any::type_name::<TestMessage>()
+    );
+    assert_eq!(envelope.payload(), [7]);
+    assert_eq!(
+        envelope.metadata().quality_of_service(),
+        QualityOfService::AtLeastOnce
+    );
+    Ok(())
 }
 
 fn delivery(payload: Vec<u8>, counts: Arc<AcknowledgementCounts>) -> Delivery {

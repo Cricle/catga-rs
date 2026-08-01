@@ -3,6 +3,12 @@
 //! Demonstrates: routed endpoints, BusPublisher, PublisherHandle (publish-from-handler),
 //! and graceful shutdown — all without a broker.
 //!
+//! This example shows two handler patterns:
+//! - **Stateful handler**: `PlaceOrderHandler` uses `PublisherHandle` to publish events.
+//!   Requires a struct with `#[async_trait]` because it holds state.
+//! - **Stateless handler**: `OrderPlacedHandler` is stateless. Can be replaced with a
+//!   plain async fn if `TypedDeliveryHandler` blanket impls are added in the future.
+//!
 //! ```bash
 //! cargo run --bin bus_cqrs
 //! ```
@@ -29,6 +35,12 @@ struct OrderPlaced {
 }
 impl Message for OrderPlaced {}
 
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
+/// Stateful handler: publishes events via PublisherHandle.
+/// This pattern REQUIRES a struct because it holds state (the publisher handle).
 struct PlaceOrderHandler {
     publisher: PublisherHandle<MemoryTransport, MemoryPackCodec>,
 }
@@ -46,7 +58,19 @@ impl TypedDeliveryHandler<PlaceOrder> for PlaceOrderHandler {
     }
 }
 
+/// Stateless handler: only logs the event.
+/// This pattern COULD be replaced with a plain async fn once TypedDeliveryHandler
+/// blanket impls are added (similar to the Handler blanket impls).
 struct OrderPlacedHandler;
+
+// FUTURE: Once TypedDeliveryHandler blanket impls are added, this could become:
+// ```rust
+// async fn order_placed_handler(event: OrderPlaced) -> CatgaResult<()> {
+//     println!("  [event]   order #{} placed: {}", event.order_id, event.item);
+//     Ok(())
+// }
+// ```
+// For now, use the struct-based approach.
 
 #[async_trait]
 impl TypedDeliveryHandler<OrderPlaced> for OrderPlacedHandler {

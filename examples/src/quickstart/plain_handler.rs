@@ -1,6 +1,6 @@
 //! Demonstrates the simplest handler registration pattern enabled by Fn-blanket impls.
 //!
-//! Plain async functions automatically satisfy [`Handler`] without `#[async_trait]` or helper
+//! Plain async functions automatically satisfy [`catga_core::Handler`] without `#[async_trait]` or helper
 //! wrappers. The handler type is inferred by the registry:
 
 use catga_auto::AutoApp;

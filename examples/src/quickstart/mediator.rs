@@ -1,6 +1,6 @@
 //! Registers a request handler and sends a typed request.
 //!
-//! Plain async functions automatically satisfy [`Handler`] — no `#[async_trait]` or helper
+//! Plain async functions automatically satisfy [`catga_core::Handler`] — no `#[async_trait]` or helper
 //! wrappers needed. For handlers that need shared state, see `request_handler_with`.
 
 use catga_auto::AutoApp;
