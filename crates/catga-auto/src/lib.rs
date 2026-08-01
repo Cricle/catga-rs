@@ -6,6 +6,30 @@
 //! [`MediatorHandle`], and exposes an explicit shutdown token. It does not add reflection,
 //! hidden tasks, or dynamic dispatch to request hot paths. Transport, Flow, and cluster features
 //! remain explicit dependencies selected by the application.
+//!
+//! # Handler Registration
+//!
+//! Plain async functions automatically satisfy handler traits thanks to Fn-blanket impls in
+//! `catga-core`. No `#[async_trait]` needed for simple handlers:
+//!
+//! ```
+//! use catga_auto::AutoApp;
+//! use catga_core::{CatgaResult, Message, Request};
+//!
+//! struct Ping;
+//! impl Message for Ping {}
+//! impl Request for Ping { type Response = (); }
+//!
+//! // Plain async fn - no #[async_trait] needed!
+//! async fn ping_handler(_: Ping) -> CatgaResult<()> { Ok(()) }
+//!
+//! # async fn run() -> catga_core::CatgaResult<()> {
+//! let app = AutoApp::builder()
+//!     .request::<Ping, _>(ping_handler)
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::sync::Arc;
 
@@ -28,6 +52,7 @@ pub use bus::StateMachineHandler;
 
 /// Re-exports Catga's bounded typed competing-consumer runner.
 pub use catga_core::{CompetingConsumer, TypedDeliveryHandler};
+pub use catga_core::{TypedEventStore, TypedPublisher};
 
 /// A startup builder for one immutable Catga application graph.
 pub struct AutoAppBuilder {
