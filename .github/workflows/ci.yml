@@ -48,7 +48,7 @@ jobs:
       - name: Run strict workspace coverage gates
         run: >-
           bash scripts/coverage.sh --profile ${{ github.event_name == 'pull_request' && 'core' || 'full' }}
-          --e2e-jobs 2
+          --e2e-jobs 1
           --required-line-coverage 80
           --required-region-coverage 80
           --required-e2e-pass-percentage 95

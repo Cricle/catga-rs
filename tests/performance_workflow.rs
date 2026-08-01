@@ -184,8 +184,8 @@ fn coverage_gate_requires_eighty_percent_without_relaxing_e2e() {
 #[test]
 fn ci_runs_strict_workspace_and_e2e_gates_once() {
     assert!(
-        COVERAGE_RUNNER.contains("llvm-cov test --workspace --all-features --no-report"),
-        "the coverage job must execute the complete workspace test suite"
+        COVERAGE_RUNNER.contains("llvm-cov test --workspace --all-features --lib --no-report"),
+        "the coverage job must execute workspace library tests before the E2E matrix"
     );
     assert!(
         COVERAGE_RUNNER.contains("--profile \"$profile\" --coverage"),
@@ -196,9 +196,9 @@ fn ci_runs_strict_workspace_and_e2e_gates_once() {
         "CI must not execute the full Docker E2E matrix a second time"
     );
     assert_eq!(
-        CI_WORKFLOW.matches("--e2e-jobs 2").count(),
+        CI_WORKFLOW.matches("--e2e-jobs 1").count(),
         1,
-        "CI must use bounded parallelism for the instrumented Docker E2E matrix"
+        "CI must serialize the instrumented Docker E2E matrix for stable coverage data"
     );
     assert!(
         !CI_WORKFLOW.contains("      - run: cargo test --workspace --all-features"),

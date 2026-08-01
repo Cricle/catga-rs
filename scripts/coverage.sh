@@ -75,7 +75,9 @@ mkdir -p "$output_directory"
 results_path="$output_directory/e2e-results.json"
 rm -f "$results_path"
 run_coverage llvm-cov clean --workspace
-run_coverage llvm-cov test --workspace --all-features --no-report
+# Integration targets are executed below by the strict E2E matrix. Running them here as well
+# only duplicates process startup and service setup while contributing the same instrumentation.
+run_coverage llvm-cov test --workspace --all-features --lib --no-report
 
 if [[ "$run_e2e" == true ]]; then
     e2e_arguments=(--profile "$profile" --coverage --jobs "$e2e_jobs" --required-pass-percentage "$required_e2e_pass_percentage"
