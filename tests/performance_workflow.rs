@@ -188,12 +188,17 @@ fn ci_runs_strict_workspace_and_e2e_gates_once() {
         "the coverage job must execute the complete workspace test suite"
     );
     assert!(
-        COVERAGE_RUNNER.contains("--profile \"$profile\" --coverage"),
-        "the coverage job must execute the complete Docker E2E scenario matrix"
+        COVERAGE_RUNNER.contains("--skip-e2e"),
+        "the coverage runner must support a workspace-only gate so Docker E2E can run independently"
     );
     assert!(
-        !CI_WORKFLOW.contains("\n  e2e:\n"),
-        "CI must not execute the full Docker E2E matrix a second time"
+        CI_WORKFLOW.contains("\n  e2e:\n"),
+        "CI must provide a dedicated Docker E2E job"
+    );
+    assert_eq!(
+        CI_WORKFLOW.matches("--required-pass-percentage 95").count(),
+        1,
+        "CI must execute the Docker E2E matrix exactly once"
     );
     assert!(
         !CI_WORKFLOW.contains("      - run: cargo test --workspace --all-features"),
@@ -201,14 +206,18 @@ fn ci_runs_strict_workspace_and_e2e_gates_once() {
     );
     for artifact in [
         "name: e2e-results",
-        "target/coverage/e2e-results.json",
+        "target/e2e-results.json",
         "target/e2e-logs",
     ] {
         assert!(
             CI_WORKFLOW.contains(artifact),
-            "the consolidated coverage job must retain the {artifact} artifact"
+            "the E2E job must retain the {artifact} artifact"
         );
     }
+    assert!(
+        !CI_WORKFLOW.contains("target/coverage/e2e-results.json"),
+        "coverage artifacts must not claim an E2E report that coverage no longer produces"
+    );
 }
 
 #[test]
