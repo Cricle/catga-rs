@@ -1,7 +1,8 @@
 //! Public reader/writer and optional-type boundary coverage.
 
 use catga_codec_memorypack::{
-    MemoryPackDecodeLimits, MemoryPackError, MemoryPackReader, MemoryPackWriter,
+    MemoryPackDecodeLimits, MemoryPackError, MemoryPackReader, MemoryPackSerializer,
+    MemoryPackWriter,
 };
 
 fn reader(bytes: &[u8]) -> MemoryPackReader<'_> {
