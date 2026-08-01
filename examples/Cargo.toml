@@ -25,6 +25,10 @@ name = "flow"
 path = "src/quickstart/flow.rs"
 
 [[bin]]
+name = "plain_handler"
+path = "src/quickstart/plain_handler.rs"
+
+[[bin]]
 name = "bus_cqrs"
 path = "src/runtime/bus_cqrs.rs"
 
