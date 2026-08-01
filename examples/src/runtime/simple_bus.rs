@@ -94,15 +94,18 @@ async fn main() -> CatgaResult<()> {
         // Note: In a real app, you'd use PublisherHandle or BusPublisher
         let codec = MemoryPackCodec::default();
         for i in 1..=3_u32 {
+            let payload = codec
+                .encode_payload(&PlaceOrder { order_id: i })
+                .expect("encode PlaceOrder should not fail");
             transport
                 .publish(Envelope::new(
                     i as u64,
                     "PlaceOrder",
-                    codec.encode_payload(&PlaceOrder { order_id: i }).unwrap(),
+                    payload,
                     MessageMetadata::new(i as u64, None),
                 ))
                 .await
-                .unwrap();
+                .expect("transport publish should not fail");
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         token.cancel();
