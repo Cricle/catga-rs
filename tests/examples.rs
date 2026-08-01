@@ -6,11 +6,12 @@ use std::{
     process::Command,
 };
 
-const EXAMPLES: [(&str, &str); 11] = [
+const EXAMPLES: [(&str, &str); 12] = [
     ("mediator", "src/quickstart/mediator.rs"),
     ("typed_mediator", "src/quickstart/typed_mediator.rs"),
     ("memory_transport", "src/quickstart/memory_transport.rs"),
     ("flow", "src/quickstart/flow.rs"),
+    ("plain_handler", "src/quickstart/plain_handler.rs"),
     ("bus_cqrs", "src/runtime/bus_cqrs.rs"),
     ("otel_bus", "src/runtime/otel_bus.rs"),
     ("axum_checkout", "src/web/axum_checkout.rs"),

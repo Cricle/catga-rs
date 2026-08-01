@@ -76,6 +76,10 @@ name = "typed_transport"
 path = "typed_transport.rs"
 
 [[test]]
+name = "typed_event_store"
+path = "typed_event_store.rs"
+
+[[test]]
 name = "message_types"
 path = "message_types.rs"
 

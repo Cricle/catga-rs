@@ -10,8 +10,8 @@
 //! impl Request for GetUser { type Response = String; }
 //!
 //! // No #[async_trait] needed - just a plain async fn!
-//! async fn get_user_handler(id: GetUser) -> CatgaResult<String> {
-//!     Ok(format!("user-{}", id.0))
+//! async fn get_user_handler(_: GetUser) -> CatgaResult<String> {
+//!     Ok("user-42".to_string())
 //! }
 //!
 //! // get_user_handler now implements Handler<GetUser>

@@ -20,6 +20,35 @@ distribution.
 | An HTTP application | [`order_service`](examples/src/web/order_service.rs) | Replace in-memory adapters with durable ones. |
 | A real multi-process deployment | [`distributed Todo`](examples/distributed-todo/compose.yaml) | Run Axum, NATS JetStream, consumer, and projection together. |
 
+## Quick start
+
+Plain async functions automatically satisfy handler traits thanks to Fn-blanket impls.
+No `#[async_trait]` needed for simple handlers:
+
+```rust
+use catga_auto::AutoApp;
+use catga_core::{CatgaResult, Message, Request};
+
+struct Double(u64);
+impl Message for Double {}
+impl Request for Double { type Response = u64; }
+
+async fn double_handler(value: Double) -> CatgaResult<u64> {
+    Ok(value.0 * 2)
+}
+
+#[tokio::main]
+async fn main() -> CatgaResult<()> {
+    let app = AutoApp::builder()
+        .request::<Double, _>(double_handler)?
+        .build()?;
+    let result = app.mediator().send(Double(21)).await?;
+    assert_eq!(result, 42);
+    println!("21 doubled is {result}");
+    Ok(())
+}
+```
+
 The complete ordered path, prerequisites, and commands are in
 [Examples](docs/examples.md).
 
@@ -40,6 +69,35 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | Bounded local adapters and deterministic tests | `catga-memory = "0.0.2"` |
 | SQL or Redis durable Flow state | `catga-flow-store = { version = "0.0.2", features = ["sqlite"] }` |
 | NATS, Redis, RobustMQ, cluster, Axum, or cron | Add the matching opt-in `catga-*` crate. |
+
+## Flow
+
+State-machine workflows with automatic retry and compensation:
+
+```rust
+use catga_flow::{Flow, Transition};
+use catga_core::{CatgaResult, Message, Command};
+
+// Define states and transitions
+#[derive(Transition)]
+enum OrderFlow {
+    Pending -> Confirmed(OrderConfirmed),
+    Confirmed -> Shipped(OrderShipped),
+    Shipped -> Delivered(OrderDelivered),
+}
+```
+
+Flow state is durable when using `catga-flow-store` with SQLite or Redis.
+
+## FlowStore
+
+Persistent state for Flow workflows:
+
+```toml
+catga-flow-store = { version = "0.0.2", features = ["sqlite"] }
+```
+
+FlowStore provides durable state persistence for workflows, enabling recovery after restart.
 
 ## Run An Example
 
@@ -103,6 +161,19 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 The strict Docker E2E and coverage gate runs only for release tags and manually
 dispatched performance workflows.
+
+NATS JetStream tests start and remove an isolated Testcontainers server.
+Tests that require external infrastructure (NATS, Redis, RobustMQ) are marked `#[ignore]` locally. and run in CI against ephemeral Testcontainers. The test-only mailbox-creation control-plane harness enables deterministic unit tests without a real message broker.
+
+## Features
+
+- **Plain async fn handlers**: Plain async functions automatically satisfy handler traits
+  via Fn-blanket impls. No `#[async_trait]` needed for simple handlers.
+- **Typed message bus**: Request/Command/Event handlers with compile-time dispatch.
+- **Compensating flows**: Multi-step workflows with automatic retry and rollback.
+- **Competing consumers**: Durable message consumption with at-least-once delivery.
+- **Outbox/Inbox patterns**: Reliable message delivery with idempotency support.
+- **catga_handlers! macro**: Compile-time handler registration for zero-cost abstraction.
 
 ## License
 

@@ -25,8 +25,8 @@
 //!
 //! # async fn run() -> catga_core::CatgaResult<()> {
 //! let app = AutoApp::builder()
-//!     .request::<Ping, _>(ping_handler)
-//!     .build()?;
+//!     .request::<Ping, _>(ping_handler)?
+//!     .build();
 //! # Ok(())
 //! # }
 //! ```
