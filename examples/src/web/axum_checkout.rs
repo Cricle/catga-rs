@@ -46,12 +46,13 @@ use axum::{
     extract::Path,
     routing::{get, post},
 };
+use catga_auto::{AutoApp, web};
 use catga_axum::{
     CatgaHttpError, CatgaHttpResult, CorrelationLayer, MediatorState, TraceContextLayer,
 };
 use catga_core::{
-    CatgaError, CatgaResult, EndpointValidation, ErrorCode, Mediator, Message, Registry, Request,
-    request_handler_with, validate_positive,
+    CatgaError, CatgaResult, EndpointValidation, ErrorCode, Message, Request, request_handler_with,
+    validate_positive,
 };
 use serde::{Deserialize, Serialize};
 
@@ -144,20 +145,16 @@ async fn find_order(store: Arc<OrderStore>, query: GetOrder) -> CatgaResult<Orde
 }
 
 // ===========================================================================
-// Step 3: Build the mediator — explicit registration, no macros, no discovery
+// Step 3: Build the application — typed registration, no macros or raw registry plumbing
 // ===========================================================================
 
-fn build_mediator() -> CatgaResult<Arc<Mediator>> {
+fn build_app() -> CatgaResult<AutoApp> {
     let store: Arc<OrderStore> = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-    let mut registry = Registry::new();
-    registry.register_request::<CreateOrder, _>(request_handler_with(
-        Arc::clone(&store),
-        place_order,
-    ))?;
-    registry.register_request::<GetOrder, _>(request_handler_with(store, find_order))?;
-
-    Ok(Arc::new(Mediator::new(registry)))
+    AutoApp::builder()
+        .request(request_handler_with(Arc::clone(&store), place_order))?
+        .request(request_handler_with(store, find_order))?
+        .build()
 }
 
 // ===========================================================================
@@ -191,14 +188,15 @@ async fn get_order_by_id(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {
+    let catga = build_app()?;
     let app = Router::new()
         .route("/orders", post(post_create_order))
         .route("/orders/{id}", get(get_order_by_id))
         // Opt-in layers — omit either if not needed. Order: outermost first.
         .layer(TraceContextLayer::new())
         .layer(CorrelationLayer::new())
-        // Mediator as state: MediatorState extracts it with one atomic Arc clone.
-        .with_state(build_mediator()?);
+        // MediatorState shares AutoApp's immutable mediator with one atomic Arc clone.
+        .with_state(web::mediator_state(&catga));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await

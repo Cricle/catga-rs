@@ -55,7 +55,7 @@ path = "src/distributed/todo_worker.rs"
 [dependencies]
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-catga-auto = { workspace = true }
+catga-auto = { workspace = true, features = ["axum"] }
 catga-axum = { workspace = true }
 catga-cluster = { workspace = true }
 catga-codec-memorypack = { workspace = true }

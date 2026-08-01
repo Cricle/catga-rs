@@ -2,8 +2,10 @@
 
 The examples use the same explicit ownership model as a production service:
 your application constructs its handlers, stores, transports, runners, and
-shutdown boundaries. Start with the smallest program that matches the problem,
-then replace only the boundary that needs durability or distribution.
+shutdown boundaries. Start local applications with `catga_auto::AutoApp`:
+it owns the immutable mediator graph and shutdown token, without creating
+tasks, connections, or global state. Use raw `Registry` and `Mediator` only
+when an integration needs lower-level composition.
 
 ## 1. Local Building Blocks
 
@@ -27,7 +29,7 @@ These programs run without Docker or credentials.
 
 | Example | Demonstrates | Run | Next step |
 | --- | --- | --- | --- |
-| [`axum_checkout`](../examples/src/web/axum_checkout.rs) | Axum request extraction, error mapping, correlation, and tracing. | `cargo run -p catga-examples --bin axum_checkout` | Attach durable stores and an application-owned worker. |
+| [`axum_checkout`](../examples/src/web/axum_checkout.rs) | `AutoApp` composition, Axum request extraction, error mapping, correlation, and tracing. | `cargo run -p catga-examples --bin axum_checkout` | Attach durable stores and an application-owned worker. |
 | [`checkout`](../examples/src/web/checkout.rs) | CQRS validation, a compensating Flow, and acknowledged event delivery. | `cargo run -p catga-examples --bin checkout` | Move the in-memory adapters to durable implementation boundaries. |
 | [`order_service`](../examples/src/web/order_service.rs) | A complete in-memory HTTP order service with CQRS, Flow, outbox delivery, and cluster leadership. | `cargo run -p catga-examples --bin order_service` | Replace in-memory adapters with deployment-owned durable stores and transport. |
 

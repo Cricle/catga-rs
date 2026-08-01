@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use catga_core::{
-    CatgaError, CatgaResult, Command, CommandHandler, ErrorCode, Event, EventHandler, Handler,
-    Mediator, MediatorHandle, Registry, Request,
+    CatgaResult, Command, CommandHandler, Event, EventHandler, Handler, Mediator, MediatorHandle,
+    Registry, Request,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -58,6 +58,40 @@ impl AutoAppBuilder {
         self
     }
 
+    /// Registers one typed request handler and returns the consumed builder for fluent composition.
+    ///
+    /// Registration can fail when another handler for `M` was already registered.
+    pub fn request<M, H>(mut self, handler: H) -> CatgaResult<Self>
+    where
+        M: Request,
+        H: Handler<M> + 'static,
+    {
+        self.registry.register_request(handler)?;
+        Ok(self)
+    }
+
+    /// Registers one typed command handler and returns the consumed builder for fluent composition.
+    ///
+    /// Registration can fail when another handler for `C` was already registered.
+    pub fn command<C, H>(mut self, handler: H) -> CatgaResult<Self>
+    where
+        C: Command,
+        H: CommandHandler<C> + 'static,
+    {
+        self.registry.register_command(handler)?;
+        Ok(self)
+    }
+
+    /// Registers an additional typed event handler and returns the consumed builder for fluent composition.
+    pub fn event<E, H>(mut self, handler: H) -> Self
+    where
+        E: Event,
+        H: EventHandler<E> + 'static,
+    {
+        self.registry.register_event(handler);
+        self
+    }
+
     /// Registers one typed request handler.
     pub fn register_request<M, H>(&mut self, handler: H) -> CatgaResult<&mut Self>
     where
@@ -89,19 +123,13 @@ impl AutoAppBuilder {
     }
 
     /// Builds the immutable application graph.
-    pub fn build(&mut self) -> CatgaResult<AutoApp> {
-        if self.handle.is_bound() {
-            return Err(CatgaError::new(
-                ErrorCode::Conflict,
-                "auto application builder has already been built",
-            ));
-        }
-        let mediator = Arc::new(Mediator::new(std::mem::take(&mut self.registry)));
+    pub fn build(self) -> CatgaResult<AutoApp> {
+        let mediator = Arc::new(Mediator::new(self.registry));
         self.handle.bind(Arc::clone(&mediator))?;
         Ok(AutoApp {
             mediator,
-            handle: self.handle.clone(),
-            shutdown: self.shutdown.clone(),
+            handle: self.handle,
+            shutdown: self.shutdown,
         })
     }
 }
@@ -122,6 +150,13 @@ impl AutoApp {
     /// Returns the immutable typed mediator.
     pub fn mediator(&self) -> &Mediator {
         self.mediator.as_ref()
+    }
+
+    /// Clones the application-owned mediator for framework integration.
+    ///
+    /// This preserves the same immutable application graph and does not add a dispatch layer.
+    pub fn mediator_arc(&self) -> Arc<Mediator> {
+        Arc::clone(&self.mediator)
     }
 
     /// Returns the startup-bound mediator handle for sharing with application services.
@@ -149,6 +184,16 @@ impl AutoApp {
 #[cfg(feature = "axum")]
 pub mod web {
     use ::axum::{Router, http::StatusCode, routing::get};
+    use catga_axum::MediatorState;
+
+    use super::AutoApp;
+
+    /// Creates Axum mediator state from an application-owned [`AutoApp`].
+    ///
+    /// The state shares the application's existing mediator and starts no task.
+    pub fn mediator_state(app: &AutoApp) -> MediatorState {
+        MediatorState::from(app.mediator_arc())
+    }
 
     /// Adds a bounded, dependency-light health endpoint at `path`.
     pub fn health_route(path: &'static str) -> Router {
@@ -178,11 +223,9 @@ pub use catga_redis as redis;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::AutoAppBuilder;
     use async_trait::async_trait;
-    use catga_core::{CatgaResult, Handler, Mediator, Message, Registry, Request};
+    use catga_core::{CatgaResult, Handler, Message, Request};
 
     #[derive(Clone)]
     struct Ping;
@@ -203,17 +246,15 @@ mod tests {
     }
 
     #[test]
-    fn failed_second_build_preserves_registered_handlers() {
+    fn build_consumes_the_builder_and_binds_its_handle() {
         let mut builder = AutoAppBuilder::new();
         builder
             .register_request::<Ping, _>(PingHandler)
             .expect("register handler");
-        builder
-            .handle
-            .bind(Arc::new(Mediator::new(Registry::new())))
-            .expect("bind test handle");
+        let handle = builder.handle.clone();
 
-        assert!(builder.build().is_err());
-        assert!(builder.register_request::<Ping, _>(PingHandler).is_err());
+        let app = builder.build().expect("build application");
+        assert!(handle.is_bound());
+        assert!(app.handle().is_bound());
     }
 }

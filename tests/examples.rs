@@ -99,6 +99,28 @@ fn example_guide_links_to_grouped_examples() {
 }
 
 #[test]
+fn public_examples_use_auto_app_for_introductory_composition() {
+    let workspace = workspace_root();
+    let mediator = read_workspace_file(workspace, "examples/src/quickstart/mediator.rs");
+    let axum = read_workspace_file(workspace, "examples/src/web/axum_checkout.rs");
+
+    assert!(
+        mediator.contains("AutoApp::builder"),
+        "the mediator quickstart must use AutoApp"
+    );
+    assert!(
+        axum.contains("AutoApp::builder") && axum.contains("web::mediator_state"),
+        "the Axum quickstart must use AutoApp and its Axum state adapter"
+    );
+    for (name, source) in [("mediator", mediator), ("axum", axum)] {
+        assert!(
+            !source.contains("Registry::new"),
+            "the {name} quickstart must not compose a raw Registry"
+        );
+    }
+}
+
+#[test]
 fn readme_navigates_to_complete_example_and_performance_guides() {
     let workspace = workspace_root();
     let readme = read_workspace_file(workspace, README_PATH);
