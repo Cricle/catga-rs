@@ -208,14 +208,15 @@ run_group() {
 }
 
 group_number=0
-group_pids=()
+declare -A group_pids=()
 while IFS= read -r group; do
     ((group_number += 1))
     run_group "$group_number" "$group" "$result_directory/$group_number.json" &
-    group_pids+=("$!")
+    group_pids["$!"]=1
     if ((${#group_pids[@]} >= parallel_jobs)); then
-        for pid in "${group_pids[@]}"; do wait "$pid"; done
-        group_pids=()
+        completed_pid=
+        wait -n -p completed_pid "${!group_pids[@]}"
+        unset "group_pids[$completed_pid]"
     fi
 done < <(jq -c --argjson maximum "$(profile_rank "$profile")" '
   [.scenarios[] | select((if .profile == "core" then 0 elif .profile == "sql" then 1 else 2 end) <= $maximum)]
@@ -232,7 +233,7 @@ done < <(jq -c --argjson maximum "$(profile_rank "$profile")" '
     end
 ' "$matrix_path")
 
-for pid in "${group_pids[@]}"; do wait "$pid"; done
+for pid in "${!group_pids[@]}"; do wait "$pid"; done
 
 jq -s --arg profile "$profile" --argjson required "$required_pass_percentage" '
   {schemaVersion: 1, profile:$profile, requiredPassPercentage:$required,

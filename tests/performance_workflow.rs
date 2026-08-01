@@ -241,6 +241,14 @@ fn e2e_runner_groups_equivalent_test_invocations_without_dropping_scenarios() {
 }
 
 #[test]
+fn e2e_runner_refills_a_completed_parallel_slot() {
+    assert!(
+        E2E_RUNNER.contains("wait -n -p"),
+        "parallel E2E execution must start the next group as soon as one group completes"
+    );
+}
+
+#[test]
 fn storage_benchmark_uses_fresh_services_after_the_functional_e2e_gate() {
     assert!(
         PERFORMANCE_RUNNER.contains("compose_project=catga-performance"),
