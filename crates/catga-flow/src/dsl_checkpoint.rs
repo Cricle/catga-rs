@@ -472,3 +472,266 @@ impl CheckpointFrame {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memorypack_error<T>(result: Result<T, MemoryPackError>) -> MemoryPackError {
+        match result {
+            Ok(_) => panic!("invalid checkpoint unexpectedly decoded"),
+            Err(error) => error,
+        }
+    }
+
+    fn decode_work(work: CheckpointWork) -> CheckpointWork {
+        let bytes = MemoryPackSerializer::serialize(&work).expect("encode checkpoint work");
+        MemoryPackSerializer::deserialize(&bytes).expect("decode checkpoint work")
+    }
+
+    #[test]
+    fn checkpoint_work_round_trips_every_persisted_cursor_shape() {
+        assert!(matches!(
+            decode_work(CheckpointWork::Branch),
+            CheckpointWork::Branch
+        ));
+
+        assert!(matches!(
+            decode_work(CheckpointWork::ForEach {
+                next_index: 2,
+                total: 5,
+            }),
+            CheckpointWork::ForEach {
+                next_index: 2,
+                total: 5,
+            }
+        ));
+
+        assert!(matches!(
+            decode_work(CheckpointWork::ReplayableForEach {
+                next_index: 1,
+                items: vec![b"first".to_vec(), b"second".to_vec()],
+            }),
+            CheckpointWork::ReplayableForEach { next_index: 1, items }
+                if items == [b"first".to_vec(), b"second".to_vec()]
+        ));
+
+        assert!(matches!(
+            decode_work(CheckpointWork::Parallel {
+                states: vec![Some(b"done".to_vec()), None],
+            }),
+            CheckpointWork::Parallel { states }
+                if states == [Some(b"done".to_vec()), None]
+        ));
+
+        assert!(matches!(
+            decode_work(CheckpointWork::WhenAny {
+                winner: 3,
+                state: b"winner".to_vec(),
+            }),
+            CheckpointWork::WhenAny { winner: 3, state } if state == b"winner"
+        ));
+
+        assert!(matches!(
+            decode_work(CheckpointWork::ParallelBranches {
+                branches: vec![
+                    Some(ParallelBranchProgress::Completed {
+                        state: b"complete".to_vec(),
+                    }),
+                    Some(ParallelBranchProgress::InProgress {
+                        step_index: 4,
+                        checkpoint_frame: true,
+                        payload: b"resume".to_vec(),
+                    }),
+                    None,
+                ],
+            }),
+            CheckpointWork::ParallelBranches { branches }
+                if matches!(
+                    &branches[..],
+                    [
+                        Some(ParallelBranchProgress::Completed { state }),
+                        Some(ParallelBranchProgress::InProgress {
+                            step_index: 4,
+                            checkpoint_frame: true,
+                            payload,
+                        }),
+                        None,
+                    ] if state == b"complete" && payload == b"resume"
+                )
+        ));
+    }
+
+    #[test]
+    fn checkpoint_frame_round_trips_nested_path_state_and_cursor() {
+        let levels = [
+            CheckpointLevel {
+                branch: 1,
+                next_step: 2,
+            },
+            CheckpointLevel {
+                branch: 3,
+                next_step: 4,
+            },
+        ];
+        let encoded = CheckpointFrame::encode(
+            &levels,
+            b"application state".to_vec(),
+            CheckpointWork::ParallelBranches {
+                branches: vec![Some(ParallelBranchProgress::InProgress {
+                    step_index: 7,
+                    checkpoint_frame: false,
+                    payload: b"nested state".to_vec(),
+                })],
+            },
+        )
+        .expect("encode checkpoint frame");
+
+        let decoded = CheckpointFrame::decode(&encoded)
+            .expect("decode checkpoint frame")
+            .expect("checkpoint magic must produce a frame");
+        assert_eq!(decoded.levels.len(), 2);
+        assert_eq!(decoded.levels[0].branch, 1);
+        assert_eq!(decoded.levels[0].next_step, 2);
+        assert_eq!(decoded.levels[1].branch, 3);
+        assert_eq!(decoded.levels[1].next_step, 4);
+        assert_eq!(decoded.state, b"application state");
+        assert!(matches!(
+            decoded.work,
+            CheckpointWork::ParallelBranches { branches }
+                if matches!(
+                    &branches[..],
+                    [Some(ParallelBranchProgress::InProgress {
+                        step_index: 7,
+                        checkpoint_frame: false,
+                        payload,
+                    })] if payload == b"nested state"
+                )
+        ));
+    }
+
+    #[test]
+    fn checkpoint_frame_accepts_legacy_branch_frames_without_a_work_cursor() {
+        let mut legacy = Vec::from(CHECKPOINT_FRAME_MAGIC.as_slice());
+        legacy.extend([CHECKPOINT_FRAME_VERSION, 0]);
+        legacy.extend(0_u32.to_be_bytes());
+
+        let decoded = CheckpointFrame::decode(&legacy)
+            .expect("decode legacy frame")
+            .expect("checkpoint magic must produce a frame");
+        assert!(decoded.levels.is_empty());
+        assert!(decoded.state.is_empty());
+        assert!(matches!(decoded.work, CheckpointWork::Branch));
+    }
+
+    #[test]
+    fn checkpoint_frame_rejects_size_version_depth_and_cursor_corruption() {
+        assert!(
+            CheckpointFrame::decode(b"application state")
+                .expect("non-frame payload is application state")
+                .is_none()
+        );
+
+        for payload in [
+            b"CDF1".as_slice(),
+            b"CDF1\x02\0\0\0\0\0".as_slice(),
+            b"CDF1\x01!\0\0\0\0".as_slice(),
+            b"CDF1\x01\0\0\0\0\x01".as_slice(),
+        ] {
+            let error = match CheckpointFrame::decode(payload) {
+                Err(error) => error,
+                Ok(_) => panic!("corrupt checkpoint unexpectedly decoded"),
+            };
+            assert_eq!(error.code(), ErrorCode::Validation);
+        }
+
+        let valid = CheckpointFrame::encode(&[], b"state".to_vec(), CheckpointWork::Branch)
+            .expect("encode frame");
+        let mut invalid_work_length = valid.clone();
+        let work_length = invalid_work_length.len() - 5;
+        invalid_work_length[work_length..work_length + 4].copy_from_slice(&99_u32.to_be_bytes());
+        assert_eq!(
+            match CheckpointFrame::decode(&invalid_work_length) {
+                Err(error) => error.code(),
+                Ok(_) => panic!("declared work beyond frame unexpectedly decoded"),
+            },
+            ErrorCode::Validation
+        );
+
+        let mut invalid_work_tag = valid;
+        let last = invalid_work_tag.len() - 1;
+        invalid_work_tag[last] = 99;
+        assert_eq!(
+            match CheckpointFrame::decode(&invalid_work_tag) {
+                Err(error) => error.code(),
+                Ok(_) => panic!("unknown work tag unexpectedly decoded"),
+            },
+            ErrorCode::Validation
+        );
+    }
+
+    #[test]
+    fn checkpoint_frame_enforces_depth_and_state_size_limits() {
+        let levels = vec![
+            CheckpointLevel {
+                branch: 0,
+                next_step: 0,
+            };
+            MAX_CHECKPOINT_PATH_DEPTH + 1
+        ];
+        assert_eq!(
+            CheckpointFrame::encode(&levels, Vec::new(), CheckpointWork::Branch)
+                .expect_err("deep checkpoint path rejected")
+                .code(),
+            ErrorCode::Validation
+        );
+        assert_eq!(
+            CheckpointFrame::encode(
+                &[],
+                vec![0; MAX_CHECKPOINT_STATE_BYTES + 1],
+                CheckpointWork::Branch,
+            )
+            .expect_err("large checkpoint state rejected")
+            .code(),
+            ErrorCode::Validation
+        );
+    }
+
+    #[test]
+    fn checkpoint_cursor_tags_reject_unknown_values() {
+        let error = memorypack_error(MemoryPackSerializer::deserialize::<CheckpointWork>(&[
+            u8::MAX,
+        ]));
+        assert!(matches!(error, MemoryPackError::DeserializationError(_)));
+
+        let error = memorypack_error(MemoryPackSerializer::deserialize::<ParallelBranchProgress>(
+            &[u8::MAX],
+        ));
+        assert!(matches!(error, MemoryPackError::DeserializationError(_)));
+    }
+
+    #[test]
+    fn checkpoint_frame_rejects_oversized_state_and_trailing_cursor_bytes() {
+        let mut oversized_state = Vec::from(CHECKPOINT_FRAME_MAGIC.as_slice());
+        oversized_state.extend([CHECKPOINT_FRAME_VERSION, 0]);
+        oversized_state.extend(((MAX_CHECKPOINT_STATE_BYTES as u32) + 1).to_be_bytes());
+        assert_eq!(
+            match CheckpointFrame::decode(&oversized_state) {
+                Err(error) => error.code(),
+                Ok(_) => panic!("declared oversized state unexpectedly decoded"),
+            },
+            ErrorCode::Validation
+        );
+
+        let mut trailing_cursor =
+            CheckpointFrame::encode(&[], Vec::new(), CheckpointWork::Branch).expect("frame");
+        trailing_cursor.push(0);
+        assert_eq!(
+            match CheckpointFrame::decode(&trailing_cursor) {
+                Err(error) => error.code(),
+                Ok(_) => panic!("trailing cursor unexpectedly decoded"),
+            },
+            ErrorCode::Validation
+        );
+    }
+}

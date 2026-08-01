@@ -156,3 +156,82 @@ fn timestamp_error() -> CatgaError {
         "flow timestamp exceeds signed milliseconds",
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_codes_round_trip_and_unknown_values_fail_closed() {
+        let statuses = [
+            FlowStatus::Running,
+            FlowStatus::Compensating,
+            FlowStatus::Suspended,
+            FlowStatus::Done,
+            FlowStatus::Failed,
+            FlowStatus::Cancelled,
+        ];
+        for (code, status) in statuses.into_iter().enumerate() {
+            assert_eq!(status_from_code(code as i64).expect("known status"), status);
+        }
+        assert_eq!(
+            status_from_code(-1)
+                .expect_err("negative status rejected")
+                .code(),
+            ErrorCode::Internal
+        );
+        assert_eq!(
+            status_from_code(99)
+                .expect_err("unknown status rejected")
+                .code(),
+            ErrorCode::Internal
+        );
+    }
+
+    #[test]
+    fn timestamp_helpers_preserve_epoch_direction_and_sub_millisecond_precision() {
+        let before_epoch = SystemTime::UNIX_EPOCH - Duration::from_nanos(1);
+        let after_epoch =
+            SystemTime::UNIX_EPOCH + Duration::from_millis(12) + Duration::from_nanos(345);
+
+        assert_eq!(unix_millis(before_epoch).expect("negative timestamp"), 0);
+        assert_eq!(unix_millis(after_epoch).expect("positive timestamp"), 12);
+
+        let (before_millis, before_nanos) =
+            unix_millis_and_subsec_nanos(before_epoch).expect("before epoch split");
+        assert_eq!((before_millis, before_nanos), (-1, 999_999));
+        assert_eq!(
+            system_time_from_unix_millis_and_subsec_nanos(before_millis, before_nanos)
+                .expect("before epoch restore"),
+            before_epoch
+        );
+
+        let (after_millis, after_nanos) =
+            unix_millis_and_subsec_nanos(after_epoch).expect("after epoch split");
+        assert_eq!((after_millis, after_nanos), (12, 345));
+        assert_eq!(
+            system_time_from_unix_millis_and_subsec_nanos(after_millis, after_nanos)
+                .expect("after epoch restore"),
+            after_epoch
+        );
+        assert_eq!(
+            system_time_from_unix_millis_and_subsec_nanos(0, 1_000_000)
+                .expect_err("nanosecond remainder bound")
+                .code(),
+            ErrorCode::Validation
+        );
+    }
+
+    #[test]
+    fn stale_threshold_saturates_when_duration_precedes_system_time_range() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        assert_eq!(
+            stale_before_unix_millis(now, Duration::from_millis(250)).expect("threshold"),
+            750
+        );
+        assert_eq!(
+            stale_before_unix_millis(now, Duration::MAX).expect("saturated threshold"),
+            i64::MIN
+        );
+    }
+}

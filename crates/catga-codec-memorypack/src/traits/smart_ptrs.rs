@@ -61,3 +61,41 @@ impl<T: MemoryPackDeserialize> MemoryPackDeserialize for Arc<T> {
         Ok(Arc::new(T::deserialize(reader)?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MemoryPackSerializer;
+    use std::sync::Arc;
+
+    #[test]
+    fn boxed_rc_arc_and_boxed_str_values_round_trip() {
+        let boxed = Box::new(7_u32);
+        let bytes = MemoryPackSerializer::serialize(&boxed).unwrap();
+        assert_eq!(
+            MemoryPackSerializer::deserialize::<Box<u32>>(&bytes).unwrap(),
+            boxed
+        );
+
+        let rc = Rc::new(String::from("rc"));
+        let bytes = MemoryPackSerializer::serialize(&rc).unwrap();
+        assert_eq!(
+            &*MemoryPackSerializer::deserialize::<Rc<String>>(&bytes).unwrap(),
+            "rc"
+        );
+
+        let arc = Arc::new(String::from("arc"));
+        let bytes = MemoryPackSerializer::serialize(&arc).unwrap();
+        assert_eq!(
+            &*MemoryPackSerializer::deserialize::<Arc<String>>(&bytes).unwrap(),
+            "arc"
+        );
+
+        let boxed_str: Box<str> = "boxed".into();
+        let bytes = MemoryPackSerializer::serialize(&boxed_str).unwrap();
+        assert_eq!(
+            &*MemoryPackSerializer::deserialize::<Box<str>>(&bytes).unwrap(),
+            "boxed"
+        );
+    }
+}

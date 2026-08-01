@@ -126,7 +126,9 @@ impl MemoryPackDeserialize for chrono::NaiveTime {
     #[inline(always)]
     fn deserialize(reader: &mut MemoryPackReader) -> Result<Self, MemoryPackError> {
         let ticks = reader.read_i64()?;
-        let total_nanos = ticks * TICKS_PER_NANOSECOND;
+        let total_nanos = ticks
+            .checked_mul(TICKS_PER_NANOSECOND)
+            .ok_or_else(|| MemoryPackError::DeserializationError("Invalid time ticks".into()))?;
         let secs = (total_nanos / 1_000_000_000) as u32;
         let nanos = (total_nanos % 1_000_000_000) as u32;
 
@@ -155,5 +157,62 @@ impl MemoryPackDeserialize for chrono::NaiveDate {
         chrono::NaiveDate::from_ymd_opt(1, 1, 1)
             .and_then(|base| base.checked_add_days(chrono::Days::new(days as u64)))
             .ok_or_else(|| MemoryPackError::DeserializationError("Invalid date".into()))
+    }
+}
+
+#[cfg(all(test, feature = "chrono"))]
+mod tests {
+    use super::*;
+    use crate::MemoryPackSerializer;
+    use chrono::{Datelike, NaiveDate, NaiveTime, TimeDelta, Timelike, Utc};
+
+    fn round_trip<T>(value: &T) -> T
+    where
+        T: MemoryPackSerialize + MemoryPackDeserialize,
+    {
+        let bytes = MemoryPackSerializer::serialize(value).expect("encode datetime value");
+        MemoryPackSerializer::deserialize(&bytes).expect("decode datetime value")
+    }
+
+    #[test]
+    fn chrono_values_round_trip_across_time_zones_and_date_shapes() {
+        let delta = TimeDelta::new(12, 345_678_900).expect("valid duration");
+        assert_eq!(round_trip(&delta), delta);
+
+        let utc = chrono::DateTime::<Utc>::from_timestamp(1_700_000_000, 123_456_700)
+            .expect("valid UTC timestamp");
+        assert_eq!(round_trip(&utc), utc);
+        let local = utc.with_timezone(&chrono::Local);
+        assert_eq!(round_trip(&local), local);
+        let offset = chrono::FixedOffset::east_opt(5 * 3600 + 30 * 60).expect("valid offset");
+        let fixed = utc.with_timezone(&offset);
+        assert_eq!(round_trip(&fixed), fixed);
+
+        let time = NaiveTime::from_hms_nano_opt(12, 34, 56, 123_456_700).expect("valid time");
+        assert_eq!(round_trip(&time), time);
+        assert_eq!(time.hour(), 12);
+        assert_eq!(time.minute(), 34);
+        let date = NaiveDate::from_ymd_opt(2026, 8, 1).expect("valid date");
+        assert_eq!(round_trip(&date), date);
+        assert_eq!(date.year(), 2026);
+        assert_eq!(date.month(), 8);
+    }
+
+    #[test]
+    fn chrono_decoders_reject_truncated_or_invalid_wire_values() {
+        assert!(MemoryPackSerializer::deserialize::<TimeDelta>(&[]).is_err());
+        assert!(MemoryPackSerializer::deserialize::<chrono::DateTime<Utc>>(&[0; 4]).is_err());
+        assert!(MemoryPackSerializer::deserialize::<NaiveTime>(&i64::MAX.to_le_bytes()).is_err());
+        assert!(MemoryPackSerializer::deserialize::<NaiveDate>(&i32::MAX.to_le_bytes()).is_err());
+        let mut invalid_offset = Vec::new();
+        invalid_offset.extend_from_slice(&i16::MAX.to_le_bytes());
+        invalid_offset.extend_from_slice(&[0; 6]);
+        invalid_offset.extend_from_slice(&0_i64.to_le_bytes());
+        assert!(
+            MemoryPackSerializer::deserialize::<chrono::DateTime<chrono::FixedOffset>>(
+                &invalid_offset
+            )
+            .is_err()
+        );
     }
 }

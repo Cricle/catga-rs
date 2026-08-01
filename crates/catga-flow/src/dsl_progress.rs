@@ -250,3 +250,76 @@ pub trait DslStepProgressStore: Send + Sync {
     /// Deletes progress for one flow step and reports whether a record existed.
     async fn delete(&self, flow_id: &str, step_index: u32) -> CatgaResult<bool>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use catga_codec_memorypack::MemoryPackSerializer;
+
+    #[test]
+    fn progress_frames_round_trip_all_kinds_and_preserve_shared_payloads() {
+        let progress = DslStepProgress::new("flow", 3, [1_u8, 2, 3]);
+        assert_eq!(progress.flow_id(), "flow");
+        assert_eq!(progress.step_index(), 3);
+        assert_eq!(progress.version(), 0);
+        assert_eq!(progress.kind(), DslProgressKind::ApplicationState);
+        assert_eq!(progress.payload(), [1, 2, 3]);
+        assert_eq!(&*progress.shared_payload(), [1, 2, 3]);
+
+        let checkpoint = progress.clone().checkpoint_frame([4_u8]);
+        let terminal = checkpoint.clone().terminal([5_u8]);
+        for expected in [progress, checkpoint, terminal] {
+            let bytes = MemoryPackSerializer::serialize(&expected).expect("progress serializes");
+            assert_eq!(
+                MemoryPackSerializer::deserialize::<DslStepProgress>(&bytes)
+                    .expect("progress deserializes"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn progress_version_transitions_clear_checkpoint_kind_and_reject_overflow() {
+        let progress = DslStepProgress::new("flow", 3, [1_u8]).checkpoint_frame([2_u8]);
+        let completed = progress
+            .completed_application_state([3_u8])
+            .expect("checkpoint completion advances progress");
+        assert_eq!(completed.version(), 1);
+        assert_eq!(completed.kind(), DslProgressKind::ApplicationState);
+        assert_eq!(completed.payload(), [3]);
+        assert!(DslStepProgress::is_next_version(0, 1));
+        assert!(!DslStepProgress::is_next_version(i64::MAX, i64::MAX));
+
+        let overflow = DslStepProgress {
+            flow_id: "overflow".into(),
+            step_index: 0,
+            version: i64::MAX,
+            kind: DslProgressKind::Terminal,
+            payload: Arc::from([]),
+            updated_at: SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            overflow
+                .clone()
+                .next_version([])
+                .expect_err("progress version overflow is rejected")
+                .code(),
+            ErrorCode::Conflict
+        );
+        assert_eq!(
+            overflow
+                .completed_application_state([])
+                .expect_err("completion cannot wrap the progress version")
+                .code(),
+            ErrorCode::Conflict
+        );
+    }
+
+    #[test]
+    fn progress_decoder_rejects_unknown_kind_and_invalid_time() {
+        assert!(matches!(
+            decode_progress_kind(9),
+            Err(MemoryPackError::DeserializationError(message)) if message.contains("progress kind")
+        ));
+    }
+}

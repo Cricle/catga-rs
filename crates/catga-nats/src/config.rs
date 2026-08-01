@@ -231,3 +231,60 @@ pub struct NatsDestinationConfig {
     /// Durable pull consumer used to receive destination envelopes.
     pub consumer: Box<str>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receive_and_consumer_options_keep_safe_defaults_and_validate_overrides() {
+        let receive = NatsReceiveOptions::default();
+        assert_eq!(
+            receive.pull_batch_size().get(),
+            DEFAULT_NATS_PULL_BATCH_SIZE
+        );
+        assert_eq!(
+            receive
+                .with_pull_batch_size(128)
+                .expect("positive batch size")
+                .pull_batch_size()
+                .get(),
+            128
+        );
+        assert_eq!(
+            receive
+                .with_pull_batch_size(0)
+                .expect_err("zero batch size rejected")
+                .code(),
+            ErrorCode::Validation
+        );
+
+        let durable = NatsConsumerOptions::durable();
+        assert_eq!(durable.mode(), NatsConsumerMode::Durable);
+        assert_eq!(durable.inactive_threshold(), None);
+        let ephemeral =
+            NatsConsumerOptions::ephemeral().with_inactive_threshold(Duration::from_secs(30));
+        assert_eq!(ephemeral.mode(), NatsConsumerMode::Ephemeral);
+        assert_eq!(
+            ephemeral.inactive_threshold(),
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn transport_options_combine_receive_and_lifecycle_configuration() {
+        let receive = NatsReceiveOptions::default()
+            .with_pull_batch_size(4)
+            .expect("positive batch size");
+        let consumer = NatsConsumerOptions::ephemeral();
+        let options = NatsTransportOptions::default()
+            .with_receive(receive)
+            .with_consumer(consumer);
+        assert_eq!(options.receive(), receive);
+        assert_eq!(options.consumer(), consumer);
+        assert_eq!(
+            NatsTransportOptions::default(),
+            NatsTransportOptions::default()
+        );
+    }
+}

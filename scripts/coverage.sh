@@ -7,8 +7,8 @@ keep_services=false
 validate_only=false
 run_e2e=true
 e2e_jobs=1
-required_line_coverage=80
-required_region_coverage=80
+required_line_coverage=85
+required_region_coverage=85
 required_e2e_pass_percentage=95
 health_timeout_seconds=180
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -77,9 +77,7 @@ rm -f "$results_path"
 run_coverage llvm-cov clean --workspace
 # Integration targets are executed below by the strict E2E matrix. Running them here as well
 # only duplicates process startup and service setup while contributing the same instrumentation.
-run_coverage llvm-cov test --workspace --all-features --lib --no-report
-# catga-testing exposes integration-only harness contracts that have no library test target.
-run_coverage llvm-cov test -p catga-testing --all-features --tests --no-report
+run_coverage llvm-cov test --workspace --all-features --no-report
 
 if [[ "$run_e2e" == true ]]; then
     e2e_arguments=(--profile "$profile" --coverage --jobs "$e2e_jobs" --required-pass-percentage "$required_e2e_pass_percentage"

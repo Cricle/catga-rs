@@ -369,3 +369,108 @@ impl DistributedIdGenerator for SnowflakeIdGenerator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layouts_reject_invalid_bit_budgets_and_ranges() {
+        assert!(SnowflakeLayout::new(44, 8, 10, 0).is_err());
+        assert!(SnowflakeLayout::new(29, 20, 14, 0).is_err());
+        assert!(SnowflakeLayout::new(50, 21, 0, 0).is_err());
+        assert!(SnowflakeLayout::new(50, 0, 21, 0).is_err());
+
+        let layout = SnowflakeLayout::new(43, 10, 10, 0).expect("valid layout");
+        assert_eq!(layout.timestamp_shift(), 20);
+        assert_eq!(layout.worker_id_shift(), 10);
+        assert_eq!(layout.max_worker_id(), 1023);
+        assert_eq!(layout.max_sequence(), 1023);
+        assert!(SnowflakeIdGenerator::new(1024, layout).is_err());
+    }
+
+    #[test]
+    fn reservations_fill_one_timestamp_then_require_a_later_timestamp() {
+        let layout = SnowflakeLayout::new(43, 10, 10, 0).expect("valid layout");
+        let generator = SnowflakeIdGenerator::new(7, layout).expect("valid generator");
+
+        assert!(
+            generator
+                .reserve_at(5, 0)
+                .expect("empty reservation")
+                .is_none()
+        );
+        let first = generator
+            .reserve_at(5, 2)
+            .expect("first reservation")
+            .expect("available sequence space");
+        assert_eq!(first.timestamp_offset, 5);
+        assert_eq!(first.start_sequence, 0);
+        assert_eq!(first.count, 2);
+
+        let remainder = generator
+            .reserve_at(5, 2048)
+            .expect("remainder reservation")
+            .expect("available sequence space");
+        assert_eq!(remainder.start_sequence, 2);
+        assert_eq!(remainder.count, 1022);
+        assert!(
+            generator
+                .reserve_at(5, 1)
+                .expect("exhausted sequence space")
+                .is_none()
+        );
+
+        let next_millis = generator
+            .reserve_at(6, 1)
+            .expect("next timestamp reservation")
+            .expect("new timestamp has sequence space");
+        assert_eq!(next_millis.timestamp_offset, 6);
+        assert_eq!(next_millis.start_sequence, 0);
+        assert_eq!(
+            match generator.reserve_at(5, 1) {
+                Err(error) => error.code(),
+                Ok(_) => panic!("backwards timestamp unexpectedly reserved"),
+            },
+            ErrorCode::Transient
+        );
+        assert_eq!(
+            match generator.reserve_at(1_u64 << layout.timestamp_bits, 1) {
+                Err(error) => error.code(),
+                Ok(_) => panic!("timestamp outside layout unexpectedly reserved"),
+            },
+            ErrorCode::Validation
+        );
+    }
+
+    #[test]
+    fn decimal_writer_and_parser_preserve_generated_fields() {
+        assert_eq!(write_decimal_u64(0, &mut [0; 1]), Some(1));
+        let mut too_small = [0; 2];
+        assert_eq!(write_decimal_u64(123, &mut too_small), None);
+        let mut output = [0; 20];
+        let written = write_decimal_u64(9_876_543_210, &mut output).expect("enough space");
+        assert_eq!(&output[..written], b"9876543210");
+
+        let layout = SnowflakeLayout::new(43, 10, 10, 0).expect("valid layout");
+        let generator = SnowflakeIdGenerator::new(42, layout).expect("valid generator");
+        let id = (123_u64 << layout.timestamp_shift()) | (42_u64 << layout.worker_id_shift()) | 9;
+        let metadata = generator.parse(id);
+        assert_eq!(metadata.timestamp_millis(), 123);
+        assert_eq!(metadata.worker_id(), 42);
+        assert_eq!(metadata.sequence(), 9);
+    }
+
+    #[test]
+    fn future_epoch_cannot_generate_ids_before_its_clock_starts() {
+        let layout = SnowflakeLayout::new(43, 10, 10, u64::MAX).expect("valid layout");
+        let generator = SnowflakeIdGenerator::new(0, layout).expect("valid generator");
+        assert_eq!(
+            generator
+                .now_offset()
+                .expect_err("future epoch rejected")
+                .code(),
+            ErrorCode::Transient
+        );
+    }
+}

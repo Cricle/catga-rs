@@ -162,17 +162,17 @@ fn complete_performance_suite_is_manual_or_release_only() {
 }
 
 #[test]
-fn coverage_gate_requires_eighty_percent_without_relaxing_e2e() {
+fn coverage_gate_requires_eighty_five_percent_without_relaxing_e2e() {
     for source in [COVERAGE_RUNNER, CI_WORKFLOW] {
         assert!(
-            source.contains("required_line_coverage=80")
-                || source.contains("--required-line-coverage 80"),
-            "line coverage must require 80 percent"
+            source.contains("required_line_coverage=85")
+                || source.contains("--required-line-coverage 85"),
+            "line coverage must require 85 percent"
         );
         assert!(
-            source.contains("required_region_coverage=80")
-                || source.contains("--required-region-coverage 80"),
-            "region coverage must require 80 percent"
+            source.contains("required_region_coverage=85")
+                || source.contains("--required-region-coverage 85"),
+            "region coverage must require 85 percent"
         );
         assert!(
             source.contains("95"),
@@ -184,13 +184,13 @@ fn coverage_gate_requires_eighty_percent_without_relaxing_e2e() {
 #[test]
 fn ci_runs_strict_workspace_and_e2e_gates_once() {
     assert!(
-        COVERAGE_RUNNER.contains("llvm-cov test --workspace --all-features --lib --no-report"),
-        "the coverage job must execute workspace library tests before the E2E matrix"
+        COVERAGE_RUNNER.contains("llvm-cov test --workspace --all-features --no-report"),
+        "the coverage job must execute the complete workspace test suite"
     );
     assert!(
-        COVERAGE_RUNNER
+        !COVERAGE_RUNNER
             .contains("llvm-cov test -p catga-testing --all-features --tests --no-report"),
-        "the coverage job must execute the public Catga testing-harness contracts"
+        "the complete workspace command already executes catga-testing integration targets"
     );
     assert!(
         COVERAGE_RUNNER.contains("--profile \"$profile\" --coverage"),

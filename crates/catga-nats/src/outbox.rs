@@ -710,3 +710,103 @@ fn is_revision_conflict(error: &kv::UpdateError) -> bool {
 fn is_revision_conflict_kind(kind: jetstream::context::PublishErrorKind) -> bool {
     kind == jetstream::context::PublishErrorKind::WrongLastSequence
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use catga_core::{Envelope, MessageMetadata};
+
+    fn message() -> OutboxMessage {
+        OutboxMessage::new(Envelope::new(
+            7,
+            "test.message",
+            vec![1, 2, 3],
+            MessageMetadata::new(7, Some(9)),
+        ))
+    }
+
+    #[test]
+    fn stored_states_and_versioned_records_round_trip_all_delivery_metadata() {
+        let codec = MemoryPackCodec::default();
+        assert_eq!(StoredState::Pending.encode(), 0);
+        assert_eq!(StoredState::Claimed.encode(), 1);
+        assert_eq!(StoredState::Failed.encode(), 2);
+        assert_eq!(StoredState::Published.encode(), 3);
+        assert_eq!(
+            StoredState::decode(4).unwrap_err().code(),
+            ErrorCode::Internal
+        );
+
+        let pending = message()
+            .with_max_retries(3)
+            .unwrap()
+            .with_retry_history(1, Some("retry"));
+        let decoded = decode(
+            &codec,
+            &encode(&codec, StoredState::Pending, &pending).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(decoded.state, StoredState::Pending);
+        assert_eq!(decoded.message.retry_count(), 1);
+        assert_eq!(decoded.message.last_error(), Some("retry"));
+
+        let mut claimed = message();
+        claimed.claim_until_with_token("worker", "token", 123);
+        let decoded = decode(
+            &codec,
+            &encode(&codec, StoredState::Claimed, &claimed).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(decoded.state, StoredState::Claimed);
+        assert_eq!(decoded.owner.as_ref(), "worker");
+        assert_eq!(decoded.message.claim_token(), Some("token"));
+        assert_eq!(decoded.message.claimed_until_unix_ms(), Some(123));
+
+        let mut published = message();
+        published.claim("worker");
+        published.mark_published(456);
+        let decoded = decode(
+            &codec,
+            &encode(&codec, StoredState::Published, &published).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(decoded.state, StoredState::Published);
+        assert_eq!(decoded.message.state(), OutboxState::Published);
+        assert_eq!(decoded.message.published_at_unix_ms(), Some(456));
+    }
+
+    #[test]
+    fn legacy_records_and_malformed_lengths_are_handled_without_panics() {
+        let codec = MemoryPackCodec::default();
+        let payload = codec.encode(message().envelope()).unwrap();
+        let mut legacy = vec![0, 0];
+        legacy.extend_from_slice(&payload);
+        let decoded = decode(&codec, &legacy).unwrap();
+        assert_eq!(decoded.state, StoredState::Pending);
+        assert_eq!(decoded.message.id(), 7);
+
+        let mut owned = vec![0, 3, b'b', b'a', b'd'];
+        owned.extend_from_slice(&payload);
+        let decoded = decode(&codec, &owned).unwrap();
+        assert_eq!(decoded.state, StoredState::Claimed);
+        assert_eq!(decoded.owner.as_ref(), "bad");
+
+        let malformed = match decode(&codec, b"bad") {
+            Ok(_) => panic!("malformed record unexpectedly decoded"),
+            Err(error) => error,
+        };
+        assert_eq!(malformed.code(), ErrorCode::Internal);
+        let malformed = match decode(&codec, &[RECORD_MAGIC.as_slice(), &[0]].concat()) {
+            Ok(_) => panic!("truncated versioned record unexpectedly decoded"),
+            Err(error) => error,
+        };
+        assert_eq!(malformed.code(), ErrorCode::Internal);
+        assert_eq!(
+            system_time_unix_ms(UNIX_EPOCH - Duration::from_secs(1))
+                .unwrap_err()
+                .code(),
+            ErrorCode::Internal
+        );
+        assert_eq!(map_error("backend").code(), ErrorCode::Transient);
+    }
+}
