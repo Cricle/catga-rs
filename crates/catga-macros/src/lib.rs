@@ -12,7 +12,9 @@ use syn::{
 
 mod handlers;
 mod typed_mediator;
-mod auto;
+pub(crate) mod auto;
+
+use crate::auto::expand_auto;
 
 /// Implements `catga_core::Message` with the fully qualified, monomorphized Rust type name.
 ///
@@ -779,30 +781,29 @@ pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Scans a module for `#[catga_handler]` impl blocks and generates registration code.
+/// Scans a module for handlers and generates registration code.
 ///
-/// The macro scans the module for impl blocks marked with `#[catga_handler]` and
-/// generates a `__catga_auto_register` function that registers all handlers with
-/// a `Registry`. Compilation comments show which handlers were discovered.
+/// The macro scans the module for impl blocks (Handler, CommandHandler, EventHandler)
+/// and plain async fn handlers, then generates a `__catga_auto_register` function
+/// that registers all handlers with a `Registry`.
 ///
 /// # Example
 ///
 /// ```ignore
 /// #[catga_auto]
 /// mod handlers {
-///     struct MyService;
+///     use super::*;
 ///
-///     #[catga_handler]
-///     impl Handler<Ping> for MyService {
-///         async fn handle(&self, ping: Ping) -> CatgaResult<String> {
-///             Ok("pong".to_string())
-///         }
+///     // Plain async fn - no struct needed!
+///     async fn ping_handler(_: Ping) -> CatgaResult<String> {
+///         Ok("pong".to_string())
 ///     }
 ///
-///     #[catga_handler]
-///     impl Handler<Pong> for MyService {
-///         async fn handle(&self, pong: Pong) -> CatgaResult<String> {
-///             Ok("ping".to_string())
+///     // Or use impl blocks
+///     struct EchoService;
+///     impl Handler<Echo> for EchoService {
+///         async fn handle(&self, _: Echo) -> CatgaResult<String> {
+///             Ok("echo".to_string())
 ///         }
 ///     }
 /// }
@@ -810,9 +811,9 @@ pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
 /// // In your app builder:
 /// let registry = handlers::__catga_auto_register(Registry::new())?;
 /// ```
-#[proc_macro]
-pub fn catga_auto(input: TokenStream) -> TokenStream {
-    auto::expand_auto(input.into())
+#[proc_macro_attribute]
+pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_auto(item.into())
 }
 
 /// Marks an impl block as a Catga handler for auto-registration.

@@ -30,6 +30,19 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! For module-level auto-discovery, use the `#[catga_auto]` attribute:
+//!
+//! ```ignore
+//! #[catga_auto]
+//! mod handlers {
+//!     async fn ping_handler(_: Ping) -> CatgaResult<String> {
+//!         Ok("pong".to_string())
+//!     }
+//! }
+//!
+//! let registry = handlers::__catga_auto_register(Registry::new())?;
+//! ```
 
 use std::sync::Arc;
 
@@ -346,15 +359,11 @@ mod tests {
 
     #[test]
     fn catga_auto_module_discovers_handlers() {
-        // Test that catga_auto! macro discovers plain async fn handlers
-        catga_auto! {
-            mod auto_handlers {
-                use super::*;
-
-                // Plain async fn - no struct or #[catga_handler] needed!
-                async fn echo_handler(_: Ping) -> CatgaResult<String> {
-                    Ok("echo".to_string())
-                }
+        // Test that #[catga_auto] discovers plain async fn handlers
+        #[catga_auto]
+        mod auto_handlers {
+            async fn echo_handler(_: Ping) -> CatgaResult<String> {
+                Ok("echo".to_string())
             }
         }
 
