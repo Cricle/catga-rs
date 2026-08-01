@@ -61,20 +61,19 @@ fn public_examples_are_present() {
     );
 
     let bin_directory = workspace.join("examples/src/bin");
-    let bin_sources = bin_directory
-        .is_dir()
-        .then(|| {
-            std::fs::read_dir(&bin_directory)
-                .expect("the examples src/bin directory must be readable")
-                .map(|entry| {
-                    entry
-                        .expect("the examples src/bin directory must be readable")
-                        .path()
-                })
-                .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
+    let bin_sources = if bin_directory.is_dir() {
+        std::fs::read_dir(&bin_directory)
+            .expect("the examples src/bin directory must be readable")
+            .map(|entry| {
+                entry
+                    .expect("the examples src/bin directory must be readable")
+                    .path()
+            })
+            .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+            .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
     assert!(
         bin_sources.is_empty(),
         "examples/src/bin must not contain auto-discovered binaries: {bin_sources:?}"
