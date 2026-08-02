@@ -1,0 +1,12 @@
+[package]
+name = "catga-local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "In-memory Transport for local development"
+
+[dependencies]
+catga-core.workspace = true
+tokio = { version = "1", features = ["sync", "rt"] }

@@ -306,7 +306,7 @@ pub use transport::{
     Acknowledger, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination, DestinationTransport,
     MessageTransport,
 };
-pub use new_transport::SimpleTransport as Transport;
+pub use new_transport::Transport;
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
 pub use typed_event_store::TypedEventStore;
 pub use typed_publisher::{EnvelopePublisher, TypedPublisher};

@@ -1,5 +1,7 @@
 //! Tests for simplified Transport trait with TypeId pattern.
 
+#![allow(dead_code)]
+
 use std::time::Duration;
 
 use catga_core::{Command, Event, Message, MessagePriority, MessageTypeId, Request, Transport};

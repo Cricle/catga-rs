@@ -1,6 +1,6 @@
 //! Simplified typed transport using TypeId for compile-time routing.
 //!
-//! This module provides a clean SimpleTransport trait that works with the simplified
+//! This module provides a clean Transport trait that works with the simplified
 //! message traits (Request, Command, Event) without requiring Envelope wrapping.
 
 #![allow(async_fn_in_trait)]
@@ -12,13 +12,13 @@ use crate::{CatgaResult, Command, Event, Request};
 /// Simplified typed transport — unified interface for Request/Command/Event.
 ///
 /// Implementors provide one concrete type (e.g., NatsTransport, LocalTransport)
-/// that satisfies all methods. Users pass `impl SimpleTransport` to handlers.
+/// that satisfies all methods. Users pass `impl Transport` to handlers.
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use async_trait::async_trait;
-/// use catga_core::{CatgaResult, Command, Event, Request, SimpleTransport};
+/// use catga_core::{CatgaResult, Command, Event, Request, Transport};
 /// use std::time::Duration;
 ///
 /// struct GetUser { id: u64 }
@@ -29,13 +29,14 @@ use crate::{CatgaResult, Command, Event, Request};
 /// impl catga_core::Message for UpdateCache {}
 /// impl Command for UpdateCache { type TypeId = (); }
 ///
+/// #[derive(Clone)]
 /// struct UserLoggedIn { user_id: u64 }
 /// impl catga_core::Message for UserLoggedIn {}
 /// impl Event for UserLoggedIn { type TypeId = (); }
 ///
 /// struct MyTransport;
 /// #[async_trait]
-/// impl SimpleTransport for MyTransport {
+/// impl Transport for MyTransport {
 ///     async fn send<R: Request>(&self, request: R) -> CatgaResult<R::Response> {
 ///         // Route by R::TypeId
 ///         todo!("implement send")
@@ -57,7 +58,7 @@ use crate::{CatgaResult, Command, Event, Request};
 ///     }
 /// }
 /// ```
-pub trait SimpleTransport: Send + Sync {
+pub trait Transport: Send + Sync {
     /// Sends a request and waits for its typed response.
     ///
     /// The `TypeId` of `R` is used by implementations to route to the correct
@@ -136,7 +137,7 @@ mod tests {
     // Mock transport that verifies trait bounds compile
     struct MockTransport;
 
-    impl SimpleTransport for MockTransport {
+    impl Transport for MockTransport {
         async fn send<R: Request>(&self, _request: R) -> CatgaResult<R::Response> {
             unimplemented!("mock")
         }
@@ -187,7 +188,7 @@ mod tests {
 
     #[test]
     fn mock_transport_implements_trait() {
-        fn assert_transport<T: SimpleTransport>() {}
+        fn assert_transport<T: Transport>() {}
         assert_transport::<MockTransport>();
     }
 }

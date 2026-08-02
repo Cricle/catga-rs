@@ -816,6 +816,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "catga-local"
+version = "0.0.2"
+dependencies = [
+ "catga-core",
+ "tokio",
+]
+
+[[package]]
 name = "catga-macros"
 version = "0.0.2"
 dependencies = [
