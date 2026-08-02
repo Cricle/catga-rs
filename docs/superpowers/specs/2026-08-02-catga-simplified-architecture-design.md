@@ -48,28 +48,66 @@ trait DelayedRequest: Request { ... }
 trait DelayedEvent: Event { ... }
 ```
 
-### 简化后 (3 种消息类型)
+### 简化后 (3 种消息类型) - 编译时类型安全
+
+采用**类型标记（TypeId）** 模式实现编译时类型安全，避免手写字符串：
 
 ```rust
+use std::marker::PhantomData;
+
+/// 编译时类型安全的消息类型标记
+pub trait MessageTypeId: 'static {
+    const NAME: &'static str;
+}
+
 /// 请求-响应消息，带延迟支持
 pub trait Request: Clone + Send + Sync + 'static {
     type Response: Clone + Send + Sync + 'static;
-    fn request_type() -> &'static str;
-    fn request_version() -> &'static str;
+    type TypeId: MessageTypeId;
 }
 
 /// 命令消息（单向），带延迟支持
 pub trait Command: Clone + Send + Sync + 'static {
-    fn command_type() -> &'static str;
-    fn command_version() -> &'static str;
+    type TypeId: MessageTypeId;
 }
 
 /// 事件消息（发布-订阅），带延迟支持
 pub trait Event: Clone + Send + Sync + 'static {
-    fn event_type() -> &'static str;
-    fn event_version() -> &'static str;
+    type TypeId: MessageTypeId;
 }
 ```
+
+### derive 宏生成的类型标记
+
+```rust
+// 用户代码
+#[derive(catga_request)]
+struct GetUser(String);
+
+// 宏自动生成（用户不可见）
+mod __catga_types {
+    pub struct GetUserTypeId;
+    impl crate::MessageTypeId for GetUserTypeId {
+        const NAME: &'static str = "GetUser";
+    }
+}
+
+// 用户使用
+impl Request for GetUser {
+    type Response = String;
+    type TypeId = __catga_types::GetUserTypeId;
+}
+
+// 获取类型名（编译时确定）
+let name = <GetUser as Request>::TypeId::NAME;  // "GetUser"
+```
+
+### 好处
+
+1. **编译时唯一性** - 每个消息类型对应唯一 TypeId
+2. **无手写错误** - derive 宏自动生成，无需手动写字符串
+3. **编译时路由匹配** - 泛型约束保证类型安全
+4. **运行时友好** - `TypeId::NAME` 只是读取常量
 
 ### 延迟消息
 
