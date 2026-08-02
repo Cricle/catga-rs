@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, Delivery, Destination, DestinationTransport,
     DistributedIdGenerator, Envelope, EnvelopeHeaders, ErrorCode, Event, Message,
-    MessageDestinationRouter, MessageMetadata, MessagePriority, MessageTransport, PayloadDecoder,
+    MessageDestinationRouter, MessageMetadata, MessageTransport, PayloadDecoder,
     PayloadEncoder, QualityOfService, SnowflakeIdGenerator, SnowflakeLayout, TypedTransport,
 };
 

@@ -345,7 +345,7 @@ impl LocalTransport {
         H: Handler<M> + 'static,
     {
         let mut handlers = self.request_handlers.write().await;
-        handlers.insert(M::request_type(), Box::new(handler));
+        handlers.insert(M::TypeId::NAME, Box::new(handler));
     }
 
     pub async fn register_command<M, H>(&self, handler: H)
@@ -354,7 +354,7 @@ impl LocalTransport {
         H: CommandHandler<M> + 'static,
     {
         let mut handlers = self.command_handlers.write().await;
-        handlers.entry(M::command_type()).or_default().push(Box::new(handler));
+        handlers.entry(M::TypeId::NAME).or_default().push(Box::new(handler));
     }
 
     pub async fn register_event<M, H>(&self, handler: H)
@@ -363,7 +363,7 @@ impl LocalTransport {
         H: EventHandler<M> + 'static,
     {
         let mut handlers = self.event_handlers.write().await;
-        handlers.entry(M::event_type()).or_default().push(Box::new(handler));
+        handlers.entry(M::TypeId::NAME).or_default().push(Box::new(handler));
     }
 }
 
@@ -371,14 +371,14 @@ impl LocalTransport {
 impl Transport for LocalTransport {
     async fn send<M: Request>(&self, msg: M) -> CatgaResult<M::Response> {
         let handlers = self.request_handlers.read().await;
-        let handler = handlers.get(M::request_type())
+        let handler = handlers.get(M::TypeId::NAME)
             .ok_or_else(|| catga_core::CatgaError::new(catga_core::ErrorCode::NotFound, "no handler"))?;
         handler.handle_request(msg).await
     }
 
     async fn send_command<M: Command>(&self, cmd: M) -> CatgaResult<()> {
         let handlers = self.command_handlers.read().await;
-        if let Some(handler_list) = handlers.get(M::command_type()) {
+        if let Some(handler_list) = handlers.get(M::TypeId::NAME) {
             for handler in handler_list {
                 handler.handle_command(cmd.clone()).await?;
             }
@@ -388,7 +388,7 @@ impl Transport for LocalTransport {
 
     async fn publish<M: Event>(&self, event: M) -> CatgaResult<()> {
         let handlers = self.event_handlers.read().await;
-        if let Some(handler_list) = handlers.get(M::event_type()) {
+        if let Some(handler_list) = handlers.get(M::TypeId::NAME) {
             for handler in handler_list {
                 handler.handle_event(event.clone()).await?;
             }
@@ -458,15 +458,22 @@ pub use local_transport::LocalTransport;
 // In local_transport.rs tests module
 #[tokio::test]
 async fn local_transport_send_and_receive() {
-    use catga_core::{Request, Handler, CatgaResult};
+    use catga_core::{Request, MessageTypeId, Handler, CatgaResult};
     use async_trait::async_trait;
+
+    // Type marker for GetUser
+    mod __get_user_types {
+        pub struct GetUserTypeId;
+        impl catga_core::MessageTypeId for GetUserTypeId {
+            const NAME: &'static str = "GetUser";
+        }
+    }
 
     #[derive(Clone)]
     struct GetUser(String);
-    impl catga_core::Message for GetUser {}
     impl Request for GetUser {
         type Response = String;
-        fn request_type() -> &'static str { "GetUser" }
+        type TypeId = __get_user_types::GetUserTypeId;
     }
 
     struct GetUserHandler;
@@ -687,7 +694,7 @@ pub struct NatsTransport {
 impl Transport for NatsTransport {
     async fn send<M: Request>(&self, msg: M) -> CatgaResult<M::Response> {
         // Use nats request/reply pattern
-        let subject = format!("requests.{}", M::request_type());
+        let subject = format!("requests.{}", M::TypeId::NAME);
         let payload = serde_json::to_vec(&msg).map_err(|e| ...)?;
         let response = self.connection.request(&subject, payload.into()).await?;
         serde_json::from_slice(&response.payload).map_err(|e| ...)
@@ -695,7 +702,7 @@ impl Transport for NatsTransport {
 
     async fn send_command<M: Command>(&self, cmd: M) -> CatgaResult<()> {
         // Use nats publish pattern
-        let subject = format!("commands.{}", M::command_type());
+        let subject = format!("commands.{}", M::TypeId::NAME);
         let payload = serde_json::to_vec(&cmd).map_err(|e| ...)?;
         self.connection.publish(&subject, payload.into()).await?;
         Ok(())
@@ -703,7 +710,7 @@ impl Transport for NatsTransport {
 
     async fn publish<M: Event>(&self, event: M) -> CatgaResult<()> {
         // Use nats publish pattern
-        let subject = format!("events.{}", M::event_type());
+        let subject = format!("events.{}", M::TypeId::NAME);
         let payload = serde_json::to_vec(&event).map_err(|e| ...)?;
         self.connection.publish(&subject, payload.into()).await?;
         Ok(())
@@ -738,23 +745,35 @@ git commit -m "feat: implement Transport trait for NatsTransport"
 
 ```rust
 // examples/simple_example.rs
-use catga_core::{Command, Event, Request, Transport, CatgaResult};
+use catga_core::{Command, Event, MessageTypeId, Request, Transport, CatgaResult};
 use catga_local::LocalTransport;
+
+// Type markers
+mod __get_user_types {
+    pub struct GetUserTypeId;
+    impl catga_core::MessageTypeId for GetUserTypeId {
+        const NAME: &'static str = "GetUser";
+    }
+}
+mod __update_user_types {
+    pub struct UpdateUserTypeId;
+    impl catga_core::MessageTypeId for UpdateUserTypeId {
+        const NAME: &'static str = "UpdateUser";
+    }
+}
 
 // Define messages
 #[derive(Clone, Debug)]
 struct GetUser(String);
-impl catga_core::Message for GetUser {}
 impl Request for GetUser {
     type Response = String;
-    fn request_type() -> &'static str { "GetUser" }
+    type TypeId = __get_user_types::GetUserTypeId;
 }
 
 #[derive(Clone, Debug)]
 struct UpdateUser { id: String, name: String }
-impl catga_core::Message for UpdateUser {}
 impl Command for UpdateUser {
-    fn command_type() -> &'static str { "UpdateUser" }
+    type TypeId = __update_user_types::UpdateUserTypeId;
 }
 
 // Handler (plain async fn - fn-blanket works!)
