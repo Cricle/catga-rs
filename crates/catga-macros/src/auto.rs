@@ -4,7 +4,7 @@ use syn::{ItemImpl, Result};
 
 /// Checks if the last segment of a path matches the given ident.
 fn last_segment_is(path: &syn::Path, ident: &str) -> bool {
-    path.segments.last().map_or(false, |seg| seg.ident == ident)
+    path.segments.last().is_some_and(|seg| seg.ident == ident)
 }
 
 /// Extracts the trait being implemented from an impl block, returning the

@@ -53,11 +53,13 @@ use catga_core::{
 use tokio_util::sync::CancellationToken;
 
 mod bus;
+pub mod global_dispatch;
 
 pub use bus::{
     Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient, DeliveryMessageOf,
     FaultPublishingHandler, FilteredHandler, MessageForwarder, PublisherHandle,
 };
+pub use global_dispatch::{bind_mediator, mediator_handle, send, send_command, publish, is_bound};
 
 /// Re-exports the state-machine Bus adapter when the `flow` feature is enabled.
 #[cfg(feature = "flow")]
@@ -203,6 +205,8 @@ impl AutoAppBuilder {
     pub fn build(self) -> CatgaResult<AutoApp> {
         let mediator = Arc::new(Mediator::new(self.registry));
         self.handle.bind(Arc::clone(&mediator))?;
+        // Also bind the global dispatch mediator
+        global_dispatch::bind_mediator(Arc::clone(&mediator))?;
         Ok(AutoApp {
             mediator,
             handle: self.handle,

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement zero-boilerplate handler registration with derive macros (catga_Request, catga_Command, catga_Event) and compile-time auto-discovery via #[catga_main].
+**Goal:** Implement zero-boilerplate handler registration with derive macros (catga_request, catga_command, catga_event) and compile-time auto-discovery via #[catga_main].
 
 **Architecture:** Three derive macros generate Message+trait impls. #[catga_main] attribute macro scans for async fn handlers and generates registration code + global dispatch functions. No runtime overhead - all discovery at compile time.
 
@@ -22,9 +22,9 @@
 
 ```
 crates/catga-macros/src/
-├── derive_request.rs   (NEW) catga_Request derive macro
-├── derive_command.rs   (NEW) catga_Command derive macro
-├── derive_event.rs     (NEW) catga_Event derive macro
+├── derive_request.rs   (NEW) catga_request derive macro
+├── derive_command.rs   (NEW) catga_command derive macro
+├── derive_event.rs     (NEW) catga_event derive macro
 ├── catga_main.rs      (NEW) #[catga_main] attribute macro
 ├── lib.rs             (MODIFY) export new macros
 
@@ -38,7 +38,7 @@ crates/catga-core/src/
 
 ---
 
-## Task 1: Implement catga_Request derive macro
+## Task 1: Implement catga_request derive macro
 
 **Files:**
 - Create: `crates/catga-macros/src/derive_request.rs`
@@ -47,7 +47,7 @@ crates/catga-core/src/
 
 **Interfaces:**
 - Consumes: Nothing
-- Produces: `#[proc_macro_derive(catga_Request, attributes(response))]` - generates Message + Request impls
+- Produces: `#[proc_macro_derive(catga_request, attributes(response))]` - generates Message + Request impls
 
 **Steps:**
 
@@ -63,7 +63,7 @@ use proc_macro::TokenStream as MacroTokenStream;
 const RESPONSE_ATTR: &str = "response";
 
 /// Implements Message + Request traits with automatic Clone bound.
-/// Users write Response type via #[catga_Request(response = "TypeName")].
+/// Users write Response type via #[catga_request(response = "TypeName")].
 pub fn expand_derive_request(input: MacroTokenStream) -> MacroTokenStream {
     match derive_request_impl(input.into()) {
         Ok(tokens) => tokens.into(),
@@ -103,7 +103,7 @@ fn add_clone_bound(generics: &Generics) -> Generics {
 }
 
 fn parse_response_type(attrs: &[syn::Attribute], name: &Ident) -> Result<syn::Type> {
-    // ... parse #[catga_Request(response = "TypeName")]
+    // ... parse #[catga_request(response = "TypeName")]
 }
 ```
 
@@ -120,7 +120,7 @@ pub use derive_request::expand_derive_request;
 ```rust
 /// Implements Message + Request for a struct with response type.
 /// ...
-#[proc_macro_derive(catga_Request, attributes(catga_Request))]
+#[proc_macro_derive(catga_request, attributes(catga_request))]
 pub fn derive_request(input: TokenStream) -> TokenStream {
     derive_request::expand_derive_request(input)
 }
@@ -132,7 +132,7 @@ pub fn derive_request(input: TokenStream) -> TokenStream {
 // crates/catga-macros/tests/derive_request.rs
 use catga_core::{Message, Request};
 
-#[derive(catga_Request(response = "String"))]
+#[derive(catga_request(response = "String"))]
 struct GetUser(String);
 
 #[test]
@@ -156,7 +156,7 @@ Expected: PASS
 
 ---
 
-## Task 2: Implement catga_Command derive macro
+## Task 2: Implement catga_command derive macro
 
 **Files:**
 - Create: `crates/catga-macros/src/derive_command.rs`
@@ -165,7 +165,7 @@ Expected: PASS
 
 **Interfaces:**
 - Consumes: Nothing
-- Produces: `#[proc_macro_derive(catga_Command)]` - generates Message + Command impls
+- Produces: `#[proc_macro_derive(catga_command)]` - generates Message + Command impls
 
 **Steps:**
 
@@ -184,7 +184,7 @@ Expected: PASS
 // crates/catga-macros/tests/derive_command.rs
 use catga_core::{Command, Message};
 
-#[derive(catga_Command)]
+#[derive(catga_command)]
 struct CreateUser { name: String }
 
 #[test]
@@ -203,7 +203,7 @@ Expected: PASS
 
 ---
 
-## Task 3: Implement catga_Event derive macro
+## Task 3: Implement catga_event derive macro
 
 **Files:**
 - Create: `crates/catga-macros/src/derive_event.rs`
@@ -212,7 +212,7 @@ Expected: PASS
 
 **Interfaces:**
 - Consumes: Nothing
-- Produces: `#[proc_macro_derive(catga_Event)]` - generates Message + Event impls (requires Clone)
+- Produces: `#[proc_macro_derive(catga_event)]` - generates Message + Event impls (requires Clone)
 
 **Steps:**
 
@@ -231,7 +231,7 @@ Expected: PASS
 // crates/catga-macros/tests/derive_event.rs
 use catga_core::{Event, Message};
 
-#[derive(catga_Event)]
+#[derive(catga_event)]
 struct UserCreated { user_id: String }
 
 #[test]
@@ -256,7 +256,7 @@ Expected: PASS
 - Test: `crates/catga-macros/tests/catga_main.rs` (create)
 
 **Interfaces:**
-- Consumes: catga_Request, catga_Command, catga_Event derive macros
+- Consumes: catga_request, catga_command, catga_event derive macros
 - Produces: `#[proc_macro_attribute]` that wraps main function with auto-discovery
 
 **Behavior:**
@@ -327,7 +327,7 @@ struct DiscoveredHandler {
 
 ```rust
 // crates/catga-macros/tests/catga_main.rs
-#[derive(catga_Request(response = "String"))]
+#[derive(catga_request(response = "String"))]
 struct GetUser(String);
 
 async fn get_user_handler(msg: GetUser) -> CatgaResult<String> {
@@ -419,7 +419,7 @@ Expected: PASS
 // Add to catga_core re-exports:
 pub use catga_macros::{
     Message, catga_handlers, catga_typed_mediator, catga_auto, catga_handler,
-    catga_Request, catga_Command, catga_Event, catga_main,
+    catga_request, catga_command, catga_event, catga_main,
 };
 ```
 
@@ -439,7 +439,7 @@ Expected: PASS
 
 - [ ] **Step 1: Add proc_macro_derive for all three macros**
 
-Add three new `#[proc_macro_derive]` entries for catga_Request, catga_Command, catga_Event.
+Add three new `#[proc_macro_derive]` entries for catga_request, catga_command, catga_event.
 
 - [ ] **Step 2: Add proc_macro_attribute for catga_main**
 
@@ -456,15 +456,15 @@ Add three new `#[proc_macro_derive]` entries for catga_Request, catga_Command, c
 
 ```rust
 //! Demonstrates zero-boilerplate handler registration
-use catga_auto::{catga_Request, catga_Command, catga_Event, catga_main, send};
+use catga_auto::{catga_request, catga_command, catga_event, catga_main, send};
 
-#[derive(catga_Request(response = "String"))]
+#[derive(catga_request(response = "String"))]
 struct GetUser(String);
 
-#[derive(catga_Command)]
+#[derive(catga_command)]
 struct CreateUser { name: String }
 
-#[derive(catga_Event, Clone)]
+#[derive(catga_event, Clone)]
 struct UserCreated { user_id: String }
 
 async fn get_user_handler(msg: GetUser) -> CatgaResult<String> {

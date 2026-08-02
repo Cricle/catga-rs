@@ -187,7 +187,7 @@ pub use behaviors::{
 };
 pub use cache::CachedResultCodec;
 pub use cancellation::{current_cancellation, scope_cancellation};
-pub use catga_macros::{Message, catga_handlers, catga_typed_mediator, catga_auto, catga_handler};
+pub use catga_macros::{Message, catga_handlers, catga_typed_mediator, catga_auto, catga_handler, catga_request, catga_command, catga_event, catga_main};
 pub use codec::{EnvelopeCodec, PayloadDecoder, PayloadEncoder};
 pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,

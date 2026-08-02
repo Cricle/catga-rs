@@ -60,12 +60,12 @@ async fn main() -> CatgaResult<()> {
 ### After (Target)
 
 ```rust
-use catga_auto::{catga_Request, catga_main, send};
+use catga_auto::{catga_request, catga_main, send};
 
 // 1. Define message with single derive
-#[derive(catga_Request)]
+#[derive(catga_request)]
 struct GetUser(String);
-impl catga_Request for GetUser { type Response = String; }
+impl catga_request for GetUser { type Response = String; }
 
 // 2. Write handler (pure business logic)
 async fn get_user_handler(msg: GetUser) -> String {
@@ -89,9 +89,9 @@ Three derive macros replace `#[derive(Message)]` + trait impls:
 
 | Derive | Trait | Notes |
 |--------|-------|-------|
-| `#[derive(catga_Request)]` | `Request` | Response type from handler return |
-| `#[derive(catga_Command)]` | `Command` | No response |
-| `#[derive(catga_Event)]` | `Event` | Multi-handler pattern |
+| `#[derive(catga_request)]` | `Request` | Response type from handler return |
+| `#[derive(catga_command)]` | `Command` | No response |
+| `#[derive(catga_event)]` | `Event` | Multi-handler pattern |
 
 Each macro:
 - Implements the corresponding trait (`Message` + `Request/Command/Event`)
@@ -141,7 +141,7 @@ These use `Arc<Mediator>` bound at startup for minimal indirection.
 
 | Feature | Status | Migration |
 |---------|--------|-----------|
-| `#[derive(Message)]` | Deprecated | Use `#[derive(catga_Request/Command/Event)]` |
+| `#[derive(Message)]` | Deprecated | Use `#[derive(catga_request/Command/Event)]` |
 | `AutoApp::builder()` | Keep | Still available for explicit control |
 | `#[catga_auto]` | Keep | For library/module auto-discovery |
 | `Handler` trait | Keep | For complex handlers needing state |
@@ -153,8 +153,8 @@ Users migrate incrementally: start with new messages using derive macros, existi
 ### New Crate: `catga-derive` (or extend `catga-macros`)
 
 ```rust
-// catga_Request derive
-#[proc_macro_derive(catga_Request, attributes(response))]
+// catga_request derive
+#[proc_macro_derive(catga_request, attributes(response))]
 pub fn derive_request(input: TokenStream) -> TokenStream {
     // 1. Parse struct name and fields
     // 2. Implement Message trait
@@ -162,16 +162,16 @@ pub fn derive_request(input: TokenStream) -> TokenStream {
     // 4. Emit struct with Clone bound
 }
 
-// catga_Command derive
-#[proc_macro_derive(catga_Command)]
+// catga_command derive
+#[proc_macro_derive(catga_command)]
 pub fn derive_command(input: TokenStream) -> TokenStream {
     // 1. Implement Message trait
     // 2. Implement Command trait
     // 3. Emit struct with Clone bound
 }
 
-// catga_Event derive
-#[proc_macro_derive(catga_Event)]
+// catga_event derive
+#[proc_macro_derive(catga_event)]
 pub fn derive_event(input: TokenStream) -> TokenStream {
     // 1. Implement Message trait
     // 2. Implement Event trait
@@ -266,7 +266,7 @@ pub fn send<M: Request>(msg: M) -> impl Future<Output = CatgaResult<M::Response>
 
 ## Implementation Order
 
-1. Implement derive macros (`catga_Request`, `catga_Command`, `catga_Event`)
+1. Implement derive macros (`catga_request`, `catga_command`, `catga_event`)
 2. Add unit tests for each derive macro
 3. Implement `#[catga_main]` with basic discovery
 4. Add global `send()` / `send_command()` / `publish()` functions
