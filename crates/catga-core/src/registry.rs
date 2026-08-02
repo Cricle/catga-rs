@@ -124,11 +124,14 @@ pub(crate) struct EventSlot {
 ///
 /// ```no_run
 /// use async_trait::async_trait;
-/// use catga_core::{CatgaResult, Handler, Mediator, Message, Registry, Request};
+/// use catga_core::{CatgaResult, Handler, Mediator, Message, MessageTypeId, Registry, Request};
+///
+/// struct PingTypeId;
+/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
 ///
 /// struct Ping;
 /// impl Message for Ping {}
-/// impl Request for Ping { type Response = &'static str; }
+/// impl Request for Ping { type Response = &'static str; type TypeId = PingTypeId; }
 ///
 /// struct PingHandler;
 /// #[async_trait]

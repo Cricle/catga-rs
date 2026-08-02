@@ -3,11 +3,14 @@
 //! Plain async functions automatically satisfy the handler traits:
 //!
 //! ```
-//! use catga_core::{CatgaResult, Handler, Message, Request};
+//! use catga_core::{CatgaResult, Handler, Message, MessageTypeId, Request};
+//!
+//! struct GetUserTypeId;
+//! impl MessageTypeId for GetUserTypeId { const NAME: &'static str = "GetUser"; }
 //!
 //! struct GetUser;
 //! impl Message for GetUser {}
-//! impl Request for GetUser { type Response = String; }
+//! impl Request for GetUser { type Response = String; type TypeId = GetUserTypeId; }
 //!
 //! // No #[async_trait] needed - just a plain async fn!
 //! async fn get_user_handler(_: GetUser) -> CatgaResult<String> {
@@ -65,11 +68,14 @@ pub struct RequestHandlerFn<M, F> {
 /// [`crate::catga_handlers!`]:
 ///
 /// ```
-/// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler};
+/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+///
+/// struct DoubleTypeId;
+/// impl MessageTypeId for DoubleTypeId { const NAME: &'static str = "Double"; }
 ///
 /// struct Double(u64);
 /// impl Message for Double {}
-/// impl Request for Double { type Response = u64; }
+/// impl Request for Double { type Response = u64; type TypeId = DoubleTypeId; }
 ///
 /// # async fn run() -> CatgaResult<()> {
 /// let mut registry = Registry::new();
@@ -101,11 +107,14 @@ where
 ///
 /// ```
 /// use std::sync::Arc;
-/// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler_with};
+/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler_with};
+///
+/// struct DoubleTypeId;
+/// impl MessageTypeId for DoubleTypeId { const NAME: &'static str = "Double"; }
 ///
 /// struct Double(u64);
 /// impl Message for Double {}
-/// impl Request for Double { type Response = u64; }
+/// impl Request for Double { type Response = u64; type TypeId = DoubleTypeId; }
 ///
 /// async fn double(factor: Arc<u64>, value: Double) -> CatgaResult<u64> {
 ///     Ok(value.0.saturating_mul(*factor))

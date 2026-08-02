@@ -104,12 +104,15 @@ pub trait Behavior<M: Request>: Send + Sync {
 ///
 /// ```
 /// use std::time::Duration;
-/// use catga_core::{Pipeline, RetryBehavior, TimeoutBehavior, Message, Request};
+/// use catga_core::{Pipeline, RetryBehavior, TimeoutBehavior, Message, MessageTypeId, Request};
+///
+/// struct MyRequestTypeId;
+/// impl MessageTypeId for MyRequestTypeId { const NAME: &'static str = "MyRequest"; }
 ///
 /// #[derive(Clone)]
 /// struct MyRequest;
 /// impl Message for MyRequest {}
-/// impl Request for MyRequest { type Response = (); }
+/// impl Request for MyRequest { type Response = (); type TypeId = MyRequestTypeId; }
 ///
 /// let pipeline: Pipeline<MyRequest> = Pipeline::new()
 ///     .with(RetryBehavior::new(2, Duration::from_millis(10)))

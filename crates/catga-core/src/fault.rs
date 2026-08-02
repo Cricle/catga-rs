@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use crate::{CatgaError, Event, Message, current_correlation_id};
+use crate::{CatgaError, Event, Message, MessageTypeId, current_correlation_id};
 
 /// An event describing one request failure.
 ///
@@ -65,4 +65,12 @@ impl<M> Fault<M> {
 
 impl<M> Message for Fault<M> where M: Message + Clone {}
 
-impl<M> Event for Fault<M> where M: Message + Clone {}
+impl<M> Event for Fault<M> where M: Message + Clone {
+    type TypeId = FaultEventTypeId;
+}
+
+pub struct FaultEventTypeId;
+
+impl MessageTypeId for FaultEventTypeId {
+    const NAME: &'static str = "Fault";
+}

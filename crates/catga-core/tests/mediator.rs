@@ -16,6 +16,25 @@ use futures::StreamExt;
 use tokio::{sync::Notify, time::timeout};
 use tokio_util::sync::CancellationToken;
 
+mod __catga_types {
+    pub struct PingTypeId;
+    impl catga_core::MessageTypeId for PingTypeId {
+        const NAME: &'static str = "Ping";
+    }
+    pub struct BlockingRequestTypeId;
+    impl catga_core::MessageTypeId for BlockingRequestTypeId {
+        const NAME: &'static str = "BlockingRequest";
+    }
+    pub struct AddTypeId;
+    impl catga_core::MessageTypeId for AddTypeId {
+        const NAME: &'static str = "Add";
+    }
+    pub struct NoticeTypeId;
+    impl catga_core::MessageTypeId for NoticeTypeId {
+        const NAME: &'static str = "Notice";
+    }
+}
+
 #[derive(Clone)]
 struct Ping(u8);
 
@@ -23,6 +42,7 @@ impl Message for Ping {}
 
 impl Request for Ping {
     type Response = u8;
+    type TypeId = __catga_types::PingTypeId;
 }
 
 #[derive(Clone)]
@@ -32,19 +52,24 @@ impl Message for BlockingRequest {}
 
 impl Request for BlockingRequest {
     type Response = ();
+    type TypeId = __catga_types::BlockingRequestTypeId;
 }
 
 #[derive(Clone)]
 struct Add(u8);
 
 impl Message for Add {}
-impl Command for Add {}
+impl Command for Add {
+    type TypeId = __catga_types::AddTypeId;
+}
 
 #[derive(Clone)]
 struct Notice(u8);
 
 impl Message for Notice {}
-impl Event for Notice {}
+impl Event for Notice {
+    type TypeId = __catga_types::NoticeTypeId;
+}
 
 struct Double;
 

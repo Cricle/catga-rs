@@ -101,7 +101,7 @@ impl MediatorHandle {
     }
 
     /// Publishes one event through the bound mediator.
-    pub async fn publish<E: Event>(&self, event: E) -> CatgaResult<()> {
+    pub async fn publish<E: Event + Clone>(&self, event: E) -> CatgaResult<()> {
         self.bound()?.publish(event).await
     }
 
@@ -515,7 +515,7 @@ impl Mediator {
         result
     }
 
-    async fn publish_concurrency_inner<E: Event>(
+    async fn publish_concurrency_inner<E: Event + Clone>(
         &self,
         event: E,
         event_type_id: TypeId,
@@ -552,7 +552,7 @@ impl Mediator {
     /// Every handler receives the event even when an earlier handler fails. The first observed
     /// failure is returned after fan-out completes. This sequential path moves the final event
     /// instance into its handler, avoiding an unnecessary clone for the common small fan-out.
-    pub async fn publish<E: Event>(&self, event: E) -> CatgaResult<()> {
+    pub async fn publish<E: Event + Clone>(&self, event: E) -> CatgaResult<()> {
         let event_type = std::any::type_name::<E>();
         let event_type_id = TypeId::of::<E>();
         let handler_count = self
@@ -572,7 +572,7 @@ impl Mediator {
         result
     }
 
-    async fn publish_inner<E: Event>(&self, event: E) -> CatgaResult<()> {
+    async fn publish_inner<E: Event + Clone>(&self, event: E) -> CatgaResult<()> {
         let event_type_id = TypeId::of::<E>();
         if let Some(slot) = self
             .registry

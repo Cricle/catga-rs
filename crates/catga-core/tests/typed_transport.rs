@@ -9,16 +9,25 @@ use async_trait::async_trait;
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, Delivery, Destination, DestinationTransport,
     DistributedIdGenerator, Envelope, EnvelopeHeaders, ErrorCode, Event, Message,
-    MessageDestinationRouter, MessageMetadata, MessageTransport, PayloadDecoder, PayloadEncoder,
-    QualityOfService, SnowflakeIdGenerator, SnowflakeLayout, TypedTransport,
+    MessageDestinationRouter, MessageMetadata, MessagePriority, MessageTransport, PayloadDecoder,
+    PayloadEncoder, QualityOfService, SnowflakeIdGenerator, SnowflakeLayout, TypedTransport,
 };
+
+mod __catga_types {
+    pub struct TestMessageTypeId;
+    impl catga_core::MessageTypeId for TestMessageTypeId {
+        const NAME: &'static str = "TestMessage";
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TestMessage(u8);
 
 impl Message for TestMessage {}
 
-impl Event for TestMessage {}
+impl Event for TestMessage {
+    type TypeId = __catga_types::TestMessageTypeId;
+}
 
 #[derive(Default)]
 struct AcknowledgementCounts {

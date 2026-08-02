@@ -40,11 +40,14 @@
 //! application supplies its own Tokio runtime and `async-trait` dependency.
 //!
 //! ```no_run
-//! use catga_core::{CatgaResult, Mediator, Request, catga_handlers, request_handler};
+//! use catga_core::{CatgaResult, Mediator, MessageTypeId, Request, catga_handlers, request_handler};
+//!
+//! struct DoubleTypeId;
+//! impl MessageTypeId for DoubleTypeId { const NAME: &'static str = "Double"; }
 //!
 //! struct Double(u64);
 //! impl catga_core::Message for Double {}
-//! impl Request for Double { type Response = u64; }
+//! impl Request for Double { type Response = u64; type TypeId = DoubleTypeId; }
 //!
 //! # async fn run() -> CatgaResult<()> {
 //! let mediator = Mediator::new(catga_handlers! {
@@ -65,21 +68,28 @@
 //! use async_trait::async_trait;
 //! use catga_core::{
 //!     CatgaResult, Command, CommandHandler, Event, EventHandler, Handler, Mediator, Message,
-//!     Registry, Request,
+//!     MessageTypeId, Registry, Request,
 //! };
+//!
+//! struct GetBalanceTypeId;
+//! impl MessageTypeId for GetBalanceTypeId { const NAME: &'static str = "GetBalance"; }
+//! struct CreditTypeId;
+//! impl MessageTypeId for CreditTypeId { const NAME: &'static str = "Credit"; }
+//! struct BalanceChangedTypeId;
+//! impl MessageTypeId for BalanceChangedTypeId { const NAME: &'static str = "BalanceChanged"; }
 //!
 //! struct GetBalance;
 //! impl Message for GetBalance {}
-//! impl Request for GetBalance { type Response = u64; }
+//! impl Request for GetBalance { type Response = u64; type TypeId = GetBalanceTypeId; }
 //!
 //! struct Credit;
 //! impl Message for Credit {}
-//! impl Command for Credit {}
+//! impl Command for Credit { type TypeId = CreditTypeId; }
 //!
 //! #[derive(Clone)]
 //! struct BalanceChanged;
 //! impl Message for BalanceChanged {}
-//! impl Event for BalanceChanged {}
+//! impl Event for BalanceChanged { type TypeId = BalanceChangedTypeId; }
 //!
 //! struct BalanceReader;
 //! #[async_trait]
@@ -228,8 +238,9 @@ pub use lifecycle::{
 };
 pub use mediator::{MAX_MEDIATOR_BATCH_SIZE, Mediator, MediatorHandle};
 pub use message::{
-    BatchKeyProvider, BatchOptionsProvider, Command, DelayedEvent, DelayedMessage, DelayedRequest,
-    DeliveryMode, Event, Message, MessageMetadata, MessagePriority, QualityOfService, Request,
+    BatchKeyProvider, BatchOptionsProvider, Command, DefaultMessageTypeId, DelayedEvent,
+    DelayedMessage, DelayedRequest, DeliveryMode, Event, Message, MessageMetadata,
+    MessagePriority, MessageTypeId, QualityOfService, Request,
 };
 pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;
@@ -340,11 +351,13 @@ pub(crate) fn build_publish_metadata<M: Message>(
 ///
 /// ```
 /// # use std::time::Duration;
-/// # use catga_core::{Pipeline, RetryBehavior, TimeoutBehavior};
+/// # use catga_core::{Pipeline, RetryBehavior, TimeoutBehavior, MessageTypeId};
+/// # struct RequestTypeId;
+/// # impl MessageTypeId for RequestTypeId { const NAME: &'static str = "Request"; }
 /// # #[derive(Clone)]
 /// # struct Request;
 /// # impl catga_core::Message for Request {}
-/// # impl catga_core::Request for Request { type Response = (); }
+/// # impl catga_core::Request for Request { type Response = (); type TypeId = RequestTypeId; }
 /// let pipeline: Pipeline<Request> = catga_core::catga_pipeline!(
 ///     Request;
 ///     RetryBehavior::new(2, Duration::from_millis(10)),
@@ -372,11 +385,14 @@ macro_rules! catga_pipeline {
 /// global or background state.
 ///
 /// ```
-/// use catga_core::{Command, CommandPipeline, Message, catga_command_pipeline};
+/// use catga_core::{Command, CommandPipeline, Message, MessageTypeId, catga_command_pipeline};
+///
+/// struct ArchiveTypeId;
+/// impl MessageTypeId for ArchiveTypeId { const NAME: &'static str = "Archive"; }
 ///
 /// struct Archive;
 /// impl Message for Archive {}
-/// impl Command for Archive {}
+/// impl Command for Archive { type TypeId = ArchiveTypeId; }
 ///
 /// let pipeline: CommandPipeline<Archive> = catga_command_pipeline!(Archive;)?;
 /// assert!(pipeline.is_empty());
