@@ -70,7 +70,11 @@ fn parse_response_attr(attr: &proc_macro2::TokenStream, name: &Ident) -> Result<
                 {
                     break;
                 }
-                type_tokens.push(tokens.next().expect("token stream ended unexpectedly"));
+                if let Some(token) = tokens.next() {
+                    type_tokens.push(token);
+                } else {
+                    break;
+                }
             }
 
             if type_tokens.is_empty() {

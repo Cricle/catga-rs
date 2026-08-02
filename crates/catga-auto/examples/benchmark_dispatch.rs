@@ -19,10 +19,10 @@ async fn main() -> CatgaResult<()> {
 
     // Direct mediator call setup
     let mut registry = Registry::new();
-    registry.register_request(get_user_handler).expect("register_request should not fail");
+    registry.register_request(get_user_handler)?;
     let mediator = Arc::new(Mediator::new(registry));
     let handle = MediatorHandle::new();
-    handle.bind(Arc::clone(&mediator)).expect("bind should not fail");
+    handle.bind(Arc::clone(&mediator))?;
 
     let iterations = 100_000;
 
