@@ -1,8 +1,33 @@
 # catga-auto Zero-Boilerplate Design
 
-## Goal
+## Goals
 
-Reduce user code to pure business logic. Users define messages and handlers without framework ceremony; the framework discovers and registers them automatically.
+1. **Zero Boilerplate** - Users write only business logic
+2. **Performance First** - No runtime overhead vs explicit registration
+3. **Minimal Memory** - Zero allocation on dispatch hot path
+4. **Readable Code** - Obvious generated code, clear error messages
+5. **Rust Best Practices** - Idiomatic API, compile-time safety, no unsafe
+
+## Performance Contract
+
+### No Runtime Overhead
+- Auto-discovery runs at **compile time** (proc-macro)
+- Handler registration is **static** (same as explicit `AutoApp::builder()`)
+- Dispatch path is **identical** to explicit registration
+- No reflection, no dynamic dispatch on hot path
+- Benchmark target: ≤5ns overhead vs direct function call
+
+### Memory Optimization
+- Registry uses **contiguous Vec** (not HashMap) for cache-friendly scan
+- Handler storage is **`Arc<dyn ErasedHandler>`** (single allocation per handler)
+- Message dispatch uses **stack allocation** for small messages (< 128 bytes)
+- No per-request allocations under normal load
+
+### Compile-Time Validation
+- Duplicate handler detection → compile error
+- Missing handler detection → compile error
+- Type mismatch detection → compile error
+- No runtime "handler not found" panics
 
 ## User Experience
 
@@ -110,7 +135,7 @@ send_command(MyCommand).await?;
 publish(MyEvent).await?;
 ```
 
-These use a thread-local or static `MediatorHandle` bound at startup.
+These use `Arc<Mediator>` bound at startup for minimal indirection.
 
 ### 4. Migration Path
 
@@ -188,6 +213,36 @@ pub fn send<M: Request>(msg: M) -> impl Future<Output = CatgaResult<M::Response>
 | Missing handler | Compile error: "No handler found for Y" |
 | Invalid signature | Compile error with suggestion |
 | Build failure | Propagate as `CatgaResult` |
+
+## Rust Best Practices
+
+### Type Safety
+- No `unsafe` code
+- No `Box<dyn Any>` on hot path
+- Compile-time message type checking
+- No runtime type erasure for dispatch
+
+### Async/Await
+- Native async/await (no blocking in async context)
+- Fn-blanket impls eliminate `#[async_trait]` boilerplate
+- Zero-cost abstraction over explicit handlers
+
+### Error Handling
+- `CatgaResult<T>` with typed `ErrorCode`
+- No `unwrap()` or `expect()` in library code
+- Meaningful error messages with context
+
+### API Design
+- Ergonomic but not magical
+- Explicit is better than implicit (except auto-discovery)
+- Small API surface (fewer knobs)
+- Zero-dependency core (only `async-trait` required)
+
+### Code Readability
+- Generated code is traceable (use `cargo expand` to verify)
+- Clear error messages pointing to source location
+- Documentation-first (every public API documented)
+- Examples for every feature
 
 ## Backward Compatibility
 
