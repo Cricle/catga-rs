@@ -169,7 +169,8 @@ mod snapshot;
 mod snapshot_codec;
 mod store;
 mod subscription;
-pub mod telemetry;
+mod new_transport;
+mod telemetry;
 mod time_travel;
 mod trace_context;
 mod transport;
@@ -303,8 +304,9 @@ pub use trace_context::{
 };
 pub use transport::{
     Acknowledger, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination, DestinationTransport,
-    MessageTransport, Transport,
+    MessageTransport,
 };
+pub use new_transport::SimpleTransport as Transport;
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
 pub use typed_event_store::TypedEventStore;
 pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
