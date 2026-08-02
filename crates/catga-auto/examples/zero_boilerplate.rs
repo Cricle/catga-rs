@@ -6,7 +6,7 @@
 //! Run with: `cargo run -p catga-auto --example zero_boilerplate`
 
 use catga_auto::{AutoApp, send};
-use catga_core::{catga_request, CatgaResult};
+use catga_core::{CatgaResult, catga_request};
 
 /// Define a request message with the response type specified via attribute.
 #[catga_request(response = String)]
@@ -21,9 +21,7 @@ async fn get_user_handler(msg: GetUser) -> CatgaResult<String> {
 async fn main() -> CatgaResult<()> {
     // Build the application with auto-discovered handlers
     // AutoApp::build() automatically binds the global dispatch mediator
-    let app = AutoApp::builder()
-        .handler(get_user_handler)?
-        .build()?;
+    let app = AutoApp::builder().handler(get_user_handler)?.build()?;
 
     // Use the global send function from anywhere
     let result = send(GetUser("123".into())).await?;

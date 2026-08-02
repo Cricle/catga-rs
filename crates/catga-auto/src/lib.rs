@@ -59,7 +59,7 @@ pub use bus::{
     Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient, DeliveryMessageOf,
     FaultPublishingHandler, FilteredHandler, MessageForwarder, PublisherHandle,
 };
-pub use global_dispatch::{bind_mediator, mediator_handle, send, send_command, publish, is_bound};
+pub use global_dispatch::{bind_mediator, is_bound, mediator_handle, publish, send, send_command};
 
 /// Re-exports the state-machine Bus adapter when the `flow` feature is enabled.
 #[cfg(feature = "flow")]
@@ -306,9 +306,7 @@ pub use catga_redis as redis;
 mod tests {
     use super::AutoAppBuilder;
     use async_trait::async_trait;
-    use catga_core::{
-        catga_auto, CatgaResult, Handler, Message, Registry, Request,
-    };
+    use catga_core::{CatgaResult, Handler, Message, Registry, Request, catga_auto};
 
     #[derive(Clone)]
     struct Ping;
@@ -373,7 +371,10 @@ mod tests {
 
         let registry = Registry::new();
         let registry = auto_handlers::__catga_auto_register(registry).expect("auto registration");
-        let app = AutoAppBuilder::new().with_registry(registry).build().expect("build app");
+        let app = AutoAppBuilder::new()
+            .with_registry(registry)
+            .build()
+            .expect("build app");
         assert!(app.handle().is_bound());
     }
 }

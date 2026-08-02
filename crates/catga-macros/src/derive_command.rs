@@ -3,7 +3,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_quote, GenericParam, Generics};
+use syn::{GenericParam, Generics, parse_quote};
 
 /// Implements `catga_core::Message` and `catga_core::Command`.
 pub fn expand_derive_command(input: TokenStream) -> TokenStream {
@@ -31,7 +31,9 @@ fn add_clone_bound(generics: &Generics) -> Generics {
     let where_clause = g.make_where_clause();
     for param in params {
         if let GenericParam::Type(type_param) = param {
-            where_clause.predicates.push(parse_quote!(#type_param: Clone));
+            where_clause
+                .predicates
+                .push(parse_quote!(#type_param: Clone));
         }
     }
     g

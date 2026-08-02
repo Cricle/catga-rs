@@ -3,7 +3,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_quote, GenericParam, Generics};
+use syn::{GenericParam, Generics, parse_quote};
 
 /// Implements `catga_core::Message` and `catga_core::Event`.
 /// Event requires Clone, so this derive enforces that bound.
@@ -34,7 +34,9 @@ fn add_event_bounds(generics: &Generics) -> Generics {
         if let GenericParam::Type(type_param) = param {
             // Events require Clone (from Event trait bound)
             // Also add Send + Sync for Message trait compatibility
-            where_clause.predicates.push(parse_quote!(#type_param: Clone + Send + Sync + 'static));
+            where_clause
+                .predicates
+                .push(parse_quote!(#type_param: Clone + Send + Sync + 'static));
         }
     }
     g

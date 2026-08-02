@@ -23,7 +23,10 @@ pub fn expand_catga_main(attr: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-fn catga_main_impl(_attr: proc_macro2::TokenStream, input: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
+fn catga_main_impl(
+    _attr: proc_macro2::TokenStream,
+    input: proc_macro2::TokenStream,
+) -> Result<proc_macro2::TokenStream> {
     let input_fn: ItemFn = syn::parse2(input.clone())?;
     let fn_name = &input_fn.sig.ident;
     let fn_async = input_fn.sig.asyncness;

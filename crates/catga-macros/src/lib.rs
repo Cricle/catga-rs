@@ -3,14 +3,14 @@
 
 use proc_macro::TokenStream;
 
+pub(crate) mod auto;
 mod handlers;
 mod typed_mediator;
-pub(crate) mod auto;
 
+mod catga_main;
 mod derive_command;
 mod derive_event;
 mod derive_request;
-mod catga_main;
 mod message;
 
 use crate::auto::expand_auto;

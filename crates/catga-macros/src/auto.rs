@@ -69,7 +69,12 @@ pub fn expand_handler(impl_item: ItemImpl) -> Result<TokenStream> {
     };
 
     let struct_name = &impl_item.self_ty;
-    let handler_ident = quote::format_ident!("__CatgaHandler_{}", quote::quote!(#struct_name).to_string().replace(['<', '>', ' ', ',', ':', '&', '(' , ')', '[', ']'], "_"));
+    let handler_ident = quote::format_ident!(
+        "__CatgaHandler_{}",
+        quote::quote!(#struct_name)
+            .to_string()
+            .replace(['<', '>', ' ', ',', ':', '&', '(', ')', '[', ']'], "_")
+    );
 
     Ok(quote! {
         {
@@ -148,11 +153,13 @@ fn expand_auto_impl(input: TokenStream) -> Result<TokenStream> {
                         // Determine the message type from function arguments
                         // For async fn(Message) -> Result, message is at index 0
                         // For async fn(&self, Message) -> Result, message is at index 1
-                        let message_type = if let Some(first_arg) = fn_item.sig.inputs.iter().next() {
+                        let message_type = if let Some(first_arg) = fn_item.sig.inputs.iter().next()
+                        {
                             match first_arg {
                                 syn::FnArg::Typed(pat_type) => {
                                     // Check if first arg is `self` (Pat::Ident with ident "self")
-                                    if matches!(&*pat_type.pat, syn::Pat::Ident(p) if p.ident == "self") {
+                                    if matches!(&*pat_type.pat, syn::Pat::Ident(p) if p.ident == "self")
+                                    {
                                         // Self is first, message is second
                                         fn_item.sig.inputs.iter().nth(1)
                                     } else {

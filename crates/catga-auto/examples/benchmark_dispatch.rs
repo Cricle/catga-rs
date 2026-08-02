@@ -1,7 +1,7 @@
 //! Benchmark: global dispatch vs direct mediator call (release mode, async)
 
 use catga_auto::{AutoApp, send};
-use catga_core::{catga_request, CatgaResult, Mediator, Registry, MediatorHandle};
+use catga_core::{CatgaResult, Mediator, MediatorHandle, Registry, catga_request};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -15,16 +15,14 @@ async fn get_user_handler(msg: GetUser) -> CatgaResult<String> {
 #[tokio::main]
 async fn main() -> CatgaResult<()> {
     // Setup: create app with global dispatch
-    let app = AutoApp::builder()
-        .handler(get_user_handler)?
-        .build()?;
+    let app = AutoApp::builder().handler(get_user_handler)?.build()?;
 
     // Direct mediator call setup
     let mut registry = Registry::new();
-    registry.register_request(get_user_handler).unwrap();
+    registry.register_request(get_user_handler).expect("register_request should not fail");
     let mediator = Arc::new(Mediator::new(registry));
     let handle = MediatorHandle::new();
-    handle.bind(Arc::clone(&mediator)).unwrap();
+    handle.bind(Arc::clone(&mediator)).expect("bind should not fail");
 
     let iterations = 100_000;
 
@@ -59,21 +57,34 @@ async fn main() -> CatgaResult<()> {
     // Prevent unused warnings
     let _ = (&global_elapsed, &handle_elapsed, &arc_elapsed);
 
-    println!("=== Benchmark Results ({} iterations, release mode) ===", iterations);
-    println!("Global send():    {:>10.3} ns/call",
-        global_elapsed.as_nanos() as f64 / iterations as f64);
-    println!("Handle send():    {:>10.3} ns/call",
-        handle_elapsed.as_nanos() as f64 / iterations as f64);
-    println!("Arc+mediator:     {:>10.3} ns/call",
-        arc_elapsed.as_nanos() as f64 / iterations as f64);
+    println!(
+        "=== Benchmark Results ({} iterations, release mode) ===",
+        iterations
+    );
+    println!(
+        "Global send():    {:>10.3} ns/call",
+        global_elapsed.as_nanos() as f64 / iterations as f64
+    );
+    println!(
+        "Handle send():    {:>10.3} ns/call",
+        handle_elapsed.as_nanos() as f64 / iterations as f64
+    );
+    println!(
+        "Arc+mediator:     {:>10.3} ns/call",
+        arc_elapsed.as_nanos() as f64 / iterations as f64
+    );
     println!();
     println!("Overhead of global send() vs direct:");
-    println!("  vs Handle:  {:>+10.3} ns/call ({:.1}x slower)",
+    println!(
+        "  vs Handle:  {:>+10.3} ns/call ({:.1}x slower)",
         (global_elapsed.as_nanos() as f64 - handle_elapsed.as_nanos() as f64) / iterations as f64,
-        global_elapsed.as_nanos() as f64 / handle_elapsed.as_nanos() as f64);
-    println!("  vs Arc:     {:>+10.3} ns/call ({:.1}x slower)",
+        global_elapsed.as_nanos() as f64 / handle_elapsed.as_nanos() as f64
+    );
+    println!(
+        "  vs Arc:     {:>+10.3} ns/call ({:.1}x slower)",
         (global_elapsed.as_nanos() as f64 - arc_elapsed.as_nanos() as f64) / iterations as f64,
-        global_elapsed.as_nanos() as f64 / arc_elapsed.as_nanos() as f64);
+        global_elapsed.as_nanos() as f64 / arc_elapsed.as_nanos() as f64
+    );
 
     app.shutdown();
     Ok(())

@@ -13,7 +13,9 @@ struct DeleteUser(u64);
 
 #[test]
 fn implements_message() {
-    let cmd = CreateUser { name: "Alice".into() };
+    let cmd = CreateUser {
+        name: "Alice".into(),
+    };
     assert!(cmd.message_type().ends_with("CreateUser"));
 }
 

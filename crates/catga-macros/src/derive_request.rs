@@ -4,7 +4,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_quote, GenericParam, Generics, Ident, Result};
+use syn::{GenericParam, Generics, Ident, Result, parse_quote};
 
 /// Implements `catga_core::Message` and `catga_core::Request` with the response type
 /// specified via `#[catga_request(response = TypeName)]`.
@@ -15,7 +15,10 @@ pub fn expand_catga_request(attr: TokenStream, input: TokenStream) -> TokenStrea
     }
 }
 
-fn catga_request_impl(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
+fn catga_request_impl(
+    attr: proc_macro2::TokenStream,
+    input: proc_macro2::TokenStream,
+) -> Result<proc_macro2::TokenStream> {
     let input = syn::parse2::<syn::DeriveInput>(input.clone())?;
     let name = &input.ident;
     let generics = add_clone_bound(&input.generics);
@@ -39,7 +42,9 @@ fn add_clone_bound(generics: &Generics) -> Generics {
     let where_clause = g.make_where_clause();
     for param in params {
         if let GenericParam::Type(type_param) = param {
-            where_clause.predicates.push(parse_quote!(#type_param: Clone));
+            where_clause
+                .predicates
+                .push(parse_quote!(#type_param: Clone));
         }
     }
     g
@@ -60,17 +65,20 @@ fn parse_response_attr(attr: &proc_macro2::TokenStream, name: &Ident) -> Result<
             // Collect all tokens after '=' as the type expression
             let mut type_tokens = Vec::new();
             while let Some(next_token) = tokens.peek() {
-                if let proc_macro2::TokenTree::Punct(p) = next_token {
-                    if p.as_char() == '=' {
-                        break;
-                    }
+                if let proc_macro2::TokenTree::Punct(p) = next_token
+                    && p.as_char() == '='
+                {
+                    break;
                 }
-                type_tokens.push(tokens.next().unwrap());
+                type_tokens.push(tokens.next().expect("token stream ended unexpectedly"));
             }
 
             if type_tokens.is_empty() {
                 let span = proc_macro2::Ident::new("response", proc_macro2::Span::call_site());
-                return Err(syn::Error::new_spanned(&span, "response type must not be empty"));
+                return Err(syn::Error::new_spanned(
+                    &span,
+                    "response type must not be empty",
+                ));
             }
 
             // Parse the collected type tokens as a type
