@@ -132,6 +132,7 @@
 mod aggregate;
 mod auto_snapshot;
 mod behaviors;
+pub mod macros;
 mod cache;
 mod cancellation;
 mod codec;
@@ -170,7 +171,7 @@ mod snapshot_codec;
 mod store;
 mod subscription;
 mod new_transport;
-mod telemetry;
+pub mod telemetry;
 mod time_travel;
 mod trace_context;
 mod transport;
@@ -198,9 +199,9 @@ pub use behaviors::{
 };
 pub use cache::CachedResultCodec;
 pub use cancellation::{current_cancellation, scope_cancellation};
-pub use catga_macros::{
-    Message, catga_auto, catga_command, catga_event, catga_handler, catga_handlers, catga_main,
-    catga_request, catga_typed_mediator,
+pub use macros::{
+    catga_auto, catga_command, catga_event, catga_handler, catga_handlers, catga_main,
+    catga_request, catga_typed_mediator, Message,
 };
 pub use codec::{EnvelopeCodec, PayloadDecoder, PayloadEncoder};
 pub use compression::{

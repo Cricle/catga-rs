@@ -27,11 +27,21 @@ fn catga_request_impl(
     // Parse response type from attribute
     let response_type = parse_response_attr(&attr, name)?;
 
+    // Generate unique TypeId struct name
+    let type_id_name = syn::Ident::new(&format!("{name}TypeId"), name.span());
+
     Ok(quote! {
         #input
+
+        struct #type_id_name;
+        impl ::catga_core::MessageTypeId for #type_id_name {
+            const NAME: &'static str = ::core::stringify!(#name);
+        }
+
         impl #impl_generics ::catga_core::Message for #name #ty_generics #where_clause {}
         impl #impl_generics ::catga_core::Request for #name #ty_generics #where_clause {
             type Response = #response_type;
+            type TypeId = #type_id_name;
         }
     })
 }

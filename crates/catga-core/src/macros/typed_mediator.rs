@@ -200,8 +200,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
 
     // We use a generic struct with impl Trait in field position (not stable).
     // Instead, generate a struct with a constructor that captures handlers in a closure-based
-    // dispatch table. Actually, the cleanest approach: generate a struct with type parameters
-    // erased via a constructor that returns an opaque type.
+    // dispatch table. Actually, the cleanest approach: generate a struct with named generic parameters.
     //
     // Best approach for stable Rust: generate a struct with named generic parameters.
     let generic_params: Vec<Ident> = (0..field_index)

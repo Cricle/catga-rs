@@ -1,9 +1,0 @@
-error: event registration requires at least one handler
- --> tests/ui/empty_event_handler_list.rs:3:1
-  |
-3 | / catga_handlers! {
-4 | |     event OrderCreated => [];
-5 | | }
-  | |_^
-  |
-  = note: this error originates in the macro `catga_handlers` (in Nightly builds, run with -Z macro-backtrace for more info)

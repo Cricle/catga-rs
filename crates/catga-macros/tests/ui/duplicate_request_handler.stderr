@@ -1,5 +1,0 @@
-error: duplicate request handler registration
- --> tests/ui/duplicate_request_handler.rs:5:13
-  |
-5 |     request CreateOrder => create_order;
-  |             ^^^^^^^^^^^

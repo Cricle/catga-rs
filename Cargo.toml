@@ -10,7 +10,6 @@ members = [
     "crates/catga-axum",
     "crates/catga-auto",
     "crates/catga-cluster",
-    "crates/catga-macros",
     "crates/catga-memory",
     "crates/catga-nats",
     "crates/catga-redis",
@@ -40,7 +39,6 @@ catga-core = { path = "crates/catga-core", version = "0.0.2" }
 catga-flow = { path = "crates/catga-flow", version = "0.0.2" }
 catga-flow-store = { path = "crates/catga-flow-store", version = "0.0.2" }
 catga-local = { path = "crates/catga-local", version = "0.0.2" }
-catga-macros = { path = "crates/catga-macros", version = "0.0.2" }
 catga-memory = { path = "crates/catga-memory", version = "0.0.2" }
 catga-memorypack-derive = { path = "crates/catga-codec-memorypack/memorypack-derive", version = "0.0.2" }
 catga-nats = { path = "crates/catga-nats", version = "0.0.2" }

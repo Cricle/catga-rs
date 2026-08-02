@@ -10,12 +10,15 @@ description.workspace = true
 [lints]
 workspace = true
 
+[features]
+unstable = []
+
 [dependencies]
 arc-swap = "1"
 async-trait = "0.1"
 base64 = "0.23"
 brotli = "8"
-catga-macros = { workspace = true }
+catga-core-macros = { path = "src/macros/proc-macros" }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures = "0.3"
 hmac = "0.13"

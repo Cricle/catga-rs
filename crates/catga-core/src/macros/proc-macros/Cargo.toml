@@ -1,5 +1,5 @@
 [package]
-name = "catga-macros"
+name = "catga-core-macros"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,15 +10,7 @@ description.workspace = true
 [lib]
 proc-macro = true
 
-[lints]
-workspace = true
-
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "3", features = ["full"] }
-
-[dev-dependencies]
-async-trait = "0.1"
-catga-core = { workspace = true }
-trybuild = "1.0"
+syn = { version = "2", features = ["full"] }

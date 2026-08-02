@@ -20,9 +20,19 @@ fn derive_event_impl(input: TokenStream2) -> Result<TokenStream2, syn::Error> {
     let generics = add_event_bounds(&input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
+    // Generate unique TypeId struct name
+    let type_id_name = syn::Ident::new(&format!("{name}TypeId"), name.span());
+
     Ok(quote! {
+        struct #type_id_name;
+        impl ::catga_core::MessageTypeId for #type_id_name {
+            const NAME: &'static str = ::core::stringify!(#name);
+        }
+
         impl #impl_generics ::catga_core::Message for #name #ty_generics #where_clause {}
-        impl #impl_generics ::catga_core::Event for #name #ty_generics #where_clause {}
+        impl #impl_generics ::catga_core::Event for #name #ty_generics #where_clause {
+            type TypeId = #type_id_name;
+        }
     })
 }
 

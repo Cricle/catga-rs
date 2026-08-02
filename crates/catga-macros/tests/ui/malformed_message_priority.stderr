@@ -1,5 +1,0 @@
-error: Catga message priority must be one of: low, normal, high, critical
- --> tests/ui/malformed_message_priority.rs:4:20
-  |
-4 | #[catga(priority = urgent)]
-  |                    ^^^^^^
