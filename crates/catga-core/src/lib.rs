@@ -303,7 +303,7 @@ pub use trace_context::{
 };
 pub use transport::{
     Acknowledger, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination, DestinationTransport,
-    MessageTransport,
+    MessageTransport, Transport,
 };
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
 pub use typed_event_store::TypedEventStore;

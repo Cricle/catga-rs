@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
+use std::time::Duration;
 
-use crate::{CatgaError, CatgaResult, Envelope, ErrorCode};
+use crate::{CatgaError, CatgaResult, Command, Envelope, ErrorCode, Event, Request};
 
 /// Default maximum number of simultaneously publishing envelopes in a transport batch.
 ///
@@ -307,4 +308,52 @@ pub trait DestinationTransport: MessageTransport {
         let _ = destination;
         Ok(())
     }
+}
+
+/// Typed message transport — unified interface for Request/Command/Event.
+///
+/// Implementors provide one concrete type (e.g., NatsTransport, RedisTransport, LocalTransport)
+/// that satisfies all methods. Users pass `impl Transport` to handlers that need it.
+///
+/// # Example
+///
+/// ```ignore
+/// async fn handler(transport: &impl Transport) -> CatgaResult<()> {
+///     transport.send(GetUser { id: 42 }).await?;
+///     transport.send_command(UpdateCache).await?;
+///     transport.publish(UserLoggedIn { user_id }).await?;
+///     Ok(())
+/// }
+/// ```
+#[allow(async_fn_in_trait)]
+pub trait Transport: Send + Sync {
+    /// Sends a request and waits for its typed response.
+    async fn send<R: Request>(&self, request: R) -> CatgaResult<R::Response>;
+
+    /// Sends a command (fire-and-forget) and waits for acknowledgement.
+    async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()>;
+
+    /// Publishes an event to all subscribers.
+    async fn publish<E: Event>(&self, event: E) -> CatgaResult<()>;
+
+    /// Sends a request after a delay.
+    async fn send_delayed<R: Request>(
+        &self,
+        request: R,
+        delay: Duration,
+    ) -> CatgaResult<R::Response>;
+
+    /// Sends a command after a delay.
+    async fn send_command_delayed<C: Command>(
+        &self,
+        command: C,
+        delay: Duration,
+    ) -> CatgaResult<()>;
+
+    /// Publishes an event after a delay.
+    async fn publish_delayed<E: Event>(
+        &self,
+        event: E,
+        delay: Duration,
+    ) -> CatgaResult<()>;
 }
