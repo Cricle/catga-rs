@@ -18,6 +18,7 @@ struct GetUserComplex;
 fn implements_message() {
     let msg = GetUser("123".into());
     assert!(msg.message_type().ends_with("GetUser"));
+    assert_eq!(msg.0, "123");
 }
 
 #[test]

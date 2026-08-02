@@ -20,6 +20,7 @@ fn implements_message() {
         user_id: "123".into(),
     };
     assert!(evt.message_type().ends_with("UserCreated"));
+    assert_eq!(evt.user_id, "123");
 }
 
 #[test]
@@ -34,5 +35,16 @@ fn event_is_clone() {
     let evt = UserCreated {
         user_id: "123".into(),
     };
+    assert_eq!(evt.user_id, "123");
     let _cloned = evt.clone();
+}
+
+#[test]
+fn order_shipped_fields() {
+    let evt = OrderShipped {
+        order_id: 42,
+        tracking: "ABC123".into(),
+    };
+    assert_eq!(evt.order_id, 42);
+    assert_eq!(evt.tracking, "ABC123");
 }

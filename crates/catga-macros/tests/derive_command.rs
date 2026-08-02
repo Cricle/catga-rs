@@ -17,6 +17,7 @@ fn implements_message() {
         name: "Alice".into(),
     };
     assert!(cmd.message_type().ends_with("CreateUser"));
+    assert_eq!(cmd.name, "Alice");
 }
 
 #[test]
@@ -24,4 +25,10 @@ fn implements_command() {
     fn assert_command<T: Command>() {}
     assert_command::<CreateUser>();
     assert_command::<DeleteUser>();
+}
+
+#[test]
+fn delete_user_tuple_field() {
+    let cmd = DeleteUser(42);
+    assert_eq!(cmd.0, 42);
 }
