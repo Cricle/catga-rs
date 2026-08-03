@@ -39,7 +39,9 @@ struct PaymentReceived {
     amount: u32,
 }
 impl Message for PaymentReceived {}
-impl Event for PaymentReceived { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for PaymentReceived {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 fn build_machine() -> StateMachine<OrderInstance, OrderState> {
     let mut definition = StateMachine::<OrderInstance, OrderState>::builder(OrderState::Pending);

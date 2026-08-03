@@ -43,17 +43,23 @@ impl Request for Divide {
 #[derive(Clone, Debug)]
 struct LogCommand(String);
 impl Message for LogCommand {}
-impl Command for LogCommand { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for LogCommand {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct OrderCreated(String);
 impl Message for OrderCreated {}
-impl Event for OrderCreated { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for OrderCreated {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct PaymentReceived(u64);
 impl Message for PaymentReceived {}
-impl Event for PaymentReceived { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for PaymentReceived {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Clone)]
 struct PanickingRequest;
@@ -74,7 +80,9 @@ impl Request for Unregistered {
 #[derive(Clone)]
 struct UnregisteredCommand;
 impl Message for UnregisteredCommand {}
-impl Command for UnregisteredCommand { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for UnregisteredCommand {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 // ---------------------------------------------------------------------------
 // Handlers

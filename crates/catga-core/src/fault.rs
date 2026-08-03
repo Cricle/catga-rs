@@ -65,7 +65,10 @@ impl<M> Fault<M> {
 
 impl<M> Message for Fault<M> where M: Message + Clone {}
 
-impl<M> Event for Fault<M> where M: Message + Clone {
+impl<M> Event for Fault<M>
+where
+    M: Message + Clone,
+{
     type TypeId = FaultEventTypeId;
 }
 

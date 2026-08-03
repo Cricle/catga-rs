@@ -29,7 +29,9 @@ impl Request for Work {
 struct Published;
 
 impl catga_core::Message for Published {}
-impl Event for Published { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for Published {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Default)]
 struct Probe {

@@ -263,8 +263,8 @@ impl AutoApp {
 #[cfg(test)]
 mod tests {
     use super::AutoAppBuilder;
-    use async_trait::async_trait;
     use crate::{CatgaResult, Handler, Message, Registry, Request};
+    use async_trait::async_trait;
 
     #[derive(Clone)]
     struct Ping;

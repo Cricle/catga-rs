@@ -853,7 +853,9 @@ async fn mediator_route_scopes_inbound_trace_context_for_nested_http_forwarding(
 struct OrderPublished(u32);
 
 impl catga_core::Message for OrderPublished {}
-impl Event for OrderPublished { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for OrderPublished {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct PublishedValue(Arc<AtomicU32>);
 

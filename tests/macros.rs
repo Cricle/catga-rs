@@ -115,7 +115,9 @@ impl Handler<Ping> for PingHandler {
 #[derive(catga_core::Message)]
 struct RebuildIndex;
 
-impl Command for RebuildIndex { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for RebuildIndex {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct RebuildIndexHandler;
 
@@ -139,7 +141,6 @@ impl Handler<Ping> for ConfiguredPingHandler {
 
 #[derive(Clone, catga_core::catga_event)]
 struct Notified;
-
 
 struct Noop;
 

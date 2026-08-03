@@ -75,7 +75,9 @@ impl Handler<ReconcileStock> for RejectReconcile {
 struct RebuildInventory;
 
 impl catga_core::Message for RebuildInventory {}
-impl Command for RebuildInventory { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for RebuildInventory {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct RebuildInventoryHandler;
 
@@ -142,7 +144,9 @@ impl Handler<WaitForCancellation> for WaitForCancellationHandler {
 struct WaitForCommandCancellation;
 
 impl catga_core::Message for WaitForCommandCancellation {}
-impl Command for WaitForCommandCancellation { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for WaitForCommandCancellation {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct WaitForCommandCancellationHandler(Arc<tokio::sync::Notify>);
 

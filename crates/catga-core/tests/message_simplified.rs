@@ -2,7 +2,9 @@
 
 #![allow(dead_code)]
 
-use catga_core::{Command, Event, DelayedMessage, Message, MessageTypeId, Request, MessagePriority};
+use catga_core::{
+    Command, DelayedMessage, Event, Message, MessagePriority, MessageTypeId, Request,
+};
 
 mod __catga_types {
     pub struct GetUserTypeId;

@@ -74,10 +74,18 @@ pub trait Transport: Send + Sync {
     /// Sends a request after a delay.
     ///
     /// Implementations may use timers, delayed queues, or scheduled message features.
-    async fn send_delayed<R: Request>(&self, request: R, delay: Duration) -> CatgaResult<R::Response>;
+    async fn send_delayed<R: Request>(
+        &self,
+        request: R,
+        delay: Duration,
+    ) -> CatgaResult<R::Response>;
 
     /// Sends a command after a delay.
-    async fn send_command_delayed<C: Command>(&self, command: C, delay: Duration) -> CatgaResult<()>;
+    async fn send_command_delayed<C: Command>(
+        &self,
+        command: C,
+        delay: Duration,
+    ) -> CatgaResult<()>;
 
     /// Publishes an event after a delay.
     async fn publish_delayed<E: Event>(&self, event: E, delay: Duration) -> CatgaResult<()>;
@@ -101,8 +109,12 @@ mod tests {
     struct Echo(String);
 
     impl Message for Echo {
-        fn schema_version(&self) -> u32 { 1 }
-        fn priority(&self) -> MessagePriority { MessagePriority::Normal }
+        fn schema_version(&self) -> u32 {
+            1
+        }
+        fn priority(&self) -> MessagePriority {
+            MessagePriority::Normal
+        }
     }
 
     impl Request for Echo {
@@ -114,8 +126,12 @@ mod tests {
     struct Reset;
 
     impl Message for Reset {
-        fn schema_version(&self) -> u32 { 1 }
-        fn priority(&self) -> MessagePriority { MessagePriority::High }
+        fn schema_version(&self) -> u32 {
+            1
+        }
+        fn priority(&self) -> MessagePriority {
+            MessagePriority::High
+        }
     }
 
     impl Command for Reset {
@@ -123,11 +139,17 @@ mod tests {
     }
 
     #[derive(Clone, Debug)]
-    struct UserLoggedIn { user_id: u64 }
+    struct UserLoggedIn {
+        user_id: u64,
+    }
 
     impl Message for UserLoggedIn {
-        fn schema_version(&self) -> u32 { 1 }
-        fn priority(&self) -> MessagePriority { MessagePriority::Normal }
+        fn schema_version(&self) -> u32 {
+            1
+        }
+        fn priority(&self) -> MessagePriority {
+            MessagePriority::Normal
+        }
     }
 
     impl Event for UserLoggedIn {
@@ -150,11 +172,19 @@ mod tests {
             unimplemented!("mock")
         }
 
-        async fn send_delayed<R: Request>(&self, _request: R, _delay: Duration) -> CatgaResult<R::Response> {
+        async fn send_delayed<R: Request>(
+            &self,
+            _request: R,
+            _delay: Duration,
+        ) -> CatgaResult<R::Response> {
             unimplemented!("mock")
         }
 
-        async fn send_command_delayed<C: Command>(&self, _command: C, _delay: Duration) -> CatgaResult<()> {
+        async fn send_command_delayed<C: Command>(
+            &self,
+            _command: C,
+            _delay: Duration,
+        ) -> CatgaResult<()> {
             unimplemented!("mock")
         }
 

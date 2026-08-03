@@ -29,7 +29,9 @@ impl Handler<Ping> for PingHandler {
 
 struct RefreshCache;
 impl Message for RefreshCache {}
-impl Command for RefreshCache { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for RefreshCache {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct RefreshCacheHandler(Arc<AtomicUsize>);
 #[async_trait]
@@ -43,7 +45,9 @@ impl CommandHandler<RefreshCache> for RefreshCacheHandler {
 #[derive(Clone)]
 struct CacheRefreshed;
 impl Message for CacheRefreshed {}
-impl Event for CacheRefreshed { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for CacheRefreshed {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct CacheRefreshedHandler(Arc<AtomicUsize>);
 #[async_trait]

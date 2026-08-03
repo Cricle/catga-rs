@@ -91,10 +91,14 @@ fn catga_main_impl(
 }
 
 /// Parses `transport = Expr` from the attribute token stream.
-fn parse_transport_attr(attr: proc_macro2::TokenStream) -> Result<Option<proc_macro2::TokenStream>> {
+fn parse_transport_attr(
+    attr: proc_macro2::TokenStream,
+) -> Result<Option<proc_macro2::TokenStream>> {
     let mut rest = attr.into_iter().peekable();
     while let Some(token) = rest.next() {
-        if let proc_macro2::TokenTree::Ident(ident) = &token && ident == "transport" {
+        if let proc_macro2::TokenTree::Ident(ident) = &token
+            && ident == "transport"
+        {
             // Expect '='
             match rest.next() {
                 Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '=' => {}

@@ -24,8 +24,8 @@
 
 // Re-export all core testing utilities from catga_core::testing
 pub use catga_core::testing::{
-    assert_contains, assert_error_code, assert_failure, assert_success, assert_value,
-    EventHandlerSpy, HandlerSpy, MessageCapture,
+    EventHandlerSpy, HandlerSpy, MessageCapture, assert_contains, assert_error_code,
+    assert_failure, assert_success, assert_value,
 };
 
 mod aggregate;

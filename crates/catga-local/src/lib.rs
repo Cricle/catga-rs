@@ -71,7 +71,11 @@ impl Transport for LocalTransport {
         self.send_command(command).await
     }
 
-    async fn publish_delayed<E: Event>(&self, event: E, _delay: std::time::Duration) -> CatgaResult<()> {
+    async fn publish_delayed<E: Event>(
+        &self,
+        event: E,
+        _delay: std::time::Duration,
+    ) -> CatgaResult<()> {
         self.publish(event).await
     }
 }

@@ -3,7 +3,7 @@
 //! These functions allow sending messages from anywhere in the application
 //! without explicitly passing the mediator handle.
 
-use crate::{CatgaResult, Command, Event, MediatorHandle, Mediator, Request};
+use crate::{CatgaResult, Command, Event, Mediator, MediatorHandle, Request};
 use std::future::Future;
 
 thread_local! {

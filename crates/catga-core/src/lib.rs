@@ -133,7 +133,6 @@ mod aggregate;
 pub mod auto;
 mod auto_snapshot;
 mod behaviors;
-pub mod macros;
 mod cache;
 mod cancellation;
 mod codec;
@@ -148,10 +147,12 @@ mod fault;
 mod handler;
 mod lease;
 mod lifecycle;
+pub mod macros;
 mod mediator;
 mod message;
 mod message_signing;
 mod message_type;
+mod new_transport;
 mod observability;
 mod outbox_processor;
 mod pipeline;
@@ -166,14 +167,13 @@ mod retry_jitter;
 mod routing;
 mod scheduler;
 pub mod sealed_dispatch;
-pub mod testing;
 mod security;
 mod snapshot;
 mod snapshot_codec;
 mod store;
 mod subscription;
-mod new_transport;
 pub mod telemetry;
+pub mod testing;
 mod time_travel;
 mod trace_context;
 mod transport;
@@ -189,13 +189,12 @@ pub use aggregate::{
     Aggregate, AggregateRepository, CompositeSnapshotStrategy, EventCountSnapshotStrategy,
     SnapshotStrategy, TimeBasedSnapshotStrategy,
 };
-pub use auto_snapshot::AutoSnapshotManager;
 pub use auto::{
-    AutoApp, AutoAppBuilder, Bus, BusBuilder, BusFaultPublisher, BusPublisher,
-    BusRequestClient, DeliveryMessageOf, FaultPublishingHandler, FilteredHandler,
-    MessageForwarder, PublisherHandle, bind_mediator, is_bound,
-    mediator_handle, publish, send, send_command,
+    AutoApp, AutoAppBuilder, Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient,
+    DeliveryMessageOf, FaultPublishingHandler, FilteredHandler, MessageForwarder, PublisherHandle,
+    bind_mediator, is_bound, mediator_handle, publish, send, send_command,
 };
+pub use auto_snapshot::AutoSnapshotManager;
 pub use behaviors::{
     AuthorizationBehavior, AuthorizationPolicies, AuthorizationPolicy, AutoBatchingBehavior,
     AutoBatchingRunner, BatchOptions, CircuitBreakerBehavior, CircuitBreakerOptions,
@@ -207,10 +206,6 @@ pub use behaviors::{
 };
 pub use cache::CachedResultCodec;
 pub use cancellation::{current_cancellation, scope_cancellation};
-pub use macros::{
-    catga_auto, catga_command, catga_event, catga_handler, catga_handlers, catga_main,
-    catga_request, catga_typed_mediator, Message,
-};
 pub use codec::{EnvelopeCodec, PayloadDecoder, PayloadEncoder};
 pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
@@ -246,14 +241,19 @@ pub use lifecycle::{
     OperationTracker, RecoverableComponent, RecoveryManager, RecoveryResult, ShutdownCoordinator,
     Stoppable, TransportLifecycle, TransportLifecycleOptions, TransportShutdown, Waitable,
 };
+pub use macros::{
+    Message, catga_auto, catga_command, catga_event, catga_handler, catga_handlers, catga_main,
+    catga_request, catga_typed_mediator,
+};
 pub use mediator::{MAX_MEDIATOR_BATCH_SIZE, Mediator, MediatorHandle};
 pub use message::{
     BatchKeyProvider, BatchOptionsProvider, Command, DefaultMessageTypeId, DelayedEvent,
-    DelayedMessage, DelayedRequest, DeliveryMode, Event, Message, MessageMetadata,
-    MessagePriority, MessageTypeId, QualityOfService, Request,
+    DelayedMessage, DelayedRequest, DeliveryMode, Event, Message, MessageMetadata, MessagePriority,
+    MessageTypeId, QualityOfService, Request,
 };
 pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;
+pub use new_transport::Transport;
 pub use observability::TRACING_TARGET;
 pub use outbox_processor::{OutboxLoopOptions, OutboxProcessor, OutboxRun};
 pub use pipeline::{
@@ -304,6 +304,10 @@ pub use subscription::{
     SubscriptionHandler, SubscriptionLoopOptions, SubscriptionRun, SubscriptionRunner,
     SubscriptionStore,
 };
+pub use testing::{
+    EventHandlerSpy, HandlerSpy, MessageCapture, assert_contains, assert_error_code,
+    assert_failure, assert_success, assert_value,
+};
 pub use time_travel::{
     MAX_STATE_COMPARISON_EVENTS, SnapshotTimeTravelService, StateComparison, TimeTravelService,
 };
@@ -315,7 +319,6 @@ pub use transport::{
     Acknowledger, DEFAULT_TRANSPORT_BATCH_CONCURRENCY, Delivery, Destination, DestinationTransport,
     MessageTransport,
 };
-pub use new_transport::Transport;
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
 pub use typed_event_store::TypedEventStore;
 pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
@@ -326,10 +329,6 @@ pub use validation::{
     validate_not_empty, validate_positive, validate_range, validate_required,
 };
 pub use versioned_transport::VersionedMessageTransport;
-pub use testing::{
-    assert_contains, assert_error_code, assert_failure, assert_success, assert_value,
-    EventHandlerSpy, HandlerSpy, MessageCapture,
-};
 
 /// Builds metadata for typed publish operations.
 ///

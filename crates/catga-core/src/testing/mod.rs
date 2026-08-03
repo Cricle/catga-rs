@@ -13,6 +13,6 @@ pub mod assertions;
 pub mod capture;
 pub mod spies;
 
-pub use spies::{EventHandlerSpy, HandlerSpy};
-pub use capture::MessageCapture;
 pub use assertions::*;
+pub use capture::MessageCapture;
+pub use spies::{EventHandlerSpy, HandlerSpy};

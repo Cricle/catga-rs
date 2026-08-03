@@ -69,10 +69,7 @@ where
 }
 
 /// Returns the error after asserting its stable Catga error code.
-pub fn assert_error_code<T>(
-    result: CatgaResult<T>,
-    expected: ErrorCode,
-) -> CatgaError {
+pub fn assert_error_code<T>(result: CatgaResult<T>, expected: ErrorCode) -> CatgaError {
     let error = match result {
         Ok(_) => panic!("expected Catga operation to fail"),
         Err(error) => error,

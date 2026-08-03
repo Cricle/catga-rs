@@ -22,7 +22,9 @@ struct IncrementCounter {
     amount: u64,
 }
 impl Message for IncrementCounter {}
-impl Command for IncrementCounter { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for IncrementCounter {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Clone)]
 struct GetCounter;
