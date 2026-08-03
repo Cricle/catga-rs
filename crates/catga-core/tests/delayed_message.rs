@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use catga_core::{
-    DelayedEvent, DelayedMessage, DelayedRequest, ErrorCode, Event, Message, Request,
+    catga_event, DelayedEvent, DelayedMessage, DelayedRequest, ErrorCode, Message, Request,
 };
 
 mod __catga_types {
@@ -48,12 +48,9 @@ impl Request for DeferredRequest {
 impl DelayedMessage for DeferredRequest {}
 
 #[derive(Clone)]
+#[derive(catga_event)]
 struct DeferredEvent;
 
-impl Message for DeferredEvent {}
-impl Event for DeferredEvent {
-    type TypeId = __catga_types::DeferredEventTypeId;
-}
 impl DelayedMessage for DeferredEvent {}
 
 #[test]

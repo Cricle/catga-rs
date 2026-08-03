@@ -165,6 +165,7 @@ mod retry_jitter;
 mod routing;
 mod scheduler;
 pub mod sealed_dispatch;
+pub mod testing;
 mod security;
 mod snapshot;
 mod snapshot_codec;
@@ -318,6 +319,10 @@ pub use validation::{
     validate_not_empty, validate_positive, validate_range, validate_required,
 };
 pub use versioned_transport::VersionedMessageTransport;
+pub use testing::{
+    assert_contains, assert_error_code, assert_failure, assert_success, assert_value,
+    EventHandlerSpy, HandlerSpy, MessageCapture,
+};
 
 /// Builds metadata for typed publish operations.
 ///
