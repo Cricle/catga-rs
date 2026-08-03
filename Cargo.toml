@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/catga-core",
+    "crates/catga-flow-store",
     "crates/catga-memorypack-derive",
     "crates/catga-axum",
     "crates/catga-cluster",
@@ -22,6 +23,7 @@ description = "Composable CQRS, event-sourcing, workflow, and distributed-runtim
 catga-axum = { path = "crates/catga-axum", version = "0.0.2" }
 catga-cluster = { path = "crates/catga-cluster", version = "0.0.2" }
 catga-core = { path = "crates/catga-core", version = "0.0.2" }
+catga-flow-store = { path = "crates/catga-flow-store", version = "0.0.2" }
 catga-memorypack-derive = { path = "crates/catga-memorypack-derive", version = "0.0.2" }
 catga-nats = { path = "crates/catga-nats", version = "0.0.2" }
 catga-redis = { path = "crates/catga-redis", version = "0.0.2" }
