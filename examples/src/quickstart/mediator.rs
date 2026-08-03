@@ -3,7 +3,7 @@
 //! Plain async functions automatically satisfy [`catga_core::Handler`] — no `#[async_trait]` or helper
 //! wrappers needed. For handlers that need shared state, see `request_handler_with`.
 
-use catga_auto::AutoApp;
+use catga_core::auto::AutoApp;
 use catga_core::{CatgaResult, Request};
 
 #[derive(catga_core::Message)]

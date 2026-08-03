@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use catga_auto::Bus;
+use catga_core::auto::Bus;
 use catga_codec_memorypack::{MemoryPackCodec, MemoryPackable};
 use catga_core::{
     CatgaResult, Envelope, EnvelopePublisher, Message, MessageMetadata, PayloadEncoder,

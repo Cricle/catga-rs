@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use catga_auto::{Bus, PublisherHandle};
+use catga_core::auto::{Bus, PublisherHandle};
 use catga_codec_memorypack::{MemoryPackCodec, MemoryPackable};
 use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
 use catga_memory::MemoryTransport;

@@ -27,7 +27,7 @@ metrics = "0.24"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = "0.7"
 tracing = "0.1"
 
 [dev-dependencies]

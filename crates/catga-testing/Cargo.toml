@@ -12,7 +12,6 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-auto = { workspace = true }
 catga-codec-memorypack = { workspace = true }
 catga-core = { workspace = true }
 catga-flow = { workspace = true }

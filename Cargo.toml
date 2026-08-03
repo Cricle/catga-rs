@@ -8,7 +8,6 @@ members = [
     "crates/catga-codec-memorypack",
     "crates/catga-codec-memorypack/memorypack-derive",
     "crates/catga-axum",
-    "crates/catga-auto",
     "crates/catga-cluster",
     "crates/catga-memory",
     "crates/catga-nats",
@@ -16,7 +15,6 @@ members = [
     "crates/catga-robustmq",
     "crates/catga-scheduler-tokio-cron",
     "tests",
-    "examples",
 ]
 resolver = "3"
 
@@ -30,7 +28,6 @@ description = "Composable CQRS, event-sourcing, workflow, and distributed-runtim
 
 [workspace.dependencies]
 catga-axum = { path = "crates/catga-axum", version = "0.0.2" }
-catga-auto = { path = "crates/catga-auto", version = "0.0.2" }
 catga-cluster = { path = "crates/catga-cluster", version = "0.0.2" }
 catga-codec-bincode = { path = "crates/catga-codec-bincode", version = "0.0.2" }
 catga-codec-memorypack = { path = "crates/catga-codec-memorypack", version = "0.0.2" }

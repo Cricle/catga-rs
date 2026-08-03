@@ -3,7 +3,7 @@
 //! Plain async functions automatically satisfy [`catga_core::Handler`] without `#[async_trait]` or helper
 //! wrappers. The handler type is inferred by the registry:
 
-use catga_auto::AutoApp;
+use catga_core::auto::AutoApp;
 use catga_core::{CatgaResult, Request};
 
 // ---------------------------------------------------------------------------

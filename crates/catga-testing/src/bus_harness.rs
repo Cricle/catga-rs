@@ -45,7 +45,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_auto::{Bus, BusBuilder};
+use catga_core::auto::{Bus, BusBuilder};
 use catga_codec_memorypack::{
     MemoryPackCodec, MemoryPackDeserialize, MemoryPackSerialize, MemoryPackTransport,
 };

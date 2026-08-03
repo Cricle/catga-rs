@@ -130,6 +130,7 @@
 //! ```
 
 mod aggregate;
+pub mod auto;
 mod auto_snapshot;
 mod behaviors;
 pub mod macros;
@@ -189,6 +190,12 @@ pub use aggregate::{
     SnapshotStrategy, TimeBasedSnapshotStrategy,
 };
 pub use auto_snapshot::AutoSnapshotManager;
+pub use auto::{
+    AutoApp, AutoAppBuilder, Bus, BusBuilder, BusFaultPublisher, BusPublisher,
+    BusRequestClient, DeliveryMessageOf, FaultPublishingHandler, FilteredHandler,
+    MessageForwarder, PublisherHandle, bind_mediator, is_bound,
+    mediator_handle, publish, send, send_command,
+};
 pub use behaviors::{
     AuthorizationBehavior, AuthorizationPolicies, AuthorizationPolicy, AutoBatchingBehavior,
     AutoBatchingRunner, BatchOptions, CircuitBreakerBehavior, CircuitBreakerOptions,
