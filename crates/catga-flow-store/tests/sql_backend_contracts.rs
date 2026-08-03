@@ -12,7 +12,7 @@ use std::{
 };
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     FlowContinuation, FlowState, FlowStore, SuspendedFlowStore, TimedOutFlowPoll,
     TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };

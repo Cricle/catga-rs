@@ -6,7 +6,7 @@ use std::{
 };
 
 use catga_core::{CatgaError, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, WaitCondition, WaitPolicy,
 };
 use catga_memory::MemorySuspendedFlows;

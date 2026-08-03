@@ -8,7 +8,7 @@ use std::sync::{
 use async_trait::async_trait;
 use catga_codec_memorypack::{MemoryPackSerializer, MemoryPackable};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     DslFlow, DslFlowLifecycleHooks, DslStateCodec, DslStepProgress, DslStepProgressStore,
 };
 use catga_memory::MemoryDslStepProgress;

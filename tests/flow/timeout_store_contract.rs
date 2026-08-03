@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime};
 
 use catga_core::CatgaResult;
-use catga_flow::{
+use catga_core::flow::{
     FlowContinuation, FlowState, TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };
 

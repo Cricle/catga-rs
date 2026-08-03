@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime};
 
 use catga_core::{CatgaError, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     FlowContinuation, FlowState, SuspendedFlowStore, WaitCondition, WaitPolicy,
     decode_continuation, encode_continuation,
 };

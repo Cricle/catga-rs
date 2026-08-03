@@ -1,6 +1,6 @@
 //! Contract tests for typed Flow test contexts.
 
-use catga_flow::{FlowDefinition, FlowRuntime, FlowStatus, FlowStepOutcome, SuspendedFlowStore};
+use catga_core::flow::{FlowDefinition, FlowRuntime, FlowStatus, FlowStepOutcome, SuspendedFlowStore};
 use catga_testing::FlowTestContext;
 
 #[tokio::test]

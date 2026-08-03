@@ -6,7 +6,7 @@ use std::{
 };
 
 use catga_core::{ErrorCode, Event, Message};
-use catga_flow::{
+use catga_core::flow::{
     StateMachine, StateMachineEventRouter, StateMachineExecutor, StateMachineSnapshot,
     StateMachineState, StateMachineStore,
 };

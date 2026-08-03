@@ -10,7 +10,7 @@
 use std::time::Instant;
 
 use catga_core::CatgaResult;
-use catga_flow::{DslFlow, Flow, dsl_action};
+use catga_core::flow::{DslFlow, Flow, dsl_action};
 
 #[path = "support/performance_report.rs"]
 mod performance_report;
@@ -119,7 +119,7 @@ fn local_flow_fixture() -> Flow {
 }
 
 /// Asserts the complete successful outcome expected from every local flow execution.
-fn assert_successful_flow(result: catga_flow::FlowResult) {
+fn assert_successful_flow(result: catga_core::flow::FlowResult) {
     assert!(result.is_success());
     assert_eq!(result.completed_steps(), STEPS_PER_FLOW);
 }

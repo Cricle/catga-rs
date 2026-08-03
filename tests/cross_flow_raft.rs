@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use catga_cluster::{RaftCommittedEntry, RaftStateMachine};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, flow_definition};
+use catga_core::flow::{FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, flow_definition};
 use catga_memory::MemorySuspendedFlows;
 
 // ---------------------------------------------------------------------------

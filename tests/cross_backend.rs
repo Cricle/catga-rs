@@ -8,7 +8,7 @@ use std::{
 };
 
 use catga_core::{CatgaError, CatgaResult, Envelope, ErrorCode, MessageMetadata, MessageTransport};
-use catga_flow::{FlowState, FlowStore};
+use catga_core::flow::{FlowState, FlowStore};
 use catga_flow_store::SqlFlowStore;
 use catga_nats::{NatsConfig, NatsTransport};
 use catga_redis::{RedisConfig, RedisTransport};

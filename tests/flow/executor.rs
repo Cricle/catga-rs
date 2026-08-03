@@ -10,7 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions, FlowResult, FlowState, FlowStatus,
     FlowStore,
 };

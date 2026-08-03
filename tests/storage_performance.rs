@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use catga_flow::{FlowState, FlowStore};
+use catga_core::flow::{FlowState, FlowStore};
 use catga_flow_store::{SqlFlowStore, SqlFlowStoreOptions};
 use catga_redis::RedisFlows;
 use futures::{StreamExt, TryStreamExt, stream};

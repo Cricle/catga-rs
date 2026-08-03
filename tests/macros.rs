@@ -8,7 +8,7 @@ use catga_core::{
     Command, CommandHandler, CommandPipeline, Event, EventHandler, Handler, Mediator, Message,
     MessagePriority, Pipeline, Request, RetryBehavior, TimeoutBehavior,
 };
-use catga_flow::{FlowDefinition, FlowStepOutcome};
+use catga_core::flow::{FlowDefinition, FlowStepOutcome};
 
 #[derive(Clone, catga_core::Message)]
 struct Ping;
@@ -226,7 +226,7 @@ fn message_derive_uses_distinct_full_type_identities() {
 
 #[test]
 fn flow_definition_macro_registers_named_async_steps() {
-    let definition: FlowDefinition = catga_flow::flow_definition! {
+    let definition: FlowDefinition = catga_core::flow::flow_definition! {
         "macro-flow";
         "choose" => |_| async { Ok(FlowStepOutcome::goto("done")) };
         "done" => |_| async { Ok(FlowStepOutcome::complete()) };

@@ -14,7 +14,7 @@ use catga_core::{
     CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Mediator, Registry, Request,
     RequestClient,
 };
-use catga_flow::{
+use catga_core::flow::{
     DslFlow, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver, DslStep, Flow,
     FlowTagPolicy, FlowThrottle, MAX_DSL_PARALLEL_BRANCHES, dsl_action, dsl_each_action,
 };

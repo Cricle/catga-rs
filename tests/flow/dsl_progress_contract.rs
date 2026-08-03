@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{DslFlow, DslStateCodec, DslStepProgressStore};
+use catga_core::flow::{DslFlow, DslStateCodec, DslStepProgressStore};
 
 pub struct U32Codec;
 

@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use catga_flow::{FlowContinuation, FlowState, FlowStore, SuspendedFlowStore};
+use catga_core::flow::{FlowContinuation, FlowState, FlowStore, SuspendedFlowStore};
 use catga_memory::{MemoryFlows, MemorySuspendedFlows};
 use serde_json::json;
 

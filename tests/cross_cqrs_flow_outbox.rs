@@ -9,7 +9,7 @@ use catga_core::{
     CatgaResult, Command, CommandHandler, Envelope, Mediator, Message, MessageMetadata,
     OutboxMessage, OutboxStore, catga_handlers,
 };
-use catga_flow::{FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, flow_definition};
+use catga_core::flow::{FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, flow_definition};
 use catga_memory::{MemoryOutbox, MemorySuspendedFlows};
 
 // ---------------------------------------------------------------------------

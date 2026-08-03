@@ -18,7 +18,7 @@ use catga_core::{
     ProcessingState, ProjectionCheckpoint, ProjectionCheckpointStore, QualityOfService, Snapshot,
     SnapshotStore, Stoppable, SubscriptionCheckpoint, SubscriptionStore, Waitable,
 };
-use catga_flow::{
+use catga_core::flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
     FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
@@ -708,7 +708,7 @@ async fn redis_suspended_flow_query_ignores_auxiliary_hashes() -> CatgaResult<()
                 .with_details(error.to_string())
         })?;
 
-    let summaries = store.query(&catga_flow::FlowQuery::new(2, 2)?).await?;
+    let summaries = store.query(&catga_core::flow::FlowQuery::new(2, 2)?).await?;
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].id(), "redis-query-index");
     Ok(())

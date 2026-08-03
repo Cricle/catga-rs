@@ -25,7 +25,7 @@ use catga_core::{
     Registry, Request, RetryBehavior, TracingBehavior, current_correlation_id,
     scope_correlation_id,
 };
-use catga_flow::{DslFlow, FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler};
+use catga_core::flow::{DslFlow, FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler};
 use catga_memory::{
     MemoryEventStore, MemoryIdempotency, MemoryInbox, MemoryLeases, MemoryOutbox,
     MemoryPubSubTransport, MemorySuspendedFlows, MemoryTransport,

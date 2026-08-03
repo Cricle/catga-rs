@@ -12,9 +12,10 @@
 
 use std::time::Instant;
 
-use catga_codec_memorypack::MemoryPackable;
+use catga_core::codec::memorypack::{MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize, MemoryPackWriter};
+use catga_core::MemoryPackable;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{StateMachineSnapshot, StateMachineStore};
+use catga_core::flow::{StateMachineSnapshot, StateMachineStore};
 use catga_flow_store::SqlStateMachineStore;
 
 const RECORD_COUNT: usize = 128;

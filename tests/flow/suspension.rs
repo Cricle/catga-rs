@@ -10,7 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     FlowChildLauncher, FlowCompletion, FlowCompletionAdapter, FlowContinuation, FlowDefinition,
     FlowQuery, FlowRuntime, FlowState, FlowStepOutcome, FlowSummary, FlowTagPolicy,
     FlowTimeoutOptions, FlowTimeoutService, MAX_FLOW_TIMEOUT_BATCH_SIZE,
@@ -84,7 +84,7 @@ async fn cancellation_wins_over_a_running_step_and_fences_its_late_completion() 
         .expect("cancelled continuation remains durable");
     assert_eq!(
         persisted.state().status(),
-        catga_flow::FlowStatus::Cancelled
+        catga_core::flow::FlowStatus::Cancelled
     );
     assert_eq!(step_calls.load(Ordering::SeqCst), 1);
 }

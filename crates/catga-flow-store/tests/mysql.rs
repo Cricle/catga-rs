@@ -2,7 +2,7 @@
 #![cfg(feature = "mysql")]
 
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     FlowContinuation, FlowQuery, FlowState, FlowStatus, FlowStore, SuspendedFlowStore,
     TimedOutFlowPoll, TimedOutFlowStore, WaitCondition, WaitPolicy,
 };

@@ -1,6 +1,6 @@
 //! Flow state construction helpers.
 
-use catga_flow::{FlowState, FlowStatus};
+use catga_core::flow::{FlowState, FlowStatus};
 
 #[test]
 fn flow_state_starts_running_with_immutable_identity_and_cas_version() {

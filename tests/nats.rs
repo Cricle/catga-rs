@@ -19,7 +19,7 @@ use catga_core::{
     ProjectionCheckpointStore, QualityOfService, Snapshot, SnapshotStore, Stoppable,
     SubscriptionCheckpoint, SubscriptionStore, Waitable,
 };
-use catga_flow::{
+use catga_core::flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
     FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };

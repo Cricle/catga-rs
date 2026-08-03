@@ -10,7 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::CatgaResult;
-use catga_flow::{
+use catga_core::flow::{
     FlowContinuation, FlowDefinition, FlowRuntime, FlowScheduler, FlowState, FlowStepOutcome,
     MemoryFlowScheduler, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
@@ -39,7 +39,7 @@ impl SuspendedFlowStore for HeartbeatBeforeClaimStore {
         expected: &FlowContinuation,
         next: FlowContinuation,
     ) -> CatgaResult<bool> {
-        if next.state().status() == catga_flow::FlowStatus::Running
+        if next.state().status() == catga_core::flow::FlowStatus::Running
             && next.state().owner() == Some("node-b")
         {
             assert!(self.inner.heartbeat("heartbeat-race", "node-a", 0).await?);
@@ -413,7 +413,7 @@ async fn restart_retries_the_persisted_durable_compensation_before_marking_faile
             .unwrap()
             .state()
             .status(),
-        catga_flow::FlowStatus::Compensating
+        catga_core::flow::FlowStatus::Compensating
     );
     let cancellation = runtime
         .cancel("compensate-after-restart")

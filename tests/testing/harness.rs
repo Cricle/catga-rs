@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Event, EventHandler, Handler, Request};
-use catga_flow::{FlowDefinition, FlowRuntime, FlowStepOutcome};
+use catga_core::flow::{FlowDefinition, FlowRuntime, FlowStepOutcome};
 use catga_testing::CatgaTestHarness;
 
 #[derive(Clone, Debug, Eq, PartialEq, catga_core::Message)]
