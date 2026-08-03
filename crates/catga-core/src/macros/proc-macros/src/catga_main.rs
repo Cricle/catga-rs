@@ -50,7 +50,7 @@ fn catga_main_impl(
     // Parse: transport = Expr
     let transport_expr = parse_transport_attr(attr)?;
 
-    let inner_fn_name = syn::Ident::new(&"__catga_main_inner".to_string(), fn_name.span());
+    let inner_fn_name = syn::Ident::new("__catga_main_inner", fn_name.span());
 
     if let Some(expr) = transport_expr {
         // With transport: .transport(expr) binds both mediator and transport in build()
