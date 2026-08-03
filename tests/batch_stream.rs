@@ -22,13 +22,14 @@ impl catga_core::Message for Work {}
 
 impl Request for Work {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
 struct Published;
 
 impl catga_core::Message for Published {}
-impl Event for Published {}
+impl Event for Published { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Default)]
 struct Probe {

@@ -49,13 +49,13 @@ impl Default for Order {
 struct Paid;
 
 impl Message for Paid {}
-impl Event for Paid {}
+impl Event for Paid { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Clone)]
 struct Started;
 
 impl Message for Started {}
-impl Event for Started {}
+impl Event for Started { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Clone)]
 struct RoutedPaid {
@@ -63,7 +63,7 @@ struct RoutedPaid {
 }
 
 impl Message for RoutedPaid {}
-impl Event for RoutedPaid {}
+impl Event for RoutedPaid { type TypeId = catga_core::DefaultMessageTypeId; }
 
 struct PaymentEvent;
 
@@ -75,6 +75,7 @@ struct CardPaid;
 impl Message for CardPaid {}
 
 impl Event for CardPaid {
+    type TypeId = catga_core::DefaultMessageTypeId;
     fn categories(&self) -> &'static [TypeId] {
         PAYMENT_EVENT_CATEGORIES
     }
@@ -86,6 +87,7 @@ struct WirePaid;
 impl Message for WirePaid {}
 
 impl Event for WirePaid {
+    type TypeId = catga_core::DefaultMessageTypeId;
     fn categories(&self) -> &'static [TypeId] {
         PAYMENT_EVENT_CATEGORIES
     }
@@ -95,7 +97,7 @@ impl Event for WirePaid {
 struct UnrelatedPaymentEvent;
 
 impl Message for UnrelatedPaymentEvent {}
-impl Event for UnrelatedPaymentEvent {}
+impl Event for UnrelatedPaymentEvent { type TypeId = catga_core::DefaultMessageTypeId; }
 
 fn machine() -> StateMachine<Order, State> {
     let mut definition = StateMachine::<Order, State>::builder(State::Pending);

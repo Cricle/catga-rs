@@ -18,7 +18,7 @@
 //!
 //! struct Ping;
 //! impl Message for Ping {}
-//! impl Request for Ping { type Response = (); }
+//! impl Request for Ping { type Response = (); type TypeId = catga_core::DefaultMessageTypeId; }
 //!
 //! // Plain async fn - no #[async_trait] needed!
 //! async fn ping_handler(_: Ping) -> CatgaResult<()> { Ok(()) }
@@ -121,7 +121,7 @@ impl AutoAppBuilder {
     ///
     /// struct Ping;
     /// impl Message for Ping {}
-    /// impl Request for Ping { type Response = (); }
+    /// impl Request for Ping { type Response = (); type TypeId = catga_core::DefaultMessageTypeId; }
     ///
     /// async fn ping_handler(_: Ping) -> CatgaResult<()> {
     ///     Ok(())
@@ -315,6 +315,7 @@ mod tests {
 
     impl Request for Ping {
         type Response = String;
+        type TypeId = catga_core::DefaultMessageTypeId;
     }
 
     struct PingHandler;

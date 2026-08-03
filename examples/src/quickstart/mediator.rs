@@ -11,6 +11,7 @@ struct Double(u64);
 
 impl Request for Double {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 // Plain async fn — Fn-blanket impl makes this a valid Handler.

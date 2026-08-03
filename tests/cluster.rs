@@ -254,6 +254,7 @@ impl catga_core::Message for LeaderWork {}
 
 impl Request for LeaderWork {
     type Response = u32;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct LeaderHandler(Arc<AtomicUsize>);

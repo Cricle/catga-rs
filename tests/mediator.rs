@@ -19,6 +19,7 @@ impl catga_core::Message for Double {}
 
 impl Request for Double {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct DoubleHandler;
@@ -218,7 +219,9 @@ async fn pipeline_terminal_handler_panics_become_internal_errors() -> CatgaResul
 struct ShipOrder(u64);
 
 impl catga_core::Message for ShipOrder {}
-impl Command for ShipOrder {}
+impl Command for ShipOrder {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct ShipOrderHandler {
     shipped_order: Arc<AtomicUsize>,
@@ -340,7 +343,9 @@ async fn command_dispatch_reports_missing_handler_and_unbound_handle() -> CatgaR
 struct OrderCreated;
 
 impl catga_core::Message for OrderCreated {}
-impl Event for OrderCreated {}
+impl Event for OrderCreated {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct AuditOrder {
     count: Arc<AtomicUsize>,
@@ -478,7 +483,9 @@ impl Clone for CloneTrackedEvent {
 }
 
 impl catga_core::Message for CloneTrackedEvent {}
-impl Event for CloneTrackedEvent {}
+impl Event for CloneTrackedEvent {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct CloneTrackedHandler {
     delivery_count: Arc<AtomicUsize>,
@@ -496,7 +503,9 @@ impl EventHandler<CloneTrackedEvent> for CloneTrackedHandler {
 struct FollowUpCreated;
 
 impl catga_core::Message for FollowUpCreated {}
-impl Event for FollowUpCreated {}
+impl Event for FollowUpCreated {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct FollowUpAudit {
     count: Arc<AtomicUsize>,
@@ -516,6 +525,7 @@ impl catga_core::Message for PublishCreated {}
 
 impl Request for PublishCreated {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct FollowUpHandler {

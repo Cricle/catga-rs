@@ -26,9 +26,10 @@ struct CreateOrder {
 
 impl Request for CreateOrder {
     type Response = OrderCreated;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
-#[derive(Debug, Eq, PartialEq, MemoryPackable)]
+#[derive(Debug, Clone, Eq, PartialEq, MemoryPackable)]
 struct OrderCreated {
     order_id: u64,
 }

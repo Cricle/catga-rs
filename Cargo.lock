@@ -640,6 +640,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "catga-auto"
+version = "0.0.2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "catga-axum",
+ "catga-cluster",
+ "catga-codec-memorypack",
+ "catga-core",
+ "catga-flow",
+ "catga-memory",
+ "catga-nats",
+ "catga-redis",
+ "futures",
+ "metrics",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "catga-axum"
 version = "0.0.2"
 dependencies = [

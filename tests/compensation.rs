@@ -19,6 +19,7 @@ impl catga_core::Message for ChargeCard {}
 
 impl Request for ChargeCard {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
@@ -27,7 +28,9 @@ struct ChargeCompensated {
 }
 
 impl catga_core::Message for ChargeCompensated {}
-impl Event for ChargeCompensated {}
+impl Event for ChargeCompensated {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct RejectCharge;
 
@@ -56,7 +59,9 @@ struct CancelCharge {
 }
 
 impl catga_core::Message for CancelCharge {}
-impl Command for CancelCharge {}
+impl Command for CancelCharge {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct RejectCancelCharge;
 

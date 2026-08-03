@@ -71,6 +71,7 @@ struct CreateOrder {
 impl Message for CreateOrder {}
 impl Request for CreateOrder {
     type Response = OrderView;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 /// Internal query message (never deserialized from HTTP — constructed in the handler).
@@ -81,6 +82,7 @@ struct GetOrder {
 impl Message for GetOrder {}
 impl Request for GetOrder {
     type Response = OrderView;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 /// The API response model.

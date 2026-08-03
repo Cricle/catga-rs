@@ -23,9 +23,10 @@ struct WireOnlyRequest(u32);
 
 impl Request for WireOnlyRequest {
     type Response = WireOnlyResponse;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
-#[derive(Debug, Eq, PartialEq, MemoryPackable)]
+#[derive(Debug, Clone, Eq, PartialEq, MemoryPackable)]
 struct WireOnlyResponse(u32);
 
 struct FailingRequestTransport;

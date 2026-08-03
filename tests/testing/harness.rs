@@ -10,6 +10,7 @@ struct Double(u32);
 
 impl Request for Double {
     type Response = u32;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct DoubleHandler;
@@ -24,7 +25,9 @@ impl Handler<Double> for DoubleHandler {
 #[derive(Clone, catga_core::Message, Debug, Eq, PartialEq)]
 struct Doubled(u32);
 
-impl Event for Doubled {}
+impl Event for Doubled {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct Noop;
 

@@ -23,6 +23,7 @@ struct WireOnlyDouble(u32);
 
 impl Request for WireOnlyDouble {
     type Response = u32;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct WireOnlyDoubleClient;

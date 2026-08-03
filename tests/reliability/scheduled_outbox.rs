@@ -40,17 +40,19 @@ impl DelayedMessage for DeclaredDelayedShipOrder {
     }
 }
 
-#[derive(Clone, MemoryPackable)]
+#[derive(Clone, MemoryPackable, catga_core::Message)]
 struct OrderScheduled(u64);
 
-impl Message for OrderScheduled {}
-impl Event for OrderScheduled {}
+impl Event for OrderScheduled {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
-#[derive(Clone, MemoryPackable)]
+#[derive(Clone, MemoryPackable, catga_core::Message)]
 struct ReliableOrderScheduled(u64);
 
-impl Message for ReliableOrderScheduled {}
-impl Event for ReliableOrderScheduled {}
+impl Event for ReliableOrderScheduled {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[tokio::test]
 async fn outbox_claim_skips_messages_until_their_delivery_time() {

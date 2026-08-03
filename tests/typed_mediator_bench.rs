@@ -23,17 +23,22 @@ struct Ping(u64);
 impl Message for Ping {}
 impl Request for Ping {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
 struct Tick(u64);
 impl Message for Tick {}
-impl Event for Tick {}
+impl Event for Tick {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Clone)]
 struct DoWork;
 impl Message for DoWork {}
-impl Command for DoWork {}
+impl Command for DoWork {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 // ---------------------------------------------------------------------------
 // Handlers

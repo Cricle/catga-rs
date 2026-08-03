@@ -21,7 +21,9 @@ struct PlaceOrder {
     order_id: String,
 }
 impl Message for PlaceOrder {}
-impl Command for PlaceOrder {}
+impl Command for PlaceOrder {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 // ---------------------------------------------------------------------------
 // Outbox-backed event publication after flow completion

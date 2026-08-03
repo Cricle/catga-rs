@@ -629,7 +629,9 @@ mod tests {
     #[derive(Clone, crate::MemoryPackable, catga_core::Message)]
     struct TestEvent(u32);
 
-    impl Event for TestEvent {}
+    impl Event for TestEvent {
+        type TypeId = catga_core::DefaultMessageTypeId;
+    }
 
     impl DelayedMessage for TestEvent {
         fn delay(&self) -> Option<Duration> {
@@ -642,9 +644,10 @@ mod tests {
 
     impl Request for TestRequest {
         type Response = TestResponse;
+        type TypeId = catga_core::DefaultMessageTypeId;
     }
 
-    #[derive(crate::MemoryPackable, Debug, Eq, PartialEq)]
+    #[derive(Clone, crate::MemoryPackable, Debug, Eq, PartialEq)]
     struct TestResponse(u32);
 
     #[derive(Default)]

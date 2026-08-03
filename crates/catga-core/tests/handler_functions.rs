@@ -32,7 +32,7 @@ impl Message for Double {}
 
 impl Request for Double {
     type Response = u64;
-    type TypeId = __catga_types::DoubleTypeId;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]

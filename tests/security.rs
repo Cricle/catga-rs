@@ -21,6 +21,7 @@ impl catga_core::Message for DeleteReport {}
 
 impl Request for DeleteReport {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl AuthorizedRequest for DeleteReport {
@@ -38,6 +39,7 @@ impl catga_core::Message for ExportReport {}
 
 impl Request for ExportReport {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl AuthorizedRequest for ExportReport {

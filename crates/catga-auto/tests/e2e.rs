@@ -47,7 +47,7 @@ struct TodoEvent {
     title: String,
 }
 impl Message for TodoEvent {}
-impl Event for TodoEvent {}
+impl Event for TodoEvent { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Clone, Serialize, Deserialize)]
 struct TodoView {

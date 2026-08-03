@@ -28,6 +28,7 @@ impl Message for QuoteOrder {}
 
 impl Request for QuoteOrder {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct QuoteOrderHandler;

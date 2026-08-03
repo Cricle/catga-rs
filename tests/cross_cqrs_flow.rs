@@ -22,7 +22,9 @@ struct StartCheckout {
     order_id: String,
 }
 impl Message for StartCheckout {}
-impl Command for StartCheckout {}
+impl Command for StartCheckout {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 /// Event published when the checkout flow completes.
 #[derive(Clone)]
@@ -30,7 +32,9 @@ struct CheckoutCompleted {
     order_id: String,
 }
 impl Message for CheckoutCompleted {}
-impl Event for CheckoutCompleted {}
+impl Event for CheckoutCompleted {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 /// Query that reads the projection state.
 #[derive(Clone)]
@@ -40,6 +44,7 @@ struct GetCheckoutStatus {
 impl Message for GetCheckoutStatus {}
 impl Request for GetCheckoutStatus {
     type Response = Option<String>;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 // ---------------------------------------------------------------------------

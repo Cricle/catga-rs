@@ -32,6 +32,7 @@ impl catga_core::Message for ScheduledWork {}
 
 impl Request for ScheduledWork {
     type Response = usize;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 /// Records the maximum number of request handlers active at the same time.

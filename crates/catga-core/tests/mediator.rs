@@ -42,7 +42,7 @@ impl Message for Ping {}
 
 impl Request for Ping {
     type Response = u8;
-    type TypeId = __catga_types::PingTypeId;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
@@ -52,7 +52,7 @@ impl Message for BlockingRequest {}
 
 impl Request for BlockingRequest {
     type Response = ();
-    type TypeId = __catga_types::BlockingRequestTypeId;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]

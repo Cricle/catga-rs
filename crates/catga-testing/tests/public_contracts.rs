@@ -19,6 +19,7 @@ struct Double(u32);
 
 impl Request for Double {
     type Response = u32;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct DoubleHandler;
@@ -33,7 +34,7 @@ impl Handler<Double> for DoubleHandler {
 #[derive(Clone, Debug, Eq, PartialEq, catga_core::Message)]
 struct Doubled(u32);
 
-impl Event for Doubled {}
+impl Event for Doubled { type TypeId = catga_core::DefaultMessageTypeId; }
 
 struct EventCounter(Arc<std::sync::atomic::AtomicU32>);
 

@@ -233,6 +233,7 @@ impl catga_core::Message for RaftLeaderWork {}
 
 impl Request for RaftLeaderWork {
     type Response = u8;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct RaftLeaderHandler;

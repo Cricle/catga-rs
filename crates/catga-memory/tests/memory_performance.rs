@@ -29,6 +29,7 @@ impl Message for MemoryRequest {}
 
 impl Request for MemoryRequest {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Serialize)]

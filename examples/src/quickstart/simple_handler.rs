@@ -18,12 +18,13 @@ struct Double(u64);
 impl Message for Double {}
 impl Request for Double {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
 struct Log(String);
 impl Message for Log {}
-impl Command for Log {}
+impl Command for Log { type TypeId = catga_core::DefaultMessageTypeId; }
 
 // ---------------------------------------------------------------------------
 // Handlers — plain async fns, no macros, no #[async_trait]

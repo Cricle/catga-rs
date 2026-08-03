@@ -16,6 +16,7 @@ impl catga_core::Message for OrderPublished {}
 
 impl Request for OrderPublished {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl OutboxEnvelope for OrderPublished {

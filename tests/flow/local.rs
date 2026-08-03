@@ -694,6 +694,7 @@ struct Double(u32);
 
 impl Request for Double {
     type Response = u32;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct DoubleHandler;
@@ -717,7 +718,7 @@ impl RequestClient<Double> for RemoteDoubleClient {
 #[derive(Clone, catga_core::Message)]
 struct FlowPublished(u32);
 
-impl Event for FlowPublished {}
+impl Event for FlowPublished { type TypeId = catga_core::DefaultMessageTypeId; }
 
 struct PublishedValue(Arc<AtomicU32>);
 

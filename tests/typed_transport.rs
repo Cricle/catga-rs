@@ -19,7 +19,9 @@ struct TestMessage(u8);
 
 impl Message for TestMessage {}
 
-impl Event for TestMessage {}
+impl Event for TestMessage {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Default)]
 struct AcknowledgementCounts {

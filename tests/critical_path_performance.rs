@@ -35,6 +35,7 @@ impl Message for Quote {}
 
 impl Request for Quote {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct QuoteHandler;

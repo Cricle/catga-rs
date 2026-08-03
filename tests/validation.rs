@@ -21,6 +21,7 @@ impl catga_core::Message for CreateInvoice {}
 
 impl Request for CreateInvoice {
     type Response = &'static str;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct CountingHandler(Arc<AtomicUsize>);

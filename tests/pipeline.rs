@@ -20,6 +20,7 @@ impl catga_core::Message for Double {}
 
 impl Request for Double {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Debug, Clone)]
@@ -29,13 +30,16 @@ impl catga_core::Message for RetryableRequest {}
 
 impl Request for RetryableRequest {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Debug)]
 struct ShipOrder;
 
 impl catga_core::Message for ShipOrder {}
-impl Command for ShipOrder {}
+impl Command for ShipOrder {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct DoubleHandler(Arc<Mutex<Vec<&'static str>>>);
 

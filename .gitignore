@@ -2,3 +2,4 @@
 /.worktrees/
 /target/
 **/*.rs.bk
+.codegraph/

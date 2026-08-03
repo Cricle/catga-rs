@@ -46,6 +46,7 @@ impl catga_core::Message for ReconcileStock {}
 
 impl Request for ReconcileStock {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct CorrelationHandler;
@@ -74,7 +75,7 @@ impl Handler<ReconcileStock> for RejectReconcile {
 struct RebuildInventory;
 
 impl catga_core::Message for RebuildInventory {}
-impl Command for RebuildInventory {}
+impl Command for RebuildInventory { type TypeId = catga_core::DefaultMessageTypeId; }
 
 struct RebuildInventoryHandler;
 
@@ -124,6 +125,7 @@ impl catga_core::Message for WaitForCancellation {}
 
 impl Request for WaitForCancellation {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct WaitForCancellationHandler(Arc<tokio::sync::Notify>);
@@ -140,7 +142,7 @@ impl Handler<WaitForCancellation> for WaitForCancellationHandler {
 struct WaitForCommandCancellation;
 
 impl catga_core::Message for WaitForCommandCancellation {}
-impl Command for WaitForCommandCancellation {}
+impl Command for WaitForCommandCancellation { type TypeId = catga_core::DefaultMessageTypeId; }
 
 struct WaitForCommandCancellationHandler(Arc<tokio::sync::Notify>);
 
@@ -189,6 +191,7 @@ struct TaggedReconcile {
 
 impl Request for TaggedReconcile {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct TaggedHandler;
@@ -204,6 +207,7 @@ struct ResponseTaggedReconcile;
 
 impl catga_core::Message for ResponseTaggedReconcile {}
 
+#[derive(Clone)]
 struct ReconciledStock {
     available: u64,
     internal_note: &'static str,
@@ -211,6 +215,7 @@ struct ReconciledStock {
 
 impl Request for ResponseTaggedReconcile {
     type Response = ReconciledStock;
+    type TypeId = catga_core::DefaultMessageTypeId;
 
     fn visit_response_trace_tags(
         response: &Self::Response,
@@ -239,6 +244,7 @@ impl catga_core::Message for RetryReconcile {}
 
 impl Request for RetryReconcile {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct SucceedsAfterOneRetry(AtomicUsize);
@@ -272,6 +278,7 @@ impl catga_core::Message for ObservedInboxRequest {}
 
 impl Request for ObservedInboxRequest {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl InboxKey for ObservedInboxRequest {
@@ -315,6 +322,7 @@ impl catga_core::Message for ObservedLockWork {}
 
 impl Request for ObservedLockWork {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl DistributedLockKey for ObservedLockWork {

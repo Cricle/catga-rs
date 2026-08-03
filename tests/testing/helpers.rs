@@ -14,6 +14,7 @@ struct Add(u32);
 impl catga_core::Message for Add {}
 impl Request for Add {
     type Response = u32;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct Doubler;
@@ -27,7 +28,9 @@ impl Handler<Add> for Doubler {
 #[derive(Clone, Debug, PartialEq)]
 struct Recorded(u32);
 impl catga_core::Message for Recorded {}
-impl Event for Recorded {}
+impl Event for Recorded {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 struct EventCounter(Arc<std::sync::atomic::AtomicU32>);
 

@@ -21,6 +21,7 @@ struct Add(u64, u64);
 impl Message for Add {}
 impl Request for Add {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +29,7 @@ struct Multiply(u64, u64);
 impl Message for Multiply {}
 impl Request for Multiply {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,28 +37,30 @@ struct Divide(u64, u64);
 impl Message for Divide {}
 impl Request for Divide {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone, Debug)]
 struct LogCommand(String);
 impl Message for LogCommand {}
-impl Command for LogCommand {}
+impl Command for LogCommand { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Clone, Debug, PartialEq)]
 struct OrderCreated(String);
 impl Message for OrderCreated {}
-impl Event for OrderCreated {}
+impl Event for OrderCreated { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Clone, Debug, PartialEq)]
 struct PaymentReceived(u64);
 impl Message for PaymentReceived {}
-impl Event for PaymentReceived {}
+impl Event for PaymentReceived { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Clone)]
 struct PanickingRequest;
 impl Message for PanickingRequest {}
 impl Request for PanickingRequest {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
@@ -64,12 +68,13 @@ struct Unregistered;
 impl Message for Unregistered {}
 impl Request for Unregistered {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
 struct UnregisteredCommand;
 impl Message for UnregisteredCommand {}
-impl Command for UnregisteredCommand {}
+impl Command for UnregisteredCommand { type TypeId = catga_core::DefaultMessageTypeId; }
 
 // ---------------------------------------------------------------------------
 // Handlers

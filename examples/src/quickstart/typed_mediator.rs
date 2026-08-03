@@ -20,6 +20,7 @@ struct GetBalance {
 impl Message for GetBalance {}
 impl Request for GetBalance {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
@@ -29,7 +30,7 @@ struct TransferFunds {
     amount: u64,
 }
 impl Message for TransferFunds {}
-impl Command for TransferFunds {}
+impl Command for TransferFunds { type TypeId = catga_core::DefaultMessageTypeId; }
 
 #[derive(Clone)]
 struct TransferCompleted {
@@ -38,7 +39,7 @@ struct TransferCompleted {
     amount: u64,
 }
 impl Message for TransferCompleted {}
-impl Event for TransferCompleted {}
+impl Event for TransferCompleted { type TypeId = catga_core::DefaultMessageTypeId; }
 
 // ---------------------------------------------------------------------------
 // Handlers

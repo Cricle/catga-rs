@@ -18,6 +18,7 @@ impl catga_core::Message for CreateOrder {}
 
 impl Request for CreateOrder {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct RejectOrder;

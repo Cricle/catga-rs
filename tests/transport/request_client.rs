@@ -28,6 +28,7 @@ struct LookupStock {
 
 impl Request for LookupStock {
     type Response = StockLevel;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(MemoryPackable, catga_core::Message)]
@@ -38,9 +39,10 @@ struct VersionedLookupStock {
 
 impl Request for VersionedLookupStock {
     type Response = StockLevel;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
-#[derive(Debug, Eq, PartialEq, MemoryPackable)]
+#[derive(Debug, Clone, Eq, PartialEq, MemoryPackable)]
 struct StockLevel {
     quantity: u32,
 }

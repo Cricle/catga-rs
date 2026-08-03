@@ -17,6 +17,7 @@ impl Message for CreateOrder {}
 
 impl Request for CreateOrder {
     type Response = u64;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[test]

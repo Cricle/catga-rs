@@ -14,6 +14,7 @@ struct Ping;
 impl catga_core::Message for Ping {}
 impl Request for Ping {
     type Response = String;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 // ---------------------------------------------------------------------------

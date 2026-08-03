@@ -34,9 +34,10 @@ impl Message for PriceOrder {}
 
 impl Request for PriceOrder {
     type Response = PriceResponse;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct PriceResponse {
     total_cents: u64,
 }

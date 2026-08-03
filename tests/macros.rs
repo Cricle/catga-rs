@@ -32,6 +32,7 @@ mod second_message_identity {
 
 impl Request for Ping {
     type Response = &'static str;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(catga_core::Message)]
@@ -44,6 +45,7 @@ struct ManageReport;
 
 impl Request for ManageReport {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(catga_core::Message)]
@@ -54,6 +56,7 @@ struct AccountScopedRequest {
 
 impl Request for AccountScopedRequest {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(catga_core::Message)]
@@ -68,6 +71,7 @@ struct ConfiguredBatchRequest;
 
 impl Request for ConfiguredBatchRequest {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(catga_core::Message)]
@@ -82,6 +86,7 @@ struct TracedRequest {
 
 impl Request for TracedRequest {
     type Response = ();
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(catga_core::Message)]
@@ -110,7 +115,7 @@ impl Handler<Ping> for PingHandler {
 #[derive(catga_core::Message)]
 struct RebuildIndex;
 
-impl Command for RebuildIndex {}
+impl Command for RebuildIndex { type TypeId = catga_core::DefaultMessageTypeId; }
 
 struct RebuildIndexHandler;
 
@@ -132,10 +137,9 @@ impl Handler<Ping> for ConfiguredPingHandler {
     }
 }
 
-#[derive(Clone, catga_core::Message)]
+#[derive(Clone, catga_core::catga_event)]
 struct Notified;
 
-impl Event for Notified {}
 
 struct Noop;
 
