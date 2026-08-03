@@ -9,14 +9,14 @@ use std::{
 };
 
 use async_nats::jetstream::{self, consumer::pull, stream};
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore,
     EnhancedSnapshotStore, Envelope, EnvelopeCodec, ErrorCode, EventStore, MessageMetadata,
     MessageTransport, OutboxMessage, OutboxState, OutboxStore, Projection, ProjectionCheckpoint,
     ProjectionCheckpointStore, QualityOfService, Snapshot, SnapshotStore, StoredEvent,
 };
-use catga_flow::{
+use catga_core::flow::{
     DueFlowScheduler, FlowContinuation, FlowQuery, FlowScheduler, FlowState, FlowStatus, FlowStore,
     SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
     WaitPolicy,

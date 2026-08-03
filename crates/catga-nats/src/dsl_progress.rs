@@ -4,11 +4,11 @@ use std::error::Error as _;
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_memorypack::{
+use catga_core::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackSerialize, MemoryPackSerializer,
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{DslStepProgress, DslStepProgressStore};
+use catga_core::flow::{DslStepProgress, DslStepProgressStore};
 use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};

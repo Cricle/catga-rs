@@ -4,7 +4,7 @@ use std::time::SystemTime;
 
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     FlowContinuation, FlowQuery, FlowState, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
     TimedOutFlowReceipt, TimedOutFlowStore, decode_continuation, encode_continuation,
     flow_timeout_deadline_unix_ms,

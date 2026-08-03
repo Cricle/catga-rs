@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use catga_codec_memorypack::{
+use catga_core::codec::memorypack::{
     MemoryPackCodec, MemoryPackDeserialize, MemoryPackRequestClient, MemoryPackSerialize,
 };
 use catga_core::{

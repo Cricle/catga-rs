@@ -3,9 +3,9 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{FlowState, FlowStatus, FlowStore};
+use catga_core::flow::{FlowState, FlowStatus, FlowStore};
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 use sha2::{Digest, Sha256};
 

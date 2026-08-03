@@ -13,9 +13,7 @@ workspace = true
 [dependencies]
 async-nats = "0.50"
 async-trait = "0.1"
-catga-codec-memorypack = { workspace = true }
 catga-core = { workspace = true }
-catga-flow = { workspace = true }
 dashmap = "6"
 futures = "0.3"
 hex = "0.4"

@@ -5,7 +5,7 @@ use async_nats::jetstream::{
     stream::{self, Stream},
 };
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore, EnvelopeCodec,
     ErrorCode,

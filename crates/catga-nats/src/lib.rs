@@ -49,7 +49,7 @@ mod subscription;
 mod suspended_flow;
 mod suspended_flow_timeout;
 
-pub use catga_codec_memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
+pub use catga_core::codec::memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
 mod transport;
 
 pub use config::{

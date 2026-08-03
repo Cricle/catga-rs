@@ -1,22 +1,12 @@
 [workspace]
 members = [
     "crates/catga-core",
-    "crates/catga-auto",
-    "crates/catga-testing",
-    "crates/catga-flow",
-    "crates/catga-flow-store",
-    "crates/catga-local",
-    "crates/catga-codec-bincode",
-    "crates/catga-codec-memorypack",
-    "crates/catga-codec-memorypack/memorypack-derive",
+    "crates/catga-memorypack-derive",
     "crates/catga-axum",
     "crates/catga-cluster",
-    "crates/catga-memory",
     "crates/catga-nats",
     "crates/catga-redis",
     "crates/catga-robustmq",
-    "crates/catga-scheduler-tokio-cron",
-    "tests",
 ]
 resolver = "3"
 
@@ -31,19 +21,11 @@ description = "Composable CQRS, event-sourcing, workflow, and distributed-runtim
 [workspace.dependencies]
 catga-axum = { path = "crates/catga-axum", version = "0.0.2" }
 catga-cluster = { path = "crates/catga-cluster", version = "0.0.2" }
-catga-codec-bincode = { path = "crates/catga-codec-bincode", version = "0.0.2" }
-catga-codec-memorypack = { path = "crates/catga-codec-memorypack", version = "0.0.2" }
 catga-core = { path = "crates/catga-core", version = "0.0.2" }
-catga-flow = { path = "crates/catga-flow", version = "0.0.2" }
-catga-flow-store = { path = "crates/catga-flow-store", version = "0.0.2" }
-catga-local = { path = "crates/catga-local", version = "0.0.2" }
-catga-memory = { path = "crates/catga-memory", version = "0.0.2" }
-catga-memorypack-derive = { path = "crates/catga-codec-memorypack/memorypack-derive", version = "0.0.2" }
+catga-memorypack-derive = { path = "crates/catga-memorypack-derive", version = "0.0.2" }
 catga-nats = { path = "crates/catga-nats", version = "0.0.2" }
 catga-redis = { path = "crates/catga-redis", version = "0.0.2" }
 catga-robustmq = { path = "crates/catga-robustmq", version = "0.0.2" }
-catga-scheduler-tokio-cron = { path = "crates/catga-scheduler-tokio-cron", version = "0.0.2" }
-catga-testing = { path = "crates/catga-testing", version = "0.0.2" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

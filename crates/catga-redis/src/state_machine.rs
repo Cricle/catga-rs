@@ -3,9 +3,9 @@
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackSnapshotCodec;
+use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
-use catga_flow::{
+use catga_core::flow::{
     StateMachineSnapshot, StateMachineStore, decode_state_machine_snapshot,
     encode_state_machine_snapshot,
 };

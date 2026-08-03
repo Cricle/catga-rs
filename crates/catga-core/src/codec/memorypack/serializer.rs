@@ -1,0 +1,94 @@
+use super::error::MemoryPackError;
+use crate::codec::memorypack::limits::MemoryPackDecodeLimits;
+use crate::codec::memorypack::reader::MemoryPackReader;
+use crate::codec::memorypack::traits::{MemoryPackDeserialize, MemoryPackSerialize};
+use crate::codec::memorypack::writer::MemoryPackWriter;
+use std::mem;
+
+/// MemoryPack serializer
+pub struct MemoryPackSerializer;
+
+impl MemoryPackSerializer {
+    /// Serialize a value to a byte vector
+    #[inline]
+    pub fn serialize<T: MemoryPackSerialize>(value: &T) -> Result<Vec<u8>, MemoryPackError> {
+        let mut writer = MemoryPackWriter::with_capacity(64);
+        value.serialize(&mut writer)?;
+        Ok(writer.into_bytes())
+    }
+
+    /// Serializes a value directly into `output`, retaining its allocation for later frames.
+    ///
+    /// On failure `output` is empty but keeps the reusable allocation. This makes error paths
+    /// deterministic and prevents a partial frame from being sent accidentally.
+    #[inline]
+    pub fn serialize_into<T: MemoryPackSerialize>(
+        value: &T,
+        output: &mut Vec<u8>,
+    ) -> Result<(), MemoryPackError> {
+        let reusable = mem::take(output);
+        let mut writer = MemoryPackWriter::from_reusable_buffer(reusable);
+        let result = value.serialize(&mut writer);
+        if result.is_err() {
+            writer.buffer.clear();
+        }
+        *output = writer.into_bytes();
+        result
+    }
+
+    /// Serialize a value to an existing writer
+    #[inline]
+    pub fn serialize_to<T: MemoryPackSerialize>(
+        value: &T,
+        writer: &mut MemoryPackWriter,
+    ) -> Result<(), MemoryPackError> {
+        value.serialize(writer)
+    }
+
+    /// Deserializes one complete frame using Catga's default resource budgets.
+    ///
+    /// For a tighter or larger application-specific budget, use [`Self::deserialize_bounded`].
+    #[inline]
+    pub fn deserialize<T: MemoryPackDeserialize>(data: &[u8]) -> Result<T, MemoryPackError> {
+        Self::deserialize_bounded(data, MemoryPackDecodeLimits::default())
+    }
+
+    /// Deserializes one exact received frame while enforcing resource budgets.
+    ///
+    /// This method rejects trailing bytes and must be used when the caller needs a budget other
+    /// than [`MemoryPackDecodeLimits::default`].
+    #[inline]
+    pub fn deserialize_bounded<T: MemoryPackDeserialize>(
+        data: &[u8],
+        limits: MemoryPackDecodeLimits,
+    ) -> Result<T, MemoryPackError> {
+        let mut reader = MemoryPackReader::new_bounded(data, limits)?;
+        let value = T::deserialize(&mut reader)?;
+        if reader.position() != data.len() as u64 {
+            return Err(MemoryPackError::TrailingBytes);
+        }
+        Ok(value)
+    }
+
+    /// Deserialize a value from an existing reader
+    #[inline]
+    pub fn deserialize_from<T: MemoryPackDeserialize>(
+        reader: &mut MemoryPackReader,
+    ) -> Result<T, MemoryPackError> {
+        T::deserialize(reader)
+    }
+
+    /// Deserializes one complete zero-copy frame using Catga's default resource budgets.
+    #[inline]
+    pub fn deserialize_zero_copy<'a, T>(data: &'a [u8]) -> Result<T, MemoryPackError>
+    where
+        T: crate::codec::memorypack::traits::MemoryPackDeserializeZeroCopy<'a>,
+    {
+        let mut reader = MemoryPackReader::new_bounded(data, MemoryPackDecodeLimits::default())?;
+        let value = T::deserialize(&mut reader)?;
+        if reader.position() != data.len() as u64 {
+            return Err(MemoryPackError::TrailingBytes);
+        }
+        Ok(value)
+    }
+}

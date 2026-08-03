@@ -1,5 +1,0 @@
-error: union tags must be in 0..=255
- --> tests/ui/out_of_range_union_tag.rs:6:13
-  |
-6 |     #[tag = 256]
-  |             ^^^

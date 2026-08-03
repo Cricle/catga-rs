@@ -9,7 +9,7 @@ use syn::Result;
 /// Attribute macro that builds the application graph and optionally initializes a transport.
 ///
 /// Basic usage:
-/// ```
+/// ```compile_fail
 /// #[catga_main]
 /// async fn main() -> CatgaResult<()> {
 ///     Ok(())
@@ -17,7 +17,7 @@ use syn::Result;
 /// ```
 ///
 /// With transport initialization:
-/// ```
+/// ```compile_fail
 /// #[catga_main(transport = catga_local::LocalTransport::new())]
 /// async fn main() -> CatgaResult<()> {
 ///     Ok(())

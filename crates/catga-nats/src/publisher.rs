@@ -1,7 +1,7 @@
 //! Publish-only JetStream transport composition.
 
 use async_nats::jetstream::{self, stream};
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, Envelope, EnvelopeCodec,
     ErrorCode, HealthCheckable, QualityOfService, Stoppable, telemetry,

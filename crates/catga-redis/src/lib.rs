@@ -54,7 +54,7 @@ mod suspended_flow;
 mod suspended_flow_timeout;
 mod transport;
 
-pub use catga_codec_memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
+pub use catga_core::codec::memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
 pub use config::{
     DEFAULT_REDIS_COMMAND_RESPONSE_TIMEOUT, MAX_REDIS_PENDING_RECLAIM_SCANS, RedisCommandOptions,
     RedisConfig, RedisPendingReclaimOptions, RedisPubSubConfig,

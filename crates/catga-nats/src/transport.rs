@@ -6,7 +6,7 @@ use async_nats::jetstream::{
     stream,
 };
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, Delivery, Destination,
     DestinationTransport, Envelope, EnvelopeCodec, ErrorCode, HealthCheckable, MessageTransport,

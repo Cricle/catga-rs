@@ -11,7 +11,6 @@ use crate::{CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Re
 /// A request-handler wrapper that retains received messages for assertions.
 ///
 /// ```no_run
-/// use catga_core::testing::HandlerSpy;
 /// use catga_core::{catga_request, CatgaResult, Handler};
 /// use async_trait::async_trait;
 ///
@@ -25,7 +24,7 @@ use crate::{CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Re
 ///     async fn handle(&self, _: Ping) -> CatgaResult<&'static str> { Ok("pong") }
 /// }
 ///
-/// let spy: HandlerSpy<Ping, _> = HandlerSpy::new(PingHandler);
+/// let spy: catga_core::testing::HandlerSpy<Ping, _> = catga_core::testing::HandlerSpy::new(PingHandler);
 /// assert_eq!(spy.call_count(), 0);
 /// ```
 pub struct HandlerSpy<M, H> {

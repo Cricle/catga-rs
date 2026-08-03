@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, Destination, DestinationTransport, Envelope, EnvelopeCodec, ErrorCode,
     MessageMetadata, MessageTransport,

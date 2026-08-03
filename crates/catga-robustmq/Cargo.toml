@@ -12,7 +12,6 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-catga-codec-memorypack = { workspace = true }
 catga-core = { workspace = true }
 robustmq = "1"
 serde = "1"

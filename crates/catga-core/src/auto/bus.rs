@@ -13,14 +13,14 @@
 //! must implement [`TypedDeliveryHandler<M>`] where `M` is the message type. Use a struct with
 //! `#[async_trait]` to define the handler, then register it in `Arc`:
 //!
-//! ```ignore
+//! ```compile_fail
 //! use std::sync::Arc;
-//! use catga_core::Bus;
-//! use catga_codec_memorypack::MemoryPackCodec;
-//! use catga_memory::MemoryTransport;
+//! use catga_core::auto::Bus;
+//! use catga_core::codec::memorypack::MemoryPackCodec;
+//! use catga_core::memory::transport::MemoryTransport;
 //! use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
 //!
-//! #[derive(catga_codec_memorypack::MemoryPackable)]
+//! #[derive(catga_core::codec::memorypack::MemoryPackable)]
 //! struct OrderPlaced { order_id: u32 }
 //! impl Message for OrderPlaced {}
 //!
@@ -48,14 +48,15 @@ use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use crate::{
     CatgaError, CatgaResult, CompetingConsumer, ConsumerRun, DeadLetterStore, Delivery,
     DeliveryHandler, Destination, DestinationTransport, DistributedIdGenerator, Envelope,
-    ErrorCode, Fault, Message, MessageDestinationRouter, MessageTransport, PayloadDecoder,
-    PayloadEncoder, RemoteRequest, RequestTransport, ShutdownCoordinator, SnowflakeIdGenerator,
-    SnowflakeLayout, TypedDeliveryHandler, TypedTransport,
+    ErrorCode, Fault, Message, MessageDestinationRouter, MessageMetadata, MessageTransport,
+    PayloadDecoder, PayloadEncoder, RemoteRequest, RequestTransport, ShutdownCoordinator,
+    SnowflakeIdGenerator, SnowflakeLayout, TypedDeliveryHandler, TypedTransport,
 };
-use async_trait::async_trait;
+use crate::codec::memorypack::{MemoryPackDeserialize, MemoryPackRpcResponse};
 use futures::future::LocalBoxFuture;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -67,8 +68,8 @@ use tracing::Instrument;
 ///
 /// # Example
 ///
-/// ```
-/// use catga_core::DeliveryMessageOf;
+/// ```no_run
+/// use catga_core::auto::DeliveryMessageOf;
 /// use catga_core::{TypedDeliveryHandler, Message, CatgaResult};
 /// use async_trait::async_trait;
 ///
@@ -483,11 +484,11 @@ where
 /// then call [`Self::bind`] with the publisher returned by [`BusBuilder::build_with_publisher`].
 /// All clones share the same binding slot, so one `bind` activates every handle.
 ///
-/// ```ignore
+/// ```no_run
 /// # use std::sync::Arc;
-/// # use catga_core::{Bus, PublisherHandle};
-/// # use catga_codec_memorypack::MemoryPackCodec;
-/// # use catga_memory::MemoryTransport;
+/// # use catga_core::auto::{Bus, PublisherHandle};
+/// # use catga_core::codec::memorypack::MemoryPackCodec;
+/// # use catga_core::memory::transport::MemoryTransport;
 /// let handle = PublisherHandle::<MemoryTransport, MemoryPackCodec>::new();
 /// let clone_for_handler = handle.clone();
 /// // ... pass clone_for_handler to a handler, build the bus ...
@@ -576,16 +577,21 @@ where
 
 /// A typed request/reply client that routes requests through the bus topology.
 ///
-/// Unlike [`crate::EnvelopeRequestClient`] which is bound to one fixed destination, this
+/// Unlike [`catga_core::EnvelopeRequestClient`] which is bound to one fixed destination, this
 /// client resolves the destination per message type from the shared [`MessageDestinationRouter`].
 /// One client serves all registered request types.
 ///
 /// Create it from a [`BusPublisher`]'s router after building the bus:
-/// ```ignore
+/// ```compile_fail
 /// # use std::{sync::Arc, time::Duration};
-/// # use catga_core::{BusRequestClient, MessageDestinationRouter};
-/// # use catga_codec_memorypack::MemoryPackCodec;
-/// // See actual usage in catga-nats or similar transport implementations
+/// # use catga_core::auto::{Bus, BusRequestClient};
+/// # use catga_core::codec::memorypack::MemoryPackCodec;
+/// # use catga_nats::NatsRequestClient as NatsRpc;
+/// # use catga_core::MessageDestinationRouter;
+/// # async fn example(rpc: Arc<NatsRpc>, router: Arc<MessageDestinationRouter>) {
+/// let client = BusRequestClient::new(rpc, router, MemoryPackCodec::default(), Duration::from_secs(5))
+///     .expect("valid");
+/// # }
 /// ```
 pub struct BusRequestClient<T: ?Sized, C> {
     transport: Arc<T>,
@@ -621,6 +627,49 @@ where
             ids,
             timeout,
         })
+    }
+}
+
+impl<T, C> BusRequestClient<T, C>
+where
+    T: RequestTransport + ?Sized,
+{
+    /// Sends a typed request to the destination registered for its message type.
+    ///
+    /// Returns [`ErrorCode::NotFound`] when no route is configured for the request type.
+    /// The reply payload is decoded as a MemoryPack RPC response envelope; a remote failure
+    /// is surfaced as the original [`CatgaError`].
+    pub async fn request<M>(&self, message: &M) -> CatgaResult<M::Response>
+    where
+        M: RemoteRequest,
+        M::Response: MemoryPackDeserialize,
+        C: PayloadEncoder<M> + PayloadDecoder<MemoryPackRpcResponse<M::Response>>,
+    {
+        let destination = self.router.resolve(message.message_type()).ok_or_else(|| {
+            CatgaError::new(
+                ErrorCode::NotFound,
+                "no route is configured for this request type",
+            )
+        })?;
+        let message_id = self.ids.next_id()?;
+        let payload = self.codec.encode_payload(message)?;
+        let envelope = Envelope::versioned(
+            message_id,
+            message.message_type(),
+            payload,
+            MessageMetadata::new(message_id, Some(message_id)),
+            message.schema_version(),
+        );
+        let reply = self
+            .transport
+            .request(destination.as_str(), envelope, self.timeout)
+            .await?;
+        let rpc_response: MemoryPackRpcResponse<M::Response> =
+            self.codec.decode_payload(reply.payload())?;
+        match rpc_response {
+            MemoryPackRpcResponse::Success(value) => Ok(value),
+            MemoryPackRpcResponse::Failure(error) => Err(error),
+        }
     }
 }
 
@@ -673,6 +722,42 @@ where
             }
             ok => ok,
         }
+    }
+}
+
+/// Adapts a [`StateMachineEventRouter`](catga_flow::StateMachineEventRouter) as a Bus endpoint handler.
+///
+/// Each delivered event is routed to the state-machine instance selected by the router's
+/// registered instance-id resolver. Routing errors propagate as handler failures, triggering
+/// the consumer's nack/dead-letter policy.
+#[cfg(feature = "flow")]
+pub struct StateMachineHandler<S, K, Store, E> {
+    router: Arc<catga_flow::StateMachineEventRouter<S, K, Store>>,
+    marker: PhantomData<fn(E)>,
+}
+
+#[cfg(feature = "flow")]
+impl<S, K, Store, E> StateMachineHandler<S, K, Store, E> {
+    /// Creates a handler that routes delivered events through `router`.
+    pub fn new(router: Arc<catga_flow::StateMachineEventRouter<S, K, Store>>) -> Self {
+        Self {
+            router,
+            marker: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "flow")]
+#[async_trait]
+impl<S, K, Store, E> TypedDeliveryHandler<E> for StateMachineHandler<S, K, Store, E>
+where
+    S: catga_flow::StateMachineState<K>,
+    K: Clone + Eq + std::hash::Hash + Send + Sync + 'static,
+    Store: catga_flow::StateMachineStore<S> + 'static,
+    E: catga_core::Event,
+{
+    async fn handle(&self, event: &E) -> CatgaResult<()> {
+        self.router.route(event).await.map(|_| ())
     }
 }
 

@@ -7,8 +7,8 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_memorypack::{
-    MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackable,
+use catga_core::codec::memorypack::{
+    MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer, MemoryPackError, MemoryPackReader, MemoryPackWriter, MemoryPackable,
 };
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, PersistentSubscription, SubscriptionCheckpoint,

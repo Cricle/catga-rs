@@ -5,7 +5,7 @@ use async_nats::{
     jetstream::{AckKind, consumer},
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_flow::{
+use catga_core::flow::{
     TimedOutFlowPoll, TimedOutFlowReceipt, decode_continuation, flow_timeout_deadline_unix_ms,
 };
 use futures::StreamExt;

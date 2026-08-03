@@ -15,7 +15,7 @@ use async_nats::{
     },
 };
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
     EventStream, MAX_EVENT_STORE_PAGE_SIZE, PayloadDecoder, PayloadEncoder, StoredEvent,

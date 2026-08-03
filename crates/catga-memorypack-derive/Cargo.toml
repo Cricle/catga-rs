@@ -1,0 +1,16 @@
+[package]
+name = "catga-memorypack-derive"
+version = "0.0.2"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+description = "Derive macros for Catga's bounded MemoryPack wire format"
+
+[lib]
+proc-macro = true
+path = "src/lib.rs"
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

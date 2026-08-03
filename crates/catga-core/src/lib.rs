@@ -135,7 +135,8 @@ mod auto_snapshot;
 mod behaviors;
 mod cache;
 mod cancellation;
-mod codec;
+mod codec_traits;
+pub mod codec;
 mod compression;
 mod consumer;
 mod correlation;
@@ -143,12 +144,18 @@ mod distributed_id;
 mod error;
 mod event_store;
 mod event_version;
+pub mod flow;
 mod fault;
 mod handler;
 mod lease;
 mod lifecycle;
+pub mod local;
 pub mod macros;
 mod mediator;
+/// Bounded in-memory implementations of Catga contracts.
+///
+/// This module is useful for deterministic local composition and integration tests.
+pub mod memory;
 mod message;
 mod message_signing;
 mod message_type;
@@ -206,7 +213,15 @@ pub use behaviors::{
 };
 pub use cache::CachedResultCodec;
 pub use cancellation::{current_cancellation, scope_cancellation};
-pub use codec::{EnvelopeCodec, PayloadDecoder, PayloadEncoder};
+pub use codec::{
+    bincode::{BincodeCodec, MAX_BINCODE_FRAME_BYTES},
+    memorypack::{
+        MemoryPackCodec, MemoryPackDecodeLimits, MemoryPackDeserialize, MemoryPackError,
+        MemoryPackReader, MemoryPackRpcResponse, MemoryPackSerialize, MemoryPackSerializer,
+        MemoryPackWriter, MemoryPackable,
+    },
+};
+pub use codec_traits::{EnvelopeCodec, PayloadDecoder, PayloadEncoder};
 pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
     compress_into, compress_to_slice, decompress, decompress_limited, is_compressed,

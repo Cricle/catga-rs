@@ -11,7 +11,7 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use catga_codec_memorypack::{MemoryPackCodec, MemoryPackDeserialize, MemoryPackSerialize};
+use catga_core::codec::memorypack::{MemoryPackCodec, MemoryPackDeserialize, MemoryPackSerialize};
 use catga_core::{
     CatgaError, CatgaResult, Delivery, Destination, DestinationTransport, Envelope, EnvelopeCodec,
     ErrorCode, Handler, Request, RequestTransport,

@@ -4,7 +4,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use catga_codec_memorypack::{MemoryPackCodec, MemoryPackRpcResponse};
+use catga_core::codec::memorypack::{MemoryPackCodec, MemoryPackRpcResponse};
 use catga_core::{
     CatgaError, CatgaResult, Destination, DestinationTransport, Envelope, ErrorCode,
     MessageMetadata,

@@ -8,7 +8,7 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DEFAULT_OUTBOX_CLAIM_LEASE, DEFAULT_OUTBOX_MAX_RETRIES, EnvelopeCodec,
     ErrorCode, OutboxMessage, OutboxState, OutboxStore, outbox_claim_expires_at, telemetry,

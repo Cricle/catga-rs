@@ -9,7 +9,7 @@ use std::{
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackSnapshotCodec;
+use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Snapshot, SnapshotCodec, SnapshotStore};
 
 const METADATA_BYTES: usize = 16;
