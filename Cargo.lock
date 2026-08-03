@@ -742,7 +742,8 @@ dependencies = [
  "async-trait",
  "base64 0.23.0",
  "brotli",
- "catga-macros",
+ "catga-core-macros",
+ "dashmap",
  "flate2",
  "futures",
  "hmac",
@@ -753,6 +754,15 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "catga-core-macros"
+version = "0.0.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -821,18 +831,6 @@ version = "0.0.2"
 dependencies = [
  "catga-core",
  "tokio",
-]
-
-[[package]]
-name = "catga-macros"
-version = "0.0.2"
-dependencies = [
- "async-trait",
- "catga-core",
- "proc-macro2",
- "quote",
- "syn 3.0.3",
- "trybuild",
 ]
 
 [[package]]
