@@ -1,8 +1,8 @@
 //! Versioned compact encoding for plain [`catga_core::flow::FlowState`] values.
 
 use catga_core::codec::memorypack::MemoryPackSerializer;
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::flow::FlowState;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
 const FLOW_STATE_FORMAT_VERSION: u8 = 2;
 

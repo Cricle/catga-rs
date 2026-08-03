@@ -1,7 +1,7 @@
 //! Optimistic storage contract for state-machine snapshots.
 
-use async_trait::async_trait;
 use crate::CatgaResult;
+use async_trait::async_trait;
 
 use super::StateMachineSnapshot;
 

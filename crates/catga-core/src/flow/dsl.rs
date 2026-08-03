@@ -7,9 +7,20 @@ use std::{
     time::Duration,
 };
 
-use crate::flow::dsl_checkpoint::{CheckpointFrame, CheckpointLevel, CheckpointWork, MAX_CHECKPOINT_PATH_DEPTH};
-use crate::flow::dsl_lifecycle::{DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver};
+use crate::codec::memorypack::{
+    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
+};
+use crate::flow::dsl_checkpoint::{
+    CheckpointFrame, CheckpointLevel, CheckpointWork, MAX_CHECKPOINT_PATH_DEPTH,
+};
+use crate::flow::dsl_lifecycle::{
+    DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver,
+};
 use crate::flow::dsl_parallel_recovery::run_checkpointed_parallel;
+use crate::flow::dsl_progress::{
+    DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore,
+};
 use crate::flow::dsl_recovery::{
     CheckpointContext, persist_checkpoint_payload, persist_completed_checkpoint,
     validate_replayable_for_each_items,
@@ -18,12 +29,9 @@ use crate::flow::dsl_step::{
     Action, BranchSelector, CloneState, Condition, DslStep, MAX_DSL_PARALLEL_BRANCHES, Merge,
     MergeWinner, ReplayableForEach,
 };
-use crate::flow::dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore};
 use crate::flow::dsl_when_any::run_checkpointed_when_any;
-use crate::flow::metrics::{FLOWS_COMPLETED, FLOWS_FAILED, FlowExecution, FlowMetrics, ForEachMetrics};
-use crate::codec::memorypack::{
-    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
-    MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
+use crate::flow::metrics::{
+    FLOWS_COMPLETED, FLOWS_FAILED, FlowExecution, FlowMetrics, ForEachMetrics,
 };
 use crate::{
     CatgaError, CatgaResult, ErrorCode, Event, Mediator, RemoteRequest, Request, RequestClient,
@@ -798,11 +806,7 @@ impl<S: Send> DslFlow<S> {
         })
     }
 
-    fn complete_dsl_execution(
-        &self,
-        execution: &mut FlowExecution,
-        error: &CatgaError,
-    ) {
+    fn complete_dsl_execution(&self, execution: &mut FlowExecution, error: &CatgaError) {
         let outcome = if error.code() == ErrorCode::Cancelled {
             "cancelled"
         } else {

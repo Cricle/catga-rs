@@ -1,7 +1,7 @@
 //! SQLite statements for durable DSL step progress.
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::flow::DslStepProgress;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use sqlx::{Row, SqlitePool};
 
 use crate::{

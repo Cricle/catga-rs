@@ -10,12 +10,10 @@ use crate::flow::{
     child_launch::FlowChildLauncher,
     definition::{FlowDefinition, FlowStepOutcome},
     metrics::{FlowExecution, FlowMetrics},
-    runtime_wait::{
-        MAX_CHILD_LAUNCH_CAS_RETRIES, WaitEvaluation, evaluate_wait, is_stale,
-    },
-    scheduler::{FlowScheduler},
+    runtime_wait::{MAX_CHILD_LAUNCH_CAS_RETRIES, WaitEvaluation, evaluate_wait, is_stale},
+    scheduler::FlowScheduler,
     state::{FlowState, FlowStatus},
-    suspension::{FlowContinuation},
+    suspension::FlowContinuation,
     suspension_store::{FlowQuery, SuspendedFlowStore},
     tag_policy::FlowTagPolicy,
 };

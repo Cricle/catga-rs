@@ -2,19 +2,17 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use crate::{CatgaError, CatgaResult, ErrorCode};
+use async_trait::async_trait;
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use tokio::sync::Mutex;
 
 use crate::flow::{
     dsl::DslFlow,
     dsl_checkpoint::{CheckpointFrame, CheckpointLevel, CheckpointWork, ParallelBranchProgress},
-    dsl_progress::{
-        DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore,
-    },
+    dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore},
     dsl_recovery::{CheckpointContext, persist_checkpoint_payload},
-    dsl_step::{CloneState, Merge, MAX_DSL_PARALLEL_BRANCHES},
+    dsl_step::{CloneState, MAX_DSL_PARALLEL_BRANCHES, Merge},
 };
 
 const MAX_PARALLEL_BRANCH_PAYLOAD_BYTES: usize = 1024 * 1024;

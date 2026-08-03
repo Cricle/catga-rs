@@ -1,7 +1,7 @@
 //! SQL Server statements for durable DSL step progress.
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::flow::DslStepProgress;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use tiberius::Query;
 
 use crate::{

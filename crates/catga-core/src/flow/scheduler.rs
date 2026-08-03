@@ -5,8 +5,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use async_trait::async_trait;
 use crate::{CatgaError, CatgaResult, ErrorCode};
+use async_trait::async_trait;
 use parking_lot::Mutex;
 
 /// Schedules durable flow resumption without coupling flows to a job system.

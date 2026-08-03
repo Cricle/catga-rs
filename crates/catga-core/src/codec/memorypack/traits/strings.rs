@@ -2,7 +2,9 @@ use std::borrow::Cow;
 
 use super::super::error::MemoryPackError;
 use super::super::reader::MemoryPackReader;
-use super::super::traits::{MemoryPackDeserialize, MemoryPackDeserializeZeroCopy, MemoryPackSerialize};
+use super::super::traits::{
+    MemoryPackDeserialize, MemoryPackDeserializeZeroCopy, MemoryPackSerialize,
+};
 use super::super::writer::MemoryPackWriter;
 
 impl MemoryPackSerialize for String {

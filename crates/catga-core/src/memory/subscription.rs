@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::{CatgaResult, PersistentSubscription, SubscriptionCheckpoint, SubscriptionStore};
+use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 
 /// A shard-locked, process-local persistent subscription and competing-lease store.

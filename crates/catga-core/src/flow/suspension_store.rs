@@ -1,9 +1,9 @@
-use async_trait::async_trait;
 use crate::{CatgaError, CatgaResult, ErrorCode};
+use async_trait::async_trait;
 
 use std::time::SystemTime;
 
-use crate::flow::{suspension::FlowContinuation, state::FlowStatus};
+use crate::flow::{state::FlowStatus, suspension::FlowContinuation};
 
 /// The maximum number of continuation summaries a query may return.
 pub const MAX_FLOW_QUERY_RESULTS: usize = 1_000;

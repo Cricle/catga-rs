@@ -5,11 +5,11 @@ use std::{error::Error as _, marker::PhantomData};
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
 use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
-use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use catga_core::flow::{
     StateMachineSnapshot, StateMachineStore, decode_state_machine_snapshot,
     encode_state_machine_snapshot,
 };
+use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};

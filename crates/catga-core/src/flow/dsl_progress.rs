@@ -2,12 +2,12 @@
 
 use std::{sync::Arc, time::SystemTime};
 
-use async_trait::async_trait;
 use crate::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackWriter, MemoryPackable,
 };
 use crate::{CatgaError, CatgaResult, ErrorCode};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::memorypack::{TimeWire, decode_time, encode_time};
@@ -53,7 +53,10 @@ pub struct DslStepProgress {
     version: i64,
     #[serde(default)]
     kind: DslProgressKind,
-    #[serde(serialize_with = "serialize_arc_slice", deserialize_with = "deserialize_arc_slice")]
+    #[serde(
+        serialize_with = "serialize_arc_slice",
+        deserialize_with = "deserialize_arc_slice"
+    )]
     payload: Arc<[u8]>,
     updated_at: SystemTime,
 }

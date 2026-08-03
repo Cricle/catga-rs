@@ -7,18 +7,18 @@ use std::{
 #[cfg(feature = "test-hooks")]
 use std::sync::{Arc, Barrier, Mutex};
 
-use async_trait::async_trait;
 use crate::{
     CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_OUTBOX_CLAIM_LEASE, ErrorCode,
     OutboxMessage, OutboxState, OutboxStore, outbox_claim_expires_at, telemetry,
     validate_completed_retention, validate_outbox_claim_limit, validate_outbox_message_id,
     validate_retention_cleanup_limit,
 };
+use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::memory::{
-    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity, RecordSequence},
     DEFAULT_MEMORY_RECORD_CAPACITY,
+    capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity, RecordSequence},
 };
 
 struct StoredMessage {

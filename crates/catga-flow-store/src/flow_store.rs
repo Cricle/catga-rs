@@ -18,14 +18,14 @@ use async_trait::async_trait;
     feature = "postgres",
     feature = "mssql"
 ))]
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
+use catga_core::flow::{FlowState, FlowStore};
 #[cfg(any(
     feature = "sqlite",
     feature = "mysql",
     feature = "postgres",
     feature = "mssql"
 ))]
-use catga_core::flow::{FlowState, FlowStore};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
 use crate::backend::Backend;
 

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use crate::{
     AcceptanceGate, Acknowledger, AsyncInitializable, CatgaError, CatgaResult, Delivery,
     Destination, DestinationTransport, Envelope, ErrorCode, HealthCheckable, MessageTransport,
     OperationGuard, OperationTracker, Stoppable, Waitable, telemetry,
 };
+use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;

@@ -48,7 +48,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use async_trait::async_trait;
+use crate::codec::memorypack::{MemoryPackDeserialize, MemoryPackRpcResponse};
 use crate::{
     CatgaError, CatgaResult, CompetingConsumer, ConsumerRun, DeadLetterStore, Delivery,
     DeliveryHandler, Destination, DestinationTransport, DistributedIdGenerator, Envelope,
@@ -56,7 +56,7 @@ use crate::{
     PayloadDecoder, PayloadEncoder, RemoteRequest, RequestTransport, ShutdownCoordinator,
     SnowflakeIdGenerator, SnowflakeLayout, TypedDeliveryHandler, TypedTransport,
 };
-use crate::codec::memorypack::{MemoryPackDeserialize, MemoryPackRpcResponse};
+use async_trait::async_trait;
 use futures::future::LocalBoxFuture;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;

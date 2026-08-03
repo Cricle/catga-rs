@@ -4,11 +4,11 @@ use std::{
     time::SystemTime,
 };
 
-use async_trait::async_trait;
 use crate::{
     CatgaError, CatgaResult, Envelope, ErrorCode, EventPage, EventStore, EventStream, StoredEvent,
     StreamIdsPage, VersionHistoryPage, VersionInfo, telemetry, validate_event_store_page_size,
 };
+use async_trait::async_trait;
 use dashmap::DashMap;
 
 /// A lock-free snapshot event store for development and deterministic tests.

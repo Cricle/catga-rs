@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use catga_core::codec::memorypack::{
     MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
-    MemoryPackSnapshotCodec, MemoryPackable, MemoryPackWriter,
+    MemoryPackSnapshotCodec, MemoryPackWriter, MemoryPackable,
 };
 use catga_core::{
     CatgaError, CatgaResult, EnhancedSnapshotStore, ErrorCode, Snapshot, SnapshotCodec,

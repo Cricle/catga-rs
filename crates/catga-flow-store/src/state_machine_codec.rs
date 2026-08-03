@@ -1,9 +1,9 @@
 //! Size validation around the shared state-machine snapshot frame.
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use catga_core::flow::{
     StateMachineSnapshot, decode_state_machine_snapshot, encode_state_machine_snapshot,
 };
+use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 
 /// Maximum opaque state payload retained for one durable state-machine instance.
 ///

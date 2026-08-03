@@ -1,7 +1,7 @@
 //! SQL Server statements for durable state-machine snapshots.
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use catga_core::flow::StateMachineSnapshot;
+use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use tiberius::Query;
 
 use crate::{

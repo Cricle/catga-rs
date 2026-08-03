@@ -2,8 +2,8 @@
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::flow::{DueFlowScheduler, FlowScheduler};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_redis::RedisFlowScheduler;
 use redis::AsyncCommands;
 

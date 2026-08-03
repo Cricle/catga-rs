@@ -1,7 +1,7 @@
 //! Application-owned launch boundary for durable Flow child fan-out.
 
-use async_trait::async_trait;
 use crate::CatgaResult;
+use async_trait::async_trait;
 
 /// Starts one stable child identity for a durable parent wait.
 ///

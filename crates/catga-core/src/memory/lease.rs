@@ -5,8 +5,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use async_trait::async_trait;
 use crate::{CatgaResult, LeaseStore, telemetry};
+use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 
 /// An in-memory lease store with owner-conditional operations.

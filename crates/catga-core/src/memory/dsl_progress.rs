@@ -1,8 +1,8 @@
 //! Lock-free, versioned in-memory progress for recoverable DSL flow steps.
 
-use async_trait::async_trait;
 use crate::CatgaResult;
 use crate::flow::dsl_progress::{DslStepProgress, DslStepProgressStore};
+use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 
 /// A sharded in-memory store of explicitly encoded DSL step progress.

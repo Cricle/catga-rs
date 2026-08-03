@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::{CatgaResult, ProjectionCheckpoint, ProjectionCheckpointStore};
+use async_trait::async_trait;
 use dashmap::DashMap;
 
 /// A shard-locked, process-local store of immutable projection checkpoints.

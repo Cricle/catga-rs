@@ -23,13 +23,6 @@ use async_trait::async_trait;
     feature = "postgres",
     feature = "mssql"
 ))]
-use catga_core::{CatgaError, CatgaResult};
-#[cfg(any(
-    feature = "sqlite",
-    feature = "mysql",
-    feature = "postgres",
-    feature = "mssql"
-))]
 use catga_core::flow::{FlowContinuation, FlowQuery, FlowSummary, SuspendedFlowStore};
 #[cfg(any(
     feature = "sqlite",
@@ -38,6 +31,13 @@ use catga_core::flow::{FlowContinuation, FlowQuery, FlowSummary, SuspendedFlowSt
     feature = "mssql"
 ))]
 use catga_core::flow::{TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore};
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
+use catga_core::{CatgaError, CatgaResult};
 
 use crate::backend::Backend;
 

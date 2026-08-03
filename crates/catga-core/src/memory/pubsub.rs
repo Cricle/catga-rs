@@ -1,10 +1,10 @@
 //! Bounded, ephemeral in-memory Pub/Sub transport.
 
-use async_trait::async_trait;
 use crate::{
     AcceptanceGate, AsyncInitializable, CatgaError, CatgaResult, Delivery, Envelope, ErrorCode,
     HealthCheckable, MessageTransport, QualityOfService, Stoppable, Waitable, telemetry,
 };
+use async_trait::async_trait;
 use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
 

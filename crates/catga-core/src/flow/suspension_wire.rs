@@ -12,14 +12,14 @@ use crate::codec::memorypack::{
 };
 
 use crate::flow::{
+    memorypack::{
+        DurationWire, ErrorWire, TimeWire, decode_duration, decode_error, decode_time,
+        encode_duration, encode_error, encode_time,
+    },
     state::FlowState,
     suspension::{
         FlowChildLaunch, FlowChildLaunchState, FlowContinuation, WaitCondition, WaitPolicy,
         WaitResult,
-    },
-    memorypack::{
-        DurationWire, ErrorWire, TimeWire, decode_duration, decode_error, decode_time,
-        encode_duration, encode_error, encode_time,
     },
 };
 

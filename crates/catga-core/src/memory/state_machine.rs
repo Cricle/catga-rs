@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
-use async_trait::async_trait;
 use crate::CatgaResult;
 use crate::flow::state_machine::{StateMachineSnapshot, StateMachineStore};
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 
 /// In-memory state-machine storage with per-instance pointer CAS updates.

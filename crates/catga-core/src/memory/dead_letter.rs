@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use async_trait::async_trait;
 use crate::{CatgaError, CatgaResult, DeadLetter, DeadLetterStore, ErrorCode};
+use async_trait::async_trait;
 use dashmap::DashMap;
 
 /// A bounded process-local dead-letter queue for development and deterministic tests.

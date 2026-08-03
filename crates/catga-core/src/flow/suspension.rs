@@ -7,11 +7,11 @@ use crate::CatgaError;
 use crate::{CatgaResult, ErrorCode};
 use serde::{Deserialize, Serialize};
 
-use crate::flow::state::FlowState;
 use super::serde_helpers::{
     deserialize_arc_slice, deserialize_optional_arc_slice, serialize_arc_slice,
     serialize_optional_arc_slice,
 };
+use crate::flow::state::FlowState;
 
 /// The policy used to decide when a wait condition is complete.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -132,11 +132,17 @@ pub struct WaitCondition {
     pub(crate) correlation_id: Box<str>,
     pub(crate) policy: WaitPolicy,
     pub(crate) expected_count: u32,
-    #[serde(serialize_with = "serialize_arc_slice", deserialize_with = "deserialize_arc_slice")]
+    #[serde(
+        serialize_with = "serialize_arc_slice",
+        deserialize_with = "deserialize_arc_slice"
+    )]
     pub(crate) results: Arc<[WaitResult]>,
     pub(crate) created_at: SystemTime,
     pub(crate) timeout: Duration,
-    #[serde(serialize_with = "serialize_arc_slice", deserialize_with = "deserialize_arc_slice")]
+    #[serde(
+        serialize_with = "serialize_arc_slice",
+        deserialize_with = "deserialize_arc_slice"
+    )]
     pub(crate) child_launches: Arc<[FlowChildLaunch]>,
 }
 
@@ -445,7 +451,10 @@ pub struct FlowContinuation {
     pub(crate) wait: Option<WaitCondition>,
     pub(crate) resume_at: Option<SystemTime>,
     pub(crate) schedule_id: Option<Box<str>>,
-    #[serde(serialize_with = "serialize_arc_slice", deserialize_with = "deserialize_arc_slice")]
+    #[serde(
+        serialize_with = "serialize_arc_slice",
+        deserialize_with = "deserialize_arc_slice"
+    )]
     pub(crate) compensations: Arc<[Box<str>]>,
     pub(crate) created_at: SystemTime,
     pub(crate) updated_at: SystemTime,

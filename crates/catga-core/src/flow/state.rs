@@ -66,7 +66,10 @@ pub struct FlowState {
     version: i64,
     owner: Option<Box<str>>,
     heartbeat: SystemTime,
-    #[serde(serialize_with = "serialize_arc_slice", deserialize_with = "deserialize_arc_slice")]
+    #[serde(
+        serialize_with = "serialize_arc_slice",
+        deserialize_with = "deserialize_arc_slice"
+    )]
     data: Arc<[u8]>,
     error: Option<CatgaError>,
 }

@@ -1,8 +1,8 @@
+use crate::{CatgaError, CatgaResult, ErrorCode, PayloadDecoder, PayloadEncoder};
 use bincode_next::{
     Decode, Encode, config,
     enc::{EncoderImpl, write::SizeWriter},
 };
-use crate::{CatgaError, CatgaResult, ErrorCode, PayloadDecoder, PayloadEncoder};
 
 /// Maximum complete Bincode frame accepted or emitted by [`BincodeCodec`].
 pub const MAX_BINCODE_FRAME_BYTES: usize = 8 * 1024 * 1024;

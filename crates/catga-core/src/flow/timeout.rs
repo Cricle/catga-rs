@@ -3,16 +3,13 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use async_trait::async_trait;
 use crate::{CatgaError, CatgaResult, ErrorCode};
+use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::flow::{
-    runtime::FlowRuntime,
-    scheduler::FlowScheduler,
-    suspension::{FlowContinuation},
-    suspension_store::SuspendedFlowStore,
-    state::FlowStatus,
+    runtime::FlowRuntime, scheduler::FlowScheduler, state::FlowStatus,
+    suspension::FlowContinuation, suspension_store::SuspendedFlowStore,
 };
 
 /// Default maximum number of expired flows processed by one timeout sweep.

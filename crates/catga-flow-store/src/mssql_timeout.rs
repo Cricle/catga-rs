@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::flow::{TimedOutFlowPoll, TimedOutFlowReceipt};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use tiberius::Query;
 
 use crate::{

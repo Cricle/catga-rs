@@ -18,7 +18,6 @@ use std::time::Duration;
     feature = "mssql"
 ))]
 use async_trait::async_trait;
-use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
 #[cfg(any(
     feature = "sqlite",
     feature = "mysql",
@@ -27,6 +26,7 @@ use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
 ))]
 use catga_core::CatgaResult;
 use catga_core::SnapshotCodec;
+use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
 #[cfg(any(
     feature = "sqlite",
     feature = "mysql",

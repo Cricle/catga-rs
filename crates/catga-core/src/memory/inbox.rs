@@ -6,18 +6,18 @@ use std::{
 #[cfg(feature = "test-hooks")]
 use std::sync::{Barrier, Mutex};
 
-use async_trait::async_trait;
 use crate::{
     CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DEFAULT_INBOX_CLAIM_LEASE, ErrorCode,
     InboxClaim, InboxStore, ProcessingState, inbox_claim_expires_at, telemetry,
     validate_completed_retention, validate_retention_cleanup_limit,
 };
+use async_trait::async_trait;
 use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::memory::{
+    DEFAULT_MEMORY_RECORD_CAPACITY,
     capacity::{OPPORTUNISTIC_CLEANUP_LIMIT, RecordCapacity, RecordSequence},
     claim::ClaimRecord,
-    DEFAULT_MEMORY_RECORD_CAPACITY,
 };
 
 #[derive(Clone, Copy, Eq, PartialEq)]

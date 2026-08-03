@@ -2,9 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::{
-    CatgaError, CatgaResult, ErrorCode, Mediator, RemoteRequest, Request, RequestClient,
-};
+use crate::{CatgaError, CatgaResult, ErrorCode, Mediator, RemoteRequest, Request, RequestClient};
 use futures::future::BoxFuture;
 
 pub(crate) type Action<S> =

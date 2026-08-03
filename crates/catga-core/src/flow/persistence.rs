@@ -3,7 +3,7 @@
 use crate::codec::memorypack::MemoryPackSerializer;
 use crate::{CatgaError, CatgaResult, ErrorCode};
 
-use crate::flow::{suspension::FlowContinuation, state::FlowState};
+use crate::flow::{state::FlowState, suspension::FlowContinuation};
 
 const FORMAT_VERSION: u8 = 7;
 

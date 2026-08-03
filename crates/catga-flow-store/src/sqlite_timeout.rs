@@ -10,8 +10,8 @@
 
 use std::time::{Duration, SystemTime};
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::flow::{TimedOutFlowPoll, TimedOutFlowReceipt};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use sqlx::{Row, SqlitePool};
 
 use crate::{error::database_error, key::flow_key};

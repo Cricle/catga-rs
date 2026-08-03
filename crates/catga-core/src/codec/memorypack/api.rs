@@ -7,16 +7,16 @@ use std::{
 };
 
 use crate::{
-    CatgaError, CatgaResult, DelayedMessage, DistributedIdGenerator, Envelope,
-    EnvelopeHeaders, EnvelopeRequestClient, ErrorCode, Event, Message, MessageMetadata,
-    MessagePriority, OutboxMessage, OutboxStore, QualityOfService, RemoteRequest, Request,
-    RequestClient, RequestTransport, SnapshotCodec, TransportContext, current_correlation_id,
+    CatgaError, CatgaResult, DelayedMessage, DistributedIdGenerator, Envelope, EnvelopeHeaders,
+    EnvelopeRequestClient, ErrorCode, Event, Message, MessageMetadata, MessagePriority,
+    OutboxMessage, OutboxStore, QualityOfService, RemoteRequest, Request, RequestClient,
+    RequestTransport, SnapshotCodec, TransportContext, current_correlation_id,
     current_transport_context,
 };
 
 use super::{
-    envelope::EnvelopeWire, MemoryPackCodec, MemoryPackDeserialize, MemoryPackError,
-    MemoryPackReader, MemoryPackSerialize, MemoryPackSerializer, MemoryPackWriter,
+    MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackSerializer, MemoryPackWriter, envelope::EnvelopeWire,
 };
 use crate::codec::memorypack::MemoryPackable;
 
@@ -482,11 +482,7 @@ where
 
 fn outgoing_transport_context(
     message_id: u64,
-) -> (
-    u64,
-    Option<MessagePriority>,
-    Option<EnvelopeHeaders>,
-) {
+) -> (u64, Option<MessagePriority>, Option<EnvelopeHeaders>) {
     let transport_context = current_transport_context();
     let correlation_id = transport_context.as_ref().map_or_else(
         || current_correlation_id().unwrap_or(message_id),
@@ -609,9 +605,9 @@ mod tests {
     use super::*;
     use crate::codec::memorypack::MemoryPackDecodeLimits;
     use crate::{
-        Command, DefaultMessageTypeId, EnvelopeHeaders, Event, Message, OutboxStore,
-        SnowflakeIdGenerator, SnowflakeLayout, scope_transport_context, MemoryPackDeserialize,
-        MemoryPackReader, MemoryPackSerialize, MemoryPackWriter,
+        Command, DefaultMessageTypeId, EnvelopeHeaders, Event, MemoryPackDeserialize,
+        MemoryPackReader, MemoryPackSerialize, MemoryPackWriter, Message, OutboxStore,
+        SnowflakeIdGenerator, SnowflakeLayout, scope_transport_context,
     };
 
     #[derive(MemoryPackable, Debug, Eq, PartialEq)]

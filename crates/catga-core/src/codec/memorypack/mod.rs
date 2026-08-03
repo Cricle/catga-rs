@@ -28,12 +28,12 @@ pub mod writer;
 
 // Re-export from submodules
 pub use super::bincode::{BincodeCodec, MAX_BINCODE_FRAME_BYTES};
-pub use codec::MemoryPackCodec;
-pub use limits::MemoryPackDecodeLimits;
-pub use api::MemoryPackRpcResponse;
 pub use api::MemoryPackRequestClient;
+pub use api::MemoryPackRpcResponse;
 pub use api::MemoryPackSnapshotCodec;
+pub use codec::MemoryPackCodec;
 pub use error::MemoryPackError;
+pub use limits::MemoryPackDecodeLimits;
 pub use reader::MemoryPackReader;
 pub use serializer::MemoryPackSerializer;
 pub use traits::{MemoryPackDeserialize, MemoryPackSerialize};

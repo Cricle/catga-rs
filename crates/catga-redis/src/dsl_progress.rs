@@ -1,8 +1,8 @@
 //! Redis persistence for versioned, application-encoded DSL step progress.
 
 use async_trait::async_trait;
-use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::CatgaResult;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::flow::{DslStepProgress, DslStepProgressStore};
 use redis::{Script, aio::ConnectionManager};
 use sha2::{Digest, Sha256};

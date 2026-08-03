@@ -11,8 +11,8 @@
 
 use std::time::Instant;
 
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::flow::{DslStepProgress, DslStepProgressStore};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow_store::SqlDslStepProgressStore;
 
 const RECORD_COUNT: usize = 128;

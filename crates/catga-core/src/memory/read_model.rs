@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use crate::{
     CatgaResult, ChangeRecord, ChangeTracker, ReadModelStore, validate_read_model_page_size,
 };
+use async_trait::async_trait;
 use dashmap::DashMap;
 
 /// A sharded in-memory tracker that releases each change after it is acknowledged.

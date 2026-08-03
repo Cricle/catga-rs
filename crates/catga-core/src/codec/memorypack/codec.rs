@@ -1,6 +1,8 @@
 use super::{
-    limits::MemoryPackDecodeLimits, traits::{MemoryPackDeserialize, MemoryPackSerialize},
-    error::MemoryPackError, serializer::MemoryPackSerializer,
+    error::MemoryPackError,
+    limits::MemoryPackDecodeLimits,
+    serializer::MemoryPackSerializer,
+    traits::{MemoryPackDeserialize, MemoryPackSerialize},
 };
 use crate::{CatgaError, CatgaResult, ErrorCode, PayloadDecoder, PayloadEncoder};
 

@@ -1,6 +1,7 @@
 //! Checkpoint-aware `when_any` execution.
 
 use crate::{
+    CatgaError, CatgaResult, ErrorCode,
     flow::{
         dsl::DslFlow,
         dsl_checkpoint::{CheckpointFrame, CheckpointLevel, CheckpointWork},
@@ -8,9 +9,8 @@ use crate::{
         dsl_recovery::{CheckpointContext, persist_checkpoint_payload},
         dsl_step::{CloneState, MergeWinner},
     },
-    CatgaError, CatgaResult, ErrorCode,
 };
-use futures::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 
 pub(super) fn run_checkpointed_when_any<'a, S, C, P>(
     state: &'a mut S,
