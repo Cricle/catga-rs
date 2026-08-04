@@ -27,7 +27,7 @@ pub mod shared;
 
 pub use behavior::{ValidationBehavior, Validator};
 pub use endpoint::{
-    validate_max_length, validate_min_count, validate_min_length, validate_not_empty,
-    validate_positive, validate_range, validate_required, EndpointValidation,
+    EndpointValidation, validate_max_length, validate_min_count, validate_min_length,
+    validate_not_empty, validate_positive, validate_range, validate_required,
 };
 pub use shared::format_validation_errors;

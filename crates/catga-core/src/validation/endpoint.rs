@@ -3,8 +3,8 @@
 //! These are framework-agnostic: any HTTP adapter can use them to collect validation
 //! failures before converting them into a framework-specific error response.
 
-use crate::CatgaResult;
 use super::shared::format_validation_errors;
+use crate::CatgaResult;
 
 /// Collects validation messages before converting them into one Catga error.
 ///

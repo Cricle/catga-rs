@@ -244,6 +244,11 @@ pub use event_store::{
 };
 pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
+pub use flow::{
+    DslFlow, DslFlowLifecycleHooks, DslQueryStep, Flow, FlowDefinition, FlowRuntime,
+    FlowRuntimeResult, FlowScheduler, FlowStepOutcome, FlowTagPolicy, MemoryFlowScheduler,
+    ScheduledResume, suspension,
+};
 pub use handler::{
     CommandHandler, CommandHandlerFn, EventHandler, EventHandlerFn, Handler, RequestHandlerFn,
     command_handler, command_handler_with, event_handler, event_handler_with, request_handler,
@@ -294,10 +299,6 @@ pub use resilience::{ResilienceExecutor, ResilienceOptions};
 pub use resilient_transport::ResilientTransport;
 pub use retry_jitter::RetryJitter;
 pub use routing::{MessageDestinationRouter, MessageRouter};
-pub use flow::{
-    DslFlow, DslFlowLifecycleHooks, DslQueryStep, Flow, FlowDefinition, FlowRuntime, FlowRuntimeResult,
-    FlowScheduler, FlowStepOutcome, FlowTagPolicy, MemoryFlowScheduler, ScheduledResume, suspension,
-};
 pub use scheduler::{
     MAX_CRON_SCHEDULE_BYTES, MAX_SCHEDULED_TASK_ID_BYTES, ScheduledTask, ScheduledTaskId,
     TaskSchedule, TaskScheduler,
@@ -342,7 +343,7 @@ pub use typed_event_store::TypedEventStore;
 pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use validation::{
-    format_validation_errors, EndpointValidation, validate_max_length, validate_min_count,
+    EndpointValidation, format_validation_errors, validate_max_length, validate_min_count,
     validate_min_length, validate_not_empty, validate_positive, validate_range, validate_required,
 };
 pub use versioned_transport::VersionedMessageTransport;
