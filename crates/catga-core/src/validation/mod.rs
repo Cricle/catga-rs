@@ -20,6 +20,7 @@
 
 pub mod behavior;
 pub mod endpoint;
+pub mod shared;
 
 pub use behavior::{ValidationBehavior, Validator};
 pub use endpoint::{

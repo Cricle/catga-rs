@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{Behavior, CatgaError, CatgaResult, ErrorCode, Next, Request};
+use crate::{Behavior, CatgaError, CatgaResult, Next, Request};
+use super::shared::format_validation_errors;
 
 /// Validates one request and appends every user-facing error to `errors`.
 #[async_trait]
@@ -81,17 +82,5 @@ where
 }
 
 pub(crate) fn validation_error(errors: &[Box<str>]) -> CatgaError {
-    let prefix = "validation failed: ";
-    let capacity = prefix.len()
-        + errors.iter().map(|error| error.len()).sum::<usize>()
-        + errors.len().saturating_sub(1) * 2;
-    let mut message = String::with_capacity(capacity);
-    message.push_str(prefix);
-    for (index, error) in errors.iter().enumerate() {
-        if index != 0 {
-            message.push_str("; ");
-        }
-        message.push_str(error);
-    }
-    CatgaError::new(ErrorCode::Validation, message)
+    format_validation_errors(errors, "validation failed: ")
 }

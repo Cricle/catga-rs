@@ -3,7 +3,8 @@
 //! These are framework-agnostic: any HTTP adapter can use them to collect validation
 //! failures before converting them into a framework-specific error response.
 
-use crate::{CatgaError, CatgaResult, ErrorCode};
+use crate::CatgaResult;
+use super::shared::format_validation_errors;
 
 /// Collects validation messages before converting them into one Catga error.
 ///
@@ -88,20 +89,7 @@ impl EndpointValidation {
         if self.errors.is_empty() {
             return Ok(());
         }
-        let capacity = self
-            .errors
-            .iter()
-            .map(|error| error.len())
-            .sum::<usize>()
-            .saturating_add(self.errors.len().saturating_sub(1).saturating_mul(2));
-        let mut message = String::with_capacity(capacity);
-        for (index, error) in self.errors.into_iter().enumerate() {
-            if index != 0 {
-                message.push_str("; ");
-            }
-            message.push_str(&error);
-        }
-        Err(CatgaError::new(ErrorCode::Validation, message))
+        Err(format_validation_errors(&self.errors, ""))
     }
 }
 
