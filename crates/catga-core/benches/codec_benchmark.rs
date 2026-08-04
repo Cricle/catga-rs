@@ -117,7 +117,8 @@ fn bench_deserialize_f64(b: &mut test::Bencher) {
 // Benchmark: Deserialize String
 #[bench]
 fn bench_deserialize_string(b: &mut test::Bencher) {
-    let data = MemoryPackSerializer::serialize(&String::from("hello world this is a test string")).unwrap();
+    let data = MemoryPackSerializer::serialize(&String::from("hello world this is a test string"))
+        .unwrap();
     b.iter(|| {
         test::black_box(MemoryPackSerializer::deserialize::<String>(&data).unwrap());
     });

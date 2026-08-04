@@ -143,4 +143,3 @@ impl MemoryPackDeserialize for url::Url {
         url::Url::parse(&s).map_err(|e| MemoryPackError::DeserializationError(e.to_string()))
     }
 }
-

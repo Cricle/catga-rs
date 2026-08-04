@@ -2,12 +2,12 @@
 
 use std::time::{Duration, SystemTime};
 
-use catga_core::flow::{FlowState, WaitCondition, WaitPolicy};
 use catga_core::flow::timeout::{
-    flow_timeout_deadline_unix_ms, FlowTimeoutOptions, TimedOutFlowPoll, TimedOutFlowReceipt,
-    MAX_FLOW_TIMEOUT_BATCH_SIZE, MAX_FLOW_TIMEOUT_SCAN_LIMIT,
+    FlowTimeoutOptions, MAX_FLOW_TIMEOUT_BATCH_SIZE, MAX_FLOW_TIMEOUT_SCAN_LIMIT, TimedOutFlowPoll,
+    TimedOutFlowReceipt, flow_timeout_deadline_unix_ms,
 };
-use catga_core::{ErrorCode, CatgaResult};
+use catga_core::flow::{FlowState, WaitCondition, WaitPolicy};
+use catga_core::{CatgaResult, ErrorCode};
 
 #[test]
 fn timeout_polls_options_and_receipts_validate_all_bounds() -> CatgaResult<()> {
@@ -64,9 +64,6 @@ fn timeout_deadlines_require_a_suspended_wait_and_round_up_fractional_millis() -
         Duration::from_nanos(500),
     );
     let continuation = FlowContinuation::waiting(suspended, "step", wait);
-    assert_eq!(
-        flow_timeout_deadline_unix_ms(&continuation)?,
-        Some(1)
-    );
+    assert_eq!(flow_timeout_deadline_unix_ms(&continuation)?, Some(1));
     Ok(())
 }

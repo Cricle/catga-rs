@@ -171,4 +171,3 @@ impl MemoryPackDeserialize for glam::Mat4 {
         Ok(glam::Mat4::from_cols_array(&arr))
     }
 }
-

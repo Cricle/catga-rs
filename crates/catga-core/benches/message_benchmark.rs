@@ -8,13 +8,17 @@ use catga_core::{Message, MessageTypeId};
 
 // Define test message types
 struct PingTypeId;
-impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+impl MessageTypeId for PingTypeId {
+    const NAME: &'static str = "Ping";
+}
 
 struct Ping;
 impl Message for Ping {}
 
 struct QueryTypeId;
-impl MessageTypeId for QueryTypeId { const NAME: &'static str = "Query"; }
+impl MessageTypeId for QueryTypeId {
+    const NAME: &'static str = "Query";
+}
 
 struct Query;
 impl Message for Query {}

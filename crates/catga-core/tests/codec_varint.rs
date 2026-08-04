@@ -1,6 +1,6 @@
 //! Tests for codec module
 
-use catga_core::codec::memorypack::varint::{read_varint, write_varint, INT64};
+use catga_core::codec::memorypack::varint::{INT64, read_varint, write_varint};
 use catga_core::codec::memorypack::{MemoryPackDecodeLimits, MemoryPackReader, MemoryPackWriter};
 
 #[test]

@@ -4,9 +4,7 @@
 
 extern crate test;
 
-use catga_core::{
-    compress, decompress, CompressionAlgorithm, CompressionStats,
-};
+use catga_core::{CompressionAlgorithm, CompressionStats, compress, decompress};
 
 fn generate_test_data(size: usize) -> Vec<u8> {
     let pattern: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".to_vec();

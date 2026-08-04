@@ -4,8 +4,8 @@
 
 extern crate test;
 
-use catga_core::flow::local::Flow;
 use catga_core::flow::DslFlow;
+use catga_core::flow::local::Flow;
 
 // Benchmark: Flow creation (empty)
 #[bench]
@@ -19,8 +19,7 @@ fn bench_flow_new(b: &mut test::Bencher) {
 #[bench]
 fn bench_flow_1_step(b: &mut test::Bencher) {
     b.iter(|| {
-        let _flow = Flow::new("bench-flow")
-            .step(|| async { Ok(()) }, || async { Ok(()) });
+        let _flow = Flow::new("bench-flow").step(|| async { Ok(()) }, || async { Ok(()) });
     });
 }
 
@@ -59,11 +58,12 @@ fn bench_dsl_flow_new(b: &mut test::Bencher) {
 #[bench]
 fn bench_dsl_flow_1_action(b: &mut test::Bencher) {
     b.iter(|| {
-        let _flow: DslFlow<u32> = DslFlow::new()
-            .action(|state: &mut u32| Box::pin(async move {
+        let _flow: DslFlow<u32> = DslFlow::new().action(|state: &mut u32| {
+            Box::pin(async move {
                 *state += 1;
                 Ok(())
-            }));
+            })
+        });
     });
 }
 
@@ -72,18 +72,24 @@ fn bench_dsl_flow_1_action(b: &mut test::Bencher) {
 fn bench_dsl_flow_3_actions(b: &mut test::Bencher) {
     b.iter(|| {
         let _flow: DslFlow<u32> = DslFlow::new()
-            .action(|state: &mut u32| Box::pin(async move {
-                *state += 1;
-                Ok(())
-            }))
-            .action(|state: &mut u32| Box::pin(async move {
-                *state += 1;
-                Ok(())
-            }))
-            .action(|state: &mut u32| Box::pin(async move {
-                *state += 1;
-                Ok(())
-            }));
+            .action(|state: &mut u32| {
+                Box::pin(async move {
+                    *state += 1;
+                    Ok(())
+                })
+            })
+            .action(|state: &mut u32| {
+                Box::pin(async move {
+                    *state += 1;
+                    Ok(())
+                })
+            })
+            .action(|state: &mut u32| {
+                Box::pin(async move {
+                    *state += 1;
+                    Ok(())
+                })
+            });
     });
 }
 
@@ -93,10 +99,12 @@ fn bench_dsl_flow_10_actions(b: &mut test::Bencher) {
     b.iter(|| {
         let mut flow: DslFlow<u32> = DslFlow::new();
         for _ in 0..10 {
-            flow = flow.action(|state: &mut u32| Box::pin(async move {
-                *state += 1;
-                Ok(())
-            }));
+            flow = flow.action(|state: &mut u32| {
+                Box::pin(async move {
+                    *state += 1;
+                    Ok(())
+                })
+            });
         }
         flow
     });
@@ -137,10 +145,12 @@ fn bench_flow_sizeof_10_steps(b: &mut test::Bencher) {
 fn bench_dsl_flow_sizeof_10_actions(b: &mut test::Bencher) {
     let mut flow: DslFlow<u32> = DslFlow::new();
     for _ in 0..10 {
-        flow = flow.action(|state: &mut u32| Box::pin(async move {
-            *state += 1;
-            Ok(())
-        }));
+        flow = flow.action(|state: &mut u32| {
+            Box::pin(async move {
+                *state += 1;
+                Ok(())
+            })
+        });
     }
     b.iter(|| {
         test::black_box(std::mem::size_of_val(&flow));

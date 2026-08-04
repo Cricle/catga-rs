@@ -179,7 +179,12 @@ impl Mediator {
         let started = Instant::now();
         if span.is_disabled() {
             let result = isolate_mediator_panic(Self::dispatch(&self.registry, message)).await;
-            observability::record_request(&span, std::any::type_name::<M>(), started.elapsed(), &result);
+            observability::record_request(
+                &span,
+                std::any::type_name::<M>(),
+                started.elapsed(),
+                &result,
+            );
             return result;
         }
         observability::record_message_tags(&span, &message);
@@ -187,7 +192,12 @@ impl Mediator {
             .instrument(span.clone())
             .await;
         observability::record_response_tags::<M>(&span, &result);
-        observability::record_request(&span, std::any::type_name::<M>(), started.elapsed(), &result);
+        observability::record_request(
+            &span,
+            std::any::type_name::<M>(),
+            started.elapsed(),
+            &result,
+        );
         result
     }
 
@@ -214,15 +224,26 @@ impl Mediator {
         let span = observability::command_span(std::any::type_name::<C>());
         let started = Instant::now();
         if span.is_disabled() {
-            let result = isolate_mediator_panic(Self::dispatch_command(&self.registry, command)).await;
-            observability::record_command(&span, std::any::type_name::<C>(), started.elapsed(), &result);
+            let result =
+                isolate_mediator_panic(Self::dispatch_command(&self.registry, command)).await;
+            observability::record_command(
+                &span,
+                std::any::type_name::<C>(),
+                started.elapsed(),
+                &result,
+            );
             return result;
         }
         observability::record_message_tags(&span, &command);
         let result = Self::dispatch_command(&self.registry, command)
             .instrument(span.clone())
             .await;
-        observability::record_command(&span, std::any::type_name::<C>(), started.elapsed(), &result);
+        observability::record_command(
+            &span,
+            std::any::type_name::<C>(),
+            started.elapsed(),
+            &result,
+        );
         result
     }
 
@@ -587,9 +608,7 @@ impl Mediator {
             return result;
         }
         observability::record_message_tags(&span, &event);
-        let result = self.publish_inner(event)
-            .instrument(span.clone())
-            .await;
+        let result = self.publish_inner(event).instrument(span.clone()).await;
         observability::record_event(&span, event_type, started.elapsed(), &result);
         result
     }

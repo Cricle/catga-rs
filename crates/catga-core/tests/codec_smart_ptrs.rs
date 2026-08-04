@@ -31,8 +31,7 @@ fn boxed_rc_arc_and_boxed_str_values_round_trip() {
     let boxed_str: Box<str> = "boxed".into();
     let bytes = MemoryPackSerializer::serialize(&boxed_str).expect("boxed string serializes");
     assert_eq!(
-        &*MemoryPackSerializer::deserialize::<Box<str>>(&bytes)
-            .expect("boxed string deserializes"),
+        &*MemoryPackSerializer::deserialize::<Box<str>>(&bytes).expect("boxed string deserializes"),
         "boxed"
     );
 }

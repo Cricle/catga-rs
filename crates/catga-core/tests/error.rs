@@ -87,7 +87,6 @@ fn errors_bound_utf8_details_and_restore_legacy_wire_defaults() {
     assert!(explicit.is_retryable());
     assert_eq!(explicit.details(), Some("detail"));
     assert!(
-        serde_json::from_str::<CatgaError>(r#"{"code":"not-a-code","message":"invalid"}"#)
-            .is_err()
+        serde_json::from_str::<CatgaError>(r#"{"code":"not-a-code","message":"invalid"}"#).is_err()
     );
 }

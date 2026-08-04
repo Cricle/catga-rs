@@ -4,15 +4,17 @@
 
 extern crate test;
 
-use catga_core::{
-    CatgaResult, Command, CommandHandler, Event, EventHandler, Handler,
-    Message, MessageTypeId, Request,
-};
 use async_trait::async_trait;
+use catga_core::{
+    CatgaResult, Command, CommandHandler, Event, EventHandler, Handler, Message, MessageTypeId,
+    Request,
+};
 
 // Define test types
 struct PingTypeId;
-impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+impl MessageTypeId for PingTypeId {
+    const NAME: &'static str = "Ping";
+}
 
 struct Ping(u64);
 impl Message for Ping {}
@@ -30,11 +32,15 @@ impl Handler<Ping> for PingHandler {
 }
 
 struct CommandTypeId;
-impl MessageTypeId for CommandTypeId { const NAME: &'static str = "Command"; }
+impl MessageTypeId for CommandTypeId {
+    const NAME: &'static str = "Command";
+}
 
 struct MyCommand;
 impl Message for MyCommand {}
-impl Command for MyCommand { type TypeId = CommandTypeId; }
+impl Command for MyCommand {
+    type TypeId = CommandTypeId;
+}
 
 struct CommandHandlerImpl;
 #[async_trait]
@@ -46,12 +52,16 @@ impl CommandHandler<MyCommand> for CommandHandlerImpl {
 
 #[derive(Clone)]
 struct EventTypeId;
-impl MessageTypeId for EventTypeId { const NAME: &'static str = "Event"; }
+impl MessageTypeId for EventTypeId {
+    const NAME: &'static str = "Event";
+}
 
 #[derive(Clone)]
 struct MyEvent;
 impl Message for MyEvent {}
-impl Event for MyEvent { type TypeId = EventTypeId; }
+impl Event for MyEvent {
+    type TypeId = EventTypeId;
+}
 
 struct EventHandlerImpl;
 #[async_trait]

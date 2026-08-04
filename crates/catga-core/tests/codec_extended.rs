@@ -1,6 +1,6 @@
 //! Tests for MemoryPack extended type traits
 
-use catga_core::{MemoryPackDeserialize, MemoryPackSerializer, MemoryPackSerialize};
+use catga_core::{MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer};
 
 fn round_trip<T>(value: &T) -> T
 where
@@ -33,7 +33,11 @@ fn decimal_values_round_trip_sign_and_scale() {
 #[cfg(feature = "half")]
 #[test]
 fn half_precision_values_round_trip_special_values() {
-    for value in [half::f16::from_f32(1.5), half::f16::NEG_INFINITY, half::f16::NAN] {
+    for value in [
+        half::f16::from_f32(1.5),
+        half::f16::NEG_INFINITY,
+        half::f16::NAN,
+    ] {
         let decoded = round_trip(&value);
         assert_eq!(decoded.to_bits(), value.to_bits());
     }
@@ -56,12 +60,10 @@ fn big_integer_values_round_trip_and_reject_negative_lengths() {
         assert_eq!(round_trip(&value), value);
     }
     assert!(
-        MemoryPackSerializer::deserialize::<num_bigint::BigInt>(&(-1_i32).to_le_bytes())
-            .is_err()
+        MemoryPackSerializer::deserialize::<num_bigint::BigInt>(&(-1_i32).to_le_bytes()).is_err()
     );
     assert!(
-        MemoryPackSerializer::deserialize::<num_bigint::BigUint>(&(-1_i32).to_le_bytes())
-            .is_err()
+        MemoryPackSerializer::deserialize::<num_bigint::BigUint>(&(-1_i32).to_le_bytes()).is_err()
     );
 }
 
@@ -70,7 +72,7 @@ fn big_integer_values_round_trip_and_reject_negative_lengths() {
 fn urls_round_trip_and_invalid_text_is_rejected() {
     let value = url::Url::parse("https://example.com/orders?id=7").expect("valid URL");
     assert_eq!(round_trip(&value), value);
-    let encoded =
-        MemoryPackSerializer::serialize(&String::from("not a URL")).expect("encode invalid URL text");
+    let encoded = MemoryPackSerializer::serialize(&String::from("not a URL"))
+        .expect("encode invalid URL text");
     assert!(MemoryPackSerializer::deserialize::<url::Url>(&encoded).is_err());
 }

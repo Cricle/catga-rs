@@ -76,7 +76,7 @@ fn bench_uuid_v4_generation(b: &mut test::Bencher) {
 // Benchmark: SHA256 hash computation (used for identity keys)
 #[bench]
 fn bench_sha256_computation(b: &mut test::Bencher) {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let data = b"test-flow-data-for-hashing";
     b.iter(|| {
         let mut hasher = Sha256::new();

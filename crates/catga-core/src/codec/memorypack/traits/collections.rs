@@ -507,4 +507,3 @@ impl<T: MemoryPackDeserialize + Eq + std::hash::Hash> MemoryPackDeserialize for 
         }
     }
 }
-

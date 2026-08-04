@@ -9,9 +9,9 @@ use std::{
 use async_trait::async_trait;
 
 use catga_core::{
-    CatgaResult, Envelope, ErrorCode, EventPage, EventStore, EventStream, MessageMetadata,
-    Projection, ProjectionCheckpoint, ProjectionCheckpointStore, StoredEvent, StreamIdsPage,
-    VersionHistoryPage, CatgaError,
+    CatgaError, CatgaResult, Envelope, ErrorCode, EventPage, EventStore, EventStream,
+    MessageMetadata, Projection, ProjectionCheckpoint, ProjectionCheckpointStore, StoredEvent,
+    StreamIdsPage, VersionHistoryPage,
 };
 
 #[derive(Default)]
@@ -210,10 +210,11 @@ async fn empty_stream_catalog_returns_without_reading_events() {
     let checkpoints = TestCheckpoints::default();
     let projection = TestProjection::default();
 
-    let run = catga_core::projection::CatchUpProjectionRunner::new(&events, &checkpoints, &projection)
-        .run()
-        .await
-        .expect("empty catalog is a successful projection run");
+    let run =
+        catga_core::projection::CatchUpProjectionRunner::new(&events, &checkpoints, &projection)
+            .run()
+            .await
+            .expect("empty catalog is a successful projection run");
 
     assert_eq!(run.applied(), 0);
     assert_eq!(run.streams(), 0);
@@ -236,10 +237,11 @@ async fn checkpoint_recovery_reads_the_next_event_version_and_persists_progress(
     };
     let projection = TestProjection::default();
 
-    let run = catga_core::projection::CatchUpProjectionRunner::new(&events, &checkpoints, &projection)
-        .run()
-        .await
-        .expect("checkpointed event is replayed");
+    let run =
+        catga_core::projection::CatchUpProjectionRunner::new(&events, &checkpoints, &projection)
+            .run()
+            .await
+            .expect("checkpointed event is replayed");
 
     assert_eq!(run.applied(), 1);
     assert_eq!(events.requested_versions(), vec![8]);
@@ -269,10 +271,11 @@ async fn maximum_checkpoint_is_rejected_before_reading_or_applying_events() {
     };
     let projection = TestProjection::default();
 
-    let error = catga_core::projection::CatchUpProjectionRunner::new(&events, &checkpoints, &projection)
-        .run()
-        .await
-        .expect_err("maximum checkpoint cannot advance");
+    let error =
+        catga_core::projection::CatchUpProjectionRunner::new(&events, &checkpoints, &projection)
+            .run()
+            .await
+            .expect_err("maximum checkpoint cannot advance");
 
     assert_eq!(error.code(), ErrorCode::Validation);
     assert!(events.requested_versions().is_empty());

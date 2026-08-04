@@ -5,8 +5,8 @@
 extern crate test;
 
 use catga_core::{
-    current_correlation_id, current_correlation_value, scope_correlation_id, scope_correlation_value,
-    EnvelopeHeaders, TransportContext,
+    EnvelopeHeaders, TransportContext, current_correlation_id, current_correlation_value,
+    scope_correlation_id, scope_correlation_value,
 };
 use std::sync::Arc;
 
@@ -41,9 +41,7 @@ fn bench_current_correlation_value_empty(b: &mut test::Bencher) {
 #[bench]
 fn bench_scope_correlation_id(b: &mut test::Bencher) {
     b.iter(|| {
-        let _ = scope_correlation_id(12345u64, async {
-            42u32
-        });
+        let _ = scope_correlation_id(12345u64, async { 42u32 });
     });
 }
 
@@ -52,9 +50,7 @@ fn bench_scope_correlation_id(b: &mut test::Bencher) {
 fn bench_scope_correlation_value(b: &mut test::Bencher) {
     let value: Arc<str> = "test-correlation-value".into();
     b.iter(|| {
-        let _ = scope_correlation_value(value.clone(), async {
-            42u32
-        });
+        let _ = scope_correlation_value(value.clone(), async { 42u32 });
     });
 }
 
@@ -70,9 +66,8 @@ fn bench_transport_context_from_headers(b: &mut test::Bencher) {
 // Benchmark: TransportContext correlation_id access
 #[bench]
 fn bench_transport_context_correlation_id(b: &mut test::Bencher) {
-    let context = TransportContext::from_headers(
-        EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap(),
-    );
+    let context =
+        TransportContext::from_headers(EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap());
     b.iter(|| {
         test::black_box(context.correlation_id());
     });
@@ -81,9 +76,8 @@ fn bench_transport_context_correlation_id(b: &mut test::Bencher) {
 // Benchmark: TransportContext priority access
 #[bench]
 fn bench_transport_context_priority(b: &mut test::Bencher) {
-    let context = TransportContext::from_headers(
-        EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap(),
-    );
+    let context =
+        TransportContext::from_headers(EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap());
     b.iter(|| {
         test::black_box(context.priority());
     });
@@ -92,9 +86,8 @@ fn bench_transport_context_priority(b: &mut test::Bencher) {
 // Benchmark: TransportContext headers access
 #[bench]
 fn bench_transport_context_headers(b: &mut test::Bencher) {
-    let context = TransportContext::from_headers(
-        EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap(),
-    );
+    let context =
+        TransportContext::from_headers(EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap());
     b.iter(|| {
         test::black_box(context.headers());
     });
@@ -103,9 +96,8 @@ fn bench_transport_context_headers(b: &mut test::Bencher) {
 // Benchmark: TransportContext clone
 #[bench]
 fn bench_transport_context_clone(b: &mut test::Bencher) {
-    let context = TransportContext::from_headers(
-        EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap(),
-    );
+    let context =
+        TransportContext::from_headers(EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap());
     b.iter(|| {
         test::black_box(context.clone());
     });
@@ -114,9 +106,8 @@ fn bench_transport_context_clone(b: &mut test::Bencher) {
 // Benchmark: TransportContext struct size
 #[bench]
 fn bench_transport_context_sizeof(b: &mut test::Bencher) {
-    let context = TransportContext::from_headers(
-        EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap(),
-    );
+    let context =
+        TransportContext::from_headers(EnvelopeHeaders::try_new([("x-tenant", "acme")]).unwrap());
     b.iter(|| {
         test::black_box(std::mem::size_of_val(&context));
     });
