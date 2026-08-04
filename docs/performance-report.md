@@ -1,6 +1,6 @@
 # catga-rs Performance Report
 
-**Generated:** 2026-08-04
+**Generated:** 2026-08-05
 **Platform:** Linux 6.1.0-18-amd64
 **Rust:** Nightly toolchain
 
@@ -236,15 +236,41 @@ This report presents performance benchmarks for the catga-rs core library across
 
 ---
 
+### 12. Flow Store (Persistence Layer)
+
+| Benchmark | Time (ns/iter) | Notes |
+|-----------|---------------|-------|
+| FlowState::new | 95.47 | ~95ns per creation |
+| FlowState clone | 52.55 | ~53ns |
+| FlowState serialize | 210.36 | MemoryPack serialization |
+| FlowState deserialize | 221.39 | MemoryPack deserialization |
+| FlowState id accessor | 0.33 | Sub-nanosecond |
+| FlowState status transition | 62.58 | ~63ns for state change |
+| FlowState with large data (4KB) | 173.64 | Data size dominates |
+| UUID v4 generation | 317.52 | ~318ns per UUID |
+| SHA256 hash computation | 66.56 | ~67ns for hashing |
+| SystemTime duration | 40.06 | ~40ns |
+| Unix epoch conversion | 0.34 | Sub-nanosecond |
+
+**Key Findings:**
+- FlowState creation is ~95ns (reasonable for complex struct)
+- Serialization round-trip is ~430ns total
+- UUID generation is the slowest at ~318ns (external dependency)
+- Accessor methods are sub-nanosecond (inline optimization)
+
+---
+
 ## Performance Highlights
 
 ### Hot Path Optimization
 | Component | Operation | Time |
 |-----------|-----------|------|
-| Message dispatch | Registry lookup | 64-93ns |
+| Message dispatch | Registry lookup | 64-93ns (10 handlers: 670ns, 100 handlers: 9,230ns) |
 | Error creation | Basic error | 1.32ns |
 | Task-local access | Correlation ID | 1.34ns |
 | Handler call | Trait invocation | <1ns (ZST) |
+| Flow state creation | FlowState::new | 95ns |
+| Flow serialization | MemoryPack | 210ns |
 
 ### Memory Efficiency
 | Component | Struct Size |
@@ -261,8 +287,11 @@ This report presents performance benchmarks for the catga-rs core library across
 |-----------|--------------|
 | Flow steps | ~12-14ns/step |
 | DslFlow actions | ~11-26ns/action |
-| Registry dispatch | ~64-93ns/handler |
+| Registry dispatch (10 handlers) | ~670ns/lookup |
+| Registry dispatch (100 handlers) | ~9,230ns/lookup |
 | Codec Vec | ~700-850ns/KB |
+| FlowState serialize | ~210ns |
+| FlowState deserialize | ~221ns |
 
 ---
 
@@ -273,6 +302,8 @@ This report presents performance benchmarks for the catga-rs core library across
 3. **Choose Gzip for speed** - Gzip/Deflate decompression is 28x faster than Brotli
 4. **Minimize TransportContext creation** - At 14ns, it's not free; cache when possible
 5. **Registry scaling is acceptable** - O(1) lookup maintains consistent performance
+6. **Cache FlowState accessors** - id() is 0.33ns, but clone() is 53ns; minimize clones
+7. **Batch FlowState operations** - Serialize+deserialize is ~430ns; consider batching writes
 
 ---
 
