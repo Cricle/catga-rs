@@ -1,3 +1,30 @@
+//! Error types, error codes, and result aliases for the Catga framework.
+//!
+//! All framework operations return [`CatgaResult<T>`] which is an alias for
+//! `Result<T, CatgaError>`. The [`CatgaError`] type carries a stable [`ErrorCode`]
+//! classification that callers use for control-flow decisions.
+//!
+//! # Error Code Categories
+//!
+//! [`ErrorCode`] partitions failures into actionable categories:
+//! - **Validation** — Input rejected before reaching a handler
+//! - **HandlerFailed** — Handler returned an error
+//! - **HandlerNotFound** — No handler registered for the message type
+//! - **PipelineFailed** — A pipeline behavior reported failure
+//! - **PersistenceFailed** — Storage operation failed
+//! - **LockFailed** — Distributed lock acquisition failed
+//! - **TransportFailed** — Network transport operation failed
+//! - **SerializationFailed** — Codec encode/decode failed
+//! - **Conflict** — Optimistic concurrency conflict detected
+//! - **NotFound** — Requested resource does not exist
+//! - **Unauthorized/Forbidden** — Security check failed
+//! - **Flow*** — Saga/flow orchestration failures
+//!
+//! # Stability
+//!
+//! Error codes are stable identifiers. [`ErrorCode::as_stable_str`] emits a
+//! lowercase snake_case name suitable for logging and wire protocols.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize, de};

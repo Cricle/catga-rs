@@ -1,3 +1,38 @@
+//! Typed mediator for request, command, and event dispatch.
+//!
+//! The mediator maps incoming messages to registered handlers without coupling
+//! senders to concrete implementations. It supports three message types:
+//!
+//! - **Requests** ([`Request`]) — typed request/response with one handler
+//! - **Commands** ([`Command`]) — fire-and-forget with one handler
+//! - **Events** ([`Event`]) — broadcast to zero or more handlers
+//!
+//! # Usage
+//!
+//! Construct a [`Registry`] at startup with all handlers, then create one [`Mediator`]:
+//!
+//! ```no_run
+//! use catga_core::{Mediator, Handler, Request, Message, MessageTypeId};
+//!
+//! struct QueryTypeId;
+//! impl MessageTypeId for QueryTypeId { const NAME: &'static str = "Query"; }
+//!
+//! struct Query;
+//! impl Message for Query {}
+//! impl Request for Query { type Response = String; type TypeId = QueryTypeId; }
+//!
+//! # async fn run() -> catga_core::CatgaResult<()> {
+//! let mediator = Mediator::new(catga_core::Registry::new());
+//! let result = mediator.send(Query).await;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Batch Operations
+//!
+//! [`Mediator::send_batch`] processes up to [`MAX_MEDIATOR_BATCH_SIZE`] requests in parallel.
+//! For unbounded producers, use [`Mediator::send_stream`] instead.
+
 use std::{
     any::{Any, TypeId},
     future::Future,
