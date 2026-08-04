@@ -129,10 +129,6 @@
 //! # }
 //! ```
 
-// ============================================================================
-// Module declarations
-// ============================================================================
-
 mod aggregate;
 pub mod auto;
 mod auto_snapshot;
@@ -192,7 +188,7 @@ mod transport_trait;
 mod typed_event_store;
 mod typed_publisher;
 mod upgrading_event_store;
-mod validation;
+pub mod validation;
 mod versioned_transport;
 
 pub use aggregate::{
@@ -241,16 +237,7 @@ pub use correlation::{
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
 };
-// ============================================================================
-// Core re-exports: Error handling
-// ============================================================================
-
 pub use error::{CatgaError, CatgaResult, ErrorCode, MAX_ERROR_DETAILS_BYTES};
-
-// ============================================================================
-// Core re-exports: Message types
-// ============================================================================
-
 pub use event_store::{
     EventPage, EventStore, EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage,
     VersionHistoryPage, VersionInfo, validate_event_store_page_size,
@@ -307,6 +294,10 @@ pub use resilience::{ResilienceExecutor, ResilienceOptions};
 pub use resilient_transport::ResilientTransport;
 pub use retry_jitter::RetryJitter;
 pub use routing::{MessageDestinationRouter, MessageRouter};
+pub use flow::{
+    DslFlow, DslFlowLifecycleHooks, DslQueryStep, Flow, FlowDefinition, FlowRuntime, FlowRuntimeResult,
+    FlowScheduler, FlowStepOutcome, FlowTagPolicy, MemoryFlowScheduler, ScheduledResume, suspension,
+};
 pub use scheduler::{
     MAX_CRON_SCHEDULE_BYTES, MAX_SCHEDULED_TASK_ID_BYTES, ScheduledTask, ScheduledTaskId,
     TaskSchedule, TaskScheduler,
@@ -351,8 +342,8 @@ pub use typed_event_store::TypedEventStore;
 pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use validation::{
-    EndpointValidation, validate_max_length, validate_min_count, validate_min_length,
-    validate_not_empty, validate_positive, validate_range, validate_required,
+    format_validation_errors, EndpointValidation, validate_max_length, validate_min_count,
+    validate_min_length, validate_not_empty, validate_positive, validate_range, validate_required,
 };
 pub use versioned_transport::VersionedMessageTransport;
 

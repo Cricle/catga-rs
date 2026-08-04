@@ -590,7 +590,7 @@ where
 
 /// A typed request/reply client that routes requests through the bus topology.
 ///
-/// Unlike [`catga_core::EnvelopeRequestClient`] which is bound to one fixed destination, this
+/// Unlike [`crate::EnvelopeRequestClient`] which is bound to one fixed destination, this
 /// client resolves the destination per message type from the shared [`MessageDestinationRouter`].
 /// One client serves all registered request types.
 ///

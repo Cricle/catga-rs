@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::shared::format_validation_errors;
 use crate::{Behavior, CatgaError, CatgaResult, Next, Request};
+use super::shared::format_validation_errors;
 
 /// Validates one request and appends every user-facing error to `errors`.
 #[async_trait]

@@ -10,7 +10,7 @@ thread_local! {
     static MEDIATOR: MediatorHandle = MediatorHandle::new();
 }
 
-/// Binds the mediator at startup (called by #[catga_main]).
+/// Binds the mediator at startup (called by `#[catga_main]`).
 pub fn bind_mediator(mediator: std::sync::Arc<crate::Mediator>) -> CatgaResult<()> {
     MEDIATOR.with(|m| m.bind(mediator))
 }

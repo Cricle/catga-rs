@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 /// An in-memory AtMostOnce broadcast transport for local development and tests.
 ///
 /// Every [`Self::subscribe`] call owns an independent Tokio broadcast cursor, so a publication
-/// reaches all active local subscribers rather than being work-shared like [`crate::MemoryTransport`].
+/// reaches all active local subscribers rather than being work-shared like [`crate::memory::MemoryTransport`].
 /// The ring has a fixed capacity: a slow subscriber receives a transient lag error instead of
 /// causing an unbounded allocation or making publication wait indefinitely.
 pub struct MemoryPubSubTransport {
