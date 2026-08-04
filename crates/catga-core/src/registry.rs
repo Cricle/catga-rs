@@ -1,5 +1,6 @@
 use std::{
     any::{Any, TypeId},
+    collections::HashMap,
     marker::PhantomData,
     sync::Arc,
 };
@@ -99,28 +100,22 @@ where
 
 /// One registered request handler slot in the dispatch table.
 pub(crate) struct RequestSlot {
-    pub(crate) type_id: TypeId,
     pub(crate) handler: Arc<dyn ErasedRequestHandler>,
 }
 
 /// One registered command handler slot in the dispatch table.
 pub(crate) struct CommandSlot {
-    pub(crate) type_id: TypeId,
     pub(crate) handler: Arc<dyn ErasedCommandHandler>,
 }
 
 /// One registered event handler slot in the dispatch table.
 pub(crate) struct EventSlot {
-    pub(crate) type_id: TypeId,
     pub(crate) handlers: Vec<Arc<dyn ErasedEventHandler>>,
 }
 
 /// The explicit startup-time map of request, command, and event handlers.
 ///
-/// Internally uses contiguous `Vec` slots instead of `HashMap` for cache-friendly
-/// linear-scan dispatch. For typical applications with 5–30 registered message types,
-/// this outperforms hashing due to contiguous memory layout, zero hash computation,
-/// and predictable branch behavior.
+/// Internally uses `HashMap` for O(1) average-case dispatch lookup.
 ///
 /// ```no_run
 /// use async_trait::async_trait;
@@ -149,9 +144,9 @@ pub(crate) struct EventSlot {
 /// ```
 #[derive(Default)]
 pub struct Registry {
-    pub(crate) requests: Vec<RequestSlot>,
-    pub(crate) commands: Vec<CommandSlot>,
-    pub(crate) events: Vec<EventSlot>,
+    pub(crate) requests: HashMap<TypeId, RequestSlot>,
+    pub(crate) commands: HashMap<TypeId, CommandSlot>,
+    pub(crate) events: HashMap<TypeId, EventSlot>,
 }
 
 impl Registry {
@@ -170,20 +165,28 @@ impl Registry {
         H: Handler<M> + 'static,
     {
         let type_id = TypeId::of::<M>();
-        if self.requests.iter().any(|slot| slot.type_id == type_id) {
+        if self.requests.contains_key(&type_id) {
             return Err(CatgaError::new(
                 ErrorCode::Conflict,
                 "request handler is already registered",
             ));
         }
-        self.requests.push(RequestSlot {
+        self.requests.insert(
             type_id,
-            handler: Arc::new(RequestHandlerAdapter::<M, H> {
-                handler,
-                marker: PhantomData,
-            }),
-        });
+            RequestSlot {
+                handler: Arc::new(RequestHandlerAdapter::<M, H> {
+                    handler,
+                    marker: PhantomData,
+                }),
+            },
+        );
         Ok(())
+    }
+
+    /// Finds the request handler for the given type id using O(1) hash lookup.
+    #[inline]
+    pub(crate) fn find_request(&self, type_id: TypeId) -> Option<&RequestSlot> {
+        self.requests.get(&type_id)
     }
 
     /// Registers the sole handler for a command type.
@@ -196,20 +199,28 @@ impl Registry {
         H: CommandHandler<C> + 'static,
     {
         let type_id = TypeId::of::<C>();
-        if self.commands.iter().any(|slot| slot.type_id == type_id) {
+        if self.commands.contains_key(&type_id) {
             return Err(CatgaError::new(
                 ErrorCode::Conflict,
                 "command handler is already registered",
             ));
         }
-        self.commands.push(CommandSlot {
+        self.commands.insert(
             type_id,
-            handler: Arc::new(CommandHandlerAdapter::<C, H> {
-                handler,
-                marker: PhantomData,
-            }),
-        });
+            CommandSlot {
+                handler: Arc::new(CommandHandlerAdapter::<C, H> {
+                    handler,
+                    marker: PhantomData,
+                }),
+            },
+        );
         Ok(())
+    }
+
+    /// Finds the command handler for the given type id using O(1) hash lookup.
+    #[inline]
+    pub(crate) fn find_command(&self, type_id: TypeId) -> Option<&CommandSlot> {
+        self.commands.get(&type_id)
     }
 
     /// Registers an additional handler for an event type.
@@ -219,19 +230,27 @@ impl Registry {
         H: EventHandler<E> + 'static,
     {
         let type_id = TypeId::of::<E>();
-        if let Some(slot) = self.events.iter_mut().find(|slot| slot.type_id == type_id) {
+        if let Some(slot) = self.events.get_mut(&type_id) {
             slot.handlers.push(Arc::new(EventHandlerAdapter::<E, H> {
                 handler,
                 marker: PhantomData,
             }));
         } else {
-            self.events.push(EventSlot {
+            self.events.insert(
                 type_id,
-                handlers: vec![Arc::new(EventHandlerAdapter::<E, H> {
-                    handler,
-                    marker: PhantomData,
-                })],
-            });
+                EventSlot {
+                    handlers: vec![Arc::new(EventHandlerAdapter::<E, H> {
+                        handler,
+                        marker: PhantomData,
+                    })],
+                },
+            );
         }
+    }
+
+    /// Finds the event slot for the given type id using O(1) hash lookup.
+    #[inline]
+    pub(crate) fn find_event(&self, type_id: TypeId) -> Option<&EventSlot> {
+        self.events.get(&type_id)
     }
 }

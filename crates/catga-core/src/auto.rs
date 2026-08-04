@@ -300,7 +300,6 @@ mod tests {
 
     #[tokio::test]
     async fn handler_method_infers_message_type() -> CatgaResult<()> {
-        // Plain async fn - no #[async_trait] needed!
         async fn ping_handler(_: Ping) -> CatgaResult<String> {
             Ok("pong".to_string())
         }

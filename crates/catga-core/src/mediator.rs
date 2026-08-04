@@ -171,23 +171,23 @@ impl Mediator {
 
     /// Routes a request to its sole registered handler.
     ///
-    /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust panic strategy is
+    /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust strategy is
     /// unwinding. Builds configured with `panic = "abort"` terminate instead and cannot be
     /// recovered by this method.
     pub async fn send<M: Request>(&self, message: M) -> CatgaResult<M::Response> {
-        let request_type = std::any::type_name::<M>();
-        let span = observability::request_span(request_type);
+        let span = observability::request_span(std::any::type_name::<M>());
+        let started = Instant::now();
         if span.is_disabled() {
-            return isolate_mediator_panic(Self::dispatch(&self.registry, message)).await;
+            let result = isolate_mediator_panic(Self::dispatch(&self.registry, message)).await;
+            observability::record_request(&span, std::any::type_name::<M>(), started.elapsed(), &result);
+            return result;
         }
         observability::record_message_tags(&span, &message);
-        let started = Instant::now();
-        let result = isolate_mediator_panic(
-            Self::dispatch(&self.registry, message).instrument(span.clone()),
-        )
-        .await;
+        let result = Self::dispatch(&self.registry, message)
+            .instrument(span.clone())
+            .await;
         observability::record_response_tags::<M>(&span, &result);
-        observability::record_request(&span, request_type, started.elapsed(), &result);
+        observability::record_request(&span, std::any::type_name::<M>(), started.elapsed(), &result);
         result
     }
 
@@ -207,22 +207,22 @@ impl Mediator {
 
     /// Routes a command to its sole registered handler.
     ///
-    /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust panic strategy is
+    /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust strategy is
     /// unwinding. Builds configured with `panic = "abort"` terminate instead and cannot be
     /// recovered by this method.
     pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
-        let command_type = std::any::type_name::<C>();
-        let span = observability::command_span(command_type);
+        let span = observability::command_span(std::any::type_name::<C>());
+        let started = Instant::now();
         if span.is_disabled() {
-            return isolate_mediator_panic(Self::dispatch_command(&self.registry, command)).await;
+            let result = isolate_mediator_panic(Self::dispatch_command(&self.registry, command)).await;
+            observability::record_command(&span, std::any::type_name::<C>(), started.elapsed(), &result);
+            return result;
         }
         observability::record_message_tags(&span, &command);
-        let started = Instant::now();
-        let result = isolate_mediator_panic(
-            Self::dispatch_command(&self.registry, command).instrument(span.clone()),
-        )
-        .await;
-        observability::record_command(&span, command_type, started.elapsed(), &result);
+        let result = Self::dispatch_command(&self.registry, command)
+            .instrument(span.clone())
+            .await;
+        observability::record_command(&span, std::any::type_name::<C>(), started.elapsed(), &result);
         result
     }
 
@@ -385,13 +385,9 @@ impl Mediator {
 
     async fn dispatch<M: Request>(registry: &Registry, message: M) -> CatgaResult<M::Response> {
         let type_id = TypeId::of::<M>();
-        let slot = registry
-            .requests
-            .iter()
-            .find(|slot| slot.type_id == type_id)
-            .ok_or_else(|| {
-                CatgaError::new(ErrorCode::NotFound, "request handler is not registered")
-            })?;
+        let slot = registry.find_request(type_id).ok_or_else(|| {
+            CatgaError::new(ErrorCode::NotFound, "request handler is not registered")
+        })?;
         let response = slot.handler.handle(Box::new(message)).await?;
         response
             .downcast::<M::Response>()
@@ -406,13 +402,9 @@ impl Mediator {
 
     async fn dispatch_command<C: Command>(registry: &Registry, command: C) -> CatgaResult<()> {
         let type_id = TypeId::of::<C>();
-        let slot = registry
-            .commands
-            .iter()
-            .find(|slot| slot.type_id == type_id)
-            .ok_or_else(|| {
-                CatgaError::new(ErrorCode::NotFound, "command handler is not registered")
-            })?;
+        let slot = registry.find_command(type_id).ok_or_else(|| {
+            CatgaError::new(ErrorCode::NotFound, "command handler is not registered")
+        })?;
         slot.handler.handle(Box::new(command)).await
     }
 
@@ -530,9 +522,7 @@ impl Mediator {
         let event_type_id = TypeId::of::<E>();
         let handler_count = self
             .registry
-            .events
-            .iter()
-            .find(|slot| slot.type_id == event_type_id)
+            .find_event(event_type_id)
             .map_or(0, |slot| slot.handlers.len());
         let span = observability::event_span(event_type, handler_count);
         if span.is_disabled() {
@@ -556,12 +546,7 @@ impl Mediator {
         event_type_id: TypeId,
         concurrency_limit: usize,
     ) -> CatgaResult<()> {
-        let Some(slot) = self
-            .registry
-            .events
-            .iter()
-            .find(|slot| slot.type_id == event_type_id)
-        else {
+        let Some(slot) = self.registry.find_event(event_type_id) else {
             return Ok(());
         };
         let mut deliveries = stream::iter(slot.handlers.iter())
@@ -592,29 +577,26 @@ impl Mediator {
         let event_type_id = TypeId::of::<E>();
         let handler_count = self
             .registry
-            .events
-            .iter()
-            .find(|slot| slot.type_id == event_type_id)
+            .find_event(event_type_id)
             .map_or(0, |slot| slot.handlers.len());
         let span = observability::event_span(event_type, handler_count);
+        let started = Instant::now();
         if span.is_disabled() {
-            return self.publish_inner(event).await;
+            let result = self.publish_inner(event).await;
+            observability::record_event(&span, event_type, started.elapsed(), &result);
+            return result;
         }
         observability::record_message_tags(&span, &event);
-        let started = Instant::now();
-        let result = self.publish_inner(event).instrument(span.clone()).await;
+        let result = self.publish_inner(event)
+            .instrument(span.clone())
+            .await;
         observability::record_event(&span, event_type, started.elapsed(), &result);
         result
     }
 
     async fn publish_inner<E: Event + Clone>(&self, event: E) -> CatgaResult<()> {
         let event_type_id = TypeId::of::<E>();
-        if let Some(slot) = self
-            .registry
-            .events
-            .iter()
-            .find(|slot| slot.type_id == event_type_id)
-        {
+        if let Some(slot) = self.registry.find_event(event_type_id) {
             let handlers = &slot.handlers;
             let Some((last_handler, preceding_handlers)) = handlers.split_last() else {
                 return Ok(());
