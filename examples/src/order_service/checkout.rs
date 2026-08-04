@@ -7,7 +7,7 @@ use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, EventStore, MessageMetadata, OutboxMessage,
     OutboxProcessor, OutboxStore,
 };
-use catga_flow::compensating_flow;
+use catga_core::compensating_flow;
 
 use super::{
     domain::{GetOrder, OrderAccepted, OrderCompleted, PlaceOrder, RecordOrder},

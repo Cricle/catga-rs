@@ -49,7 +49,6 @@ use axum::{
 use catga_core::auto::AutoApp;
 use catga_axum::{
     CatgaHttpError, CatgaHttpResult, CorrelationLayer, MediatorState, TraceContextLayer,
-    web,
 };
 use catga_core::{
     CatgaError, CatgaResult, EndpointValidation, ErrorCode, Message, Request, request_handler_with,
@@ -199,7 +198,7 @@ async fn main() -> CatgaResult<()> {
         .layer(TraceContextLayer::new())
         .layer(CorrelationLayer::new())
         // MediatorState shares AutoApp's immutable mediator with one atomic Arc clone.
-        .with_state(web::mediator_state(&catga));
+        .with_state(MediatorState::new(catga.mediator_arc()));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await

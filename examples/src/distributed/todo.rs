@@ -3,7 +3,10 @@
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use catga_codec_memorypack::{MemoryPackCodec, MemoryPackable};
+use catga_core::codec::memorypack::{
+    MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackWriter, MemoryPackable,
+};
 use catga_core::{
     CatgaError, CatgaResult, Command, DistributedIdGenerator, Envelope, ErrorCode, Event,
     EventStore, Message, MessageMetadata, PayloadDecoder, PayloadEncoder, Projection,

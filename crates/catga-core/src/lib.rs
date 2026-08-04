@@ -159,7 +159,7 @@ pub mod memory;
 mod message;
 mod message_signing;
 mod message_type;
-mod new_transport;
+mod transport_trait;
 mod observability;
 mod outbox_processor;
 mod pipeline;
@@ -187,7 +187,6 @@ mod transport;
 mod transport_batching;
 mod typed_event_store;
 mod typed_publisher;
-mod typed_transport;
 mod upgrading_event_store;
 mod validation;
 mod versioned_transport;
@@ -268,7 +267,7 @@ pub use message::{
 };
 pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;
-pub use new_transport::Transport;
+pub use transport_trait::Transport;
 pub use observability::TRACING_TARGET;
 pub use outbox_processor::{OutboxLoopOptions, OutboxProcessor, OutboxRun};
 pub use pipeline::{
@@ -337,7 +336,6 @@ pub use transport::{
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
 pub use typed_event_store::TypedEventStore;
 pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
-pub use typed_transport::{TypedDelivery, TypedProcessOutcome, TypedTransport};
 pub use upgrading_event_store::UpgradingEventStore;
 pub use validation::{
     EndpointValidation, validate_max_length, validate_min_count, validate_min_length,
@@ -437,5 +435,65 @@ macro_rules! catga_command_pipeline {
             )*
             Ok(pipeline)
         })()
+    }};
+}
+
+/// Creates a compensating flow with named steps and their compensation actions.
+///
+/// The macro generates a [`Flow`] where each step has a corresponding compensation action
+/// that runs in reverse order if a subsequent step fails. The context must implement
+/// the step methods as async closures or functions.
+///
+/// ```
+/// use catga_core::flow::Flow;
+///
+/// struct Checkout;
+/// impl Checkout {
+///     async fn reserve_inventory(self) -> catga_core::CatgaResult<()> { Ok(()) }
+///     async fn release_inventory(self) -> catga_core::CatgaResult<()> { Ok(()) }
+///     async fn capture_payment(self) -> catga_core::CatgaResult<()> { Ok(()) }
+///     async fn refund_payment(self) -> catga_core::CatgaResult<()> { Ok(()) }
+/// }
+///
+/// let _flow = catga_core::compensating_flow! {
+///     "checkout";
+///     context = Checkout;
+///     steps {
+///         reserve_inventory => release_inventory;
+///         capture_payment => refund_payment;
+///     }
+/// };
+/// ```
+#[macro_export]
+macro_rules! compensating_flow {
+    (
+        $name:expr;
+        context = $context:expr;
+        steps {
+            $($run:ident => $compensate:ident;)+
+        }
+    ) => {{
+        let __catga_flow_context = $context;
+        let __catga_flow = $crate::flow::Flow::new($name);
+        $(let __catga_flow = __catga_flow.step_with(
+            __catga_flow_context.clone(),
+            |context| context.$run(),
+            |context| context.$compensate(),
+        );)+
+        __catga_flow
+    }};
+    (
+        $name:expr;
+        context = $context:expr;
+        $($run:expr => $compensate:expr);+ $(;)?
+    ) => {{
+        let __catga_flow_context = $context;
+        let __catga_flow = $crate::flow::Flow::new($name);
+        $(let __catga_flow = __catga_flow.step_with(
+            __catga_flow_context.clone(),
+            $run,
+            $compensate,
+        );)+
+        __catga_flow
     }};
 }

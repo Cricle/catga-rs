@@ -3,7 +3,7 @@
 use std::{env, sync::Arc};
 
 use catga_core::auto::Bus;
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, SnowflakeIdGenerator, SnowflakeLayout};
 use catga_examples::distributed_todo::{CreateTodo, TodoWorker};
 use catga_nats::{NatsConfig, NatsEventStore, NatsTransport};

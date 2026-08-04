@@ -8,9 +8,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use catga_core::auto::{Bus, PublisherHandle};
-use catga_codec_memorypack::{MemoryPackCodec, MemoryPackable};
+use catga_core::codec::memorypack::{
+    MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackWriter, MemoryPackable,
+};
 use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
-use catga_memory::MemoryTransport;
+use catga_core::memory::MemoryTransport;
 
 #[derive(Clone, MemoryPackable)]
 struct Ping(u32);

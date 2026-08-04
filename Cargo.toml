@@ -8,6 +8,7 @@ members = [
     "crates/catga-nats",
     "crates/catga-redis",
     "crates/catga-robustmq",
+    "examples",
 ]
 resolver = "3"
 

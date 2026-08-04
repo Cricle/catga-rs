@@ -54,7 +54,7 @@ use crate::{
     DeliveryHandler, Destination, DestinationTransport, DistributedIdGenerator, Envelope,
     ErrorCode, Fault, Message, MessageDestinationRouter, MessageMetadata, MessageTransport,
     PayloadDecoder, PayloadEncoder, RemoteRequest, RequestTransport, ShutdownCoordinator,
-    SnowflakeIdGenerator, SnowflakeLayout, TypedDeliveryHandler, TypedTransport,
+    SnowflakeIdGenerator, SnowflakeLayout, TypedDeliveryHandler,
 };
 use async_trait::async_trait;
 use futures::future::LocalBoxFuture;
@@ -299,14 +299,10 @@ impl<T: MessageTransport + 'static> BusBuilder<T> {
         C: Default + Send + Sync + 'static,
     {
         let router = Arc::new(self.router);
-        let ids = Arc::new(SnowflakeIdGenerator::new(1, SnowflakeLayout::default())?);
-        let typed = TypedTransport::new_with_codec(
-            Arc::clone(&self.transport),
-            ids as Arc<dyn DistributedIdGenerator>,
-            codec,
-        );
+        let transport = self.transport;
         let publisher = BusPublisher {
-            inner: typed,
+            transport: Arc::clone(&transport),
+            codec: Arc::new(codec),
             router: Arc::clone(&router),
         };
         let bus = Bus {
@@ -439,13 +435,15 @@ where
 /// resolves its destination from the topology registered during endpoint configuration, and
 /// sends it to that destination.
 pub struct BusPublisher<T: ?Sized, C> {
-    inner: TypedTransport<T, C>,
+    transport: Arc<T>,
+    codec: Arc<C>,
     router: Arc<MessageDestinationRouter>,
 }
 
 impl<T, C> BusPublisher<T, C>
 where
     T: DestinationTransport + ?Sized,
+    C: Send + Sync + 'static,
 {
     /// Publishes one message to the destination registered for its message type.
     ///
@@ -455,7 +453,21 @@ where
         M: Message,
         C: PayloadEncoder<M>,
     {
-        self.inner.send_routed(&self.router, message).await
+        let message_type = message.message_type();
+        let destination = self
+            .router
+            .resolve(message_type)
+            .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "no route for message type"))?;
+
+        let payload = self.codec.encode_payload(message)?;
+        let envelope = Envelope::new(
+            0, // id is assigned by the transport
+            message_type,
+            payload,
+            MessageMetadata::new(0, None),
+        );
+
+        self.transport.send_to(destination, envelope).await
     }
 
     /// Returns the shared topology router for constructing request clients.
@@ -532,6 +544,7 @@ impl<T: ?Sized, C> PublisherHandle<T, C> {
 impl<T, C> PublisherHandle<T, C>
 where
     T: DestinationTransport + ?Sized,
+    C: Send + Sync + 'static,
 {
     /// Binds the publisher, activating this handle and all its clones.
     ///
@@ -725,21 +738,21 @@ where
     }
 }
 
-/// Adapts a [`StateMachineEventRouter`](catga_flow::StateMachineEventRouter) as a Bus endpoint handler.
+/// Adapts a [`StateMachineEventRouter`](crate::flow::StateMachineEventRouter) as a Bus endpoint handler.
 ///
 /// Each delivered event is routed to the state-machine instance selected by the router's
 /// registered instance-id resolver. Routing errors propagate as handler failures, triggering
 /// the consumer's nack/dead-letter policy.
 #[cfg(feature = "flow")]
 pub struct StateMachineHandler<S, K, Store, E> {
-    router: Arc<catga_flow::StateMachineEventRouter<S, K, Store>>,
+    router: Arc<crate::flow::StateMachineEventRouter<S, K, Store>>,
     marker: PhantomData<fn(E)>,
 }
 
 #[cfg(feature = "flow")]
 impl<S, K, Store, E> StateMachineHandler<S, K, Store, E> {
     /// Creates a handler that routes delivered events through `router`.
-    pub fn new(router: Arc<catga_flow::StateMachineEventRouter<S, K, Store>>) -> Self {
+    pub fn new(router: Arc<crate::flow::StateMachineEventRouter<S, K, Store>>) -> Self {
         Self {
             router,
             marker: PhantomData,
@@ -751,10 +764,10 @@ impl<S, K, Store, E> StateMachineHandler<S, K, Store, E> {
 #[async_trait]
 impl<S, K, Store, E> TypedDeliveryHandler<E> for StateMachineHandler<S, K, Store, E>
 where
-    S: catga_flow::StateMachineState<K>,
+    S: crate::flow::StateMachineState<K>,
     K: Clone + Eq + std::hash::Hash + Send + Sync + 'static,
-    Store: catga_flow::StateMachineStore<S> + 'static,
-    E: catga_core::Event,
+    Store: crate::flow::StateMachineStore<S> + 'static,
+    E: crate::Event,
 {
     async fn handle(&self, event: &E) -> CatgaResult<()> {
         self.router.route(event).await.map(|_| ())

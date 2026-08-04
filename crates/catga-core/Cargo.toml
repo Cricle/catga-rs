@@ -12,6 +12,19 @@ workspace = true
 
 [features]
 unstable = []
+flow = []
+uuid = ["dep:uuid"]
+rust_decimal = ["dep:rust_decimal"]
+half = ["dep:half"]
+num-bigint = ["dep:num-bigint"]
+chrono = ["dep:chrono"]
+glam = ["dep:glam"]
+num-complex = ["dep:num-complex"]
+url = ["dep:url"]
+hashbrown = ["dep:hashbrown"]
+ahash = ["dep:ahash"]
+serde = []
+test-hooks = []
 
 [dependencies]
 arc-swap = "1"
@@ -36,7 +49,16 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tokio-cron-scheduler = { version = "0.15.1", default-features = false }
 tokio-util = "0.7"
 tracing = "0.1"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4"], optional = true }
+chrono = { version = "0.4", optional = true }
+hashbrown = { version = "0.15", optional = true }
+ahash = { version = "0.8", optional = true }
+rust_decimal = { version = "1", optional = true }
+half = { version = "2", features = ["std"], optional = true }
+num-bigint = { version = "0.4", optional = true }
+glam = { version = "0.27", optional = true }
+num-complex = { version = "0.4", optional = true }
+url = { version = "2", optional = true }
 
 [dev-dependencies]
 serde_json = "1"

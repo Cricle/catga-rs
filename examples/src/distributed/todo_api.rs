@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use catga_axum::{CatgaHttpError, CatgaHttpResult};
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, DistributedIdGenerator, Envelope, ErrorCode, MessageMetadata,
     PayloadEncoder, SnowflakeIdGenerator, SnowflakeLayout,

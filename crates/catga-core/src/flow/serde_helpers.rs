@@ -3,7 +3,7 @@
 //! This module provides custom serde serialization/deserialization functions
 //! for types like `Arc<[T]>` that don't have built-in serde support.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::Arc;
 
 /// Serializes an `Arc<[T]>` as a sequence, converting to Vec during serialization.

@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[derive(Clone, Debug)]
-    struct Echo(String);
+    struct Echo;
 
     impl Message for Echo {
         fn schema_version(&self) -> u32 {
@@ -139,9 +139,7 @@ mod tests {
     }
 
     #[derive(Clone, Debug)]
-    struct UserLoggedIn {
-        user_id: u64,
-    }
+    struct UserLoggedIn;
 
     impl Message for UserLoggedIn {
         fn schema_version(&self) -> u32 {

@@ -10,12 +10,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use catga_core::auto::Bus;
-use catga_codec_memorypack::{MemoryPackCodec, MemoryPackable};
+use catga_core::codec::memorypack::{
+    MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackWriter, MemoryPackable,
+};
 use catga_core::{
     CatgaResult, Envelope, EnvelopePublisher, Message, MessageMetadata, PayloadEncoder,
     TypedDeliveryHandler,
 };
-use catga_memory::MemoryTransport;
+use catga_core::memory::MemoryTransport;
 
 // ---------------------------------------------------------------------------
 // Message types

@@ -17,14 +17,6 @@ use tokio::{sync::Notify, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 mod __catga_types {
-    pub struct PingTypeId;
-    impl catga_core::MessageTypeId for PingTypeId {
-        const NAME: &'static str = "Ping";
-    }
-    pub struct BlockingRequestTypeId;
-    impl catga_core::MessageTypeId for BlockingRequestTypeId {
-        const NAME: &'static str = "BlockingRequest";
-    }
     pub struct AddTypeId;
     impl catga_core::MessageTypeId for AddTypeId {
         const NAME: &'static str = "Add";

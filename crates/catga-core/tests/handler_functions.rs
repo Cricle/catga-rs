@@ -10,21 +10,6 @@ use catga_core::{
     command_handler_with, event_handler, event_handler_with, request_handler, request_handler_with,
 };
 
-mod __catga_types {
-    pub struct DoubleTypeId;
-    impl catga_core::MessageTypeId for DoubleTypeId {
-        const NAME: &'static str = "Double";
-    }
-    pub struct IncrementTypeId;
-    impl catga_core::MessageTypeId for IncrementTypeId {
-        const NAME: &'static str = "Increment";
-    }
-    pub struct CountedTypeId;
-    impl catga_core::MessageTypeId for CountedTypeId {
-        const NAME: &'static str = "Counted";
-    }
-}
-
 #[derive(Clone)]
 struct Double(u64);
 
@@ -40,7 +25,7 @@ struct Increment;
 
 impl Message for Increment {}
 impl Command for Increment {
-    type TypeId = __catga_types::IncrementTypeId;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
@@ -48,7 +33,7 @@ struct Counted;
 
 impl Message for Counted {}
 impl Event for Counted {
-    type TypeId = __catga_types::CountedTypeId;
+    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[tokio::test]

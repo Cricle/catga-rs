@@ -11,10 +11,6 @@ mod __catga_types {
     impl catga_core::MessageTypeId for DeferredRequestTypeId {
         const NAME: &'static str = "DeferredRequest";
     }
-    pub struct DeferredEventTypeId;
-    impl catga_core::MessageTypeId for DeferredEventTypeId {
-        const NAME: &'static str = "DeferredEvent";
-    }
 }
 
 #[derive(Clone)]

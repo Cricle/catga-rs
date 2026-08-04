@@ -12,10 +12,9 @@ use std::sync::{
 use async_trait::async_trait;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, Handler, Mediator, Message, MessageMetadata,
-    MessageTransport, Request, catga_handlers,
+    MessageTransport, Request, catga_handlers, flow::{Flow, FlowResult},
 };
-use catga_flow::{Flow, FlowResult};
-use catga_memory::MemoryTransport;
+use catga_core::memory::MemoryTransport;
 
 /// The typed query that keeps price validation at the CQRS boundary.
 #[derive(Clone)]
