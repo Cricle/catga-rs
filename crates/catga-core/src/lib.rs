@@ -129,6 +129,10 @@
 //! # }
 //! ```
 
+// ============================================================================
+// Module declarations
+// ============================================================================
+
 mod aggregate;
 pub mod auto;
 mod auto_snapshot;
@@ -237,12 +241,26 @@ pub use correlation::{
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
 };
+// ============================================================================
+// Core re-exports: Error handling
+// ============================================================================
+
 pub use error::{CatgaError, CatgaResult, ErrorCode, MAX_ERROR_DETAILS_BYTES};
+
+// ============================================================================
+// Core re-exports: Message types
+// ============================================================================
+
+pub use message::{
+    BatchKeyProvider, BatchOptionsProvider, Command, DefaultMessageTypeId, DelayedEvent,
+    DelayedMessage, DelayedRequest, DeliveryMode, Event, Message, MessageMetadata, MessagePriority,
+    MessageTypeId, QualityOfService, Request,
+};
+pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use event_store::{
     EventPage, EventStore, EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage,
     VersionHistoryPage, VersionInfo, validate_event_store_page_size,
 };
-pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
 pub use handler::{
     CommandHandler, CommandHandlerFn, EventHandler, EventHandlerFn, Handler, RequestHandlerFn,
@@ -260,11 +278,6 @@ pub use macros::{
     catga_request, catga_typed_mediator,
 };
 pub use mediator::{MAX_MEDIATOR_BATCH_SIZE, Mediator, MediatorHandle};
-pub use message::{
-    BatchKeyProvider, BatchOptionsProvider, Command, DefaultMessageTypeId, DelayedEvent,
-    DelayedMessage, DelayedRequest, DeliveryMode, Event, Message, MessageMetadata, MessagePriority,
-    MessageTypeId, QualityOfService, Request,
-};
 pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;
 pub use observability::TRACING_TARGET;
@@ -447,6 +460,7 @@ macro_rules! catga_command_pipeline {
 /// ```
 /// use catga_core::flow::Flow;
 ///
+/// #[derive(Clone)]
 /// struct Checkout;
 /// impl Checkout {
 ///     async fn reserve_inventory(self) -> catga_core::CatgaResult<()> { Ok(()) }
