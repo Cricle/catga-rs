@@ -28,15 +28,6 @@ fn bench_flow_state_clone(b: &mut test::Bencher) {
     });
 }
 
-// Benchmark: FlowState struct size
-#[bench]
-fn bench_flow_state_sizeof(b: &mut test::Bencher) {
-    let state = FlowState::new("flow-1", "checkout", b"test".to_vec(), "owner-1");
-    b.iter(|| {
-        test::black_box(std::mem::size_of_val(&state));
-    });
-}
-
 // Benchmark: FlowState id accessor
 #[bench]
 fn bench_flow_state_id(b: &mut test::Bencher) {
@@ -46,12 +37,39 @@ fn bench_flow_state_id(b: &mut test::Bencher) {
     });
 }
 
-// Benchmark: FlowState status transition
+// Benchmark: FlowState status accessor
 #[bench]
-fn bench_flow_state_status_transition(b: &mut test::Bencher) {
+fn bench_flow_state_status(b: &mut test::Bencher) {
+    let state = FlowState::new("flow-1", "checkout", b"test".to_vec(), "owner-1");
+    b.iter(|| {
+        test::black_box(state.status());
+    });
+}
+
+// Benchmark: FlowState data accessor
+#[bench]
+fn bench_flow_state_data(b: &mut test::Bencher) {
+    let state = FlowState::new("flow-1", "checkout", b"test".to_vec(), "owner-1");
+    b.iter(|| {
+        test::black_box(state.data());
+    });
+}
+
+// Benchmark: FlowState status transition (running)
+#[bench]
+fn bench_flow_state_status_running(b: &mut test::Bencher) {
     let state = FlowState::new("flow-1", "checkout", b"test".to_vec(), "owner-1");
     b.iter(|| {
         test::black_box(state.clone().running());
+    });
+}
+
+// Benchmark: FlowState status transition (done)
+#[bench]
+fn bench_flow_state_status_done(b: &mut test::Bencher) {
+    let state = FlowState::new("flow-1", "checkout", b"test".to_vec(), "owner-1");
+    b.iter(|| {
+        test::black_box(state.clone().done(5));
     });
 }
 
@@ -133,6 +151,18 @@ fn bench_flow_state_deserialize(b: &mut test::Bencher) {
     let state = FlowState::new("flow-1", "checkout", b"test".to_vec(), "owner-1");
     let bytes = MemoryPackSerializer::serialize(&state).unwrap();
     b.iter(|| {
+        let restored: FlowState = MemoryPackSerializer::deserialize(&bytes).unwrap();
+        test::black_box(restored);
+    });
+}
+
+// Benchmark: FlowState serialize + deserialize roundtrip
+#[bench]
+fn bench_flow_state_roundtrip(b: &mut test::Bencher) {
+    use catga_core::MemoryPackSerializer;
+    let state = FlowState::new("flow-1", "checkout", b"test".to_vec(), "owner-1");
+    b.iter(|| {
+        let bytes = MemoryPackSerializer::serialize(&state).unwrap();
         let restored: FlowState = MemoryPackSerializer::deserialize(&bytes).unwrap();
         test::black_box(restored);
     });

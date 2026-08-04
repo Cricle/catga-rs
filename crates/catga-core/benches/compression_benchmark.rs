@@ -130,11 +130,21 @@ fn bench_compression_stats_accessors(b: &mut test::Bencher) {
     });
 }
 
-// Benchmark: CompressionStats struct size
+// Benchmark: CompressionStats clone
 #[bench]
-fn bench_compression_stats_sizeof(b: &mut test::Bencher) {
+fn bench_compression_stats_clone(b: &mut test::Bencher) {
     let stats = CompressionStats::new(1024, 256);
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&stats));
+        test::black_box(stats);
+    });
+}
+
+// Benchmark: Compression round-trip (compress + decompress)
+#[bench]
+fn bench_compression_roundtrip_gzip(b: &mut test::Bencher) {
+    let data = generate_test_data(1024);
+    b.iter(|| {
+        let compressed = compress(&data, CompressionAlgorithm::Gzip).unwrap();
+        test::black_box(decompress(&compressed).unwrap());
     });
 }

@@ -23,6 +23,7 @@ impl Request for Ping {
     type TypeId = PingTypeId;
 }
 
+#[derive(Clone)]
 struct PingHandler;
 #[async_trait]
 impl Handler<Ping> for PingHandler {
@@ -42,6 +43,7 @@ impl Command for MyCommand {
     type TypeId = CommandTypeId;
 }
 
+#[derive(Clone)]
 struct CommandHandlerImpl;
 #[async_trait]
 impl CommandHandler<MyCommand> for CommandHandlerImpl {
@@ -63,6 +65,7 @@ impl Event for MyEvent {
     type TypeId = EventTypeId;
 }
 
+#[derive(Clone)]
 struct EventHandlerImpl;
 #[async_trait]
 impl EventHandler<MyEvent> for EventHandlerImpl {
@@ -71,7 +74,7 @@ impl EventHandler<MyEvent> for EventHandlerImpl {
     }
 }
 
-// Benchmark: Handler implementation creation
+// Benchmark: Handler creation
 #[bench]
 fn bench_handler_creation(b: &mut test::Bencher) {
     b.iter(|| {
@@ -80,51 +83,47 @@ fn bench_handler_creation(b: &mut test::Bencher) {
     });
 }
 
-// Benchmark: Handler struct size
+// Benchmark: Handler clone (for registry storage)
 #[bench]
-fn bench_handler_sizeof(b: &mut test::Bencher) {
+fn bench_handler_clone(b: &mut test::Bencher) {
     let handler = PingHandler;
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&handler));
+        test::black_box(handler.clone());
     });
 }
 
-// Benchmark: CommandHandler implementation size
+// Benchmark: Command handler clone
 #[bench]
-fn bench_command_handler_sizeof(b: &mut test::Bencher) {
+fn bench_command_handler_clone(b: &mut test::Bencher) {
     let handler = CommandHandlerImpl;
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&handler));
+        test::black_box(handler.clone());
     });
 }
 
-// Benchmark: EventHandler implementation size
+// Benchmark: Event handler clone
 #[bench]
-fn bench_event_handler_sizeof(b: &mut test::Bencher) {
+fn bench_event_handler_clone(b: &mut test::Bencher) {
     let handler = EventHandlerImpl;
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&handler));
+        test::black_box(handler.clone());
     });
 }
 
-// Benchmark: Message struct sizes
+// Benchmark: Message creation (with payload)
 #[bench]
-fn bench_message_struct_sizes(b: &mut test::Bencher) {
+fn bench_message_creation_with_payload(b: &mut test::Bencher) {
     b.iter(|| {
-        let ping = Ping(42);
-        let cmd = MyCommand;
-        let evt = MyEvent;
-        test::black_box(std::mem::size_of_val(&ping));
-        test::black_box(std::mem::size_of_val(&cmd));
-        test::black_box(std::mem::size_of_val(&evt));
+        let msg = Ping(42);
+        test::black_box(msg);
     });
 }
 
-// Benchmark: Request message with payload size
+// Benchmark: Message creation (empty)
 #[bench]
-fn bench_request_message_sizeof(b: &mut test::Bencher) {
-    let msg = Ping(123456789);
+fn bench_message_creation_empty(b: &mut test::Bencher) {
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&msg));
+        let msg = MyCommand;
+        test::black_box(msg);
     });
 }

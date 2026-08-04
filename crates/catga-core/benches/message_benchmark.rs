@@ -12,6 +12,7 @@ impl MessageTypeId for PingTypeId {
     const NAME: &'static str = "Ping";
 }
 
+#[derive(Clone)]
 struct Ping;
 impl Message for Ping {}
 
@@ -20,24 +21,25 @@ impl MessageTypeId for QueryTypeId {
     const NAME: &'static str = "Query";
 }
 
+#[derive(Clone)]
 struct Query;
 impl Message for Query {}
 
-// Benchmark: Message struct size
+// Benchmark: Message creation (empty struct)
 #[bench]
-fn bench_message_sizeof_ping(b: &mut test::Bencher) {
-    let msg = Ping;
+fn bench_message_creation_empty(b: &mut test::Bencher) {
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&msg));
+        let msg = Ping;
+        test::black_box(msg);
     });
 }
 
-// Benchmark: Message struct size (empty struct)
+// Benchmark: Message clone (empty)
 #[bench]
-fn bench_message_sizeof_query(b: &mut test::Bencher) {
-    let msg = Query;
+fn bench_message_clone_empty(b: &mut test::Bencher) {
+    let msg = Ping;
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&msg));
+        test::black_box(msg.clone());
     });
 }
 
@@ -62,5 +64,22 @@ fn bench_message_type_id_name(b: &mut test::Bencher) {
 fn bench_message_type_id_compare(b: &mut test::Bencher) {
     b.iter(|| {
         test::black_box(PingTypeId::NAME == "Ping");
+    });
+}
+
+// Benchmark: MessageTypeId name comparison (different name)
+#[bench]
+fn bench_message_type_id_compare_miss(b: &mut test::Bencher) {
+    b.iter(|| {
+        test::black_box(PingTypeId::NAME == "Query");
+    });
+}
+
+// Benchmark: Multiple type comparisons in sequence
+#[bench]
+fn bench_message_type_id_multiple_compares(b: &mut test::Bencher) {
+    b.iter(|| {
+        let name = QueryTypeId::NAME;
+        test::black_box(name == "Ping" || name == "Query" || name == "Command");
     });
 }

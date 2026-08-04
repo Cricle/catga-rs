@@ -73,29 +73,23 @@ fn bench_retry_jitter_delay_full(b: &mut test::Bencher) {
     });
 }
 
-// Benchmark: RetryJitter clone (None variant)
+// Benchmark: RetryJitter clone (for passing to tasks)
 #[bench]
-fn bench_retry_jitter_clone_none(b: &mut test::Bencher) {
-    let jitter = RetryJitter::none();
-    b.iter(|| {
-        test::black_box(jitter);
-    });
-}
-
-// Benchmark: RetryJitter clone (Full variant)
-#[bench]
-fn bench_retry_jitter_clone_full(b: &mut test::Bencher) {
-    let jitter = RetryJitter::full(12345);
-    b.iter(|| {
-        test::black_box(jitter);
-    });
-}
-
-// Benchmark: RetryJitter struct size
-#[bench]
-fn bench_retry_jitter_sizeof(b: &mut test::Bencher) {
+fn bench_retry_jitter_clone(b: &mut test::Bencher) {
     let jitter = RetryJitter::production_default();
     b.iter(|| {
-        test::black_box(std::mem::size_of_val(&jitter));
+        test::black_box(jitter);
+    });
+}
+
+// Benchmark: Multiple jitter calculations in sequence
+#[bench]
+fn bench_retry_jitter_multiple_calculations(b: &mut test::Bencher) {
+    let jitter = RetryJitter::full(12345);
+    let base = Duration::from_millis(100);
+    b.iter(|| {
+        let _d1 = jitter.delay_for_sample(base, 5000);
+        let _d2 = jitter.delay_for_sample(base, 5001);
+        let _d3 = jitter.delay_for_sample(base, 5002);
     });
 }
