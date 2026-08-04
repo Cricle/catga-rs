@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
-//! Flow runtime for Catga.
+//! Flow orchestration DSL and runtime.
 //!
-//! The flow module provides durable, checkpointable flow execution for long-running
-//! business processes with support for parallel branches, wait conditions, and
-//! compensation/rollback semantics.
+//! This module provides the [`DslFlow`] builder for composing compensating transactions
+//! (saga pattern) with typed step closures and automatic rollback on failure.
 
 pub mod child_launch;
 /// Flow step completion tracking and signaling.

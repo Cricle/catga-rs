@@ -1,3 +1,7 @@
+//! Runtime execution engine for Flow orchestration.
+//!
+//! Handles step execution, compensation on failure, suspension, and checkpointing.
+
 use std::{
     sync::Arc,
     time::{Duration, SystemTime},

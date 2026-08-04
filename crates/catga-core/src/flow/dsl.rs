@@ -1,4 +1,7 @@
 //! Typed, state-owning flow DSL primitives.
+//!
+//! The DSL provides a builder API for defining durable flows with checkpoint support,
+//! parallel branches, and compensation on failure.
 
 use std::{
     collections::{HashMap, hash_map::Entry},
