@@ -21,9 +21,8 @@ pub const MAX_SCHEDULED_TASK_ID_BYTES: usize = 256;
 
 /// A runtime-neutral task schedule.
 ///
-/// Catga currently standardizes cron expressions because the provided scheduler adapter is based
-/// on `tokio-cron-scheduler`. The expression is retained unchanged; its grammar and timezone
-/// semantics are defined by the selected [`TaskScheduler`] implementation.
+/// Cron expressions are stored unchanged; their grammar and timezone semantics are defined by the
+/// selected [`TaskScheduler`] implementation.
 ///
 /// ```
 /// use catga_core::TaskSchedule;
