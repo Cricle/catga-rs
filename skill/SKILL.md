@@ -21,19 +21,15 @@ Catga 是纯 Rust 的 CQRS、事件溯源、工作流与分布式运行时工作
 
 | 需求 | 依赖 |
 | --- | --- |
-| 进程内 typed 请求/命令/事件（必需核心） | `catga-core = "0.1"` |
-| 补偿性 / 持久化工作流 | `catga-flow = "0.1"` |
-| 有界内存适配器、确定性测试 | `catga-memory = "0.1"` |
-| SQL/Redis 持久化 Flow 状态 | `catga-flow-store = { version = "0.1", features = ["sqlite"] }`（按后端选 `sqlite`/`mysql`/`postgres`/`mssql`/`redis`，网络库可再加 `tls-rustls`） |
-| NATS 传输与 JetStream 存储 | `catga-nats = "0.1"` |
-| Redis 传输与存储 | `catga-redis = "0.1"` |
-| RobustMQ 传输（mq9 mailbox） | `catga-robustmq = "0.1"` |
-| MemoryPack 编解码（envelope/快照/RPC 默认） | `catga-codec-memorypack = "0.1"` |
-| bincode 载荷编解码 | `catga-codec-bincode = "0.1"` |
-| Axum HTTP 集成（关联/追踪中间件、错误映射） | `catga-axum = "0.1"` |
-| 集群/Raft、单例任务、leader-only 执行 | `catga-cluster = "0.1"` |
-| tokio-cron 调度集成 | `catga-scheduler-tokio-cron = "0.1"` |
-| 进程内测试构件（spy/harness/断言） | `catga-testing = "0.1"`（dev-dependencies） |
+| 进程内 typed 请求/命令/事件（必需核心） | `catga-core = "0.0.2"` |
+| 补偿性 / 持久化工作流 | `catga-flow = "0.0.2"` |
+| 有界内存适配器、确定性测试 | `catga-memory = "0.0.2"` |
+| SQL/Redis 持久化 Flow 状态 | `catga-flow-store = { version = "0.0.2", features = ["sqlite"] }` |
+| NATS 传输与 JetStream 存储 | `catga-nats = "0.0.2"` |
+| Redis 传输与存储 | `catga-redis = "0.0.2"` |
+| RobustMQ 传输（mq9 mailbox） | `catga-robustmq = "0.0.2"` |
+| Axum HTTP 集成 | `catga-axum = "0.0.2"` |
+| 集群/Raft、单例任务、leader-only 执行 | `catga-cluster = "0.0.2"` |
 
 运行时需要 `tokio = { version = "1", features = ["macros", "rt-multi-thread"] }`；结构体处理器需要 `async-trait = "0.1"`。
 
@@ -41,8 +37,7 @@ Catga 是纯 Rust 的 CQRS、事件溯源、工作流与分布式运行时工作
 
 ```toml
 [dependencies]
-async-trait = "0.1"
-catga-core = "0.1"
+catga-core = "0.0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

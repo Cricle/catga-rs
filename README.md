@@ -12,17 +12,17 @@ distribution.
 
 ## Start Here
 
-| Need | Start with | Next step |
+| Need | Example | Description |
 | --- | --- | --- |
-| A typed local command or query | [`mediator`](examples/src/quickstart/mediator.rs) | Add policies or a durable boundary. |
-| The lowest-overhead fixed handler set | [`typed_mediator`](examples/src/quickstart/typed_mediator.rs) | Use compile-time dispatch on a hot path. |
-| Routed messages and worker topology | [`bus_cqrs`](examples/src/runtime/bus_cqrs.rs) | Choose an application-owned transport. |
-| An HTTP application | [`order_service`](examples/src/web/order_service.rs) | Replace in-memory adapters with durable ones. |
-| A real multi-process deployment | [`distributed Todo`](examples/distributed-todo/compose.yaml) | Run Axum, NATS JetStream, consumer, and projection together. |
+| Typed local command/query | [`examples/src/quickstart/mediator.rs`](examples/src/quickstart/mediator.rs) | Basic mediator with plain async handlers |
+| Zero-cost typed dispatch | [`examples/src/quickstart/typed_mediator.rs`](examples/src/quickstart/typed_mediator.rs) | Compile-time dispatch on hot paths |
+| Routed messages and workers | [`examples/src/runtime/bus_cqrs.rs`](examples/src/runtime/bus_cqrs.rs) | Bus with request/command/event handlers |
+| HTTP with CQRS | [`examples/src/web/order_service.rs`](examples/src/web/order_service.rs) | Axum + Catga integration |
+| Durable flows | [`examples/src/quickstart/flow.rs`](examples/src/quickstart/flow.rs) | State-machine workflows with compensation |
 
-## Quick start
+## Quick Start
 
-Plain async functions automatically satisfy handler traits thanks to Fn-blanket impls.
+Plain async functions automatically satisfy handler traits via Fn-blanket impls.
 No `#[async_trait]` needed for simple handlers:
 
 ```rust
@@ -49,11 +49,21 @@ async fn main() -> CatgaResult<()> {
 }
 ```
 
-The complete ordered path, prerequisites, and commands are in the examples directory.
+## Crates
+
+| Crate | Purpose |
+| --- | --- |
+| `catga-core` | Core contracts: Mediator, Registry, behaviors, memory adapters |
+| `catga-auto` | High-level App builder with fluent API |
+| `catga-core-macros` | `#[catga_main]`, `catga_handlers!` procedural macros |
+| `catga-axum` | Axum integration with typed request/response mapping |
+| `catga-cluster` | Raft-based distributed coordination |
+| `catga-nats` | NATS JetStream transport for publish/subscribe and request/reply |
+| `catga-redis` | Redis transport for queues, pub/sub, and stream operations |
+| `catga-robustmq` | RobustMQ transport for priority queues and scheduled messages |
+| `catga-flow-store` | Durable state persistence for Flow workflows (SQLite/Redis) |
 
 ## Install
-
-Choose the smallest crate that owns the contract you need:
 
 ```toml
 [dependencies]
@@ -62,115 +72,133 @@ catga-core = "0.0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-| Need | Dependency |
-| --- | --- |
-| Compensating or durable flows | `catga-flow = "0.0.2"` |
-| Bounded local adapters and deterministic tests | `catga-memory = "0.0.2"` |
-| SQL or Redis durable Flow state | `catga-flow-store = { version = "0.0.2", features = ["sqlite"] }` |
-| NATS, Redis, RobustMQ, cluster, Axum, or cron | Add the matching opt-in `catga-*` crate. |
-
-## Flow
-
-State-machine workflows with automatic retry and compensation:
-
-```rust
-use catga_flow::{Flow, Transition};
-use catga_core::{CatgaResult, Message, Command};
-
-// Define states and transitions
-#[derive(Transition)]
-enum OrderFlow {
-    Pending -> Confirmed(OrderConfirmed),
-    Confirmed -> Shipped(OrderShipped),
-    Shipped -> Delivered(OrderDelivered),
-}
-```
-
-Flow state is durable when using `catga-flow-store` with SQLite or Redis.
-
-## FlowStore
-
-Persistent state for Flow workflows:
+### Feature Flags
 
 ```toml
+# Flow state persistence
 catga-flow-store = { version = "0.0.2", features = ["sqlite"] }
+catga-flow-store = { version = "0.0.2", features = ["sqlx-postgres"] }
+
+# Transports
+catga-nats = "0.0.2"
+catga-redis = "0.0.2"
+catga-robustmq = "0.0.2"
+
+# HTTP adapter
+catga-axum = "0.0.2"
 ```
 
-FlowStore provides durable state persistence for workflows, enabling recovery after restart.
+## Core Concepts
 
-## Run An Example
+### Mediator Pattern
 
-Run a local program without Docker:
+Request (one handler, returns response), Command (one handler, no response),
+and Event (multiple handlers) messages with typed dispatch:
+
+```rust
+use catga_core::{Message, Request, Command, Event, Mediator, Registry};
+
+struct GetUser(u64);
+impl Message for GetUser {}
+impl Request for GetUser { type Response = User; }
+
+struct CreateUser(String);
+impl Message for CreateUser {}
+impl Command for CreateUser {}
+
+struct UserCreated(u64);
+impl Message for UserCreated {}
+impl Event for UserCreated {}
+```
+
+### Compensating Flows
+
+Multi-step workflows with automatic retry and rollback on failure:
+
+```rust
+use catga_core::{compensating_flow, CatgaResult, Message, Command};
+
+struct Order { id: u64 }
+impl Message for Order {}
+impl Command for Order {}
+
+let flow = compensating_flow! {
+    "checkout";
+    context = Order { id: 1 };
+    steps {
+        reserve_inventory => release_inventory;
+        capture_payment => refund_payment;
+    }
+};
+```
+
+### Durable Patterns
+
+- **Outbox**: Reliable event publishing with at-least-once delivery
+- **Inbox**: Idempotent command processing with deduplication
+- **Competing Consumers**: Multiple workers processing shared queues
+- **Dead Letter**: Failed messages routing to error queues
+
+## Run Examples
 
 ```bash
+# Basic mediator
 cargo run -p catga-examples --bin mediator
-```
 
-Run the full distributed reference application:
+# Typed mediator
+cargo run -p catga-examples --bin typed_mediator
 
-```bash
+# Flow example
+cargo run -p catga-examples --bin flow
+
+# Bus with CQRS
+cargo run -p catga-examples --bin simple_bus
+cargo run -p catga-examples --bin bus_cqrs
+
+# HTTP with Axum
+cargo run -p catga-examples --bin checkout
+
+# Distributed (requires Docker)
 docker compose --file examples/distributed-todo/compose.yaml up --build
-examples/distributed-todo/verify.sh
 ```
 
-The Todo API publishes durable commands to JetStream. A typed competing consumer
-appends events, and the API rebuilds its in-memory read model through a durable
-projection checkpoint after restart. The API is publish-only and does not create
-an idle consumer. Configure production resource names and identities with the
-documented `CATGA_TODO_*` environment variables.
+## Production Guidelines
 
-## Production Boundaries
-
-- Delivery, Flow recovery, and retries are at-least-once. Make external effects
-  idempotent with an application-owned stable key.
-- Run migrations in controlled startup, then supervise consumers, schedulers,
-  outbox processors, and shutdown in application-owned tasks.
-- Select only the Cargo features and adapters your deployment uses.
-- Use `CompetingConsumer` for durable production receive loops. `process_next`
-  is a useful one-message composition and test helper.
-- Keep database connection pools application-owned. Catga exposes configuration
-  but does not impose a connection count on the application.
-
-## Performance
-
-The current release-mode benchmark table and measurement scope are in the crate's source code documentation.
-
-## Documentation
-
-- [Examples](docs/examples.md): ordered runnable programs and the distributed
-  Todo reference application.
-- [Performance](docs/performance.md): full throughput, latency, memory, and
-  database durability report.
-- [Catga application guide](skill/SKILL.md): API selection and ownership rules.
-- [Transport guide](skill/transport.md): transports, typed delivery, RPC, and
-  production consumption patterns.
-- [Reliability guide](skill/reliability.md): outbox, inbox, idempotency,
-  dead-lettering, and competing consumers.
+- **Delivery guarantees**: Flow recovery and retries are at-least-once.
+  Make external effects idempotent with application-owned stable keys.
+- **Ownership**: Run migrations in controlled startup, then supervise
+  consumers, schedulers, outbox processors, and shutdown in application-owned tasks.
+- **Feature selection**: Select only the Cargo features and adapters your deployment uses.
+- **Connection pools**: Keep database connection pools application-owned.
+  Catga exposes configuration but does not impose a connection count.
+- **Consumer patterns**: Use `CompetingConsumer` for durable production receive loops.
 
 ## Verification
 
 ```bash
+# Check all examples compile
 cargo check -p catga-examples --bins
-cargo test -p catga-examples --all-features
+
+# Run all tests
+cargo test --workspace --all-features
+
+# Format check
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Lint check
+cargo clippy --workspace --all-features -- -D warnings
 ```
 
-The strict Docker E2E and coverage gate runs only for release tags and manually
-dispatched performance workflows.
+NATS JetStream and external infrastructure tests run with `#[ignore]` locally
+and in CI against ephemeral Testcontainers.
 
-NATS JetStream tests start and remove an isolated Testcontainers server.
-Tests that require external infrastructure (NATS, Redis, RobustMQ) are marked `#[ignore]` locally. and run in CI against ephemeral Testcontainers. The test-only mailbox-creation control-plane harness enables deterministic unit tests without a real message broker.
+## Documentation
 
-## Features
-
-- **Plain async fn handlers**: Plain async functions automatically satisfy handler traits
-  via Fn-blanket impls. No `#[async_trait]` needed for simple handlers.
-- **Typed message bus**: Request/Command/Event handlers with compile-time dispatch.
-- **Compensating flows**: Multi-step workflows with automatic retry and rollback.
-- **Competing consumers**: Durable message consumption with at-least-once delivery.
-- **Outbox/Inbox patterns**: Reliable message delivery with idempotency support.
-- **catga_handlers! macro**: Compile-time handler registration for zero-cost abstraction.
+- [Examples Guide](docs/examples.md): Ordered runnable programs
+- [Performance Report](docs/performance.md): Throughput, latency, and durability benchmarks
+- [Skill Guide](skill/SKILL.md): API selection and ownership rules
+- [Transport Guide](skill/transport.md): Transports, typed delivery, RPC patterns
+- [Reliability Guide](skill/reliability.md): Outbox, inbox, idempotency, dead-lettering
 
 ## License
 
