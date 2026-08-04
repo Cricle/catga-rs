@@ -12,8 +12,8 @@ use std::{
 };
 
 use catga_cluster::MemoryClusterNode;
-use catga_core::{CatgaError, CatgaResult, ErrorCode, MediatorHandle};
 use catga_core::memory::{MemoryEventStore, MemoryOutbox, MemoryTransport};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, MediatorHandle};
 
 use super::domain::OrderAccepted;
 

@@ -1,7 +1,7 @@
 //! Publishes, receives, and acknowledges one envelope through the in-memory transport.
 
-use catga_core::{CatgaResult, Envelope, MessageMetadata, MessageTransport};
 use catga_core::memory::MemoryTransport;
+use catga_core::{CatgaResult, Envelope, MessageMetadata, MessageTransport};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {

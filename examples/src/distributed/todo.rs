@@ -24,7 +24,9 @@ pub struct CreateTodo {
 }
 
 impl Message for CreateTodo {}
-impl Command for CreateTodo { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for CreateTodo {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 impl CreateTodo {
     /// Rejects command values that cannot produce a useful Todo item.
@@ -64,7 +66,9 @@ pub struct TodoCreated {
 }
 
 impl Message for TodoCreated {}
-impl Event for TodoCreated { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for TodoCreated {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 /// Typed worker service that stores accepted Todo commands as durable events.
 pub struct TodoWorker<S: ?Sized> {

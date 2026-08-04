@@ -14,11 +14,11 @@ use catga_core::codec::memorypack::{
     MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackWriter, MemoryPackable,
 };
+use catga_core::memory::MemoryTransport;
 use catga_core::{
     CatgaResult, Envelope, EnvelopePublisher, Message, MessageMetadata, PayloadEncoder,
     TypedDeliveryHandler,
 };
-use catga_core::memory::MemoryTransport;
 
 // ---------------------------------------------------------------------------
 // Message types

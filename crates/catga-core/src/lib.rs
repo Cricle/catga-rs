@@ -159,7 +159,6 @@ pub mod memory;
 mod message;
 mod message_signing;
 mod message_type;
-mod transport_trait;
 mod observability;
 mod outbox_processor;
 mod pipeline;
@@ -185,6 +184,7 @@ mod time_travel;
 mod trace_context;
 mod transport;
 mod transport_batching;
+mod transport_trait;
 mod typed_event_store;
 mod typed_publisher;
 mod upgrading_event_store;
@@ -267,7 +267,6 @@ pub use message::{
 };
 pub use message_signing::{HmacMessageSigner, MessageSigner};
 pub use message_type::MessageTypeRegistry;
-pub use transport_trait::Transport;
 pub use observability::TRACING_TARGET;
 pub use outbox_processor::{OutboxLoopOptions, OutboxProcessor, OutboxRun};
 pub use pipeline::{
@@ -334,6 +333,7 @@ pub use transport::{
     MessageTransport,
 };
 pub use transport_batching::{TransportBatchOptions, TransportBatchRunner, TransportBatcher};
+pub use transport_trait::Transport;
 pub use typed_event_store::TypedEventStore;
 pub use typed_publisher::{EnvelopePublisher, TypedPublisher};
 pub use upgrading_event_store::UpgradingEventStore;

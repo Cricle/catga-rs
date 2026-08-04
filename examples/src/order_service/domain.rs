@@ -25,7 +25,9 @@ pub(crate) struct RecordOrder {
 }
 
 impl Message for RecordOrder {}
-impl Command for RecordOrder { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Command for RecordOrder {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 #[derive(Clone)]
 pub(crate) struct GetOrder {
@@ -46,7 +48,9 @@ pub(crate) struct OrderCompleted {
 }
 
 impl Message for OrderCompleted {}
-impl Event for OrderCompleted { type TypeId = catga_core::DefaultMessageTypeId; }
+impl Event for OrderCompleted {
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
 /// The HTTP and CQRS response returned when an order has completed checkout.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

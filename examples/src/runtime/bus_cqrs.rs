@@ -21,8 +21,8 @@ use catga_core::codec::memorypack::{
     MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackWriter, MemoryPackable,
 };
-use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
 use catga_core::memory::MemoryTransport;
+use catga_core::{CatgaResult, Message, TypedDeliveryHandler};
 
 #[derive(Clone, MemoryPackable)]
 struct PlaceOrder {

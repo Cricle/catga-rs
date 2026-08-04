@@ -46,10 +46,10 @@ use axum::{
     extract::Path,
     routing::{get, post},
 };
-use catga_core::auto::AutoApp;
 use catga_axum::{
     CatgaHttpError, CatgaHttpResult, CorrelationLayer, MediatorState, TraceContextLayer,
 };
+use catga_core::auto::AutoApp;
 use catga_core::{
     CatgaError, CatgaResult, EndpointValidation, ErrorCode, Message, Request, request_handler_with,
     validate_positive,
