@@ -15,14 +15,14 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ### 1. 定义消息和处理器
 
 ```rust
-use catga_core::{CatgaResult, Request};
+use catga_core::{CatgaResult, DefaultMessageTypeId, Message, Request};
 
 // 定义请求消息
-#[derive(catga_core::Message)]
 struct Double(u64);
-
+impl Message for Double {}
 impl Request for Double {
     type Response = u64;
+    type TypeId = DefaultMessageTypeId;
 }
 
 // 异步函数自动满足 Handler trait
@@ -53,16 +53,16 @@ async fn main() -> CatgaResult<()> {
 ### 命令、查询、事件 (CQRS)
 
 ```rust
-use catga_core::{Command, Event, CatgaResult};
+use catga_core::{Command, Event, CatgaResult, DefaultMessageTypeId, Message};
 use catga_core::auto::AutoApp;
 
-#[derive(catga_core::Message, Clone)]
 struct CreateOrder { product_id: u64, quantity: u32 }
-impl Command for CreateOrder {}
+impl Message for CreateOrder {}
+impl Command for CreateOrder { type TypeId = DefaultMessageTypeId; }
 
-#[derive(catga_core::Message, Clone)]
 struct OrderCreated { order_id: u64, product_id: u64 }
-impl Event for OrderCreated {}
+impl Message for OrderCreated {}
+impl Event for OrderCreated { type TypeId = DefaultMessageTypeId; }
 
 async fn create_order_handler(cmd: CreateOrder) -> CatgaResult<OrderCreated> {
     Ok(OrderCreated { order_id: 1, product_id: cmd.product_id })

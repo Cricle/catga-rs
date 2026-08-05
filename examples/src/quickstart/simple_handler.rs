@@ -7,25 +7,23 @@
 //! cargo run --bin simple_handler
 //! ```
 
-use catga_core::{CatgaResult, Command, Mediator, Message, Registry, Request};
+use catga_core::{CatgaResult, Command, DefaultMessageTypeId, Mediator, Message, Registry, Request};
 
 // ---------------------------------------------------------------------------
 // Message types
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
 struct Double(u64);
 impl Message for Double {}
 impl Request for Double {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
+    type TypeId = DefaultMessageTypeId;
 }
 
-#[derive(Clone)]
 struct Log(String);
 impl Message for Log {}
 impl Command for Log {
-    type TypeId = catga_core::DefaultMessageTypeId;
+    type TypeId = DefaultMessageTypeId;
 }
 
 // ---------------------------------------------------------------------------

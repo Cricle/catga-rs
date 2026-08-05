@@ -4,14 +4,14 @@
 //! wrappers needed. For handlers that need shared state, see `request_handler_with`.
 
 use catga_core::auto::AutoApp;
-use catga_core::{CatgaResult, Request};
+use catga_core::{CatgaResult, DefaultMessageTypeId, Message, Request};
 
-#[derive(catga_core::Message)]
 struct Double(u64);
 
+impl Message for Double {}
 impl Request for Double {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
+    type TypeId = DefaultMessageTypeId;
 }
 
 // Plain async fn — Fn-blanket impl makes this a valid Handler.
