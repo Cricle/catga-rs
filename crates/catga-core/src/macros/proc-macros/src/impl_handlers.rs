@@ -13,6 +13,7 @@ struct MethodAnalysis {
     method_name: Ident,
     message_type: Type,
     is_request: bool,
+    is_event: bool,
 }
 
 fn expand_impl(impl_item: syn::ItemImpl) -> TokenStream {
@@ -61,6 +62,24 @@ fn expand_impl(impl_item: syn::ItemImpl) -> TokenStream {
             registry_calls.push(quote! {
                 registry.register_request::<#message_type, #wrapper_name>(#wrapper_name)?;
             });
+        } else if m.is_event {
+            wrapper_structs.push(quote! {
+                struct #wrapper_name;
+            });
+
+            wrapper_impls.push(quote! {
+                #[::async_trait::async_trait]
+                impl catga_core::EventHandler<#message_type> for #wrapper_name {
+                    async fn handle(&self, event: #message_type) -> catga_core::CatgaResult<()> {
+                        let svc = #ty;
+                        svc.#method_name(event).await
+                    }
+                }
+            });
+
+            registry_calls.push(quote! {
+                registry.register_event::<#message_type, #wrapper_name>(#wrapper_name);
+            });
         } else {
             wrapper_structs.push(quote! {
                 struct #wrapper_name;
@@ -102,6 +121,10 @@ fn expand_impl(impl_item: syn::ItemImpl) -> TokenStream {
 
 fn analyze_method(method: &syn::ImplItemFn) -> Option<MethodAnalysis> {
     let method_name = method.sig.ident.clone();
+    let method_name_str = method_name.to_string();
+
+    // Events: methods starting with "on_" returning CatgaResult<()>
+    let is_event = method_name_str.starts_with("on_");
 
     // Get first param after self
     let mut inputs = method.sig.inputs.iter();
@@ -120,19 +143,21 @@ fn analyze_method(method: &syn::ImplItemFn) -> Option<MethodAnalysis> {
                         if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
                             if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
                                 // CatgaResult<T> where T is NOT () = request
-                                // CatgaResult<()> = command
+                                // CatgaResult<()> = command (or event if method starts with "on_")
                                 if !is_unit_type(inner_ty) {
                                     return Some(MethodAnalysis {
                                         method_name,
                                         message_type,
                                         is_request: true,
+                                        is_event: false,
                                     });
                                 } else {
-                                    // It's CatgaResult<()>, so it's a command
+                                    // It's CatgaResult<()>, so it's a command or event
                                     return Some(MethodAnalysis {
                                         method_name,
                                         message_type,
                                         is_request: false,
+                                        is_event,
                                     });
                                 }
                             }
@@ -150,6 +175,7 @@ fn analyze_method(method: &syn::ImplItemFn) -> Option<MethodAnalysis> {
         method_name,
         message_type,
         is_request,
+        is_event,
     })
 }
 
