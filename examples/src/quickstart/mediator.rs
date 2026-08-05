@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use catga_core::CatgaResult;
-use catga_core::{auto::AutoApp, Handler};
+use catga_core::{Handler, auto::AutoApp};
 
 // One-liner: #[catga_core::catga_request] auto-implements Message + Request
 #[catga_core::catga_request(response = u64)]

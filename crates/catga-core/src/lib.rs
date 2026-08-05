@@ -195,9 +195,7 @@ pub use aggregate::{
     Aggregate, AggregateRepository, CompositeSnapshotStrategy, EventCountSnapshotStrategy,
     SnapshotStrategy, TimeBasedSnapshotStrategy,
 };
-pub use auto::{
-    AutoApp, AutoAppBuilder,
-};
+pub use auto::{AutoApp, AutoAppBuilder};
 pub use auto_snapshot::AutoSnapshotManager;
 pub use behaviors::{
     AuthorizationBehavior, AuthorizationPolicies, AuthorizationPolicy, AutoBatchingBehavior,

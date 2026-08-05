@@ -129,9 +129,15 @@ fn heap_allocations() {
     println!("\n=== Heap Allocation Analysis ===");
 
     let mut registry = Registry::new();
-    registry.register_request::<Ping, _>(PingHandler).expect("benchmark should not fail");
-    registry.register_request::<Query, _>(QueryHandler).expect("benchmark should not fail");
-    registry.register_request::<Heavy, _>(HeavyHandler).expect("benchmark should not fail");
+    registry
+        .register_request::<Ping, _>(PingHandler)
+        .expect("benchmark should not fail");
+    registry
+        .register_request::<Query, _>(QueryHandler)
+        .expect("benchmark should not fail");
+    registry
+        .register_request::<Heavy, _>(HeavyHandler)
+        .expect("benchmark should not fail");
 
     println!("Registry with 3 handlers:");
     println!("  - HashMap: 3 * (key + RequestSlot) entries");

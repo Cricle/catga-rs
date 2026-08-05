@@ -114,7 +114,9 @@ fn single_handler_registration(c: &mut Criterion) {
     c.bench_function("single_handler_registration", |b| {
         b.iter(|| {
             let mut registry = Registry::new();
-            registry.register_request::<Msg0, _>(Handler0).expect("benchmark should not fail");
+            registry
+                .register_request::<Msg0, _>(Handler0)
+                .expect("benchmark should not fail");
             black_box(());
         });
     });

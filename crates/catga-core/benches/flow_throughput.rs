@@ -91,7 +91,8 @@ fn dsl_flow_two_actions_throughput(c: &mut Criterion) {
                     })
                 });
             let mut state = 0u32;
-            rt.block_on(flow.run(&mut state)).expect("benchmark should not fail");
+            rt.block_on(flow.run(&mut state))
+                .expect("benchmark should not fail");
         });
     });
 }
@@ -137,7 +138,8 @@ fn dsl_flow_five_actions_throughput(c: &mut Criterion) {
                     })
                 });
             let mut state = 0u32;
-            rt.block_on(flow.run(&mut state)).expect("benchmark should not fail");
+            rt.block_on(flow.run(&mut state))
+                .expect("benchmark should not fail");
         });
     });
 }
