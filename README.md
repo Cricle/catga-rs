@@ -104,6 +104,44 @@ let result = Flow::new("order_checkout")
     .await?;
 ```
 
+### 服务处理器 (catga_service)
+
+将处理器方法组织在 impl 块中，自动识别请求/命令：
+
+```rust
+use catga_core::{auto::AutoApp, CatgaResult};
+
+#[catga_core::catga_request(response = u64)]
+struct Double(u64);
+
+#[derive(catga_core::catga_command)]
+struct Log(String);
+
+struct OrderService;
+
+#[catga_core::catga_service]
+impl OrderService {
+    // CatgaResult<T> (T != ()) → 请求处理器
+    async fn double(&self, msg: Double) -> CatgaResult<u64> {
+        Ok(msg.0 * 2)
+    }
+
+    // CatgaResult<()> → 命令处理器
+    async fn log(&self, msg: Log) -> CatgaResult<()> {
+        println!("[OrderService] {}", msg.0);
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> CatgaResult<()> {
+    let app = AutoApp::from_registry(OrderService::registry()?)?;
+    let result = app.mediator().send(Double(21)).await?;
+    assert_eq!(result, 42);
+    Ok(())
+}
+```
+
 ## 示例
 
 | 示例 | 说明 |
@@ -111,6 +149,7 @@ let result = Flow::new("order_checkout")
 | [simple_handler.rs](examples/src/quickstart/simple_handler.rs) | 最简处理器（无宏） |
 | [mediator.rs](examples/src/quickstart/mediator.rs) | AutoApp 中介者 |
 | [flow.rs](examples/src/quickstart/flow.rs) | 工作流与补偿 |
+| [service_handler.rs](examples/src/quickstart/service_handler.rs) | #[catga_service] 服务处理器 |
 
 运行示例：
 
