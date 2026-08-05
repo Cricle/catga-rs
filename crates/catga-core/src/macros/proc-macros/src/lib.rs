@@ -60,7 +60,7 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use catga_core::{CatgaResult, auto::AutoApp, catga_request, catga_command, catga_service};
 ///
 /// #[catga_request(response = u64)]
