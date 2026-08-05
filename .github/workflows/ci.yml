@@ -26,3 +26,24 @@ jobs:
       - run: cargo check -p catga-examples --bins
       - name: Validate Docker Compose E2E runner
         run: bash scripts/e2e.sh --profile full --validate-only
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: quality
+    if: always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage report
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
