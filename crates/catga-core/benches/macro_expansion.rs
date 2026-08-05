@@ -53,26 +53,26 @@ macro_rules! macro_registry_20_handlers {
     () => {{
         let mut registry = Registry::new();
         paste! {
-            registry.register_request::<[<Msg 0>], _>([<Handler 0>]).unwrap();
-            registry.register_request::<[<Msg 1>], _>([<Handler 1>]).unwrap();
-            registry.register_request::<[<Msg 2>], _>([<Handler 2>]).unwrap();
-            registry.register_request::<[<Msg 3>], _>([<Handler 3>]).unwrap();
-            registry.register_request::<[<Msg 4>], _>([<Handler 4>]).unwrap();
-            registry.register_request::<[<Msg 5>], _>([<Handler 5>]).unwrap();
-            registry.register_request::<[<Msg 6>], _>([<Handler 6>]).unwrap();
-            registry.register_request::<[<Msg 7>], _>([<Handler 7>]).unwrap();
-            registry.register_request::<[<Msg 8>], _>([<Handler 8>]).unwrap();
-            registry.register_request::<[<Msg 9>], _>([<Handler 9>]).unwrap();
-            registry.register_request::<[<Msg 10>], _>([<Handler 10>]).unwrap();
-            registry.register_request::<[<Msg 11>], _>([<Handler 11>]).unwrap();
-            registry.register_request::<[<Msg 12>], _>([<Handler 12>]).unwrap();
-            registry.register_request::<[<Msg 13>], _>([<Handler 13>]).unwrap();
-            registry.register_request::<[<Msg 14>], _>([<Handler 14>]).unwrap();
-            registry.register_request::<[<Msg 15>], _>([<Handler 15>]).unwrap();
-            registry.register_request::<[<Msg 16>], _>([<Handler 16>]).unwrap();
-            registry.register_request::<[<Msg 17>], _>([<Handler 17>]).unwrap();
-            registry.register_request::<[<Msg 18>], _>([<Handler 18>]).unwrap();
-            registry.register_request::<[<Msg 19>], _>([<Handler 19>]).unwrap();
+            registry.register_request::<[<Msg 0>], _>([<Handler 0>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 1>], _>([<Handler 1>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 2>], _>([<Handler 2>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 3>], _>([<Handler 3>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 4>], _>([<Handler 4>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 5>], _>([<Handler 5>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 6>], _>([<Handler 6>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 7>], _>([<Handler 7>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 8>], _>([<Handler 8>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 9>], _>([<Handler 9>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 10>], _>([<Handler 10>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 11>], _>([<Handler 11>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 12>], _>([<Handler 12>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 13>], _>([<Handler 13>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 14>], _>([<Handler 14>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 15>], _>([<Handler 15>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 16>], _>([<Handler 16>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 17>], _>([<Handler 17>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 18>], _>([<Handler 18>]).expect("benchmark should not fail");
+            registry.register_request::<[<Msg 19>], _>([<Handler 19>]).expect("benchmark should not fail");
         }
         registry
     }};
@@ -114,7 +114,7 @@ fn single_handler_registration(c: &mut Criterion) {
     c.bench_function("single_handler_registration", |b| {
         b.iter(|| {
             let mut registry = Registry::new();
-            registry.register_request::<Msg0, _>(Handler0).unwrap();
+            registry.register_request::<Msg0, _>(Handler0).expect("benchmark should not fail");
             black_box(());
         });
     });
@@ -126,11 +126,11 @@ fn registry_scaling_small(c: &mut Criterion) {
         b.iter(|| {
             let mut registry = Registry::new();
             paste! {
-                registry.register_request::<[<Msg 0>], _>([<Handler 0>]).unwrap();
-                registry.register_request::<[<Msg 1>], _>([<Handler 1>]).unwrap();
-                registry.register_request::<[<Msg 2>], _>([<Handler 2>]).unwrap();
-                registry.register_request::<[<Msg 3>], _>([<Handler 3>]).unwrap();
-                registry.register_request::<[<Msg 4>], _>([<Handler 4>]).unwrap();
+                registry.register_request::<[<Msg 0>], _>([<Handler 0>]).expect("benchmark should not fail");
+                registry.register_request::<[<Msg 1>], _>([<Handler 1>]).expect("benchmark should not fail");
+                registry.register_request::<[<Msg 2>], _>([<Handler 2>]).expect("benchmark should not fail");
+                registry.register_request::<[<Msg 3>], _>([<Handler 3>]).expect("benchmark should not fail");
+                registry.register_request::<[<Msg 4>], _>([<Handler 4>]).expect("benchmark should not fail");
             }
             black_box(());
         });

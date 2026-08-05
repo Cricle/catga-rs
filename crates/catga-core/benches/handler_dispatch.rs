@@ -37,7 +37,7 @@ fn handler_direct_dispatch(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     let handler = DoubleHandler;
 
@@ -55,7 +55,7 @@ fn handler_arc_dispatch(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     let handler = Arc::new(DoubleHandler);
 
@@ -74,7 +74,7 @@ fn handler_arc_clone_overhead(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     let handler = Arc::new(DoubleHandler);
 
@@ -96,7 +96,7 @@ fn handler_box_dispatch(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     let handler: Box<dyn Handler<Ping> + Send + Sync> = Box::new(DoubleHandler);
 
@@ -115,7 +115,7 @@ fn handler_arc_box_dispatch(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     let handler: Arc<Box<dyn Handler<Ping> + Send + Sync>> = Arc::new(Box::new(DoubleHandler));
 

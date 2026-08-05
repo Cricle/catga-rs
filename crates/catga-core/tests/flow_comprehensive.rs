@@ -371,7 +371,7 @@ async fn dsl_flow_complex_nested_state() -> CatgaResult<()> {
         ))
         .action(dsl_action!(
             |state: &mut HashMap<String, Vec<u32>>| async move {
-                state.get_mut("a").unwrap().push(3);
+                state.get_mut("a").expect("state should have 'a' key").push(3);
                 Ok(())
             }
         ))

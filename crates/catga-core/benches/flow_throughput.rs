@@ -17,7 +17,7 @@ fn single_step_flow_throughput(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     c.bench_function("single_step_flow_execution", |b| {
         b.iter(|| {
@@ -33,7 +33,7 @@ fn multi_step_flow_throughput(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     c.bench_function("three_step_flow_execution", |b| {
         b.iter(|| {
@@ -52,7 +52,7 @@ fn multi_step_flow_5_throughput(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     c.bench_function("five_step_flow_execution", |b| {
         b.iter(|| {
@@ -73,7 +73,7 @@ fn dsl_flow_two_actions_throughput(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     c.bench_function("dsl_flow_two_actions", |b| {
         b.iter(|| {
@@ -91,7 +91,7 @@ fn dsl_flow_two_actions_throughput(c: &mut Criterion) {
                     })
                 });
             let mut state = 0u32;
-            rt.block_on(flow.run(&mut state)).unwrap();
+            rt.block_on(flow.run(&mut state)).expect("benchmark should not fail");
         });
     });
 }
@@ -101,7 +101,7 @@ fn dsl_flow_five_actions_throughput(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     c.bench_function("dsl_flow_five_actions", |b| {
         b.iter(|| {
@@ -137,7 +137,7 @@ fn dsl_flow_five_actions_throughput(c: &mut Criterion) {
                     })
                 });
             let mut state = 0u32;
-            rt.block_on(flow.run(&mut state)).unwrap();
+            rt.block_on(flow.run(&mut state)).expect("benchmark should not fail");
         });
     });
 }
@@ -147,7 +147,7 @@ fn flow_compensation_on_failure_throughput(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
     c.bench_function("flow_compensation_on_failure", |b| {
         b.iter(|| {

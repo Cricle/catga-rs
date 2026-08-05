@@ -31,7 +31,7 @@ fn envelope_encoding(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _size| {
             b.iter(|| {
-                let encoded = codec.encode(black_box(&envelope)).unwrap();
+                let encoded = codec.encode(black_box(&envelope)).expect("benchmark should not fail");
                 black_box(encoded)
             });
         });
@@ -48,27 +48,27 @@ fn envelope_decoding(c: &mut Criterion) {
         (16, {
             let metadata = MessageMetadata::new(1, None);
             let env = Envelope::new(1, "test", vec![0u8; 16], metadata);
-            codec.encode(&env).unwrap()
+            codec.encode(&env).expect("benchmark should not fail")
         }),
         (64, {
             let metadata = MessageMetadata::new(1, None);
             let env = Envelope::new(1, "test", vec![0u8; 64], metadata);
-            codec.encode(&env).unwrap()
+            codec.encode(&env).expect("benchmark should not fail")
         }),
         (256, {
             let metadata = MessageMetadata::new(1, None);
             let env = Envelope::new(1, "test", vec![0u8; 256], metadata);
-            codec.encode(&env).unwrap()
+            codec.encode(&env).expect("benchmark should not fail")
         }),
         (1024, {
             let metadata = MessageMetadata::new(1, None);
             let env = Envelope::new(1, "test", vec![0u8; 1024], metadata);
-            codec.encode(&env).unwrap()
+            codec.encode(&env).expect("benchmark should not fail")
         }),
         (4096, {
             let metadata = MessageMetadata::new(1, None);
             let env = Envelope::new(1, "test", vec![0u8; 4096], metadata);
-            codec.encode(&env).unwrap()
+            codec.encode(&env).expect("benchmark should not fail")
         }),
     ];
 
@@ -77,7 +77,7 @@ fn envelope_decoding(c: &mut Criterion) {
     for (size, encoded) in test_cases {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _size| {
             b.iter(|| {
-                let decoded: Envelope = codec.decode(black_box(&encoded)).unwrap();
+                let decoded: Envelope = codec.decode(black_box(&encoded)).expect("benchmark should not fail");
                 black_box(decoded)
             });
         });
@@ -103,8 +103,8 @@ fn envelope_round_trip(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _size| {
             b.iter(|| {
-                let encoded = codec.encode(black_box(&envelope)).unwrap();
-                let decoded: Envelope = codec.decode(black_box(&encoded)).unwrap();
+                let encoded = codec.encode(black_box(&envelope)).expect("benchmark should not fail");
+                let decoded: Envelope = codec.decode(black_box(&encoded)).expect("benchmark should not fail");
                 black_box(decoded)
             });
         });
@@ -142,10 +142,10 @@ fn codec_decode_limits(c: &mut Criterion) {
     group.bench_function("baseline_256", |b| {
         let metadata = MessageMetadata::new(1, None);
         let envelope = Envelope::new(1, "test.message", vec![0u8; 256], metadata);
-        let encoded = codec.encode(&envelope).unwrap();
+        let encoded = codec.encode(&envelope).expect("benchmark should not fail");
 
         b.iter(|| {
-            let decoded: Envelope = codec.decode(black_box(&encoded)).unwrap();
+            let decoded: Envelope = codec.decode(black_box(&encoded)).expect("benchmark should not fail");
             black_box(decoded)
         });
     });
@@ -168,7 +168,7 @@ fn large_payload_serialization(c: &mut Criterion) {
         .map(|(size, payload)| {
             let metadata = MessageMetadata::new(1, None);
             let envelope = Envelope::new(1, "test.message", payload.clone(), metadata);
-            let encoded = codec.encode(&envelope).unwrap();
+            let encoded = codec.encode(&envelope).expect("benchmark should not fail");
             (*size, encoded)
         })
         .collect();
@@ -182,7 +182,7 @@ fn large_payload_serialization(c: &mut Criterion) {
 
             encode_group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _size| {
                 b.iter(|| {
-                    let result = codec.encode(black_box(&envelope)).unwrap();
+                    let result = codec.encode(black_box(&envelope)).expect("benchmark should not fail");
                     black_box(result)
                 });
             });
@@ -197,7 +197,7 @@ fn large_payload_serialization(c: &mut Criterion) {
 
             decode_group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _size| {
                 b.iter(|| {
-                    let result: Envelope = codec.decode(black_box(encoded)).unwrap();
+                    let result: Envelope = codec.decode(black_box(encoded)).expect("benchmark should not fail");
                     black_box(result)
                 });
             });

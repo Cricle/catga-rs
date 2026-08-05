@@ -100,6 +100,7 @@ fn compare_handler_sizes() {
     }
 
     struct DataHandler {
+        #[allow(dead_code)]
         data: [u8; 64],
     }
     #[async_trait::async_trait]
@@ -117,7 +118,7 @@ fn compare_handler_sizes() {
         "DataHandler (64 bytes data): {} bytes",
         std::mem::size_of::<DataHandler>()
     );
-    println!("");
+    println!();
     println!("Note: Handler size directly affects Arc<Handler> allocation");
     println!("Empty handler = 1 byte on stack, no heap allocation");
     println!("DataHandler = 64 bytes on stack, may heap allocate if >75% of Box");
@@ -128,16 +129,16 @@ fn heap_allocations() {
     println!("\n=== Heap Allocation Analysis ===");
 
     let mut registry = Registry::new();
-    registry.register_request::<Ping, _>(PingHandler).unwrap();
-    registry.register_request::<Query, _>(QueryHandler).unwrap();
-    registry.register_request::<Heavy, _>(HeavyHandler).unwrap();
+    registry.register_request::<Ping, _>(PingHandler).expect("benchmark should not fail");
+    registry.register_request::<Query, _>(QueryHandler).expect("benchmark should not fail");
+    registry.register_request::<Heavy, _>(HeavyHandler).expect("benchmark should not fail");
 
     println!("Registry with 3 handlers:");
     println!("  - HashMap: 3 * (key + RequestSlot) entries");
     println!("  - Each RequestSlot contains Arc<dyn ErasedRequestHandler>");
     println!("  - Each Arc points to RequestHandlerAdapter on heap");
     println!("  - RequestHandlerAdapter contains handler (ZST in this case)");
-    println!("");
+    println!();
     println!("Total heap allocations per handler: 2 (Arc inner + Adapter)");
 }
 
@@ -156,7 +157,7 @@ fn zero_sized_types() {
         "HeavyHandler is ZST: {}",
         std::mem::size_of::<HeavyHandler>() == 0
     );
-    println!("");
+    println!();
     println!("ZST benefit: Arc can optimize small types to avoid heap allocation");
     println!("Rule of 3: Box/ZST/Arc can inline <= 3 pointers worth of data");
 }

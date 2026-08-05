@@ -30,9 +30,9 @@ fn mediator_throughput(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
-    let mediator = create_mediator().unwrap();
+    let mediator = create_mediator().expect("benchmark should not fail");
 
     let mut group = c.benchmark_group("mediator_throughput");
 
@@ -62,9 +62,9 @@ fn mediator_single_request(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
-    let mediator = create_mediator().unwrap();
+    let mediator = create_mediator().expect("benchmark should not fail");
 
     let mut group = c.benchmark_group("mediator_single_request");
 
@@ -85,9 +85,9 @@ fn mediator_batch_send(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("benchmark should not fail");
 
-    let mediator = create_mediator().unwrap();
+    let mediator = create_mediator().expect("benchmark should not fail");
 
     let mut group = c.benchmark_group("mediator_batch_send");
 
