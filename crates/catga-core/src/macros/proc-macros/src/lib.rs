@@ -43,6 +43,50 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Scans an impl block for async methods and generates handler registrations.
+///
+/// # Automatic Type Detection
+///
+/// The macro automatically detects handler types based on method signatures:
+///
+/// - `async fn name(&self, msg: M) -> CatgaResult<T>` where `T != ()` -> **Request handler**
+/// - `async fn name(&self, cmd: C) -> CatgaResult<()>` -> **Command handler**
+/// - `async fn on_name(&self, event: E) -> CatgaResult<()>` -> **Event handler**
+///
+/// # Generated Code
+///
+/// The macro generates:
+/// - A `registry()` function returning `CatgaResult<Registry>`
+/// - Wrapper structs implementing `Handler<M>` or `CommandHandler<C>` for each method
+///
+/// # Example
+///
+/// ```
+/// use catga_core::{CatgaResult, auto::AutoApp, catga_request, catga_command, catga_service};
+///
+/// #[catga_request(response = u64)]
+/// struct Double(u64);
+///
+/// #[derive(catga_command)]
+/// struct Log(String);
+///
+/// struct Calculator;
+///
+/// #[catga_service]
+/// impl Calculator {
+///     async fn double(&self, msg: Double) -> CatgaResult<u64> {
+///         Ok(msg.0 * 2)
+///     }
+///     async fn log(&self, msg: Log) -> CatgaResult<()> {
+///         Ok(())
+///     }
+/// }
+///
+/// # async fn example() -> CatgaResult<()> {
+/// let app = AutoApp::from_registry(Calculator::registry()?)?;
+/// assert_eq!(app.mediator().send(Double(21)).await?, 42);
+/// # Ok(())
+/// # }
+/// ```
 #[proc_macro_attribute]
 pub fn catga_service(_attr: TokenStream, input: TokenStream) -> TokenStream {
     impl_handlers::expand_impl_handlers(input.into()).into()
