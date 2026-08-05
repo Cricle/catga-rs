@@ -31,6 +31,26 @@ use async_trait::async_trait;
 use crate::{CatgaResult, Command, Event, Request};
 
 /// Handles one request and returns its typed response.
+///
+/// # Example
+///
+/// ```
+/// use async_trait::async_trait;
+/// use catga_core::{CatgaResult, Handler, Message, MessageTypeId, Request};
+///
+/// struct PingTypeId;
+/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+///
+/// struct Ping;
+/// impl Message for Ping {}
+/// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+///
+/// struct PingHandler;
+/// #[async_trait]
+/// impl Handler<Ping> for PingHandler {
+///     async fn handle(&self, _: Ping) -> CatgaResult<u64> { Ok(42) }
+/// }
+/// ```
 #[async_trait]
 pub trait Handler<M: Request>: Send + Sync {
     /// Handles the request.
@@ -38,6 +58,26 @@ pub trait Handler<M: Request>: Send + Sync {
 }
 
 /// Handles one command without returning a response value.
+///
+/// # Example
+///
+/// ```
+/// use async_trait::async_trait;
+/// use catga_core::{CatgaResult, Command, CommandHandler, Message, MessageTypeId};
+///
+/// struct ArchiveTypeId;
+/// impl MessageTypeId for ArchiveTypeId { const NAME: &'static str = "Archive"; }
+///
+/// struct Archive;
+/// impl Message for Archive {}
+/// impl Command for Archive { type TypeId = ArchiveTypeId; }
+///
+/// struct ArchiveHandler;
+/// #[async_trait]
+/// impl CommandHandler<Archive> for ArchiveHandler {
+///     async fn handle(&self, _: Archive) -> CatgaResult<()> { Ok(()) }
+/// }
+/// ```
 #[async_trait]
 pub trait CommandHandler<C: Command>: Send + Sync {
     /// Handles the command.
@@ -45,6 +85,30 @@ pub trait CommandHandler<C: Command>: Send + Sync {
 }
 
 /// Handles one event delivery.
+///
+/// # Example
+///
+/// ```
+/// use async_trait::async_trait;
+/// use catga_core::{CatgaResult, Event, EventHandler, Message, MessageTypeId};
+///
+/// struct UserCreatedTypeId;
+/// impl MessageTypeId for UserCreatedTypeId { const NAME: &'static str = "UserCreated"; }
+///
+/// #[derive(Clone)]
+/// struct UserCreated { pub user_id: u64 }
+/// impl Message for UserCreated {}
+/// impl Event for UserCreated { type TypeId = UserCreatedTypeId; }
+///
+/// struct UserProjection;
+/// #[async_trait]
+/// impl EventHandler<UserCreated> for UserProjection {
+///     async fn handle(&self, event: UserCreated) -> CatgaResult<()> {
+///         println!("Projecting user: {}", event.user_id);
+///         Ok(())
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait EventHandler<E: Event>: Send + Sync {
     /// Handles the event.

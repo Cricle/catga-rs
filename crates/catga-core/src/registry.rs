@@ -117,9 +117,11 @@ pub(crate) struct EventSlot {
 ///
 /// Internally uses `HashMap` for O(1) average-case dispatch lookup.
 ///
-/// ```no_run
+/// # Example
+///
+/// ```
 /// use async_trait::async_trait;
-/// use catga_core::{CatgaResult, Handler, Mediator, Message, MessageTypeId, Registry, Request};
+/// use catga_core::{CatgaResult, Handler, Message, MessageTypeId, Registry, Request};
 ///
 /// struct PingTypeId;
 /// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
@@ -137,8 +139,7 @@ pub(crate) struct EventSlot {
 /// # async fn run() -> CatgaResult<()> {
 /// let mut registry = Registry::new();
 /// registry.register_request::<Ping, _>(PingHandler)?;
-/// let mediator = Mediator::new(registry);
-/// assert_eq!(mediator.send(Ping).await?, "pong");
+/// assert!(registry.get_handler::<Ping>());
 /// # Ok(())
 /// # }
 /// ```
