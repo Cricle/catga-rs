@@ -82,6 +82,7 @@ pub struct MediatorHandle {
 
 impl MediatorHandle {
     /// Creates an empty handle that must be bound after registry startup.
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
@@ -99,16 +100,19 @@ impl MediatorHandle {
     }
 
     /// Returns whether startup has bound this handle to a mediator.
+    #[inline]
     pub fn is_bound(&self) -> bool {
         self.mediator.get().is_some()
     }
 
     /// Sends one request through the bound mediator.
+    #[inline]
     pub async fn send<M: Request>(&self, message: M) -> CatgaResult<M::Response> {
         self.bound()?.send(message).await
     }
 
     /// Sends one request through the bound mediator with cooperative cancellation.
+    #[inline]
     pub async fn send_with_cancellation<M: Request>(
         &self,
         message: M,
@@ -120,11 +124,13 @@ impl MediatorHandle {
     }
 
     /// Sends one command through the bound mediator.
+    #[inline]
     pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
         self.bound()?.send_command(command).await
     }
 
     /// Sends one command through the bound mediator with cooperative cancellation.
+    #[inline]
     pub async fn send_command_with_cancellation<C: Command>(
         &self,
         command: C,
@@ -136,11 +142,13 @@ impl MediatorHandle {
     }
 
     /// Publishes one event through the bound mediator.
+    #[inline]
     pub async fn publish<E: Event + Clone>(&self, event: E) -> CatgaResult<()> {
         self.bound()?.publish(event).await
     }
 
     /// Publishes one event through the bound mediator with cooperative cancellation.
+    #[inline]
     pub async fn publish_with_cancellation<E: Event>(
         &self,
         event: E,
@@ -151,6 +159,7 @@ impl MediatorHandle {
             .await
     }
 
+    #[inline]
     fn bound(&self) -> CatgaResult<&Arc<Mediator>> {
         self.mediator.get().ok_or_else(|| {
             CatgaError::new(
@@ -404,6 +413,7 @@ impl Mediator {
         result
     }
 
+    #[inline]
     async fn dispatch<M: Request>(registry: &Registry, message: M) -> CatgaResult<M::Response> {
         let type_id = TypeId::of::<M>();
         let slot = registry.find_request(type_id).ok_or_else(|| {
@@ -421,6 +431,7 @@ impl Mediator {
             })
     }
 
+    #[inline]
     async fn dispatch_command<C: Command>(registry: &Registry, command: C) -> CatgaResult<()> {
         let type_id = TypeId::of::<C>();
         let slot = registry.find_command(type_id).ok_or_else(|| {

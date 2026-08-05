@@ -23,6 +23,7 @@ num-complex = ["dep:num-complex"]
 url = ["dep:url"]
 hashbrown = ["dep:hashbrown"]
 ahash = ["dep:ahash"]
+fnv = ["dep:fnv"]
 serde = []
 test-hooks = []
 
@@ -52,6 +53,7 @@ uuid = { version = "1", features = ["v4"], optional = true }
 chrono = { version = "0.4", optional = true }
 hashbrown = { version = "0.15", optional = true }
 ahash = { version = "0.8", optional = true }
+fnv = { version = "1.0", optional = true }
 rust_decimal = { version = "1", optional = true }
 half = { version = "2", features = ["std"], optional = true }
 num-bigint = { version = "0.4", optional = true }

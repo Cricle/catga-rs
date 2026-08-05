@@ -10,8 +10,7 @@
 //!
 //! # Handler Registration
 //!
-//! Plain async functions automatically satisfy handler traits thanks to Fn-blanket impls in
-//! `catga-core`. No `#[async_trait]` needed for simple handlers:
+//! Handlers must explicitly implement `Handler`, `CommandHandler`, or `EventHandler` traits.
 //!
 //! ```
 //! use catga_core::auto::AutoApp;
@@ -24,24 +23,31 @@
 //!     type TypeId = catga_core::DefaultMessageTypeId;
 //! }
 //!
-//! // Plain async fn - no #[async_trait] needed!
-//! async fn ping_handler(_: Ping) -> CatgaResult<()> { Ok(()) }
+//! struct PingHandler;
+//! #[async_trait::async_trait]
+//! impl catga_core::Handler<Ping> for PingHandler {
+//!     async fn handle(&self, _: Ping) -> CatgaResult<()> { Ok(()) }
+//! }
 //!
 //! # async fn run() -> catga_core::CatgaResult<()> {
 //! let app = AutoApp::builder()
-//!     .handler(ping_handler)?  // Inferred message type!
+//!     .handler(PingHandler)?  // Explicit handler struct required
 //!     .build()?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! For module-level auto-discovery, use the `#[catga_auto]` attribute:
+//! For module-level auto-discovery, use the `#[catga_auto]` attribute with handler structs:
 //!
 //! ```ignore
 //! #[catga_auto]
 //! mod handlers {
-//!     async fn ping_handler(_: Ping) -> CatgaResult<String> {
-//!         Ok("pong".to_string())
+//!     struct PingHandler;
+//!     #[async_trait::async_trait]
+//!     impl catga_core::Handler<Ping> for PingHandler {
+//!         async fn handle(&self, _: Ping) -> CatgaResult<String> {
+//!             Ok("pong".to_string())
+//!         }
 //!     }
 //! }
 //!
@@ -51,20 +57,14 @@
 use std::sync::Arc;
 
 use crate::{
-    CatgaResult, Command, CommandHandler, Event, EventHandler, Handler, Mediator, MediatorHandle,
-    Registry, Request,
+    CatgaResult, Command, CommandHandler, Event, EventHandler, Handler, Mediator, Registry, Request,
 };
 use tokio_util::sync::CancellationToken;
-
-pub mod global_dispatch;
-
-pub use global_dispatch::{bind_mediator, is_bound, mediator_handle, publish, send, send_command};
 
 /// A startup builder for one immutable Catga application graph.
 pub struct AutoAppBuilder {
     registry: Registry,
     shutdown: CancellationToken,
-    handle: MediatorHandle,
 }
 
 impl Default for AutoAppBuilder {
@@ -79,7 +79,6 @@ impl AutoAppBuilder {
         Self {
             registry: Registry::new(),
             shutdown: CancellationToken::new(),
-            handle: MediatorHandle::new(),
         }
     }
 
@@ -107,8 +106,9 @@ impl AutoAppBuilder {
     /// commands, and events. For explicit control, use `.request()`, `.command()`, or `.event()`.
     ///
     /// ```
+    /// use async_trait::async_trait;
     /// use catga_core::auto::AutoApp;
-    /// use catga_core::{CatgaResult, Message, Request};
+    /// use catga_core::{CatgaResult, Handler, Message, Request};
     ///
     /// struct Ping;
     /// impl Message for Ping {}
@@ -117,13 +117,17 @@ impl AutoAppBuilder {
     ///     type TypeId = catga_core::DefaultMessageTypeId;
     /// }
     ///
-    /// async fn ping_handler(_: Ping) -> CatgaResult<()> {
-    ///     Ok(())
+    /// struct PingHandler;
+    /// #[async_trait]
+    /// impl Handler<Ping> for PingHandler {
+    ///     async fn handle(&self, _: Ping) -> CatgaResult<()> {
+    ///         Ok(())
+    ///     }
     /// }
     ///
     /// # async fn run() -> catga_core::CatgaResult<()> {
     /// let app = AutoApp::builder()
-    ///     .handler(ping_handler)?
+    ///     .handler(PingHandler)?
     ///     .build()?;
     /// # Ok(())
     /// # }
@@ -198,12 +202,8 @@ impl AutoAppBuilder {
     /// Builds the immutable application graph.
     pub fn build(self) -> CatgaResult<AutoApp> {
         let mediator = Arc::new(Mediator::new(self.registry));
-        self.handle.bind(Arc::clone(&mediator))?;
-        // Also bind the global dispatch mediator
-        global_dispatch::bind_mediator(Arc::clone(&mediator))?;
         Ok(AutoApp {
             mediator,
-            handle: self.handle,
             shutdown: self.shutdown,
         })
     }
@@ -212,7 +212,6 @@ impl AutoAppBuilder {
 /// The immutable, explicitly owned Catga application facade.
 pub struct AutoApp {
     mediator: Arc<Mediator>,
-    handle: MediatorHandle,
     shutdown: CancellationToken,
 }
 
@@ -239,11 +238,6 @@ impl AutoApp {
         Arc::clone(&self.mediator)
     }
 
-    /// Returns the startup-bound mediator handle for sharing with application services.
-    pub fn handle(&self) -> &MediatorHandle {
-        &self.handle
-    }
-
     /// Returns a clone of the explicit application shutdown token.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
@@ -257,63 +251,5 @@ impl AutoApp {
     /// Waits until the application-owned shutdown token is cancelled.
     pub async fn run_until_cancelled(&self) {
         self.shutdown.cancelled().await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::AutoAppBuilder;
-    use crate::{CatgaResult, Handler, Message, Registry, Request};
-    use async_trait::async_trait;
-
-    #[derive(Clone)]
-    struct Ping;
-
-    impl Message for Ping {}
-
-    impl Request for Ping {
-        type Response = String;
-        type TypeId = crate::DefaultMessageTypeId;
-    }
-
-    struct PingHandler;
-
-    #[async_trait]
-    impl Handler<Ping> for PingHandler {
-        async fn handle(&self, _: Ping) -> CatgaResult<String> {
-            Ok("pong".to_string())
-        }
-    }
-
-    #[test]
-    fn build_consumes_the_builder_and_binds_its_handle() {
-        let mut builder = AutoAppBuilder::new();
-        builder
-            .register_request::<Ping, _>(PingHandler)
-            .expect("register handler");
-        let handle = builder.handle.clone();
-
-        let app = builder.build().expect("build application");
-        assert!(handle.is_bound());
-        assert!(app.handle().is_bound());
-    }
-
-    #[tokio::test]
-    async fn handler_method_infers_message_type() -> CatgaResult<()> {
-        async fn ping_handler(_: Ping) -> CatgaResult<String> {
-            Ok("pong".to_string())
-        }
-
-        let app = AutoAppBuilder::new().handler(ping_handler)?.build()?;
-        assert!(app.handle().is_bound());
-        Ok(())
-    }
-
-    #[test]
-    fn with_registry_accepts_prebuilt_registry() {
-        let registry = Registry::new();
-        let builder = AutoAppBuilder::new().with_registry(registry);
-        let app = builder.build().expect("build with prebuilt registry");
-        assert!(app.handle().is_bound());
     }
 }

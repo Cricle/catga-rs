@@ -1,9 +1,14 @@
 use std::{
     any::{Any, TypeId},
-    collections::HashMap,
     marker::PhantomData,
     sync::Arc,
 };
+
+#[cfg(feature = "fnv")]
+use fnv::FnvHashMap;
+
+#[cfg(not(feature = "fnv"))]
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 
@@ -98,6 +103,12 @@ where
     }
 }
 
+#[cfg(feature = "fnv")]
+type RegistryMap<K, V> = FnvHashMap<K, V>;
+
+#[cfg(not(feature = "fnv"))]
+type RegistryMap<K, V> = HashMap<K, V>;
+
 /// One registered request handler slot in the dispatch table.
 pub(crate) struct RequestSlot {
     pub handler: Arc<dyn ErasedRequestHandler>,
@@ -145,9 +156,9 @@ pub(crate) struct EventSlot {
 /// ```
 #[derive(Default)]
 pub struct Registry {
-    pub(crate) requests: HashMap<TypeId, RequestSlot>,
-    pub(crate) commands: HashMap<TypeId, CommandSlot>,
-    pub(crate) events: HashMap<TypeId, EventSlot>,
+    pub(crate) requests: RegistryMap<TypeId, RequestSlot>,
+    pub(crate) commands: RegistryMap<TypeId, CommandSlot>,
+    pub(crate) events: RegistryMap<TypeId, EventSlot>,
 }
 
 impl Registry {

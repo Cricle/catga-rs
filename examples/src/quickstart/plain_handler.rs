@@ -1,10 +1,10 @@
-//! Demonstrates the simplest handler registration pattern enabled by Fn-blanket impls.
+//! Demonstrates the simplest handler registration pattern.
 //!
-//! Plain async functions automatically satisfy [`catga_core::Handler`] without `#[async_trait]` or helper
-//! wrappers. The handler type is inferred by the registry:
+//! Handlers implement `Handler`, `CommandHandler`, or `EventHandler` traits explicitly.
 
+use async_trait::async_trait;
 use catga_core::auto::AutoApp;
-use catga_core::{CatgaResult, Request};
+use catga_core::{CatgaResult, Handler, Request};
 
 // ---------------------------------------------------------------------------
 // Message types
@@ -18,11 +18,16 @@ impl Request for Ping {
 }
 
 // ---------------------------------------------------------------------------
-// Handlers — plain async fns, no macros, no #[async_trait]
+// Handlers — explicit trait implementation
 // ---------------------------------------------------------------------------
 
-async fn ping_handler(_: Ping) -> CatgaResult<String> {
-    Ok("pong".to_string())
+struct PingHandler;
+
+#[async_trait]
+impl Handler<Ping> for PingHandler {
+    async fn handle(&self, _: Ping) -> CatgaResult<String> {
+        Ok("pong".to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -31,9 +36,8 @@ async fn ping_handler(_: Ping) -> CatgaResult<String> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {
-    // Plain async fn as handler — Fn-blanket impl makes this work.
     let app = AutoApp::builder()
-        .request::<Ping, _>(ping_handler)?
+        .request::<Ping, _>(PingHandler)?
         .build()?;
 
     let response = app.mediator().send(Ping).await?;

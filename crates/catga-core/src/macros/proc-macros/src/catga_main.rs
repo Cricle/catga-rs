@@ -71,7 +71,7 @@ fn catga_main_impl(
             #fn_vis #fn_async fn #inner_fn_name #fn_inputs #fn_output #fn_body
         })
     } else {
-        // Without transport: .build() binds the mediator via global_dispatch
+        // Without transport: .build() creates the mediator
         Ok(quote! {
             #fn_vis #fn_async fn #fn_name #fn_inputs #fn_output {
                 let __catga_app = {

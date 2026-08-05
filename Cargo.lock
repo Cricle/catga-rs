@@ -594,6 +594,7 @@ dependencies = [
  "criterion 0.8.2",
  "dashmap",
  "flate2",
+ "fnv",
  "futures",
  "glam",
  "half",

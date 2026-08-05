@@ -197,7 +197,6 @@ pub use aggregate::{
 };
 pub use auto::{
     AutoApp, AutoAppBuilder,
-    bind_mediator, is_bound, mediator_handle, publish, send, send_command,
 };
 pub use auto_snapshot::AutoSnapshotManager;
 pub use behaviors::{

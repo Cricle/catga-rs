@@ -4,23 +4,28 @@
 //! cargo run --example mediator
 //! ```
 
+use async_trait::async_trait;
 use catga_core::CatgaResult;
-use catga_core::auto::AutoApp;
+use catga_core::{auto::AutoApp, Handler};
 
 // One-liner: #[catga_core::catga_request] auto-implements Message + Request
 #[catga_core::catga_request(response = u64)]
 struct Double(u64);
 
-// Plain async fn
-async fn double_handler(value: Double) -> CatgaResult<u64> {
-    Ok(value.0 * 2)
+// Handler struct
+struct DoubleHandler;
+
+#[async_trait]
+impl Handler<Double> for DoubleHandler {
+    async fn handle(&self, value: Double) -> CatgaResult<u64> {
+        Ok(value.0 * 2)
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {
-    // One-liner registration!
     let registry = catga_core::catga_handlers! {
-        request Double => double_handler;
+        request Double => DoubleHandler;
     }?;
 
     let app = AutoApp::from_registry(registry)?;

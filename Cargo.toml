@@ -29,6 +29,7 @@ catga-memorypack-derive = { path = "crates/catga-memorypack-derive", version = "
 catga-nats = { path = "crates/catga-nats", version = "0.0.2" }
 catga-redis = { path = "crates/catga-redis", version = "0.0.2" }
 catga-robustmq = { path = "crates/catga-robustmq", version = "0.0.2" }
+fnv = "1.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
