@@ -80,3 +80,7 @@ harness = false
 [[bench]]
 name = "macro_expansion"
 harness = false
+
+[[bench]]
+name = "flow_throughput"
+harness = false
