@@ -17,24 +17,8 @@ name = "typed_mediator"
 path = "src/quickstart/typed_mediator.rs"
 
 [[bin]]
-name = "memory_transport"
-path = "src/quickstart/memory_transport.rs"
-
-[[bin]]
-name = "flow"
-path = "src/quickstart/flow.rs"
-
-[[bin]]
 name = "plain_handler"
 path = "src/quickstart/plain_handler.rs"
-
-[[bin]]
-name = "simple_handler"
-path = "src/quickstart/simple_handler.rs"
-
-[[bin]]
-name = "service_handler"
-path = "src/quickstart/service_handler.rs"
 
 [[bin]]
 name = "axum_checkout"
@@ -57,7 +41,7 @@ catga-core = { workspace = true }
 catga-nats = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "net", "rt", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

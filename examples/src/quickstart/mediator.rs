@@ -1,36 +1,29 @@
-//! Registers request handlers using `catga_handlers!` macro with AutoApp.
+//! Minimal Catga example — define service, use mediator
 //!
 //! ```bash
-//! cargo run --example mediator
+//! cargo run -p catga-examples --bin mediator
 //! ```
 
-use async_trait::async_trait;
-use catga_core::CatgaResult;
-use catga_core::{Handler, auto::AutoApp};
+use catga_core::{catga_service, catga_request, CatgaResult};
+use tokio;
 
-// One-liner: #[catga_core::catga_request] auto-implements Message + Request
-#[catga_core::catga_request(response = u64)]
+#[catga_request(response = u64)]
 struct Double(u64);
 
-// Handler struct
-struct DoubleHandler;
+#[derive(Clone)]
+struct Calculator;
 
-#[async_trait]
-impl Handler<Double> for DoubleHandler {
-    async fn handle(&self, value: Double) -> CatgaResult<u64> {
-        Ok(value.0 * 2)
+#[catga_service(CalculatorMediator)]
+impl Calculator {
+    async fn double(&self, msg: Double) -> CatgaResult<u64> {
+        Ok(msg.0 * 2)
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> CatgaResult<()> {
-    let registry = catga_core::catga_handlers! {
-        request Double => DoubleHandler;
-    }?;
-
-    let app = AutoApp::from_registry(registry)?;
-    let result = app.mediator().send(Double(21)).await?;
-    assert_eq!(result, 42);
-    println!("21 doubled is {result}");
+    let mediator = CalculatorMediator::new(Calculator);
+    let result = mediator.send(Double(21)).await?;
+    println!("21 * 2 = {}", result);
     Ok(())
 }
