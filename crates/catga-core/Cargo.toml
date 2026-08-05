@@ -76,3 +76,7 @@ harness = false
 [[bench]]
 name = "handler_dispatch"
 harness = false
+
+[[bench]]
+name = "macro_expansion"
+harness = false
