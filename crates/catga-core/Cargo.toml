@@ -62,3 +62,8 @@ url = { version = "2", optional = true }
 [dev-dependencies]
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "mediator_throughput"
+harness = false
