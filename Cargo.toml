@@ -13,7 +13,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.0.3"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
@@ -21,14 +21,14 @@ repository = "https://github.com/Cricle/Catga"
 description = "Composable CQRS, event-sourcing, workflow, and distributed-runtime components for Rust"
 
 [workspace.dependencies]
-catga-axum = { path = "crates/catga-axum", version = "0.0.3" }
-catga-cluster = { path = "crates/catga-cluster", version = "0.0.3" }
-catga-core = { path = "crates/catga-core", version = "0.0.3" }
-catga-flow-store = { path = "crates/catga-flow-store", version = "0.0.3" }
-catga-memorypack-derive = { path = "crates/catga-memorypack-derive", version = "0.0.3" }
-catga-nats = { path = "crates/catga-nats", version = "0.0.3" }
-catga-redis = { path = "crates/catga-redis", version = "0.0.3" }
-catga-robustmq = { path = "crates/catga-robustmq", version = "0.0.3" }
+catga-axum = { path = "crates/catga-axum", version = "0.2.0" }
+catga-cluster = { path = "crates/catga-cluster", version = "0.2.0" }
+catga-core = { path = "crates/catga-core", version = "0.2.0" }
+catga-flow-store = { path = "crates/catga-flow-store", version = "0.2.0" }
+catga-memorypack-derive = { path = "crates/catga-memorypack-derive", version = "0.2.0" }
+catga-nats = { path = "crates/catga-nats", version = "0.2.0" }
+catga-redis = { path = "crates/catga-redis", version = "0.2.0" }
+catga-robustmq = { path = "crates/catga-robustmq", version = "0.2.0" }
 fnv = "1.0"
 
 [workspace.lints.rust]

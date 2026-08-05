@@ -542,7 +542,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "catga-axum"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "catga-cluster"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "catga-core"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "ahash 0.8.12",
  "arc-swap",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "catga-core-macros"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "catga-examples"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "catga-flow-store"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bb8",
@@ -667,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "catga-memorypack-derive"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "catga-nats"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "async-nats 0.50.0",
  "async-trait",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "catga-redis"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "catga-core",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "catga-robustmq"
-version = "0.0.3"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "catga-core",
