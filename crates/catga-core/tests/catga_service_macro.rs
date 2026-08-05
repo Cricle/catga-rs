@@ -16,6 +16,7 @@ struct OrderCreated {
     order_id: u64,
 }
 
+#[derive(Clone)]
 struct TestService;
 
 #[catga_service]
@@ -39,7 +40,7 @@ impl TestService {
 
 #[tokio::test]
 async fn catga_service_generates_working_registry() -> CatgaResult<()> {
-    let registry = TestService::registry()?;
+    let registry = TestService.registry()?;
     let app = AutoApp::from_registry(registry)?;
 
     let result = app.mediator().send(Double(21)).await?;
@@ -51,7 +52,7 @@ async fn catga_service_generates_working_registry() -> CatgaResult<()> {
 
 #[tokio::test]
 async fn catga_service_detects_request_vs_command() -> CatgaResult<()> {
-    let registry = TestService::registry()?;
+    let registry = TestService.registry()?;
     let app = AutoApp::from_registry(registry)?;
 
     let response: u64 = app.mediator().send(Double(5)).await?;

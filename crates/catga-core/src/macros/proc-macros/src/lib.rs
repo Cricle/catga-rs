@@ -52,13 +52,26 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - `async fn name(&self, cmd: C) -> CatgaResult<()>` -> **Command handler**
 /// - `async fn on_name(&self, event: E) -> CatgaResult<()>` -> **Event handler**
 ///
+/// # Typed Mediator (Optional)
+///
+/// Pass a name to generate a zero-allocation typed mediator:
+///
+/// ```ignore
+/// #[catga_service(BankMediator)]
+/// impl BankService {
+///     async fn get_balance(&self, msg: GetBalance) -> CatgaResult<u64> { ... }
+///     async fn transfer(&self, cmd: Transfer) -> CatgaResult<()> { ... }
+/// }
+///
+/// let mediator = BankMediator::new(bank_service.clone());
+/// let balance = mediator.send(GetBalance { account_id: 1 }).await?;
+/// ```
+///
 /// # Generated Code
 ///
 /// The macro generates:
 /// - A `registry()` function returning `CatgaResult<Registry>`
-/// - Wrapper structs implementing `Handler<M>` or `CommandHandler<C>` for each method
-///
-/// # Example
+/// - Wrapper structs implementing `Handler<M>`, `CommandHandler<C>`, or `EventHandler<E>` for each method
 ///
 /// ```ignore
 /// use catga_core::{CatgaResult, auto::AutoApp, catga_request, catga_command, catga_service};
@@ -88,8 +101,17 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # }
 /// ```
 #[proc_macro_attribute]
-pub fn catga_service(_attr: TokenStream, input: TokenStream) -> TokenStream {
-    impl_handlers::expand_impl_handlers(input.into()).into()
+pub fn catga_service(attr: TokenStream, input: TokenStream) -> TokenStream {
+    let typed_mediator_name = if attr.is_empty() {
+        None
+    } else {
+        match syn::parse::<syn::Ident>(attr.into()) {
+            Ok(ident) => Some(ident),
+            Err(e) => return e.into_compile_error().into(),
+        }
+    };
+
+    impl_handlers::expand_impl_handlers(input.into(), typed_mediator_name).into()
 }
 
 /// Implements `catga_core::Message` and `catga_core::Request` with the response type
