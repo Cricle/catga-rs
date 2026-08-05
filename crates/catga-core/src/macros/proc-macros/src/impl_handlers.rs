@@ -17,10 +17,6 @@ struct MethodAnalysis {
 
 fn expand_impl(impl_item: syn::ItemImpl) -> TokenStream {
     let ty = &impl_item.self_ty;
-    let ty_name = match ty.as_ref() {
-        syn::Type::Path(p) => p.path.get_ident().map(|i| i.clone()),
-        _ => None,
-    };
 
     let mut methods = Vec::new();
 
@@ -34,11 +30,8 @@ fn expand_impl(impl_item: syn::ItemImpl) -> TokenStream {
         }
     }
 
-    // Generate registry function name
-    let registry_fn_name = ty_name
-        .as_ref()
-        .map(|n| format_ident!("{}_registry", n.to_string().to_lowercase()))
-        .unwrap_or_else(|| format_ident!("__catga_registry"));
+    // Generate registry function with fixed name "registry"
+    let registry_fn_name = format_ident!("registry");
 
     // Generate wrapper structs and trait impls
     let mut wrapper_structs = Vec::new();

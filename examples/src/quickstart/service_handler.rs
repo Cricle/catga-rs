@@ -24,7 +24,7 @@ impl OrderService {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {
-    let registry = OrderService::orderservice_registry()?;
+    let registry = OrderService::registry()?;
     let app = catga_core::auto::AutoApp::from_registry(registry)?;
 
     let result = app.mediator().send(Double(21)).await?;
