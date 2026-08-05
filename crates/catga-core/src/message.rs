@@ -11,7 +11,7 @@ pub trait MessageTypeId: 'static {
     const NAME: &'static str;
 }
 
-/// Default [`MessageTypeId`] marker for doctests and handwritten examples.
+/// Default [`MessageTypeId`] marker.
 ///
 /// Production code should use the derive macro or a named marker type
 /// so the name reflects the business domain, not a generic placeholder.
@@ -20,14 +20,6 @@ pub struct DefaultMessageTypeId;
 
 impl MessageTypeId for DefaultMessageTypeId {
     const NAME: &'static str = "Default";
-}
-
-/// Blanket impl so doctests can write `type TypeId = ()` without extra boilerplate.
-///
-/// The unit type is a valid `'static` type with a stable address and no fields,
-/// so `()` satisfies `MessageTypeId` without any state or uniqueness risk.
-impl MessageTypeId for () {
-    const NAME: &'static str = "()";
 }
 
 /// Base message trait — simplified from 7 to 3 core traits.
@@ -65,7 +57,6 @@ pub trait Message: Send + Sync + 'static {
 pub trait Request: Message {
     /// The value returned by the matching request handler.
     type Response: Clone + Send + Sync + 'static;
-
     /// A compile-time unique marker type for this request.
     type TypeId: MessageTypeId;
 

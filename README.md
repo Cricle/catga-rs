@@ -12,37 +12,43 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ## 快速开始
 
-### 1. 定义消息和处理器
+### 一行宏定义消息
 
 ```rust
-use catga_core::{CatgaResult, DefaultMessageTypeId, Message, Request};
+use catga_core::{CatgaResult, Mediator};
 
-// 定义请求消息
+// Request: #[catga_core::catga_request(response = ResponseType)]
+#[catga_core::catga_request(response = u64)]
 struct Double(u64);
-impl Message for Double {}
-impl Request for Double {
-    type Response = u64;
-    type TypeId = DefaultMessageTypeId;
-}
+
+// Command: #[derive(catga_core::catga_command)]
+#[derive(catga_core::catga_command)]
+struct Log(String);
 
 // 异步函数自动满足 Handler trait
 async fn double_handler(msg: Double) -> CatgaResult<u64> {
     Ok(msg.0 * 2)
 }
+
+async fn log_handler(msg: Log) -> CatgaResult<()> {
+    println!("[log] {}", msg.0);
+    Ok(())
+}
 ```
 
-### 2. 构建应用
+### 一行注册处理器
 
 ```rust
-use catga_core::auto::AutoApp;
-
 #[tokio::main]
 async fn main() -> CatgaResult<()> {
-    let app = AutoApp::builder()
-        .request::<Double, _>(double_handler)?
-        .build()?;
+    // 消息 => 处理器;
+    let registry = catga_core::catga_handlers! {
+        request Double => double_handler;
+        command Log => log_handler;
+    }?;
 
-    let result = app.mediator().send(Double(21)).await?;
+    let mediator = Mediator::new(registry);
+    let result = mediator.send(Double(21)).await?;
     println!("21 * 2 = {}", result); // 输出: 21 * 2 = 42
     Ok(())
 }
@@ -53,16 +59,16 @@ async fn main() -> CatgaResult<()> {
 ### 命令、查询、事件 (CQRS)
 
 ```rust
-use catga_core::{Command, Event, CatgaResult, DefaultMessageTypeId, Message};
 use catga_core::auto::AutoApp;
+use catga_core::CatgaResult;
 
+// Request: #[catga_core::catga_request(response = Type)]
+#[catga_core::catga_request(response = OrderCreated)]
 struct CreateOrder { product_id: u64, quantity: u32 }
-impl Message for CreateOrder {}
-impl Command for CreateOrder { type TypeId = DefaultMessageTypeId; }
 
+// Event: #[derive(catga_core::catga_event)]
+#[derive(catga_core::catga_event)]
 struct OrderCreated { order_id: u64, product_id: u64 }
-impl Message for OrderCreated {}
-impl Event for OrderCreated { type TypeId = DefaultMessageTypeId; }
 
 async fn create_order_handler(cmd: CreateOrder) -> CatgaResult<OrderCreated> {
     Ok(OrderCreated { order_id: 1, product_id: cmd.product_id })
@@ -73,10 +79,11 @@ async fn notify_handler(event: OrderCreated) -> CatgaResult<()> {
     Ok(())
 }
 
-let app = AutoApp::builder()
-    .command::<CreateOrder, _>(create_order_handler)?
-    .event::<OrderCreated, _>(notify_handler)?
-    .build()?;
+// 一行注册！
+let app = AutoApp::from(catga_core::catga_handlers! {
+    request CreateOrder => create_order_handler;
+    event OrderCreated => notify_handler;
+}?);
 ```
 
 ### 带补偿的工作流

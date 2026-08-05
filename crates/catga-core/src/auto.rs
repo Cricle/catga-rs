@@ -227,6 +227,11 @@ impl AutoApp {
         AutoAppBuilder::new()
     }
 
+    /// Builds an AutoApp from a pre-built registry (e.g., from `catga_handlers!`).
+    pub fn from_registry(registry: Registry) -> CatgaResult<Self> {
+        AutoAppBuilder::new().with_registry(registry).build()
+    }
+
     /// Returns the immutable typed mediator.
     pub fn mediator(&self) -> &Mediator {
         self.mediator.as_ref()

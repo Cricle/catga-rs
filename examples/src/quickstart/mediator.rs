@@ -1,29 +1,29 @@
-//! Registers a request handler and sends a typed request.
+//! Registers request handlers using `catga_handlers!` macro with AutoApp.
 //!
-//! Plain async functions automatically satisfy [`catga_core::Handler`] — no `#[async_trait]` or helper
-//! wrappers needed. For handlers that need shared state, see `request_handler_with`.
+//! ```bash
+//! cargo run --example mediator
+//! ```
 
 use catga_core::auto::AutoApp;
-use catga_core::{CatgaResult, DefaultMessageTypeId, Message, Request};
+use catga_core::CatgaResult;
 
+// One-liner: #[catga_core::catga_request] auto-implements Message + Request
+#[catga_core::catga_request(response = u64)]
 struct Double(u64);
 
-impl Message for Double {}
-impl Request for Double {
-    type Response = u64;
-    type TypeId = DefaultMessageTypeId;
-}
-
-// Plain async fn — Fn-blanket impl makes this a valid Handler.
+// Plain async fn
 async fn double_handler(value: Double) -> CatgaResult<u64> {
     Ok(value.0 * 2)
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> CatgaResult<()> {
-    let app = AutoApp::builder()
-        .request::<Double, _>(double_handler)?
-        .build()?;
+    // One-liner registration!
+    let registry = catga_core::catga_handlers! {
+        request Double => double_handler;
+    }?;
+
+    let app = AutoApp::from_registry(registry)?;
     let result = app.mediator().send(Double(21)).await?;
     assert_eq!(result, 42);
     println!("21 doubled is {result}");
