@@ -100,7 +100,7 @@ where
 
 /// One registered request handler slot in the dispatch table.
 pub(crate) struct RequestSlot {
-    pub(crate) handler: Arc<dyn ErasedRequestHandler>,
+    pub handler: Arc<dyn ErasedRequestHandler>,
 }
 
 /// One registered command handler slot in the dispatch table.
@@ -187,6 +187,14 @@ impl Registry {
     #[inline]
     pub(crate) fn find_request(&self, type_id: TypeId) -> Option<&RequestSlot> {
         self.requests.get(&type_id)
+    }
+
+    /// Gets the request handler for the given message type.
+    ///
+    /// Returns true if a handler is registered for the message type.
+    #[inline]
+    pub fn get_handler<M: Request>(&self) -> bool {
+        self.requests.contains_key(&TypeId::of::<M>())
     }
 
     /// Registers the sole handler for a command type.
