@@ -141,25 +141,31 @@ fn analyze_method(method: &syn::ImplItemFn) -> Option<MethodAnalysis> {
                 && (segment.ident == "Result" || segment.ident == "CatgaResult")
                 && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
                 && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+                && !is_unit_type(inner_ty)
             {
                 // CatgaResult<T> where T is NOT () = request
-                // CatgaResult<()> = command (or event if method starts with "on_")
-                if !is_unit_type(inner_ty) {
-                    return Some(MethodAnalysis {
-                        method_name,
-                        message_type,
-                        is_request: true,
-                        is_event: false,
-                    });
-                } else {
-                    // It's CatgaResult<()>, so it's a command or event
-                    return Some(MethodAnalysis {
-                        method_name,
-                        message_type,
-                        is_request: false,
-                        is_event,
-                    });
-                }
+                return Some(MethodAnalysis {
+                    method_name,
+                    message_type,
+                    is_request: true,
+                    is_event: false,
+                });
+            }
+            // Not CatgaResult<T> where T != (), or it's CatgaResult<()>
+            // CatgaResult<()> = command (or event if method starts with "on_")
+            if let Type::Path(type_path) = ty.as_ref()
+                && let Some(segment) = type_path.path.segments.last()
+                && (segment.ident == "Result" || segment.ident == "CatgaResult")
+                && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+                && is_unit_type(inner_ty)
+            {
+                return Some(MethodAnalysis {
+                    method_name,
+                    message_type,
+                    is_request: false,
+                    is_event,
+                });
             }
             // Not a CatgaResult, check if it's unit
             !is_unit_type(ty)
