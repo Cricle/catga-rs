@@ -24,9 +24,10 @@ fn expand_impl(impl_item: syn::ItemImpl) -> TokenStream {
     for item in &impl_item.items {
         if let syn::ImplItem::Fn(method) = item
             && method.sig.asyncness.is_some()
-                && let Some(analysis) = analyze_method(method) {
-                    methods.push(analysis);
-                }
+            && let Some(analysis) = analyze_method(method)
+        {
+            methods.push(analysis);
+        }
     }
 
     // Generate registry function with fixed name "registry"
@@ -136,30 +137,32 @@ fn analyze_method(method: &syn::ImplItemFn) -> Option<MethodAnalysis> {
         syn::ReturnType::Type(_, ty) => {
             // Check if return type is CatgaResult<T>
             if let Type::Path(type_path) = ty.as_ref()
-                && let Some(segment) = type_path.path.segments.last() {
-                    if (segment.ident == "Result" || segment.ident == "CatgaResult")
-                        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-                            && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
-                                // CatgaResult<T> where T is NOT () = request
-                                // CatgaResult<()> = command (or event if method starts with "on_")
-                                if !is_unit_type(inner_ty) {
-                                    return Some(MethodAnalysis {
-                                        method_name,
-                                        message_type,
-                                        is_request: true,
-                                        is_event: false,
-                                    });
-                                } else {
-                                    // It's CatgaResult<()>, so it's a command or event
-                                    return Some(MethodAnalysis {
-                                        method_name,
-                                        message_type,
-                                        is_request: false,
-                                        is_event,
-                                    });
-                                }
-                            }
+                && let Some(segment) = type_path.path.segments.last()
+            {
+                if (segment.ident == "Result" || segment.ident == "CatgaResult")
+                    && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+                {
+                    // CatgaResult<T> where T is NOT () = request
+                    // CatgaResult<()> = command (or event if method starts with "on_")
+                    if !is_unit_type(inner_ty) {
+                        return Some(MethodAnalysis {
+                            method_name,
+                            message_type,
+                            is_request: true,
+                            is_event: false,
+                        });
+                    } else {
+                        // It's CatgaResult<()>, so it's a command or event
+                        return Some(MethodAnalysis {
+                            method_name,
+                            message_type,
+                            is_request: false,
+                            is_event,
+                        });
+                    }
                 }
+            }
             // Not a CatgaResult, check if it's unit
             !is_unit_type(ty)
         }
