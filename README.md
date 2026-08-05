@@ -1,205 +1,141 @@
-# Catga: Rust Event-Driven Distributed Runtime
+# Catga: Rust 事件驱动分布式运行时
 
-Catga is a pure-Rust runtime for event-driven distributed systems. CQRS, event
-sourcing, workflows, queues, RPC, competing consumers, durable outbox and
-inbox processing, Raft coordination, and cron scheduling are explicit,
-composable building blocks.
+纯 Rust 实现的事件驱动分布式系统框架。包含 CQRS、事件溯源、工作流、队列、RPC、竞争消费者、可靠 Outbox/Inbox 处理。
 
-Applications own their handlers, stores, transports, task supervision, and
-shutdown. There is no reflection, service locator, hidden worker, or unbounded
-queue. Start in memory, then replace only the boundary that needs durability or
-distribution.
+## 安装
 
-## Start Here
+```toml
+[dependencies]
+catga-core = "0.0.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
 
-| Need | Example | Description |
-| --- | --- | --- |
-| Typed local command/query | [`examples/src/quickstart/mediator.rs`](examples/src/quickstart/mediator.rs) | Basic mediator with plain async handlers |
-| Zero-cost typed dispatch | [`examples/src/quickstart/typed_mediator.rs`](examples/src/quickstart/typed_mediator.rs) | Compile-time dispatch on hot paths |
-| Routed messages and workers | [`examples/src/runtime/bus_cqrs.rs`](examples/src/runtime/bus_cqrs.rs) | Bus with request/command/event handlers |
-| HTTP with CQRS | [`examples/src/web/order_service.rs`](examples/src/web/order_service.rs) | Axum + Catga integration |
-| Durable flows | [`examples/src/quickstart/flow.rs`](examples/src/quickstart/flow.rs) | State-machine workflows with compensation |
+## 快速开始
 
-## Quick Start
-
-Plain async functions automatically satisfy handler traits via Fn-blanket impls.
-No `#[async_trait]` needed for simple handlers:
+### 1. 定义消息和处理器
 
 ```rust
-use catga_auto::AutoApp;
-use catga_core::{CatgaResult, Message, Request};
+use catga_core::{CatgaResult, Request};
 
+// 定义请求消息
+#[derive(catga_core::Message)]
 struct Double(u64);
-impl Message for Double {}
-impl Request for Double { type Response = u64; }
 
-async fn double_handler(value: Double) -> CatgaResult<u64> {
-    Ok(value.0 * 2)
+impl Request for Double {
+    type Response = u64;
 }
+
+// 异步函数自动满足 Handler trait
+async fn double_handler(msg: Double) -> CatgaResult<u64> {
+    Ok(msg.0 * 2)
+}
+```
+
+### 2. 构建应用
+
+```rust
+use catga_core::auto::AutoApp;
 
 #[tokio::main]
 async fn main() -> CatgaResult<()> {
     let app = AutoApp::builder()
         .request::<Double, _>(double_handler)?
         .build()?;
+
     let result = app.mediator().send(Double(21)).await?;
-    assert_eq!(result, 42);
-    println!("21 doubled is {result}");
+    println!("21 * 2 = {}", result); // 输出: 21 * 2 = 42
     Ok(())
 }
 ```
 
-## Crates
+## 核心功能
 
-| Crate | Purpose |
+### 命令、查询、事件 (CQRS)
+
+```rust
+use catga_core::{Command, Event, CatgaResult};
+use catga_core::auto::AutoApp;
+
+#[derive(catga_core::Message, Clone)]
+struct CreateOrder { product_id: u64, quantity: u32 }
+impl Command for CreateOrder {}
+
+#[derive(catga_core::Message, Clone)]
+struct OrderCreated { order_id: u64, product_id: u64 }
+impl Event for OrderCreated {}
+
+async fn create_order_handler(cmd: CreateOrder) -> CatgaResult<OrderCreated> {
+    Ok(OrderCreated { order_id: 1, product_id: cmd.product_id })
+}
+
+async fn notify_handler(event: OrderCreated) -> CatgaResult<()> {
+    println!("订单 {} 已创建", event.order_id);
+    Ok(())
+}
+
+let app = AutoApp::builder()
+    .command::<CreateOrder, _>(create_order_handler)?
+    .event::<OrderCreated, _>(notify_handler)?
+    .build()?;
+```
+
+### 带补偿的工作流
+
+```rust
+use catga_core::flow::Flow;
+
+let result = Flow::new("order_checkout")
+    .step(
+        || async { Ok(()) },  // 预留库存
+        || async { Ok(()) },  // 释放库存
+    )
+    .step(
+        || async { Ok(()) },  // 扣款
+        || async { Ok(()) },  // 退款
+    )
+    .run()
+    .await?;
+```
+
+## 示例
+
+| 示例 | 说明 |
 | --- | --- |
-| `catga-core` | Core contracts: Mediator, Registry, behaviors, memory adapters |
-| `catga-auto` | High-level App builder with fluent API |
-| `catga-core-macros` | `#[catga_main]`, `catga_handlers!` procedural macros |
-| `catga-axum` | Axum integration with typed request/response mapping |
-| `catga-cluster` | Raft-based distributed coordination |
-| `catga-nats` | NATS JetStream transport for publish/subscribe and request/reply |
-| `catga-redis` | Redis transport for queues, pub/sub, and stream operations |
-| `catga-robustmq` | RobustMQ transport for priority queues and scheduled messages |
-| `catga-flow-store` | Durable state persistence for Flow workflows (SQLite/Redis) |
+| [simple_handler.rs](examples/src/quickstart/simple_handler.rs) | 最简处理器（无宏） |
+| [mediator.rs](examples/src/quickstart/mediator.rs) | AutoApp 中介者 |
+| [flow.rs](examples/src/quickstart/flow.rs) | 工作流与补偿 |
 
-## Install
-
-```toml
-[dependencies]
-catga-auto = "0.0.2"
-catga-core = "0.0.2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-### Feature Flags
-
-```toml
-# Flow state persistence
-catga-flow-store = { version = "0.0.2", features = ["sqlite"] }
-catga-flow-store = { version = "0.0.2", features = ["sqlx-postgres"] }
-
-# Transports
-catga-nats = "0.0.2"
-catga-redis = "0.0.2"
-catga-robustmq = "0.0.2"
-
-# HTTP adapter
-catga-axum = "0.0.2"
-```
-
-## Core Concepts
-
-### Mediator Pattern
-
-Request (one handler, returns response), Command (one handler, no response),
-and Event (multiple handlers) messages with typed dispatch:
-
-```rust
-use catga_core::{Message, Request, Command, Event, Mediator, Registry};
-
-struct GetUser(u64);
-impl Message for GetUser {}
-impl Request for GetUser { type Response = User; }
-
-struct CreateUser(String);
-impl Message for CreateUser {}
-impl Command for CreateUser {}
-
-struct UserCreated(u64);
-impl Message for UserCreated {}
-impl Event for UserCreated {}
-```
-
-### Compensating Flows
-
-Multi-step workflows with automatic retry and rollback on failure:
-
-```rust
-use catga_core::{compensating_flow, CatgaResult, Message, Command};
-
-struct Order { id: u64 }
-impl Message for Order {}
-impl Command for Order {}
-
-let flow = compensating_flow! {
-    "checkout";
-    context = Order { id: 1 };
-    steps {
-        reserve_inventory => release_inventory;
-        capture_payment => refund_payment;
-    }
-};
-```
-
-### Durable Patterns
-
-- **Outbox**: Reliable event publishing with at-least-once delivery
-- **Inbox**: Idempotent command processing with deduplication
-- **Competing Consumers**: Multiple workers processing shared queues
-- **Dead Letter**: Failed messages routing to error queues
-
-## Run Examples
+运行示例：
 
 ```bash
-# Basic mediator
-cargo run -p catga-examples --bin mediator
-
-# Typed mediator
-cargo run -p catga-examples --bin typed_mediator
-
-# Flow example
-cargo run -p catga-examples --bin flow
-
-# Bus with CQRS
-cargo run -p catga-examples --bin simple_bus
-cargo run -p catga-examples --bin bus_cqrs
-
-# HTTP with Axum
-cargo run -p catga-examples --bin checkout
-
-# Distributed (requires Docker)
-docker compose --file examples/distributed-todo/compose.yaml up --build
+cargo run --example simple_handler
+cargo run --example mediator
+cargo run --example flow
 ```
 
-## Production Guidelines
+## 模块
 
-- **Delivery guarantees**: Flow recovery and retries are at-least-once.
-  Make external effects idempotent with application-owned stable keys.
-- **Ownership**: Run migrations in controlled startup, then supervise
-  consumers, schedulers, outbox processors, and shutdown in application-owned tasks.
-- **Feature selection**: Select only the Cargo features and adapters your deployment uses.
-- **Connection pools**: Keep database connection pools application-owned.
-  Catga exposes configuration but does not impose a connection count.
-- **Consumer patterns**: Use `CompetingConsumer` for durable production receive loops.
+| 模块 | 说明 |
+| --- | --- |
+| `catga-core` | 核心接口：Mediator、Registry、Handler traits |
+| `catga-flow-store` | Flow 状态持久化 (SQLite/PostgreSQL) |
+| `catga-nats` | NATS JetStream 传输层 |
+| `catga-redis` | Redis 队列和发布订阅 |
+| `catga-axum` | Axum HTTP 集成 |
 
-## Verification
+## 测试
 
 ```bash
-# Check all examples compile
-cargo check -p catga-examples --bins
+# 运行所有测试
+cargo test --workspace
 
-# Run all tests
-cargo test --workspace --all-features
+# 运行基准测试
+cargo +nightly bench --workspace
 
-# Format check
-cargo fmt --all -- --check
-
-# Lint check
-cargo clippy --workspace --all-features -- -D warnings
+# 检查代码质量
+cargo clippy --workspace
 ```
 
-NATS JetStream and external infrastructure tests run with `#[ignore]` locally
-and in CI against ephemeral Testcontainers.
+## 许可证
 
-## Documentation
-
-- [Examples Guide](docs/examples.md): Ordered runnable programs
-- [Performance Report](docs/performance.md): Throughput, latency, and durability benchmarks
-- [Skill Guide](skill/SKILL.md): API selection and ownership rules
-- [Transport Guide](skill/transport.md): Transports, typed delivery, RPC patterns
-- [Reliability Guide](skill/reliability.md): Outbox, inbox, idempotency, dead-lettering
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT
