@@ -1,6 +1,6 @@
 //! Memory layout tests for Registry
 
-use catga_core::{CatgaResult, Handler, Message, MessageTypeId, Registry, Request};
+use catga_core::{CatgaResult, Command, CommandHandler, ErrorCode, Handler, Message, MessageTypeId, Registry, Request};
 
 struct PingTypeId;
 impl MessageTypeId for PingTypeId {
@@ -11,6 +11,16 @@ impl Message for Ping {}
 impl Request for Ping {
     type Response = String;
     type TypeId = PingTypeId;
+}
+
+struct AddTypeId;
+impl MessageTypeId for AddTypeId {
+    const NAME: &'static str = "Add";
+}
+struct Add;
+impl Message for Add {}
+impl Command for Add {
+    type TypeId = AddTypeId;
 }
 
 struct QueryTypeId;
@@ -146,4 +156,46 @@ fn zero_sized_types() {
     println!("");
     println!("ZST benefit: Arc can optimize small types to avoid heap allocation");
     println!("Rule of 3: Box/ZST/Arc can inline <= 3 pointers worth of data");
+}
+
+struct Double;
+
+#[async_trait::async_trait]
+impl Handler<Ping> for Double {
+    async fn handle(&self, _: Ping) -> CatgaResult<String> {
+        Ok("double".to_string())
+    }
+}
+
+struct AddTo;
+
+#[async_trait::async_trait]
+impl CommandHandler<Add> for AddTo {
+    async fn handle(&self, _: Add) -> CatgaResult<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn registry_rejects_duplicate_request_handler() -> CatgaResult<()> {
+    let mut registry = Registry::new();
+    registry.register_request::<Ping, _>(Double)?;
+    let result = registry.register_request::<Ping, _>(Double);
+    assert!(
+        matches!(result, Err(e) if e.code() == ErrorCode::Conflict),
+        "Expected Conflict error when registering duplicate request handler"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn registry_rejects_duplicate_command_handler() -> CatgaResult<()> {
+    let mut registry = Registry::new();
+    registry.register_command::<Add, _>(AddTo)?;
+    let result = registry.register_command::<Add, _>(AddTo);
+    assert!(
+        matches!(result, Err(e) if e.code() == ErrorCode::Conflict),
+        "Expected Conflict error when registering duplicate command handler"
+    );
+    Ok(())
 }
