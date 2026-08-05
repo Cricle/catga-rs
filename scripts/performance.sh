@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Runs the release-grade Docker E2E performance suite and writes publishable diagnostics.
+# Also supports running criterion microbenchmarks for quick performance feedback.
 set -euo pipefail
 
 profile=full
@@ -14,15 +15,31 @@ compose_file="$repository_root/testing/docker/compose.yaml"
 compose_project=catga-performance
 services_started=false
 
+# Criterion benchmark options
+run_criterion=false
+skip_transport=false
+criterion_output_dir=
+
 usage() {
     cat <<'EOF'
 Usage: scripts/performance.sh [options]
 
+  Docker E2E Options:
   --profile core|sql|full              Docker services and functional E2E profile (default: full)
   --output-directory PATH              Publishable result directory (default: target/performance/<profile>)
   --keep-services                      Leave Docker services and volumes running
   --validate-only                      Validate the performance runner without starting services
   --health-timeout-seconds NUMBER      Per-service health timeout for the functional E2E preflight
+
+  Criterion Benchmark Options:
+  --criterion                          Run criterion microbenchmarks (no Docker required)
+  --skip-transport                     Skip transport benchmarks (redis, robustmq, nats)
+  --criterion-output PATH              Output directory for criterion results (default: target/criterion)
+
+  Examples:
+  ./scripts/performance.sh --criterion --skip-transport
+  ./scripts/performance.sh --profile full
+  ./scripts/performance.sh --criterion --criterion-output target/my-benchmarks
 EOF
 }
 
@@ -138,12 +155,106 @@ while (($#)); do
         --keep-services) keep_services=true; shift ;;
         --validate-only) validate_only=true; shift ;;
         --health-timeout-seconds) health_timeout_seconds=${2:?missing timeout}; shift 2 ;;
+        --criterion) run_criterion=true; shift ;;
+        --skip-transport) skip_transport=true; shift ;;
+        --criterion-output) criterion_output_dir=${2:?missing output directory}; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) die "unknown argument '$1'" ;;
     esac
 done
 
 command -v cargo >/dev/null || die 'Cargo must be available on PATH'
+
+# If running criterion benchmarks only, don't require Docker
+if [[ "$run_criterion" == true ]]; then
+    command -v jq >/dev/null || die 'jq must be available on PATH'
+    criterion_output_dir=${criterion_output_dir:-"$repository_root/target/criterion"}
+    criterion_output_dir=$(realpath -m "$criterion_output_dir")
+    mkdir -p "$criterion_output_dir"
+
+    echo "=== Criterion Microbenchmarks ==="
+    echo "Output directory: $criterion_output_dir"
+
+    # Run catga-core benchmarks (mediator, registry, handler, flow)
+    # Note: order_checkout_benchmark requires nightly, so we run specific benchmarks
+    echo ""
+    echo "Running catga-core benchmarks..."
+    echo "  - mediator_throughput"
+    cargo bench -p catga-core --bench mediator_throughput -- --noplot 2>&1 | tee "$criterion_output_dir/mediator_throughput.log"
+    echo "  - registry"
+    cargo bench -p catga-core --bench registry -- --noplot 2>&1 | tee "$criterion_output_dir/registry.log"
+    echo "  - handler_dispatch"
+    cargo bench -p catga-core --bench handler_dispatch -- --noplot 2>&1 | tee "$criterion_output_dir/handler_dispatch.log"
+    echo "  - macro_expansion"
+    cargo bench -p catga-core --bench macro_expansion -- --noplot 2>&1 | tee "$criterion_output_dir/macro_expansion.log"
+    echo "  - flow_throughput"
+    cargo bench -p catga-core --bench flow_throughput -- --noplot 2>&1 | tee "$criterion_output_dir/flow_throughput.log"
+
+    # Copy criterion results
+    cp -r "$repository_root/target/criterion"/* "$criterion_output_dir/" 2>/dev/null || true
+
+    # Run transport benchmarks if not skipped and services are available
+    if [[ "$skip_transport" == false ]]; then
+        echo ""
+        echo "Checking transport benchmark availability..."
+
+        # Check Redis availability
+        if [[ -n "${CATGA_REDIS_URL:-}" ]]; then
+            echo "Running Redis benchmarks (CATGA_REDIS_URL is set)..."
+            cargo bench -p catga-redis -- --noplot 2>&1 | tee "$criterion_output_dir/catga-redis.log"
+        else
+            echo "Skipping Redis benchmarks (CATGA_REDIS_URL not set)"
+        fi
+
+        # Check NATS availability
+        if [[ -n "${CATGA_NATS_URL:-}" ]]; then
+            echo "Running NATS benchmarks (CATGA_NATS_URL is set)..."
+            cargo bench -p catga-nats -- --noplot 2>&1 | tee "$criterion_output_dir/catga-nats.log"
+        else
+            echo "Skipping NATS benchmarks (CATGA_NATS_URL not set)"
+        fi
+
+        # Check RobustMQ availability
+        if [[ -n "${CATGA_ROBUSTMQ_URL:-}" ]]; then
+            echo "Running RobustMQ benchmarks (CATGA_ROBUSTMQ_URL is set)..."
+            cargo bench -p catga-robustmq -- --noplot 2>&1 | tee "$criterion_output_dir/catga-robustmq.log"
+        else
+            echo "Skipping RobustMQ benchmarks (CATGA_ROBUSTMQ_URL not set)"
+        fi
+    else
+        echo ""
+        echo "Skipping all transport benchmarks (--skip-transport set)"
+    fi
+
+    # Generate summary report
+    echo ""
+    echo "=== Benchmark Summary ==="
+    if command -v cargo-benchcmp >/dev/null 2>&1; then
+        echo "cargo-benchcmp available for comparison"
+    fi
+
+    echo ""
+    echo "Results saved to: $criterion_output_dir"
+    echo ""
+    echo "Core benchmarks completed:"
+    echo "  - mediator_throughput (catga-core)"
+    echo "  - registry (catga-core)"
+    echo "  - handler_dispatch (catga-core)"
+    echo "  - macro_expansion (catga-core)"
+    echo "  - flow_throughput (catga-core)"
+    [[ "$skip_transport" == false ]] && echo "  - redis_throughput (catga-redis, if CATGA_REDIS_URL set)"
+    [[ "$skip_transport" == false ]] && echo "  - nats_throughput (catga-nats, if CATGA_NATS_URL set)"
+    [[ "$skip_transport" == false ]] && echo "  - robustmq_throughput (catga-robustmq, if CATGA_ROBUSTMQ_URL set)"
+
+    echo ""
+    echo "To view HTML reports, run:"
+    echo "  cargo bench -p catga-core"
+    echo "  # Then open target/criterion/report/index.html in a browser"
+
+    exit 0
+fi
+
+# Continue with Docker E2E benchmarks
 command -v docker >/dev/null || die 'Docker must be available on PATH'
 command -v jq >/dev/null || die 'jq must be available on PATH'
 [[ -f "$compose_file" ]] || die "Docker Compose file does not exist: $compose_file"
