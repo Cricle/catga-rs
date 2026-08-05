@@ -1,7 +1,10 @@
 //! Tests for MemoryPack extended type traits
 
+#[cfg(any(feature = "uuid", feature = "rust_decimal", feature = "half", feature = "num-bigint", feature = "url"))]
 use catga_core::{MemoryPackDeserialize, MemoryPackSerialize, MemoryPackSerializer};
 
+#[cfg(any(feature = "uuid", feature = "rust_decimal", feature = "half", feature = "num-bigint", feature = "url"))]
+#[allow(dead_code)]
 fn round_trip<T>(value: &T) -> T
 where
     T: MemoryPackSerialize + MemoryPackDeserialize,

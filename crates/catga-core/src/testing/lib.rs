@@ -29,11 +29,9 @@ pub use crate::testing::{
 };
 
 mod aggregate;
-mod bus_harness;
 mod flow;
 mod harness;
 
 pub use aggregate::{AggregateScenario, ReplayedAggregate};
-pub use bus_harness::BusTestHarness;
 pub use flow::FlowTestContext;
 pub use harness::{CatgaTestHarness, RunningCatgaTestHarness};

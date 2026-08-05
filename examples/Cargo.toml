@@ -37,18 +37,6 @@ name = "service_handler"
 path = "src/quickstart/service_handler.rs"
 
 [[bin]]
-name = "simple_bus"
-path = "src/runtime/simple_bus.rs"
-
-[[bin]]
-name = "bus_cqrs"
-path = "src/runtime/bus_cqrs.rs"
-
-[[bin]]
-name = "otel_bus"
-path = "src/runtime/otel_bus.rs"
-
-[[bin]]
 name = "axum_checkout"
 path = "src/web/axum_checkout.rs"
 
@@ -59,14 +47,6 @@ path = "src/web/checkout.rs"
 [[bin]]
 name = "order_service"
 path = "src/web/order_service.rs"
-
-[[bin]]
-name = "distributed_todo_api"
-path = "src/distributed/todo_api.rs"
-
-[[bin]]
-name = "distributed_todo_worker"
-path = "src/distributed/todo_worker.rs"
 
 [dependencies]
 async-trait = "0.1"

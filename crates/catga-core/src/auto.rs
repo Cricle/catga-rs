@@ -56,13 +56,8 @@ use crate::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub mod bus;
 pub mod global_dispatch;
 
-pub use bus::{
-    Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient, DeliveryMessageOf,
-    FaultPublishingHandler, FilteredHandler, MessageForwarder, PublisherHandle,
-};
 pub use global_dispatch::{bind_mediator, is_bound, mediator_handle, publish, send, send_command};
 
 /// A startup builder for one immutable Catga application graph.

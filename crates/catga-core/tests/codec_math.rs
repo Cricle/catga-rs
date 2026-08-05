@@ -1,5 +1,6 @@
 //! Tests for MemoryPack math type traits
 
+#[cfg(any(feature = "num-complex", feature = "glam"))]
 use catga_core::MemoryPackSerializer;
 
 #[cfg(feature = "num-complex")]

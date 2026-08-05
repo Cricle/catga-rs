@@ -196,8 +196,7 @@ pub use aggregate::{
     SnapshotStrategy, TimeBasedSnapshotStrategy,
 };
 pub use auto::{
-    AutoApp, AutoAppBuilder, Bus, BusBuilder, BusFaultPublisher, BusPublisher, BusRequestClient,
-    DeliveryMessageOf, FaultPublishingHandler, FilteredHandler, MessageForwarder, PublisherHandle,
+    AutoApp, AutoAppBuilder,
     bind_mediator, is_bound, mediator_handle, publish, send, send_command,
 };
 pub use auto_snapshot::AutoSnapshotManager;
