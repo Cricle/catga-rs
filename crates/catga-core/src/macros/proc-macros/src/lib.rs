@@ -7,6 +7,7 @@ mod derive_command;
 mod derive_event;
 mod derive_request;
 mod handlers;
+mod impl_handlers;
 mod message;
 mod typed_mediator;
 
@@ -39,6 +40,12 @@ pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
     auto::expand_auto(item.into())
+}
+
+/// Scans an impl block for async methods and generates handler registrations.
+#[proc_macro_attribute]
+pub fn catga_service(_attr: TokenStream, input: TokenStream) -> TokenStream {
+    impl_handlers::expand_impl_handlers(input.into()).into()
 }
 
 /// Implements `catga_core::Message` and `catga_core::Request` with the response type

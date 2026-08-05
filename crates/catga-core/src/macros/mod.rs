@@ -3,5 +3,5 @@
 
 pub use catga_core_macros::{
     Message, catga_auto, catga_command, catga_event, catga_handler, catga_handlers, catga_main,
-    catga_request, catga_typed_mediator,
+    catga_request, catga_service, catga_typed_mediator,
 };
