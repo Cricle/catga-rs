@@ -4,11 +4,12 @@
 //!
 //! Run: cargo bench -p catga-core --bench flow_throughput
 
-use criterion::{criterion_group, criterion_main, Criterion};
-use catga_core::flow::{Flow, DslFlow};
+use catga_core::flow::{DslFlow, Flow};
 use catga_core::{CatgaError, ErrorCode};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::sync::{
-    Arc, atomic::{AtomicBool, Ordering},
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 /// Benchmark single step flow execution
@@ -20,8 +21,7 @@ fn single_step_flow_throughput(c: &mut Criterion) {
 
     c.bench_function("single_step_flow_execution", |b| {
         b.iter(|| {
-            let flow = Flow::new("bench")
-                .step(|| async { Ok(()) }, || async { Ok(()) });
+            let flow = Flow::new("bench").step(|| async { Ok(()) }, || async { Ok(()) });
             let result = rt.block_on(flow.run());
             assert!(result.is_success());
         });
@@ -78,14 +78,18 @@ fn dsl_flow_two_actions_throughput(c: &mut Criterion) {
     c.bench_function("dsl_flow_two_actions", |b| {
         b.iter(|| {
             let flow = DslFlow::<u32>::new()
-                .action(|state: &mut u32| Box::pin(async move {
-                    *state += 1;
-                    Ok(())
-                }))
-                .action(|state: &mut u32| Box::pin(async move {
-                    *state += 1;
-                    Ok(())
-                }));
+                .action(|state: &mut u32| {
+                    Box::pin(async move {
+                        *state += 1;
+                        Ok(())
+                    })
+                })
+                .action(|state: &mut u32| {
+                    Box::pin(async move {
+                        *state += 1;
+                        Ok(())
+                    })
+                });
             let mut state = 0u32;
             rt.block_on(flow.run(&mut state)).unwrap();
         });
@@ -102,26 +106,36 @@ fn dsl_flow_five_actions_throughput(c: &mut Criterion) {
     c.bench_function("dsl_flow_five_actions", |b| {
         b.iter(|| {
             let flow = DslFlow::<u32>::new()
-                .action(|state: &mut u32| Box::pin(async move {
-                    *state += 1;
-                    Ok(())
-                }))
-                .action(|state: &mut u32| Box::pin(async move {
-                    *state += 1;
-                    Ok(())
-                }))
-                .action(|state: &mut u32| Box::pin(async move {
-                    *state += 1;
-                    Ok(())
-                }))
-                .action(|state: &mut u32| Box::pin(async move {
-                    *state += 1;
-                    Ok(())
-                }))
-                .action(|state: &mut u32| Box::pin(async move {
-                    *state += 1;
-                    Ok(())
-                }));
+                .action(|state: &mut u32| {
+                    Box::pin(async move {
+                        *state += 1;
+                        Ok(())
+                    })
+                })
+                .action(|state: &mut u32| {
+                    Box::pin(async move {
+                        *state += 1;
+                        Ok(())
+                    })
+                })
+                .action(|state: &mut u32| {
+                    Box::pin(async move {
+                        *state += 1;
+                        Ok(())
+                    })
+                })
+                .action(|state: &mut u32| {
+                    Box::pin(async move {
+                        *state += 1;
+                        Ok(())
+                    })
+                })
+                .action(|state: &mut u32| {
+                    Box::pin(async move {
+                        *state += 1;
+                        Ok(())
+                    })
+                });
             let mut state = 0u32;
             rt.block_on(flow.run(&mut state)).unwrap();
         });

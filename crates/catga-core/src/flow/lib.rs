@@ -325,3 +325,29 @@ macro_rules! dsl_each_action {
         |$state: $state_ty, $item: $item_ty| Box::pin(async move $body)
     };
 }
+
+/// Converts a natural async state action into a [`DslFlow::action_outcome`] step outcome.
+///
+/// The macro evaluates the async block and wraps its [`FlowStepOutcome`] result in
+/// `Ok::<_, CatgaError>(...)` so the closure returns `CatgaResult<()>` as required.
+///
+/// ```no_run
+/// use catga_core::flow::DslFlow;
+/// use catga_core::flow::FlowStepOutcome;
+///
+/// struct State(u32);
+/// let _flow = DslFlow::new().action_outcome(catga_core::flow_outcome!(|state: &mut State| async move {
+///     state.0 += 1;
+///     FlowStepOutcome::Advance
+/// }));
+/// ```
+#[macro_export]
+macro_rules! flow_outcome {
+    (|$state:ident : $state_ty:ty| async move $body:block) => {
+        |$state: $state_ty| ::std::boxed::Box::pin(async move {
+            let __outcome = async move $body;
+            #[allow(clippy::unit_arg)]
+            Ok::<_, $crate::CatgaError>(__outcome.await)
+        })
+    };
+}

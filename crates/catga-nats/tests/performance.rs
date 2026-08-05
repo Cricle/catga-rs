@@ -6,9 +6,8 @@
 use std::time::{Duration, Instant};
 
 use catga_core::{
-    codec::memorypack::MemoryPackCodec,
     Envelope, EnvelopeCodec, ErrorCode, MessageMetadata, MessageTransport, QualityOfService,
-    Stoppable,
+    Stoppable, codec::memorypack::MemoryPackCodec,
 };
 
 /// Test envelope encoding/decoding throughput.
@@ -19,7 +18,8 @@ async fn envelope_encoding_decoding_throughput() -> Result<(), Box<dyn std::erro
     let codec = MemoryPackCodec::default();
 
     // Create a test envelope
-    let metadata = MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtLeastOnce);
+    let metadata =
+        MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtLeastOnce);
     let original = Envelope::new(1, "test.message", vec![1, 2, 3, 4, 5, 6, 7, 8], metadata);
 
     // Benchmark encoding
@@ -39,8 +39,14 @@ async fn envelope_encoding_decoding_throughput() -> Result<(), Box<dyn std::erro
     let decode_elapsed = decode_start.elapsed();
     let decode_ops = COUNT as f64 / decode_elapsed.as_secs_f64();
 
-    println!("Envelope encode: {:.0} ops/s ({:?} total)", encode_ops, encode_elapsed);
-    println!("Envelope decode: {:.0} ops/s ({:?} total)", decode_ops, decode_elapsed);
+    println!(
+        "Envelope encode: {:.0} ops/s ({:?} total)",
+        encode_ops, encode_elapsed
+    );
+    println!(
+        "Envelope decode: {:.0} ops/s ({:?} total)",
+        decode_ops, decode_elapsed
+    );
     Ok(())
 }
 
@@ -83,7 +89,10 @@ async fn client_connection_establishment() -> Result<(), Box<dyn std::error::Err
     let pub_elapsed = pub_start.elapsed();
     let publish_ops = COUNT as f64 / pub_elapsed.as_secs_f64();
 
-    println!("NATS publish throughput: {:.0} ops/s ({:?} total)", publish_ops, pub_elapsed);
+    println!(
+        "NATS publish throughput: {:.0} ops/s ({:?} total)",
+        publish_ops, pub_elapsed
+    );
 
     // Measure receive round-trip
     let recv_start = Instant::now();
@@ -109,7 +118,10 @@ async fn client_connection_establishment() -> Result<(), Box<dyn std::error::Err
         0.0
     };
 
-    println!("NATS receive throughput: {:.0} ops/s ({} received in {:?})", receive_ops, recv_count, recv_elapsed);
+    println!(
+        "NATS receive throughput: {:.0} ops/s ({} received in {:?})",
+        receive_ops, recv_count, recv_elapsed
+    );
 
     Ok(())
 }
@@ -132,7 +144,11 @@ async fn error_handling_under_failure() -> Result<(), Box<dyn std::error::Error>
     match result {
         Ok(_) => panic!("Connection to invalid server should fail"),
         Err(error) => {
-            assert_eq!(error.code(), ErrorCode::Transient, "Invalid server should return Transient error");
+            assert_eq!(
+                error.code(),
+                ErrorCode::Transient,
+                "Invalid server should return Transient error"
+            );
             println!("Error handling test passed: {:?}", error);
         }
     }
@@ -196,7 +212,12 @@ async fn envelope_serialization_overhead() -> Result<(), Box<dyn std::error::Err
         assert_eq!(envelope.message_type(), decoded.message_type());
 
         let ratio = encoded.len() as f64 / payload_size as f64;
-        println!("Payload {} bytes -> {} wire bytes (ratio: {:.2}x)", payload_size, encoded.len(), ratio);
+        println!(
+            "Payload {} bytes -> {} wire bytes (ratio: {:.2}x)",
+            payload_size,
+            encoded.len(),
+            ratio
+        );
     }
 
     Ok(())

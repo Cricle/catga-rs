@@ -31,7 +31,9 @@ async fn main() -> CatgaResult<()> {
     assert_eq!(result, 42);
     println!("Double(21) = {}", result);
 
-    app.mediator().send_command(Log("hello from OrderService!".to_string())).await?;
+    app.mediator()
+        .send_command(Log("hello from OrderService!".to_string()))
+        .await?;
 
     Ok(())
 }

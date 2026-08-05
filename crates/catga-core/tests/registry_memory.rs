@@ -1,6 +1,9 @@
 //! Memory layout tests for Registry
 
-use catga_core::{CatgaResult, Command, CommandHandler, ErrorCode, Handler, Message, MessageTypeId, Registry, Request};
+use catga_core::{
+    CatgaResult, Command, CommandHandler, ErrorCode, Handler, Message, MessageTypeId, Registry,
+    Request,
+};
 
 struct PingTypeId;
 impl MessageTypeId for PingTypeId {

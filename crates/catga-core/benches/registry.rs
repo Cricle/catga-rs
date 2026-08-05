@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Handler, Message, Registry, Request};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use paste::paste;
 use std::hint::black_box;
 
@@ -180,7 +180,9 @@ fn registry_creation(c: &mut Criterion) {
 fn registry_lookup(c: &mut Criterion) {
     // Setup: create registry with one registered handler
     let mut registry = Registry::new();
-    registry.register_request::<PingSingle, _>(HandlerSingle).unwrap();
+    registry
+        .register_request::<PingSingle, _>(HandlerSingle)
+        .unwrap();
 
     c.bench_function("registry_lookup", |b| {
         let registry = &registry;

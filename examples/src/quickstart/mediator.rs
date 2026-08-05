@@ -4,8 +4,8 @@
 //! cargo run --example mediator
 //! ```
 
-use catga_core::auto::AutoApp;
 use catga_core::CatgaResult;
+use catga_core::auto::AutoApp;
 
 // One-liner: #[catga_core::catga_request] auto-implements Message + Request
 #[catga_core::catga_request(response = u64)]

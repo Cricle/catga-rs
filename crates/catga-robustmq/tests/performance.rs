@@ -6,8 +6,8 @@
 use std::time::Instant;
 
 use catga_core::{
-    codec::memorypack::MemoryPackCodec,
     Envelope, EnvelopeCodec, ErrorCode, MessageMetadata, QualityOfService,
+    codec::memorypack::MemoryPackCodec,
 };
 
 /// Test envelope encoding/decoding throughput.
@@ -18,7 +18,8 @@ async fn envelope_encoding_decoding_throughput() -> Result<(), Box<dyn std::erro
     let codec = MemoryPackCodec::default();
 
     // Create a test envelope
-    let metadata = MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtLeastOnce);
+    let metadata =
+        MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtLeastOnce);
     let original = Envelope::new(1, "test.message", vec![1, 2, 3, 4, 5, 6, 7, 8], metadata);
 
     // Benchmark encoding
@@ -38,8 +39,14 @@ async fn envelope_encoding_decoding_throughput() -> Result<(), Box<dyn std::erro
     let decode_elapsed = decode_start.elapsed();
     let decode_ops = COUNT as f64 / decode_elapsed.as_secs_f64();
 
-    println!("Envelope encode: {:.0} ops/s ({:?} total)", encode_ops, encode_elapsed);
-    println!("Envelope decode: {:.0} ops/s ({:?} total)", decode_ops, decode_elapsed);
+    println!(
+        "Envelope encode: {:.0} ops/s ({:?} total)",
+        encode_ops, encode_elapsed
+    );
+    println!(
+        "Envelope decode: {:.0} ops/s ({:?} total)",
+        decode_ops, decode_elapsed
+    );
     Ok(())
 }
 
@@ -62,7 +69,10 @@ async fn client_connection_establishment() -> Result<(), Box<dyn std::error::Err
     let client = MailboxClient::connect(&config.server).await?;
     let connect_elapsed = start.elapsed();
 
-    println!("RobustMQ client connection establishment: {:?}", connect_elapsed);
+    println!(
+        "RobustMQ client connection establishment: {:?}",
+        connect_elapsed
+    );
 
     // Create a test mailbox
     let mailbox_start = Instant::now();
@@ -77,13 +87,15 @@ async fn client_connection_establishment() -> Result<(), Box<dyn std::error::Err
     let envelope = Envelope::new(1, "test", vec![1, 2, 3], metadata);
 
     let (mailbox_id, _) = {
-        let m = client.create(&MailboxConfig {
-            server: config.server.clone(),
-            ttl_seconds: 60,
-            public: true,
-            name: "perf_test_replies".into(),
-            description: "".into(),
-        }).await?;
+        let m = client
+            .create(&MailboxConfig {
+                server: config.server.clone(),
+                ttl_seconds: 60,
+                public: true,
+                name: "perf_test_replies".into(),
+                description: "".into(),
+            })
+            .await?;
         (m.mail_id.clone(), m)
     };
 
@@ -92,12 +104,17 @@ async fn client_connection_establishment() -> Result<(), Box<dyn std::error::Err
         let mut e = envelope.clone();
         let meta = MessageMetadata::new(i as u64, None);
         e = e.with_metadata(meta);
-        client.send_envelope(&mailbox_id, &e, catga_robustmq::MailboxPriority::Normal).await?;
+        client
+            .send_envelope(&mailbox_id, &e, catga_robustmq::MailboxPriority::Normal)
+            .await?;
     }
     let send_elapsed = send_start.elapsed();
     let send_ops = COUNT as f64 / send_elapsed.as_secs_f64();
 
-    println!("RobustMQ send throughput: {:.0} ops/s ({:?} total)", send_ops, send_elapsed);
+    println!(
+        "RobustMQ send throughput: {:.0} ops/s ({:?} total)",
+        send_ops, send_elapsed
+    );
 
     Ok(())
 }
@@ -113,7 +130,11 @@ async fn error_handling_under_failure() -> Result<(), Box<dyn std::error::Error>
     match result {
         Ok(_) => panic!("Connection to invalid server should fail"),
         Err(error) => {
-            assert_eq!(error.code(), ErrorCode::Transient, "Invalid server should return Transient error");
+            assert_eq!(
+                error.code(),
+                ErrorCode::Transient,
+                "Invalid server should return Transient error"
+            );
             println!("Error handling test passed: {:?}", error);
         }
     }
@@ -152,7 +173,9 @@ async fn batch_send_throughput() -> Result<(), Box<dyn std::error::Error>> {
         let start = Instant::now();
         for _ in 0..100 {
             for env in &envelopes {
-                client.send_envelope(&mailbox_id, env, MailboxPriority::Normal).await?;
+                client
+                    .send_envelope(&mailbox_id, env, MailboxPriority::Normal)
+                    .await?;
             }
         }
         let elapsed = start.elapsed();
@@ -183,7 +206,12 @@ async fn envelope_serialization_overhead() -> Result<(), Box<dyn std::error::Err
         assert_eq!(envelope.message_type(), decoded.message_type());
 
         let ratio = encoded.len() as f64 / payload_size as f64;
-        println!("Payload {} bytes -> {} wire bytes (ratio: {:.2}x)", payload_size, encoded.len(), ratio);
+        println!(
+            "Payload {} bytes -> {} wire bytes (ratio: {:.2}x)",
+            payload_size,
+            encoded.len(),
+            ratio
+        );
     }
 
     Ok(())
@@ -220,7 +248,9 @@ async fn priority_queue_operations() -> Result<(), Box<dyn std::error::Error>> {
         // Send test message with priority
         let metadata = MessageMetadata::new(1, None);
         let envelope = Envelope::new(1, "priority.test", vec![1, 2, 3], metadata);
-        client.send_envelope(&config.name, &envelope, priority).await?;
+        client
+            .send_envelope(&config.name, &envelope, priority)
+            .await?;
 
         let elapsed = start.elapsed();
         println!("Priority {:?}: mailbox + send in {:?}", priority, elapsed);

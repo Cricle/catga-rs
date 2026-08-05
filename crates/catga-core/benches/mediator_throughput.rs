@@ -4,8 +4,8 @@
 //!
 //! Target: >10M ops/s for Mediator operations (single-threaded)
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 /// Simple ping message for throughput testing
@@ -93,19 +93,21 @@ fn mediator_batch_send(c: &mut Criterion) {
 
     // Test batch send throughput
     for batch_size in [100, 1_000, 10_000].iter() {
-        group.bench_with_input(BenchmarkId::from_parameter(batch_size), batch_size, |b, &batch_size| {
-            let mediator = &mediator;
-            let runtime = &runtime;
-            b.iter(|| {
-                let results = runtime.block_on(
-                    mediator.send_batch(
+        group.bench_with_input(
+            BenchmarkId::from_parameter(batch_size),
+            batch_size,
+            |b, &batch_size| {
+                let mediator = &mediator;
+                let runtime = &runtime;
+                b.iter(|| {
+                    let results = runtime.block_on(mediator.send_batch(
                         std::iter::repeat_with(|| Ping(1)).take(batch_size),
                         batch_size,
-                    )
-                );
-                let _ = black_box(results);
-            });
-        });
+                    ));
+                    let _ = black_box(results);
+                });
+            },
+        );
     }
 
     group.finish();

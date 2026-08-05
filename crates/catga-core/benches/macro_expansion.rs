@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Handler, Message, Registry, Request};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use paste::paste;
 use std::hint::black_box;
 

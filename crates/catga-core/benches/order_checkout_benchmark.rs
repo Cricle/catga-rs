@@ -7,10 +7,7 @@
 
 extern crate test;
 
-use catga_core::{
-    flow::Flow,
-    ErrorCode,
-};
+use catga_core::{ErrorCode, flow::Flow};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -33,10 +30,9 @@ impl Inventory {
         self.reserved
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| ())
-            .map_err(|_| catga_core::CatgaError::new(
-                ErrorCode::Conflict,
-                "inventory already reserved",
-            ))
+            .map_err(|_| {
+                catga_core::CatgaError::new(ErrorCode::Conflict, "inventory already reserved")
+            })
     }
 
     fn release(&self) {
@@ -232,7 +228,10 @@ fn bench_multi_step_flow_5(b: &mut test::Bencher) {
     b.iter(|| {
         let flow = rt.block_on(async {
             Flow::new("multi-step")
-                .step(|| async { Ok::<_, catga_core::CatgaError>(()) }, || async { Ok(()) })
+                .step(
+                    || async { Ok::<_, catga_core::CatgaError>(()) },
+                    || async { Ok(()) },
+                )
                 .step(|| async { Ok(()) }, || async { Ok(()) })
                 .step(|| async { Ok(()) }, || async { Ok(()) })
                 .step(|| async { Ok(()) }, || async { Ok(()) })
@@ -255,7 +254,10 @@ fn bench_multi_step_flow_10(b: &mut test::Bencher) {
     b.iter(|| {
         let flow = rt.block_on(async {
             Flow::new("multi-step-10")
-                .step(|| async { Ok::<_, catga_core::CatgaError>(()) }, || async { Ok(()) })
+                .step(
+                    || async { Ok::<_, catga_core::CatgaError>(()) },
+                    || async { Ok(()) },
+                )
                 .step(|| async { Ok(()) }, || async { Ok(()) })
                 .step(|| async { Ok(()) }, || async { Ok(()) })
                 .step(|| async { Ok(()) }, || async { Ok(()) })
@@ -396,11 +398,17 @@ fn bench_concurrent_flows_4(b: &mut test::Bencher) {
                         .step(
                             move || {
                                 let i = inv1_run.clone();
-                                async move { i.reserve() }
+                                async move {
+                                    i.reserve();
+                                    Ok(())
+                                }
                             },
                             move || {
                                 let i = inv1_comp.clone();
-                                async move { i.release(); Ok(()) }
+                                async move {
+                                    i.release();
+                                    Ok(())
+                                }
                             },
                         )
                         .run()
@@ -413,11 +421,17 @@ fn bench_concurrent_flows_4(b: &mut test::Bencher) {
                         .step(
                             move || {
                                 let i = inv2_run.clone();
-                                async move { i.reserve() }
+                                async move {
+                                    i.reserve();
+                                    Ok(())
+                                }
                             },
                             move || {
                                 let i = inv2_comp.clone();
-                                async move { i.release(); Ok(()) }
+                                async move {
+                                    i.release();
+                                    Ok(())
+                                }
                             },
                         )
                         .run()
@@ -430,11 +444,17 @@ fn bench_concurrent_flows_4(b: &mut test::Bencher) {
                         .step(
                             move || {
                                 let i = inv3_run.clone();
-                                async move { i.reserve() }
+                                async move {
+                                    i.reserve();
+                                    Ok(())
+                                }
                             },
                             move || {
                                 let i = inv3_comp.clone();
-                                async move { i.release(); Ok(()) }
+                                async move {
+                                    i.release();
+                                    Ok(())
+                                }
                             },
                         )
                         .run()
@@ -447,11 +467,17 @@ fn bench_concurrent_flows_4(b: &mut test::Bencher) {
                         .step(
                             move || {
                                 let i = inv4_run.clone();
-                                async move { i.reserve() }
+                                async move {
+                                    i.reserve();
+                                    Ok(())
+                                }
                             },
                             move || {
                                 let i = inv4_comp.clone();
-                                async move { i.release(); Ok(()) }
+                                async move {
+                                    i.release();
+                                    Ok(())
+                                }
                             },
                         )
                         .run()
@@ -514,41 +540,65 @@ fn bench_deep_compensation_chain(b: &mut test::Bencher) {
                 .step(
                     move || {
                         let c = c1_run.clone();
-                        async move { c.fetch_add(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_add(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                     move || {
                         let c = c1_comp.clone();
-                        async move { c.fetch_sub(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_sub(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                 )
                 .step(
                     move || {
                         let c = c2_run.clone();
-                        async move { c.fetch_add(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_add(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                     move || {
                         let c = c2_comp.clone();
-                        async move { c.fetch_sub(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_sub(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                 )
                 .step(
                     move || {
                         let c = c3_run.clone();
-                        async move { c.fetch_add(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_add(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                     move || {
                         let c = c3_comp.clone();
-                        async move { c.fetch_sub(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_sub(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                 )
                 .step(
                     move || {
                         let c = c4_run.clone();
-                        async move { c.fetch_add(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_add(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                     move || {
                         let c = c4_comp.clone();
-                        async move { c.fetch_sub(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_sub(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                 )
                 .step(
@@ -567,7 +617,10 @@ fn bench_deep_compensation_chain(b: &mut test::Bencher) {
                     },
                     move || {
                         let c = c5_comp.clone();
-                        async move { c.fetch_add(1, Ordering::Relaxed); Ok(()) }
+                        async move {
+                            c.fetch_add(1, Ordering::Relaxed);
+                            Ok(())
+                        }
                     },
                 )
                 .run()
@@ -590,9 +643,7 @@ fn bench_empty_flow(b: &mut test::Bencher) {
         .unwrap();
 
     b.iter(|| {
-        let flow = rt.block_on(async {
-            Flow::new("empty").run().await
-        });
+        let flow = rt.block_on(async { Flow::new("empty").run().await });
         test::black_box(flow);
     });
 }

@@ -6,9 +6,8 @@
 use std::time::{Duration, Instant};
 
 use catga_core::{
-    codec::memorypack::MemoryPackCodec,
     Envelope, EnvelopeCodec, ErrorCode, MessageMetadata, MessageTransport, QualityOfService,
-    Stoppable,
+    Stoppable, codec::memorypack::MemoryPackCodec,
 };
 
 /// Test envelope encoding/decoding throughput.
@@ -19,10 +18,9 @@ async fn envelope_encoding_decoding_throughput() -> Result<(), Box<dyn std::erro
     let codec = MemoryPackCodec::default();
 
     // Create a test envelope
-    let metadata = MessageMetadata::new(1, None)
-        .with_quality_of_service(QualityOfService::AtLeastOnce);
-    let original =
-        Envelope::new(1, "test.message", vec![1, 2, 3, 4, 5, 6, 7, 8], metadata);
+    let metadata =
+        MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtLeastOnce);
+    let original = Envelope::new(1, "test.message", vec![1, 2, 3, 4, 5, 6, 7, 8], metadata);
 
     // Benchmark encoding
     let encode_start = Instant::now();
@@ -101,7 +99,12 @@ async fn connection_establishment() -> Result<(), Box<dyn std::error::Error>> {
     let mut recv_count = 0;
     let deadline = Instant::now() + Duration::from_secs(10);
     while recv_count < COUNT && Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(100), MessageTransport::receive(&transport)).await {
+        match tokio::time::timeout(
+            Duration::from_millis(100),
+            MessageTransport::receive(&transport),
+        )
+        .await
+        {
             Ok(Ok(delivery)) => {
                 recv_count += 1;
                 delivery.acknowledge().await?;

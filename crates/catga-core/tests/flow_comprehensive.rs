@@ -1,9 +1,10 @@
 //! Comprehensive Flow and DslFlow tests
 
-use catga_core::flow::{Flow, DslFlow};
-use catga_core::{CatgaResult, ErrorCode, CatgaError};
+use catga_core::flow::{DslFlow, Flow};
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use std::sync::{
-    Arc, atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering}
+    Arc,
+    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 
 // The dsl_action macro is defined in flow/lib.rs
@@ -199,17 +200,16 @@ async fn flow_state_isolated_between_runs() -> CatgaResult<()> {
 
     // First flow: increment, counter becomes 1
     let c1 = counter.clone();
-    let flow1 = Flow::new("flow-1")
-        .step(
-            move || {
-                let c = c1.clone();
-                async move {
-                    c.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            || async { Ok(()) }, // Compensation runs only on failure
-        );
+    let flow1 = Flow::new("flow-1").step(
+        move || {
+            let c = c1.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        },
+        || async { Ok(()) }, // Compensation runs only on failure
+    );
 
     let result1 = flow1.run().await;
     assert!(result1.is_success());
@@ -218,17 +218,16 @@ async fn flow_state_isolated_between_runs() -> CatgaResult<()> {
 
     // Second flow: increment again, counter becomes 2
     let c2 = counter.clone();
-    let flow2 = Flow::new("flow-2")
-        .step(
-            move || {
-                let c = c2.clone();
-                async move {
-                    c.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            || async { Ok(()) }, // Compensation runs only on failure
-        );
+    let flow2 = Flow::new("flow-2").step(
+        move || {
+            let c = c2.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        },
+        || async { Ok(()) }, // Compensation runs only on failure
+    );
 
     let result2 = flow2.run().await;
     assert!(result2.is_success());
@@ -314,11 +313,10 @@ async fn dsl_flow_multiple_state_mutations() -> CatgaResult<()> {
 // Edge case: Flow with successful then failing compensation
 #[tokio::test]
 async fn flow_error_preserved_after_failed_compensation() -> CatgaResult<()> {
-    let flow = Flow::new("comp-fail")
-        .step(
-            || async { Err(CatgaError::new(ErrorCode::Internal, "initial error")) },
-            || async { Err(CatgaError::new(ErrorCode::Internal, "compensation error")) },
-        );
+    let flow = Flow::new("comp-fail").step(
+        || async { Err(CatgaError::new(ErrorCode::Internal, "initial error")) },
+        || async { Err(CatgaError::new(ErrorCode::Internal, "compensation error")) },
+    );
 
     let result = flow.run().await;
     assert!(!result.is_success());
@@ -365,18 +363,24 @@ async fn dsl_flow_complex_nested_state() -> CatgaResult<()> {
     use std::collections::HashMap;
 
     let flow = DslFlow::new()
-        .action(dsl_action!(|state: &mut HashMap<String, Vec<u32>>| async move {
-            state.insert("a".to_string(), vec![1, 2]);
-            Ok(())
-        }))
-        .action(dsl_action!(|state: &mut HashMap<String, Vec<u32>>| async move {
-            state.get_mut("a").unwrap().push(3);
-            Ok(())
-        }))
-        .action(dsl_action!(|state: &mut HashMap<String, Vec<u32>>| async move {
-            state.insert("b".to_string(), vec![4]);
-            Ok(())
-        }));
+        .action(dsl_action!(
+            |state: &mut HashMap<String, Vec<u32>>| async move {
+                state.insert("a".to_string(), vec![1, 2]);
+                Ok(())
+            }
+        ))
+        .action(dsl_action!(
+            |state: &mut HashMap<String, Vec<u32>>| async move {
+                state.get_mut("a").unwrap().push(3);
+                Ok(())
+            }
+        ))
+        .action(dsl_action!(
+            |state: &mut HashMap<String, Vec<u32>>| async move {
+                state.insert("b".to_string(), vec![4]);
+                Ok(())
+            }
+        ));
 
     let mut state = HashMap::new();
     flow.run(&mut state).await?;

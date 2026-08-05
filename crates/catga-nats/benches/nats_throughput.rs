@@ -6,10 +6,9 @@
 //! Run with: `cargo bench -p catga-nats --bench nats_throughput`
 
 use catga_core::{
-    codec::memorypack::MemoryPackCodec,
-    Envelope, EnvelopeCodec, MessageMetadata, QualityOfService,
+    Envelope, EnvelopeCodec, MessageMetadata, QualityOfService, codec::memorypack::MemoryPackCodec,
 };
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
 fn envelope_encoding(c: &mut Criterion) {
     let codec = MemoryPackCodec::default();
@@ -26,8 +25,8 @@ fn envelope_encoding(c: &mut Criterion) {
     let mut group = c.benchmark_group("envelope_encoding");
 
     for (size, payload) in payloads {
-        let metadata = MessageMetadata::new(1, None)
-            .with_quality_of_service(QualityOfService::AtLeastOnce);
+        let metadata =
+            MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtLeastOnce);
         let envelope = Envelope::new(1, "test.message", payload.clone(), metadata);
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _size| {

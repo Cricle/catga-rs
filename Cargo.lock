@@ -701,6 +701,7 @@ version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-core",
+ "criterion 0.5.1",
  "dashmap",
  "futures",
  "hex",
@@ -718,6 +719,7 @@ version = "0.0.2"
 dependencies = [
  "async-trait",
  "catga-core",
+ "criterion 0.5.1",
  "robustmq",
  "serde",
  "tokio",

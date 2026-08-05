@@ -196,6 +196,40 @@ impl<S: Send> DslFlow<S> {
         self
     }
 
+    /// Appends one state-mutating asynchronous action that returns a [`FlowStepOutcome`].
+    ///
+    /// This is a convenience method that eliminates the `Ok::<_, CatgaError>(...)` wrapper
+    /// when writing simple steps. The async block should return a [`FlowStepOutcome`] directly;
+    /// it is automatically converted to `CatgaResult<()>` where `Ok(())` signals success and
+    /// allows the flow to proceed according to the returned outcome.
+    ///
+    /// The [`catga_flow::flow_outcome!`] macro wraps an async block returning [`FlowStepOutcome`]
+    /// into the required closure type. Alternatively, write the closure directly:
+    ///
+    /// ```no_run
+    /// use catga_core::flow::DslFlow;
+    /// use catga_core::flow::FlowStepOutcome;
+    /// use catga_core::CatgaResult;
+    /// use futures::future::BoxFuture;
+    ///
+    /// struct State(u32);
+    /// let action: for<'a> fn(&'a mut State) -> BoxFuture<'a, CatgaResult<()>> =
+    ///     |state| {
+    ///         Box::pin(async move {
+    ///             state.0 += 1;
+    ///             Ok::<(), catga_core::CatgaError>(()) // actual outcome stored in state
+    ///         })
+    ///     };
+    /// let _flow = DslFlow::new().action(action);
+    /// ```
+    pub fn action_outcome<F>(mut self, action: F) -> Self
+    where
+        F: for<'a> Fn(&'a mut S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync + 'static,
+    {
+        self.steps.push(Step::Action(Box::new(action)));
+        self
+    }
+
     /// Appends an action that retries only transient failures.
     ///
     /// `max_retries` counts attempts after the first execution. Each delay doubles from

@@ -1,6 +1,8 @@
 //! Comprehensive tests for #[catga_service] macro
 
-use catga_core::{auto::AutoApp, catga_command, catga_event, catga_request, catga_service, CatgaResult};
+use catga_core::{
+    CatgaResult, auto::AutoApp, catga_command, catga_event, catga_request, catga_service,
+};
 
 #[catga_request(response = u64)]
 struct Double(u64);
@@ -11,7 +13,7 @@ struct Log(String);
 #[derive(catga_event, Clone)]
 struct OrderCreated {
     #[allow(dead_code)]
-    order_id: u64
+    order_id: u64,
 }
 
 struct TestService;
@@ -55,6 +57,8 @@ async fn catga_service_detects_request_vs_command() -> CatgaResult<()> {
     let response: u64 = app.mediator().send(Double(5)).await?;
     assert_eq!(response, 10);
 
-    app.mediator().send_command(Log("hello".to_string())).await?;
+    app.mediator()
+        .send_command(Log("hello".to_string()))
+        .await?;
     Ok(())
 }
