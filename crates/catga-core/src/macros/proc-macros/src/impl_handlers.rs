@@ -22,13 +22,11 @@ fn expand_impl(impl_item: syn::ItemImpl) -> TokenStream {
     let mut methods = Vec::new();
 
     for item in &impl_item.items {
-        if let syn::ImplItem::Fn(method) = item {
-            if method.sig.asyncness.is_some() {
-                if let Some(analysis) = analyze_method(method) {
+        if let syn::ImplItem::Fn(method) = item
+            && method.sig.asyncness.is_some()
+                && let Some(analysis) = analyze_method(method) {
                     methods.push(analysis);
                 }
-            }
-        }
     }
 
     // Generate registry function with fixed name "registry"
@@ -137,11 +135,11 @@ fn analyze_method(method: &syn::ImplItemFn) -> Option<MethodAnalysis> {
     let is_request = match ret {
         syn::ReturnType::Type(_, ty) => {
             // Check if return type is CatgaResult<T>
-            if let Type::Path(type_path) = ty.as_ref() {
-                if let Some(segment) = type_path.path.segments.last() {
-                    if segment.ident == "Result" || segment.ident == "CatgaResult" {
-                        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                            if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+            if let Type::Path(type_path) = ty.as_ref()
+                && let Some(segment) = type_path.path.segments.last() {
+                    if (segment.ident == "Result" || segment.ident == "CatgaResult")
+                        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                            && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
                                 // CatgaResult<T> where T is NOT () = request
                                 // CatgaResult<()> = command (or event if method starts with "on_")
                                 if !is_unit_type(inner_ty) {
@@ -161,10 +159,7 @@ fn analyze_method(method: &syn::ImplItemFn) -> Option<MethodAnalysis> {
                                     });
                                 }
                             }
-                        }
-                    }
                 }
-            }
             // Not a CatgaResult, check if it's unit
             !is_unit_type(ty)
         }
