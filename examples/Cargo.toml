@@ -16,6 +16,10 @@ path = "src/quickstart/main.rs"
 name = "order"
 path = "src/order/main.rs"
 
+[[bin]]
+name = "doc_demo"
+path = "src/doc_demo/main.rs"
+
 [dependencies]
 catga-core = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

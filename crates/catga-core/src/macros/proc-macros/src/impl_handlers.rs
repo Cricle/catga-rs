@@ -230,44 +230,42 @@ pub fn expand_impl_handlers(
         let mut parts = Vec::new();
         parts.push(" Builds a [`Registry`] containing all handlers from this service.".to_string());
 
-        // Group handlers by type
         let requests: Vec<_> = method_infos.iter().filter(|(_, m)| m.is_request).collect();
         let commands: Vec<_> = method_infos.iter().filter(|(_, m)| !m.is_request && !m.is_event).collect();
         let events: Vec<_> = method_infos.iter().filter(|(_, m)| m.is_event).collect();
 
         if !requests.is_empty() {
-            parts.push("\n/// # Handlers\n///".to_string());
-            parts.push("/// ## Requests\n///".to_string());
+            parts.push("\n# Handlers\n## Requests".to_string());
             for (_, m) in &requests {
                 let msg_type = &m.message_type;
                 let msg_type_str = quote!(#msg_type).to_string().trim().to_string();
                 let response_str = m.response_type_name.as_deref().unwrap_or("()");
                 parts.push(format!(
-                    "/// - `async fn {}(&self, msg: {}) -> CatgaResult<{}>`",
+                    "- `async fn {}(&self, msg: {}) -> CatgaResult<{}>`",
                     m.method_name, msg_type_str, response_str
                 ));
             }
         }
 
         if !commands.is_empty() {
-            parts.push("\n/// ## Commands\n///".to_string());
+            parts.push("\n## Commands".to_string());
             for (_, m) in &commands {
                 let msg_type = &m.message_type;
                 let msg_type_str = quote!(#msg_type).to_string().trim().to_string();
                 parts.push(format!(
-                    "/// - `async fn {}(&self, cmd: {}) -> CatgaResult<()>`",
+                    "- `async fn {}(&self, cmd: {}) -> CatgaResult<()>`",
                     m.method_name, msg_type_str
                 ));
             }
         }
 
         if !events.is_empty() {
-            parts.push("\n/// ## Events\n///".to_string());
+            parts.push("\n## Events".to_string());
             for (_, m) in &events {
                 let msg_type = &m.message_type;
                 let msg_type_str = quote!(#msg_type).to_string().trim().to_string();
                 parts.push(format!(
-                    "/// - `async fn {}(&self, event: {}) -> CatgaResult<()>`",
+                    "- `async fn {}(&self, event: {}) -> CatgaResult<()>`",
                     m.method_name, msg_type_str
                 ));
             }
@@ -519,7 +517,7 @@ struct MethodAnalysis {
     message_type: syn::Type,
     is_request: bool,
     is_event: bool,
-    response_type_name: Option<String>, // NEW: for doc generation
+    response_type_name: Option<String>,
 }
 
 fn analyze_method(method: &syn::ImplItemFn, index: usize) -> Option<MethodAnalysis> {
