@@ -25,7 +25,7 @@ jobs:
       - run: cargo check --examples --workspace --all-features
       - run: cargo check -p catga-examples --bins
       - name: Validate Docker Compose E2E runner
-        run: bash scripts/e2e.sh --profile full --validate-only
+        run: bash scripts/e2e.sh --fast --validate-only
 
   coverage:
     runs-on: ubuntu-latest

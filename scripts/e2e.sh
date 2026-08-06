@@ -8,7 +8,9 @@ keep_services=false
 validate_only=false
 required_pass_percentage=95
 health_timeout_seconds=180
-parallel_jobs=1
+# parallel_jobs defaults to CPU cores, capped at 4 for stability
+parallel_jobs=$(nproc 2>/dev/null || echo 4)
+[[ "$parallel_jobs" -gt 4 ]] && parallel_jobs=4
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 matrix_path="$repository_root/testing/e2e-scenarios.json"
 results_path="$repository_root/target/e2e-results.json"
@@ -26,7 +28,8 @@ Usage: scripts/e2e.sh [options]
   --validate-only                      Validate Docker Compose and the scenario matrix
   --required-pass-percentage NUMBER    Required scenario pass rate (default: 95)
   --health-timeout-seconds NUMBER      Per-service health timeout (default: 180)
-  --jobs NUMBER                        Concurrent Cargo test groups (default: 1)
+  --jobs NUMBER                        Concurrent Cargo test groups (default: CPU cores, max 4)
+  --fast                               Shortcut: --profile core --jobs 4 (fastest local run)
   --matrix-path PATH                   Scenario matrix path
   --results-path PATH                  Result JSON path
 EOF
@@ -116,6 +119,7 @@ while (($#)); do
         --required-pass-percentage) required_pass_percentage=${2:?missing percentage}; shift 2 ;;
         --health-timeout-seconds) health_timeout_seconds=${2:?missing timeout}; shift 2 ;;
         --jobs) parallel_jobs=${2:?missing jobs}; shift 2 ;;
+        --fast) profile=core; parallel_jobs=4; shift ;;
         --matrix-path) matrix_path=${2:?missing matrix path}; shift 2 ;;
         --results-path) results_path=${2:?missing result path}; shift 2 ;;
         --help|-h) usage; exit 0 ;;
