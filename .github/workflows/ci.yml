@@ -11,7 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_QUIET: true
-  CARGO_BUILD_JOBS: 2
+  CARGO_BUILD_JOBS: 1
 
 jobs:
   quality:
@@ -50,7 +50,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run E2E tests with coverage
-        run: bash scripts/e2e.sh --profile core --jobs 2 --coverage --keep-services
+        run: bash scripts/e2e.sh --profile core --jobs 1 --coverage --keep-services
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --fail-under-lines 80 --html
       - uses: actions/upload-artifact@v4

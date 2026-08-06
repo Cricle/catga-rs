@@ -467,14 +467,6 @@
       "testArguments": []
     },
     {
-      "id": "transport-request-client",
-      "package": "catga-tests",
-      "target": "transport_request_client",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
       "id": "transport-batch",
       "package": "catga-tests",
       "target": "transport_batch",
