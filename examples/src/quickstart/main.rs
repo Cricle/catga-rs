@@ -1,7 +1,7 @@
-//! Minimal Catga example — define service, use mediator
+//! Minimal Catga example — the simplest path to a working mediator
 //!
 //! ```bash
-//! cargo run -p catga-examples --bin mediator
+//! cargo run -p catga-examples --bin quickstart
 //! ```
 
 use catga_core::{catga_service, catga_request, CatgaResult};
@@ -9,6 +9,9 @@ use tokio;
 
 #[catga_request(response = u64)]
 struct Double(u64);
+
+#[catga_request(response = u64)]
+struct Square(u64);
 
 #[derive(Clone)]
 struct Calculator;
@@ -18,12 +21,21 @@ impl Calculator {
     async fn double(&self, msg: Double) -> CatgaResult<u64> {
         Ok(msg.0 * 2)
     }
+
+    async fn square(&self, msg: Square) -> CatgaResult<u64> {
+        Ok(msg.0 * msg.0)
+    }
 }
 
 #[tokio::main]
 async fn main() -> CatgaResult<()> {
     let mediator = CalculatorMediator::new(Calculator);
-    let result = mediator.send(Double(21)).await?;
-    println!("21 * 2 = {}", result);
+
+    let doubled = mediator.send(Double(21)).await?;
+    println!("21 * 2 = {}", doubled);
+
+    let squared = mediator.send(Square(7)).await?;
+    println!("7 * 7 = {}", squared);
+
     Ok(())
 }
