@@ -4,7 +4,7 @@
 //! This module provides a small, typed application facade for Catga runtimes.
 //!
 //! `auto` owns only startup composition: it builds the existing Catga registry, binds a
-//! [`MediatorHandle`], and exposes an explicit shutdown token. It does not add reflection,
+//! [`crate::MediatorHandle`], and exposes an explicit shutdown token. It does not add reflection,
 //! hidden tasks, or dynamic dispatch to request hot paths. Transport, Flow, and cluster features
 //! remain explicit dependencies selected by the application.
 //!
