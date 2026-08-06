@@ -5,11 +5,11 @@ use std::{
     sync::Arc,
 };
 
-use catga_core::{ErrorCode, Event, Message};
 use catga_core::flow::{
     StateMachine, StateMachineEventRouter, StateMachineExecutor, StateMachineSnapshot,
     StateMachineState, StateMachineStore,
 };
+use catga_core::{ErrorCode, Event, Message};
 use catga_memory::MemoryStateMachines;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

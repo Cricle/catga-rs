@@ -3,12 +3,12 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use catga_core::flow::{FlowDefinition, FlowStepOutcome};
 use catga_core::{
     AuthorizedRequest, AutoBatchingBehavior, BatchKeyProvider, BatchOptionsProvider, CatgaResult,
     Command, CommandHandler, CommandPipeline, Event, EventHandler, Handler, Mediator, Message,
     MessagePriority, Pipeline, Request, RetryBehavior, TimeoutBehavior,
 };
-use catga_core::flow::{FlowDefinition, FlowStepOutcome};
 
 #[derive(Clone, catga_core::Message)]
 struct Ping;

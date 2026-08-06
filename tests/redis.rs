@@ -9,6 +9,10 @@ use std::{
 };
 
 use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::flow::{
+    DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
+    FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
+};
 use catga_core::{
     AsyncInitializable, CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, DeadLetter,
     DeadLetterStore, Destination, DestinationTransport, EnhancedSnapshotStore, Envelope,
@@ -17,10 +21,6 @@ use catga_core::{
     MessageTransport, OutboxMessage, OutboxState, OutboxStore, PersistentSubscription,
     ProcessingState, ProjectionCheckpoint, ProjectionCheckpointStore, QualityOfService, Snapshot,
     SnapshotStore, Stoppable, SubscriptionCheckpoint, SubscriptionStore, Waitable,
-};
-use catga_core::flow::{
-    DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
-    FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_redis::{
     MAX_REDIS_PENDING_RECLAIM_SCANS, RedisConfig, RedisDeadLetters, RedisDslStepProgress,
@@ -708,7 +708,9 @@ async fn redis_suspended_flow_query_ignores_auxiliary_hashes() -> CatgaResult<()
                 .with_details(error.to_string())
         })?;
 
-    let summaries = store.query(&catga_core::flow::FlowQuery::new(2, 2)?).await?;
+    let summaries = store
+        .query(&catga_core::flow::FlowQuery::new(2, 2)?)
+        .await?;
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].id(), "redis-query-index");
     Ok(())

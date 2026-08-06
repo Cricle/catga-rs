@@ -5,10 +5,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_core::{CatgaError, ErrorCode};
 use catga_core::flow::{
     FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, WaitCondition, WaitPolicy,
 };
+use catga_core::{CatgaError, ErrorCode};
 use catga_memory::MemorySuspendedFlows;
 
 fn waiting_runtime(
