@@ -1,0 +1,10 @@
+[package]
+name = "catga-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+catga-core = { workspace = true }
+tokio = { version = "1", features = ["sync"] }

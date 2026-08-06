@@ -1,0 +1,9 @@
+[package]
+name = "catga-codec-memorypack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+catga-core = { workspace = true }
