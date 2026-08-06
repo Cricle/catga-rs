@@ -3,7 +3,7 @@
 //! Hover over `registry()` to see the auto-generated docs listing all handlers.
 //! The docs show handlers grouped by type: Requests, Commands, Events.
 
-use catga_core::{catga_command, catga_event, catga_request, catga_service, CatgaResult};
+use catga_core::{CatgaResult, catga_command, catga_event, catga_request, catga_service};
 
 // Command type
 #[derive(catga_command)]
