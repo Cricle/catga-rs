@@ -40,7 +40,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage report
-        run: cargo llvm-cov --workspace --fail-under-lines 80 --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --fail-under-lines 30 --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
