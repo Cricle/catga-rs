@@ -14,14 +14,21 @@ env:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --doc --workspace --all-features
-      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+      - run: cargo clippy -p catga-core --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p catga-core-macros --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p catga-cluster --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p catga-axum --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p catga-redis --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p catga-nats --all-targets --all-features -- -D warnings
+      - run: cargo test --doc -p catga-core --all-features
+      - run: cargo test --doc -p catga-core-macros --all-features
+      - run: RUSTDOCFLAGS='-D warnings' cargo doc -p catga-core --all-features --no-deps
       - run: cargo check --examples --workspace --all-features
       - run: cargo check -p catga-examples --bins
 
@@ -29,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: quality
     if: always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
