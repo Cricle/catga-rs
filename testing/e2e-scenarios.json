@@ -1,0 +1,1573 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "nats-transport",
+      "package": "catga-tests",
+      "target": "nats",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "nats-request",
+      "package": "catga-tests",
+      "target": "nats_request",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "nats-contracts",
+      "package": "catga-nats",
+      "target": "nats_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "auto-bus-nats-integration",
+      "package": "catga-auto",
+      "target": "nats_integration",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "redis-contracts",
+      "package": "catga-tests",
+      "target": "redis",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "redis-codec-injection",
+      "package": "catga-redis",
+      "target": "codec_injection",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "redis-streams-rpc",
+      "package": "catga-redis",
+      "target": "streams_rpc",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "redis-migrated-contracts",
+      "package": "catga-redis",
+      "target": "migrated_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "redis-scheduler-contracts",
+      "package": "catga-redis",
+      "target": "scheduler_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "robustmq-runtime",
+      "package": "catga-tests",
+      "target": "robustmq",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "robustmq-private-reply-mailbox",
+      "package": "catga-tests",
+      "target": "robustmq",
+      "testFilter": "mailbox_request_server_replies_through_the_private_reply_mailbox",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "robustmq-ignored-contracts",
+      "package": "catga-tests",
+      "target": "robustmq",
+      "profile": "core",
+      "critical": true,
+      "testArguments": [
+        "--ignored",
+        "--skip",
+        "mailbox_request_server_replies_through_the_private_reply_mailbox"
+      ]
+    },
+    {
+      "id": "state-machine-persistence",
+      "package": "catga-tests",
+      "target": "state_machine_persistence",
+      "profile": "core",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "flow-dsl-durable-progress",
+      "package": "catga-tests",
+      "target": "dsl_progress",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-recovery",
+      "package": "catga-tests",
+      "target": "flow_recovery",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-mediator",
+      "package": "catga-tests",
+      "target": "mediator",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-runtime-recovery",
+      "package": "catga-tests",
+      "target": "raft_runtime",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "mysql-flow-store",
+      "package": "catga-flow-store",
+      "target": "mysql",
+      "profile": "sql",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "postgres-flow-store",
+      "package": "catga-flow-store",
+      "target": "postgres",
+      "profile": "sql",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "mssql-flow-store",
+      "package": "catga-flow-store",
+      "target": "mssql",
+      "profile": "full",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "sql-backend-boundaries",
+      "package": "catga-flow-store",
+      "target": "sql_backend_contracts",
+      "profile": "full",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "cross-backend",
+      "package": "catga-tests",
+      "target": "cross_backend",
+      "profile": "full",
+      "critical": true,
+      "testArguments": ["--ignored"]
+    },
+    {
+      "id": "cluster-coordination",
+      "package": "catga-tests",
+      "target": "cluster",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cluster-raft-state-machine",
+      "package": "catga-tests",
+      "target": "raft_state_machine",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cluster-state-machine-runtime",
+      "package": "catga-tests",
+      "target": "raft_state_machine_runtime",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "axum-http-boundary",
+      "package": "catga-tests",
+      "target": "axum",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "codec-bincode-roundtrip",
+      "package": "catga-codec-bincode",
+      "target": "codec",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "codec-memorypack-roundtrip",
+      "package": "catga-tests",
+      "target": "memorypack",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "scheduler-cron-lifecycle",
+      "package": "catga-scheduler-tokio-cron",
+      "target": "cron_runtime",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "event-sourcing-full-cycle",
+      "package": "catga-tests",
+      "target": "event_store",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "subscription-competing",
+      "package": "catga-tests",
+      "target": "subscriptions",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "reliability-dead-letter",
+      "package": "catga-tests",
+      "target": "memory_reliability",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-timeout-service",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "pipeline-behaviors",
+      "package": "catga-tests",
+      "target": "pipeline",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "pipeline-auto-batching",
+      "package": "catga-tests",
+      "target": "auto_batching",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "pipeline-circuit-breaker",
+      "package": "catga-tests",
+      "target": "circuit_breaker",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "behaviors-full",
+      "package": "catga-tests",
+      "target": "behaviors",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "resilience-executor",
+      "package": "catga-tests",
+      "target": "resilience",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "reliability-contracts",
+      "package": "catga-tests",
+      "target": "reliability_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "inbox-conformance",
+      "package": "catga-tests",
+      "target": "inbox_conformance",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "outbox-processor",
+      "package": "catga-tests",
+      "target": "outbox_processor",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "outbox-behavior",
+      "package": "catga-tests",
+      "target": "outbox_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "at-least-once-pipeline",
+      "package": "catga-tests",
+      "target": "at_least_once_pipeline",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "outbox-processor-runtime",
+      "package": "catga-tests",
+      "target": "outbox_processor_runtime",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "scheduled-outbox",
+      "package": "catga-tests",
+      "target": "scheduled_outbox",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memory-outbox",
+      "package": "catga-tests",
+      "target": "memory_outbox",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "aggregates-lifecycle",
+      "package": "catga-tests",
+      "target": "aggregates",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "auto-snapshot",
+      "package": "catga-tests",
+      "target": "auto_snapshot",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "snapshots-store",
+      "package": "catga-tests",
+      "target": "snapshots",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "enhanced-snapshots",
+      "package": "catga-tests",
+      "target": "enhanced_snapshots",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "event-versions-upgrade",
+      "package": "catga-tests",
+      "target": "event_versions",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "time-travel-reconstruction",
+      "package": "catga-tests",
+      "target": "time_travel",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "projections-catchup",
+      "package": "catga-tests",
+      "target": "projections",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "read-models-sync",
+      "package": "catga-tests",
+      "target": "read_models",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "typed-transport",
+      "package": "catga-tests",
+      "target": "typed_transport",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memory-transport",
+      "package": "catga-tests",
+      "target": "memory_transport",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "transport-competing-consumer",
+      "package": "catga-tests",
+      "target": "transport_competing_consumer",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "transport-request-client",
+      "package": "catga-tests",
+      "target": "transport_request_client",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "transport-batch",
+      "package": "catga-tests",
+      "target": "transport_batch",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "transport-destination",
+      "package": "catga-tests",
+      "target": "transport_destination",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "transport-acknowledgement",
+      "package": "catga-tests",
+      "target": "transport_acknowledgement",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "versioned-transport",
+      "package": "catga-tests",
+      "target": "versioned_transport",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "delivery-ack",
+      "package": "catga-tests",
+      "target": "delivery_ack",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-local-compensation",
+      "package": "catga-tests",
+      "target": "flows",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-state-machine",
+      "package": "catga-tests",
+      "target": "flow_state",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-store-contracts",
+      "package": "catga-tests",
+      "target": "flow_store",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-executor",
+      "package": "catga-tests",
+      "target": "flow_executor",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-persistence",
+      "package": "catga-tests",
+      "target": "flow_persistence",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-wait-policies",
+      "package": "catga-tests",
+      "target": "flow_wait_policies",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-due-scheduler",
+      "package": "catga-tests",
+      "target": "due_scheduler",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "security-authorization",
+      "package": "catga-tests",
+      "target": "security",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "validation-endpoint",
+      "package": "catga-tests",
+      "target": "validation",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "message-signing",
+      "package": "catga-tests",
+      "target": "message_signing",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "lifecycle-coordination",
+      "package": "catga-tests",
+      "target": "lifecycle",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "distributed-id-generation",
+      "package": "catga-tests",
+      "target": "distributed_id",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "lease-coordination",
+      "package": "catga-tests",
+      "target": "leases",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "message-routing",
+      "package": "catga-tests",
+      "target": "routing",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "compression-codec",
+      "package": "catga-tests",
+      "target": "compression",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "message-contracts",
+      "package": "catga-tests",
+      "target": "message",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "message-types-registry",
+      "package": "catga-tests",
+      "target": "message_types",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "macros-derive",
+      "package": "catga-tests",
+      "target": "macros",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "observability-tracing",
+      "package": "catga-tests",
+      "target": "observability",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "faults-publishing",
+      "package": "catga-tests",
+      "target": "faults",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "compensation-saga",
+      "package": "catga-tests",
+      "target": "compensation",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "state-machine-core",
+      "package": "catga-tests",
+      "target": "state_machine",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "axum-application",
+      "package": "catga-tests",
+      "target": "application",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "axum-composable",
+      "package": "catga-tests",
+      "target": "axum_composable",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-cluster-topology",
+      "package": "catga-tests",
+      "target": "raft_cluster",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-config-validation",
+      "package": "catga-tests",
+      "target": "raft_config",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cluster-public-contracts",
+      "package": "catga-cluster",
+      "target": "public_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cluster-raft-runtime-contracts",
+      "package": "catga-cluster",
+      "target": "raft_runtime_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-codec-api",
+      "package": "catga-codec-memorypack",
+      "target": "codec_api",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-bounded-decode",
+      "package": "catga-codec-memorypack",
+      "target": "bounded_decode",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-envelope",
+      "package": "catga-codec-memorypack",
+      "target": "envelope",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-trait-matrix",
+      "package": "catga-codec-memorypack",
+      "target": "trait_matrix",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-runtime-contracts",
+      "package": "catga-flow",
+      "target": "runtime_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-checkpoint",
+      "package": "catga-flow",
+      "target": "dsl_checkpoint_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-executor-contracts",
+      "package": "catga-flow",
+      "target": "executor_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-contracts",
+      "package": "catga-flow",
+      "target": "suspension_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-edge-contracts",
+      "package": "catga-flow",
+      "target": "dsl_edge_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-execution",
+      "package": "catga-flow",
+      "target": "dsl_execution_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-durable-frames",
+      "package": "catga-flow",
+      "target": "durable_frames",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memory-capacity-bounds",
+      "package": "catga-tests",
+      "target": "memory_capacity",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "batch-stream",
+      "package": "catga-tests",
+      "target": "batch_stream",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "codec-envelope",
+      "package": "catga-tests",
+      "target": "codec",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "testing-harness-contracts",
+      "package": "catga-tests",
+      "target": "testing_harness",
+      "profile": "core",
+      "critical": false,
+      "testArguments": []
+    },
+    {
+      "id": "testing-aggregate-scenarios",
+      "package": "catga-tests",
+      "target": "testing_aggregate",
+      "profile": "core",
+      "critical": false,
+      "testArguments": []
+    },
+    {
+      "id": "testing-flow-context",
+      "package": "catga-tests",
+      "target": "testing_flow",
+      "profile": "core",
+      "critical": false,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-cancellation-pipeline-cross",
+      "package": "catga-tests",
+      "target": "mediator",
+      "testFilter": "cancellation",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-panic-safety-cross",
+      "package": "catga-tests",
+      "target": "mediator",
+      "testFilter": "panics",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-event-fanout-cross",
+      "package": "catga-tests",
+      "target": "mediator",
+      "testFilter": "event_fan_out",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-command-dispatch-cross",
+      "package": "catga-tests",
+      "target": "mediator",
+      "testFilter": "command",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-handle-bind-cross",
+      "package": "catga-tests",
+      "target": "mediator",
+      "testFilter": "mediator_handle_binds",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-pipeline-retry-timeout-cross",
+      "package": "catga-tests",
+      "target": "behaviors",
+      "testFilter": "retry_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-pipeline-timeout-cross",
+      "package": "catga-tests",
+      "target": "behaviors",
+      "testFilter": "timeout_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-idempotency-cross",
+      "package": "catga-tests",
+      "target": "behaviors",
+      "testFilter": "idempotency_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-distributed-lock-cross",
+      "package": "catga-tests",
+      "target": "behaviors",
+      "testFilter": "distributed_lock_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-inbox-behavior-cross",
+      "package": "catga-tests",
+      "target": "behaviors",
+      "testFilter": "inbox_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-correlation-behavior-cross",
+      "package": "catga-tests",
+      "target": "behaviors",
+      "testFilter": "correlation_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-pipeline-depth-bound",
+      "package": "catga-tests",
+      "target": "pipeline",
+      "testFilter": "rejects_depths",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-pipeline-order-cross",
+      "package": "catga-tests",
+      "target": "pipeline",
+      "testFilter": "wrap_a_registered_handler",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cqrs-at-least-once-outbox-cross",
+      "package": "catga-tests",
+      "target": "at_least_once_pipeline",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-executor-ownership-cross",
+      "package": "catga-tests",
+      "target": "flow_executor",
+      "testFilter": "executor_rejects_a_live_flow_owned_by_another",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-executor-heartbeat-cross",
+      "package": "catga-tests",
+      "target": "flow_executor",
+      "testFilter": "heartbeat",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-executor-stale-recovery-cross",
+      "package": "catga-tests",
+      "target": "flow_executor",
+      "testFilter": "executor_claims_stale",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-executor-replay-cross",
+      "package": "catga-tests",
+      "target": "flow_executor",
+      "testFilter": "executor_replays_failed",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-executor-supervised-cross",
+      "package": "catga-tests",
+      "target": "flow_executor",
+      "testFilter": "supervised_executor",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-recovery-compensation-cross",
+      "package": "catga-tests",
+      "target": "flow_recovery",
+      "testFilter": "compensation",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-recovery-stale-claim-cross",
+      "package": "catga-tests",
+      "target": "flow_recovery",
+      "testFilter": "claims_an_abandoned",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-recovery-heartbeat-fence-cross",
+      "package": "catga-tests",
+      "target": "flow_recovery",
+      "testFilter": "heartbeat_prevents",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-recovery-cancellation-idempotent",
+      "package": "catga-tests",
+      "target": "flow_recovery",
+      "testFilter": "cancellation_is_terminal",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-recovery-concurrent-resume",
+      "package": "catga-tests",
+      "target": "flow_recovery",
+      "testFilter": "concurrent_resumes",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-cancellation-fence",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "testFilter": "cancellation_wins_over",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-child-fanout",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "testFilter": "durable_child_fan_out",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-child-completion",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "testFilter": "durable_child_completion",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-child-failure",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "testFilter": "durable_child_failure",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-completion-adapter",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "testFilter": "flow_completion_adapter",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-retry-transient",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "testFilter": "tagged_durable_step_retries",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-suspension-timeout-structured",
+      "package": "catga-tests",
+      "target": "flow_suspension",
+      "testFilter": "tagged_durable_step_timeout",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-wait-policy-semantics",
+      "package": "catga-tests",
+      "target": "flow_wait_policies",
+      "testFilter": "failed_children_follow_all_and_any",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-wait-duplicate-notification",
+      "package": "catga-tests",
+      "target": "flow_wait_policies",
+      "testFilter": "duplicate_child_notifications",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-wait-concurrent-notification",
+      "package": "catga-tests",
+      "target": "flow_wait_policies",
+      "testFilter": "concurrent_child_notifications",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-due-scheduler-lease-recovery",
+      "package": "catga-tests",
+      "target": "due_scheduler",
+      "testFilter": "due_scheduler_claims_once",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-due-scheduler-reconcile",
+      "package": "catga-tests",
+      "target": "due_scheduler",
+      "testFilter": "due_scheduler_reconciles",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-due-service-resume-ack",
+      "package": "catga-tests",
+      "target": "due_scheduler",
+      "testFilter": "due_flow_service_resumes",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-due-service-renew-running",
+      "package": "catga-tests",
+      "target": "due_scheduler",
+      "testFilter": "due_flow_service_renews",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-due-service-batch-error",
+      "package": "catga-tests",
+      "target": "due_scheduler",
+      "testFilter": "due_flow_service_releases",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-store-version-fence",
+      "package": "catga-tests",
+      "target": "flow_store",
+      "testFilter": "flow_store_uses_versions",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-store-stale-recovery",
+      "package": "catga-tests",
+      "target": "flow_store",
+      "testFilter": "flow_store_recovers_stale",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-local-compensation-order",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "local_flow_compensates",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-local-cancellation-compensate",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "local_flow_cancellation",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-mediator-send-cross",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "dsl_flow_sends_a_request",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-remote-send-cross",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "dsl_flow_remote_send",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-lifecycle-hooks",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "dsl_flow_notifies_configured_lifecycle",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-failure-hooks",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "dsl_flow_runs_failure_hooks",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-branching",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "dsl_flow_runs_only_the_selected_nested_branch",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-dsl-match-on",
+      "package": "catga-tests",
+      "target": "flows",
+      "testFilter": "dsl_flow_match_on",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-persistence-codec-validation",
+      "package": "catga-tests",
+      "target": "flow_persistence",
+      "testFilter": "continuation_codec",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-runtime-transport-recovery",
+      "package": "catga-tests",
+      "target": "raft_runtime",
+      "testFilter": "raft_runtime_keeps_running_after",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-runtime-replication-recovery",
+      "package": "catga-tests",
+      "target": "raft_runtime",
+      "testFilter": "raft_runtime_recovers_replication",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-runtime-shutdown-cancel",
+      "package": "catga-tests",
+      "target": "raft_runtime",
+      "testFilter": "raft_runtime_shutdown_cancels",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-runtime-committed-entries",
+      "package": "catga-tests",
+      "target": "raft_runtime",
+      "testFilter": "raft_runtime_owns_ticks",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-sm-multi-node-replication",
+      "package": "catga-tests",
+      "target": "raft_state_machine_runtime",
+      "testFilter": "state_machine_runtimes_replicate",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-sm-snapshot-restore",
+      "package": "catga-tests",
+      "target": "raft_state_machine_runtime",
+      "testFilter": "state_machine_runtime_restores_an_incoming_snapshot",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-sm-replay-after-restart",
+      "package": "catga-tests",
+      "target": "raft_state_machine_runtime",
+      "testFilter": "persistent_state_machine_runtime_replays",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-sm-shutdown-cancel",
+      "package": "catga-tests",
+      "target": "raft_state_machine_runtime",
+      "testFilter": "state_machine_runtime_shutdown_cancels",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-sm-transport-failure-resilience",
+      "package": "catga-tests",
+      "target": "raft_state_machine_runtime",
+      "testFilter": "state_machine_runtime_keeps_running",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "raft-sm-failed-application-stop",
+      "package": "catga-tests",
+      "target": "raft_state_machine_runtime",
+      "testFilter": "state_machine_runtime_stops_before",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-store-sqlite-full",
+      "package": "catga-flow-store",
+      "target": "sqlite",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-store-sqlite-adapter-edges",
+      "package": "catga-flow-store",
+      "target": "sqlite_adapter_edges",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-store-sql-contracts",
+      "package": "catga-flow-store",
+      "target": "sql_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "nats-validation-bounds",
+      "package": "catga-nats",
+      "target": "nats_validation",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "nats-client-injection",
+      "package": "catga-nats",
+      "target": "client_injection",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memory-cleanup-toctou",
+      "package": "catga-memory",
+      "target": "cleanup_toctou",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memory-dead-letter",
+      "package": "catga-memory",
+      "target": "dead_letter",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-derive-behavior",
+      "package": "catga-codec-memorypack",
+      "target": "derive_behavior",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-wire-bounds",
+      "package": "catga-codec-memorypack",
+      "target": "wire_bounds",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-state-varint",
+      "package": "catga-codec-memorypack",
+      "target": "state_and_varint",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-trait-rejections",
+      "package": "catga-codec-memorypack",
+      "target": "trait_rejections",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "memorypack-io-feature-edges",
+      "package": "catga-codec-memorypack",
+      "target": "io_and_feature_edges",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-runtime-checkpoint-contracts",
+      "package": "catga-flow",
+      "target": "runtime_checkpoint_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-local-context-contracts",
+      "package": "catga-flow",
+      "target": "local_context_contracts",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "flow-async-contracts",
+      "package": "catga-flow",
+      "target": "flow_async",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cross-cqrs-flow-integration",
+      "package": "catga-tests",
+      "target": "cross_cqrs_flow",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cross-cqrs-raft-integration",
+      "package": "catga-tests",
+      "target": "cross_cqrs_raft",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cross-flow-raft-integration",
+      "package": "catga-tests",
+      "target": "cross_flow_raft",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cross-cqrs-flow-outbox-integration",
+      "package": "catga-tests",
+      "target": "cross_cqrs_flow_outbox",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    },
+    {
+      "id": "cross-flow-subscription-integration",
+      "package": "catga-tests",
+      "target": "cross_flow_subscription",
+      "profile": "core",
+      "critical": true,
+      "testArguments": []
+    }
+  ]
+}

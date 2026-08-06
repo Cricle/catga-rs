@@ -1,0 +1,88 @@
+name: catga-e2e
+
+services:
+  nats:
+    image: ${CATGA_CONTAINER_IMAGE_PREFIX:-docker.io}/library/nats:2.10-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "127.0.0.1::4222"
+      - "127.0.0.1::8222"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 4222"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - nats-data:/data
+
+  redis:
+    image: ${CATGA_CONTAINER_IMAGE_PREFIX:-docker.io}/library/redis:8-alpine
+    ports:
+      - "127.0.0.1::6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - redis-data:/data
+
+  mysql:
+    image: ${CATGA_CONTAINER_IMAGE_PREFIX:-docker.io}/library/mysql:8.4
+    profiles: ["sql", "full"]
+    environment:
+      MYSQL_DATABASE: catga
+      MYSQL_USER: catga
+      MYSQL_PASSWORD: catga_e2e_password
+      MYSQL_ROOT_PASSWORD: catga_root_e2e_password
+    ports:
+      - "127.0.0.1::3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  postgres:
+    image: ${CATGA_CONTAINER_IMAGE_PREFIX:-docker.io}/library/postgres:17-alpine
+    profiles: ["sql", "full"]
+    environment:
+      POSTGRES_DB: catga
+      POSTGRES_USER: catga
+      POSTGRES_PASSWORD: catga_e2e_password
+    ports:
+      - "127.0.0.1::5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  mssql:
+    # Azure SQL Edge keeps the SQL Server-compatible E2E profile small.
+    image: ${CATGA_CONTAINER_IMAGE_PREFIX:-mcr.microsoft.com}/azure-sql-edge:latest
+    profiles: ["full"]
+    environment:
+      ACCEPT_EULA: "1"
+      MSSQL_SA_PASSWORD: Catga_e2e_password_2026!
+      MSSQL_PID: Developer
+    ports:
+      - "127.0.0.1::1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $$MSSQL_SA_PASSWORD -Q 'SELECT 1'"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    volumes:
+      - mssql-data:/var/opt/mssql
+
+volumes:
+  mssql-data:
+  mysql-data:
+  nats-data:
+  postgres-data:
+  redis-data:
