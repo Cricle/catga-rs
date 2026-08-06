@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use catga_core::flow::{FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, flow_definition};
+use catga_core::flow::{FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, FlowDefinition};
 use catga_core::{
     CatgaResult, Command, CommandHandler, Event, EventHandler, Mediator, Message, Request,
     catga_handlers,
