@@ -436,6 +436,7 @@ struct MethodAnalysis {
     message_type: syn::Type,
     is_request: bool,
     is_event: bool,
+    response_type_name: Option<String>, // NEW: for doc generation
 }
 
 fn analyze_method(method: &syn::ImplItemFn, index: usize) -> Option<MethodAnalysis> {
@@ -470,15 +471,36 @@ fn analyze_method(method: &syn::ImplItemFn, index: usize) -> Option<MethodAnalys
         syn::ReturnType::Default => false,
     };
 
+    // Extract response type name for requests
+    let response_type_name = if is_request {
+        extract_response_type_name(ret)
+    } else {
+        None
+    };
+
     Some(MethodAnalysis {
         index,
         method_name,
         message_type,
         is_request,
         is_event,
+        response_type_name,
     })
 }
 
 fn is_unit_type(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Tuple(t) if t.elems.is_empty())
+}
+
+fn extract_response_type_name(output: &syn::ReturnType) -> Option<String> {
+    if let syn::ReturnType::Type(_, ty) = output {
+        if let syn::Type::Path(type_path) = ty.as_ref()
+            && let Some(segment) = type_path.path.segments.last()
+            && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+        {
+            return Some(quote!(#inner_ty).to_string().trim().to_string());
+        }
+    }
+    None
 }
