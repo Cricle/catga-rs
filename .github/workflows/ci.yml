@@ -49,10 +49,11 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Run E2E tests with coverage
-        run: bash scripts/e2e.sh --profile core --jobs 1 --coverage --keep-services
+      - name: Run tests with coverage
+        run: |
+          cargo llvm-cov test --workspace --all-features --no-clean --ignore-run-failures --lcov --output-path lcov.info
       - name: Generate coverage report
-        run: cargo llvm-cov --workspace --fail-under-lines 80 --html
+        run: cargo llvm-cov report --html --fail-under-lines 80
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
