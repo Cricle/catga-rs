@@ -56,7 +56,11 @@ pub fn expand_impl_handlers(
             .iter()
             .map(|(_, m)| {
                 let wrapper_name = format_ident!("__CatgaServiceHandler_{}", m.index);
-                let doc = format!(" Handler wrapper for [`{}`] method `{}`", quote!(#ty).to_string().trim(), m.method_name);
+                let doc = format!(
+                    " Handler wrapper for [`{}`] method `{}`",
+                    quote!(#ty).to_string().trim(),
+                    m.method_name
+                );
                 quote! {
                     #[doc = #doc]
                     #[derive(::std::clone::Clone)]
@@ -139,7 +143,11 @@ pub fn expand_impl_handlers(
             .iter()
             .map(|(_, m)| {
                 let wrapper_name = format_ident!("__CatgaServiceHandler_{}", m.index);
-                let doc = format!(" Handler wrapper for [`{}`] method `{}`", quote!(#ty).to_string().trim(), m.method_name);
+                let doc = format!(
+                    " Handler wrapper for [`{}`] method `{}`",
+                    quote!(#ty).to_string().trim(),
+                    m.method_name
+                );
                 quote! {
                     #[doc = #doc]
                     #[derive(::std::clone::Clone)]
@@ -243,7 +251,11 @@ pub fn expand_impl_handlers(
             .map(|(_, m)| {
                 let message_type = &m.message_type;
                 let method_name = &m.method_name;
-                let doc = format!(" Sealed dispatch impl for [`{}`] request → {}", quote!(#message_type), m.method_name);
+                let doc = format!(
+                    " Sealed dispatch impl for [`{}`] request → {}",
+                    quote!(#message_type),
+                    m.method_name
+                );
                 quote! {
                     #[doc = #doc]
                     impl ::catga_core::sealed_dispatch::SealedRequestDispatch<#message_type>
@@ -268,7 +280,11 @@ pub fn expand_impl_handlers(
             .map(|(_, m)| {
                 let message_type = &m.message_type;
                 let method_name = &m.method_name;
-                let doc = format!(" Sealed dispatch impl for [`{}`] command → {}", quote!(#message_type), m.method_name);
+                let doc = format!(
+                    " Sealed dispatch impl for [`{}`] command → {}",
+                    quote!(#message_type),
+                    m.method_name
+                );
                 quote! {
                     #[doc = #doc]
                     impl ::catga_core::sealed_dispatch::SealedCommandDispatch<#message_type>
@@ -291,7 +307,11 @@ pub fn expand_impl_handlers(
             .map(|(_, m)| {
                 let message_type = &m.message_type;
                 let method_name = &m.method_name;
-                let doc = format!(" Sealed dispatch impl for [`{}`] event → {}", quote!(#message_type), m.method_name);
+                let doc = format!(
+                    " Sealed dispatch impl for [`{}`] event → {}",
+                    quote!(#message_type),
+                    m.method_name
+                );
                 quote! {
                     #[doc = #doc]
                     impl ::catga_core::sealed_dispatch::SealedEventDispatch<#message_type>
@@ -313,7 +333,11 @@ pub fn expand_impl_handlers(
                 .iter()
                 .map(|(_, m)| {
                     let msg_type = &m.message_type;
-                    format!("  - `{}` → `{}`", m.method_name, quote!(#msg_type).to_string().trim())
+                    format!(
+                        "  - `{}` → `{}`",
+                        m.method_name,
+                        quote!(#msg_type).to_string().trim()
+                    )
                 })
                 .collect();
             let handlers_list = handlers.join("\n");
