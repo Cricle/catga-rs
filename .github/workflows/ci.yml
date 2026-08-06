@@ -24,8 +24,6 @@ jobs:
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: cargo check --examples --workspace --all-features
       - run: cargo check -p catga-examples --bins
-      - name: Validate Docker Compose E2E runner
-        run: bash scripts/e2e.sh --fast --validate-only
 
   coverage:
     runs-on: ubuntu-latest
@@ -39,8 +37,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run E2E tests with coverage
+        run: bash scripts/e2e.sh --fast --coverage --keep-services
       - name: Generate coverage report
-        run: cargo llvm-cov --workspace --fail-under-lines 30 --html --open
+        run: cargo llvm-cov --workspace --fail-under-lines 80 --html
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
