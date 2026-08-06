@@ -3,3 +3,8 @@
 exclude = [
     "catga-core-macros",
 ]
+
+# Exclude catga-tests package - it has broken test files with unresolved imports
+do_not_report = [
+    "catga-tests",
+]
