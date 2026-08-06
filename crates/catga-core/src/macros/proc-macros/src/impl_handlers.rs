@@ -56,7 +56,9 @@ pub fn expand_impl_handlers(
             .iter()
             .map(|(_, m)| {
                 let wrapper_name = format_ident!("__CatgaServiceHandler_{}", m.index);
+                let doc = format!(" Handler wrapper for [`{}`] method `{}`", quote!(#ty).to_string().trim(), m.method_name);
                 quote! {
+                    #[doc = #doc]
                     #[derive(::std::clone::Clone)]
                     struct #wrapper_name {
                         service: #ty,
@@ -72,7 +74,9 @@ pub fn expand_impl_handlers(
                 let method_name = &m.method_name;
                 let message_type = &m.message_type;
                 if m.is_request {
+                    let doc = format!(" Implements [`Handler`] for `{}` — dispatches [`{}`]", wrapper_name, quote!(#message_type));
                     quote! {
+                        #[doc = #doc]
                         #[::async_trait::async_trait]
                         impl catga_core::Handler<#message_type> for #wrapper_name {
                             async fn handle(&self, msg: #message_type) -> catga_core::CatgaResult<<#message_type as catga_core::Request>::Response> {
@@ -81,7 +85,9 @@ pub fn expand_impl_handlers(
                         }
                     }
                 } else if m.is_event {
+                    let doc = format!(" Implements [`EventHandler`] for `{}` — dispatches [`{}`]", wrapper_name, quote!(#message_type));
                     quote! {
+                        #[doc = #doc]
                         #[::async_trait::async_trait]
                         impl catga_core::EventHandler<#message_type> for #wrapper_name {
                             async fn handle(&self, event: #message_type) -> catga_core::CatgaResult<()> {
@@ -90,7 +96,9 @@ pub fn expand_impl_handlers(
                         }
                     }
                 } else {
+                    let doc = format!(" Implements [`CommandHandler`] for `{}` — dispatches [`{}`]", wrapper_name, quote!(#message_type));
                     quote! {
+                        #[doc = #doc]
                         #[::async_trait::async_trait]
                         impl catga_core::CommandHandler<#message_type> for #wrapper_name {
                             async fn handle(&self, cmd: #message_type) -> catga_core::CatgaResult<()> {
@@ -131,7 +139,9 @@ pub fn expand_impl_handlers(
             .iter()
             .map(|(_, m)| {
                 let wrapper_name = format_ident!("__CatgaServiceHandler_{}", m.index);
+                let doc = format!(" Handler wrapper for [`{}`] method `{}`", quote!(#ty).to_string().trim(), m.method_name);
                 quote! {
+                    #[doc = #doc]
                     #[derive(::std::clone::Clone)]
                     struct #wrapper_name {
                         service: ::std::sync::Arc<#ty>,
@@ -147,7 +157,9 @@ pub fn expand_impl_handlers(
                 let method_name = &m.method_name;
                 let message_type = &m.message_type;
                 if m.is_request {
+                    let doc = format!(" Implements [`Handler`] for `{}` — dispatches [`{}`]", wrapper_name, quote!(#message_type));
                     quote! {
+                        #[doc = #doc]
                         #[::async_trait::async_trait]
                         impl catga_core::Handler<#message_type> for #wrapper_name {
                             async fn handle(&self, msg: #message_type) -> catga_core::CatgaResult<<#message_type as catga_core::Request>::Response> {
@@ -156,7 +168,9 @@ pub fn expand_impl_handlers(
                         }
                     }
                 } else if m.is_event {
+                    let doc = format!(" Implements [`EventHandler`] for `{}` — dispatches [`{}`]", wrapper_name, quote!(#message_type));
                     quote! {
+                        #[doc = #doc]
                         #[::async_trait::async_trait]
                         impl catga_core::EventHandler<#message_type> for #wrapper_name {
                             async fn handle(&self, event: #message_type) -> catga_core::CatgaResult<()> {
@@ -165,7 +179,9 @@ pub fn expand_impl_handlers(
                         }
                     }
                 } else {
+                    let doc = format!(" Implements [`CommandHandler`] for `{}` — dispatches [`{}`]", wrapper_name, quote!(#message_type));
                     quote! {
+                        #[doc = #doc]
                         #[::async_trait::async_trait]
                         impl catga_core::CommandHandler<#message_type> for #wrapper_name {
                             async fn handle(&self, cmd: #message_type) -> catga_core::CatgaResult<()> {
@@ -208,6 +224,7 @@ pub fn expand_impl_handlers(
         impl #impl_generics #ty {
             #(#original_method_tokens)*
 
+            /// Builds a [`Registry`] containing all handlers from this service.
             pub fn registry(self) -> catga_core::CatgaResult<catga_core::Registry> {
                 let mut registry = catga_core::Registry::new();
                 #(#registry_calls)*
@@ -226,7 +243,9 @@ pub fn expand_impl_handlers(
             .map(|(_, m)| {
                 let message_type = &m.message_type;
                 let method_name = &m.method_name;
+                let doc = format!(" Sealed dispatch impl for [`{}`] request → {}", quote!(#message_type), m.method_name);
                 quote! {
+                    #[doc = #doc]
                     impl ::catga_core::sealed_dispatch::SealedRequestDispatch<#message_type>
                         for #mediator_name
                     {
@@ -249,7 +268,9 @@ pub fn expand_impl_handlers(
             .map(|(_, m)| {
                 let message_type = &m.message_type;
                 let method_name = &m.method_name;
+                let doc = format!(" Sealed dispatch impl for [`{}`] command → {}", quote!(#message_type), m.method_name);
                 quote! {
+                    #[doc = #doc]
                     impl ::catga_core::sealed_dispatch::SealedCommandDispatch<#message_type>
                         for #mediator_name
                     {
@@ -270,7 +291,9 @@ pub fn expand_impl_handlers(
             .map(|(_, m)| {
                 let message_type = &m.message_type;
                 let method_name = &m.method_name;
+                let doc = format!(" Sealed dispatch impl for [`{}`] event → {}", quote!(#message_type), m.method_name);
                 quote! {
+                    #[doc = #doc]
                     impl ::catga_core::sealed_dispatch::SealedEventDispatch<#message_type>
                         for #mediator_name
                     {
@@ -285,22 +308,47 @@ pub fn expand_impl_handlers(
             })
             .collect();
 
+        let mediator_doc = {
+            let handlers: Vec<_> = method_infos
+                .iter()
+                .map(|(_, m)| {
+                    let msg_type = &m.message_type;
+                    format!("  - `{}` → `{}`", m.method_name, quote!(#msg_type).to_string().trim())
+                })
+                .collect();
+            let handlers_list = handlers.join("\n");
+            format!(
+                " A compile-time monomorphized mediator for `{}`.\n\n\
+                 ## Registered Handlers\n\n\
+                 {}\n\n\
+                 ## Example\n\n\
+                 ```ignore\n\
+                 let mediator = {}::new(service);\n\
+                 let response = mediator.send(request).await?;\n\
+                 ```",
+                quote!(#ty).to_string().trim(),
+                handlers_list,
+                mediator_name
+            )
+        };
+
         quote! {
             #base_output
 
-            #[doc = concat!(" A compile-time monomorphized mediator for ", stringify!(#ty))]
+            #[doc = #mediator_doc]
             #[derive(::std::clone::Clone)]
             pub struct #mediator_name {
                 service: #ty,
             }
 
+            #[doc = " Typed mediator for compile-time dispatch."]
             impl #mediator_name {
                 #[doc = " Creates a new typed mediator with the given service."]
                 pub fn new(service: #ty) -> Self {
                     Self { service }
                 }
 
-                /// Dispatches a request with zero heap allocation.
+                #[doc = " Dispatches a request with compile-time dispatch, zero heap allocation."]
                 pub async fn send<__M: ::catga_core::Request>(
                     &self,
                     message: __M,
@@ -314,7 +362,7 @@ pub fn expand_impl_handlers(
                     .await
                 }
 
-                /// Dispatches a command with zero heap allocation.
+                #[doc = " Dispatches a command with compile-time dispatch, zero heap allocation."]
                 pub async fn send_command<__C: ::catga_core::Command>(
                     &self,
                     command: __C,
@@ -328,7 +376,7 @@ pub fn expand_impl_handlers(
                     .await
                 }
 
-                /// Publishes an event with zero heap allocation.
+                #[doc = " Publishes an event with compile-time dispatch, zero heap allocation."]
                 pub async fn publish<__E: ::catga_core::Event>(
                     &self,
                     event: __E,

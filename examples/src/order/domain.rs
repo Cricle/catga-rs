@@ -143,19 +143,14 @@ impl Event for OrderCancelled {
 // ============================================================================
 
 /// Order lifecycle status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderStatus {
     /// Order placed, awaiting payment.
+    #[default]
     Pending,
     /// Payment confirmed.
     Confirmed,
     /// Order cancelled.
     Cancelled,
-}
-
-impl Default for OrderStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }

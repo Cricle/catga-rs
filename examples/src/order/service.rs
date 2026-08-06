@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use catga_core::compensating_flow;
-use catga_core::{catga_service, CatgaError, CatgaResult, ErrorCode, Event};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Event, catga_service};
 use tokio::sync::RwLock;
 
 use super::domain::*;
@@ -63,10 +63,9 @@ pub struct OrderService {
 /// - Queries: `get_order`, `get_order_status`
 /// - Commands: `place_order`, `confirm_payment`, `cancel_order`
 /// - Events: `on_payment_confirmed`
-#[allow(missing_docs)]
 #[catga_service(OrderMediator)]
 impl OrderService {
-    // Query handlers
+    /// Handles `GetOrder` query — returns full order details.
     async fn get_order(&self, query: GetOrder) -> CatgaResult<OrderPlaced> {
         let orders = self.orders.read().await;
         orders
@@ -80,6 +79,7 @@ impl OrderService {
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "order not found"))
     }
 
+    /// Handles `GetOrderStatus` query — returns only the order status.
     async fn get_order_status(&self, query: GetOrderStatus) -> CatgaResult<OrderStatus> {
         let orders = self.orders.read().await;
         orders
@@ -89,9 +89,13 @@ impl OrderService {
     }
 
     // Command handlers
+    /// Handles `PlaceOrder` command — creates a new order with pending status.
     async fn place_order(&self, cmd: PlaceOrder) -> CatgaResult<OrderPlaced> {
         if cmd.quantity == 0 {
-            return Err(CatgaError::new(ErrorCode::Validation, "quantity must be at least 1"));
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "quantity must be at least 1",
+            ));
         }
         let total_cents = cmd
             .unit_price_cents
@@ -107,7 +111,10 @@ impl OrderService {
             payment_id: None,
         };
 
-        self.orders.write().await.insert(order_id.clone(), state.clone());
+        self.orders
+            .write()
+            .await
+            .insert(order_id.clone(), state.clone());
 
         let event = OrderPlaced {
             order_id: order_id.clone(),
@@ -120,6 +127,7 @@ impl OrderService {
         Ok(event)
     }
 
+    /// Handles `ConfirmPayment` command — confirms payment via compensating flow.
     async fn confirm_payment(&self, cmd: ConfirmPayment) -> CatgaResult<()> {
         let result = compensating_flow!("payment"; context = PaymentCtx {
             orders: Arc::clone(&self.orders),
@@ -155,6 +163,7 @@ impl OrderService {
         }
     }
 
+    /// Handles `CancelOrder` command — cancels a pending order.
     async fn cancel_order(&self, cmd: CancelOrder) -> CatgaResult<()> {
         let mut orders = self.orders.write().await;
         let order = orders
@@ -162,7 +171,10 @@ impl OrderService {
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "order not found"))?;
 
         if order.status != OrderStatus::Pending {
-            return Err(CatgaError::new(ErrorCode::Validation, "can only cancel pending orders"));
+            return Err(CatgaError::new(
+                ErrorCode::Validation,
+                "can only cancel pending orders",
+            ));
         }
 
         order.status = OrderStatus::Cancelled;
@@ -176,6 +188,7 @@ impl OrderService {
     }
 
     // Event handler
+    /// Handles `PaymentConfirmed` event — updates order status.
     async fn on_payment_confirmed(&self, event: PaymentConfirmed) -> CatgaResult<()> {
         let mut orders = self.orders.write().await;
         if let Some(order) = orders.get_mut(event.order_id.as_ref()) {
@@ -195,6 +208,7 @@ impl OrderService {
         }
     }
 
+    /// Serializes and records an event to the event log.
     async fn record_event<E: Event + serde::Serialize>(
         &self,
         order_id: &str,
@@ -235,18 +249,23 @@ impl Clone for PaymentCtx {
 }
 
 impl PaymentCtx {
+    /// Reserves payment ID for the order (compensating flow step).
     async fn reserve(self) -> CatgaResult<()> {
         let mut orders = self.orders.write().await;
         let order = orders
             .get_mut(self.order_id.as_ref())
             .ok_or_else(|| CatgaError::new(ErrorCode::NotFound, "order not found"))?;
         if order.payment_id.is_some() {
-            return Err(CatgaError::new(ErrorCode::Conflict, "payment already captured"));
+            return Err(CatgaError::new(
+                ErrorCode::Conflict,
+                "payment already captured",
+            ));
         }
         order.payment_id = Some(self.payment_id);
         Ok(())
     }
 
+    /// Releases payment ID reservation (compensating flow rollback).
     async fn release(self) -> CatgaResult<()> {
         let mut orders = self.orders.write().await;
         if let Some(order) = orders.get_mut(self.order_id.as_ref()) {
@@ -260,7 +279,7 @@ fn uuid_simple() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("system time is before Unix epoch")
         .as_nanos() as u64
         % 1_000_000
 }

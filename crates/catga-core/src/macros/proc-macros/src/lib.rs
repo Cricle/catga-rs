@@ -105,7 +105,7 @@ pub fn catga_service(attr: TokenStream, input: TokenStream) -> TokenStream {
     let typed_mediator_name = if attr.is_empty() {
         None
     } else {
-        match syn::parse::<syn::Ident>(attr.into()) {
+        match syn::parse::<syn::Ident>(attr) {
             Ok(ident) => Some(ident),
             Err(e) => return e.into_compile_error().into(),
         }

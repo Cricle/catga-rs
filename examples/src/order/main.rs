@@ -5,9 +5,8 @@
 //! ```
 
 use catga_core::CatgaResult;
-use tokio;
 
-use catga_examples::order::{domain::*, OrderMediator, OrderService};
+use catga_examples::order::{OrderMediator, OrderService, domain::*};
 
 #[tokio::main]
 async fn main() -> CatgaResult<()> {
@@ -79,7 +78,9 @@ async fn main() -> CatgaResult<()> {
         })
         .await?;
     mediator
-        .send_command(CancelOrder { order_id: order2.order_id })
+        .send_command(CancelOrder {
+            order_id: order2.order_id,
+        })
         .await?;
     println!("Order cancelled successfully");
 

@@ -4,8 +4,7 @@
 //! cargo run -p catga-examples --bin quickstart
 //! ```
 
-use catga_core::{catga_service, catga_request, CatgaResult};
-use tokio;
+use catga_core::{CatgaResult, catga_request, catga_service};
 
 #[catga_request(response = u64)]
 struct Double(u64);
