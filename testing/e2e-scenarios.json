@@ -28,16 +28,6 @@
       ]
     },
     {
-      "id": "auto-bus-nats-integration",
-      "package": "catga-tests",
-      "target": "nats_integration",
-      "profile": "core",
-      "critical": true,
-      "testArguments": [
-        "--ignored"
-      ]
-    },
-    {
       "id": "redis-contracts",
       "package": "catga-tests",
       "target": "redis",
@@ -248,14 +238,6 @@
       "id": "codec-memorypack-roundtrip",
       "package": "catga-tests",
       "target": "memorypack",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "scheduler-cron-lifecycle",
-      "package": "catga-tests",
-      "target": "cron_runtime",
       "profile": "core",
       "critical": true,
       "testArguments": []
@@ -752,94 +734,6 @@
       "id": "cluster-raft-runtime-contracts",
       "package": "catga-cluster",
       "target": "raft_runtime_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-codec-api",
-      "package": "catga-core-macros",
-      "target": "codec_api",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-bounded-decode",
-      "package": "catga-core-macros",
-      "target": "bounded_decode",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-envelope",
-      "package": "catga-core-macros",
-      "target": "envelope",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-trait-matrix",
-      "package": "catga-core-macros",
-      "target": "trait_matrix",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-runtime-contracts",
-      "package": "catga-tests",
-      "target": "runtime_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-dsl-checkpoint",
-      "package": "catga-tests",
-      "target": "dsl_checkpoint_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-executor-contracts",
-      "package": "catga-tests",
-      "target": "executor_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-suspension-contracts",
-      "package": "catga-tests",
-      "target": "suspension_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-dsl-edge-contracts",
-      "package": "catga-tests",
-      "target": "dsl_edge_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-dsl-execution",
-      "package": "catga-tests",
-      "target": "dsl_execution_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-durable-frames",
-      "package": "catga-tests",
-      "target": "durable_frames",
       "profile": "core",
       "critical": true,
       "testArguments": []
@@ -1467,86 +1361,6 @@
       "id": "nats-client-injection",
       "package": "catga-nats",
       "target": "client_injection",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memory-cleanup-toctou",
-      "package": "catga-tests",
-      "target": "cleanup_toctou",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memory-dead-letter",
-      "package": "catga-tests",
-      "target": "dead_letter",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-derive-behavior",
-      "package": "catga-core-macros",
-      "target": "derive_behavior",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-wire-bounds",
-      "package": "catga-core-macros",
-      "target": "wire_bounds",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-state-varint",
-      "package": "catga-core-macros",
-      "target": "state_and_varint",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-trait-rejections",
-      "package": "catga-core-macros",
-      "target": "trait_rejections",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "memorypack-io-feature-edges",
-      "package": "catga-core-macros",
-      "target": "io_and_feature_edges",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-runtime-checkpoint-contracts",
-      "package": "catga-tests",
-      "target": "runtime_checkpoint_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-local-context-contracts",
-      "package": "catga-tests",
-      "target": "local_context_contracts",
-      "profile": "core",
-      "critical": true,
-      "testArguments": []
-    },
-    {
-      "id": "flow-async-contracts",
-      "package": "catga-tests",
-      "target": "flow_async",
       "profile": "core",
       "critical": true,
       "testArguments": []

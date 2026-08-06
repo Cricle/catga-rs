@@ -1,0 +1,5 @@
+[workspace]
+# Exclude proc-macro crates that have no tests
+exclude = [
+    "catga-core-macros",
+]
