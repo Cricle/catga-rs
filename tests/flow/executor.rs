@@ -14,7 +14,7 @@ use catga_core::flow::{
     FlowStore,
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_memory::MemoryFlows;
+use catga_core::memory::MemoryFlows;
 use tokio::sync::Notify;
 
 struct HeartbeatDuringTerminalUpdateStore {

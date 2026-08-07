@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_codec_memorypack::MemoryPackable;
+use catga_core::codec::memorypack::MemoryPackable;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, Handler, MessageMetadata, Request,
     SnowflakeIdGenerator, SnowflakeLayout,

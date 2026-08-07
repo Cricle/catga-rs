@@ -72,18 +72,28 @@ where
             ));
         }
 
-        run_request_with_timeout(timeout, async {
-            let reply_to: Box<str> =
-                format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
-            let mut subscription = self.client.get_async_pubsub().await.map_err(map_error)?;
-            subscription
-                .subscribe(reply_to.as_ref())
-                .await
-                .map_err(map_error)?;
-            self.transport
-                .send_to(&destination, request.with_reply_to(reply_to))
-                .await?;
+        let reply_to: Box<str> =
+            format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
+        let mut subscription = self.client.get_async_pubsub().await.map_err(|e| {
+            CatgaError::new(
+                ErrorCode::Connection,
+                format!("Redis connection failed: {e}"),
+            )
+        })?;
+        subscription
+            .subscribe(reply_to.as_ref())
+            .await
+            .map_err(|e| {
+                CatgaError::new(
+                    ErrorCode::Connection,
+                    format!("Redis subscription failed: {e}"),
+                )
+            })?;
+        self.transport
+            .send_to(&destination, request.with_reply_to(reply_to))
+            .await?;
 
+        run_request_with_timeout(timeout, reply_to, &mut subscription, async {
             let reply = subscription.on_message().next().await.ok_or_else(|| {
                 CatgaError::new(
                     ErrorCode::Transient,
@@ -186,6 +196,12 @@ where
 /// publication, a missing reply destination, or a dropped request never silently acknowledges the
 /// durable ingress entry. Applications that decide not to respond can call [`Self::nack`] to make
 /// the entry immediately eligible for the transport's next receive attempt.
+///
+/// ## Lifetime semantics
+///
+/// The underlying delivery is held by value and released only when [`Self::respond`],
+/// [`Self::nack`], or [`Drop`] runs. A successful response publication followed by acknowledgement
+/// failure still leaves the entry unacknowledged so the transport's redelivery path can recover it.
 pub struct RedisStreamsRequest {
     delivery: Delivery,
     client: redis::Client,
@@ -262,11 +278,26 @@ impl RedisStreamsRequest {
 ///
 /// Keeping the timer outside the supplied future prevents connection, subscription, durable-send,
 /// and reply-wait phases from each receiving a fresh full timeout.
+///
+/// On timeout, the reply inbox subscription is unsubscribed before returning to prevent leaking
+/// the subscription until the connection is dropped. The subscription channel is dropped as part of
+/// the unsubscription, which allows Redis to discard any late replies.
 async fn run_request_with_timeout<T>(
     timeout: Duration,
+    reply_to: Box<str>,
+    subscription: &mut redis::aio::PubSub,
     operation: impl Future<Output = CatgaResult<T>>,
 ) -> CatgaResult<T> {
     tokio::time::timeout(timeout, operation)
         .await
-        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "Redis Streams request timed out"))?
+        .map_err(|_| {
+            // Explicitly unsubscribe before returning to release the subscription.
+            // Dropping the PubSub connection without unsubscribing would leave the subscription
+            // active on the Redis server until the connection closes, leaking resources.
+            let _ = subscription.unsubscribe(reply_to.as_ref());
+            CatgaError::new(
+                ErrorCode::Timeout,
+                "Redis Streams request timed out waiting for reply",
+            )
+        })?
 }

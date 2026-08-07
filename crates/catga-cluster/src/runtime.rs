@@ -103,8 +103,58 @@ pub enum RaftRuntimeError {
     /// The configured transport failed while sending an outbound protocol message.
     Transport(RaftTransportError),
     /// The owner task panicked or was aborted.
-    Task(tokio::task::JoinError),
+    Task(TaskError),
 }
+
+/// Wrapper for tokio task join errors that can be cloned.
+///
+/// Since `tokio::task::JoinError` cannot be cloned or constructed externally,
+/// we use this wrapper to provide a cloneable representation.
+#[derive(Debug, Clone)]
+pub struct TaskError {
+    is_cancelled: bool,
+    is_panic: bool,
+}
+
+impl TaskError {
+    /// Creates a new cancelled task error.
+    pub fn cancelled() -> Self {
+        Self {
+            is_cancelled: true,
+            is_panic: false,
+        }
+    }
+
+    /// Creates a new panic task error.
+    pub fn panic() -> Self {
+        Self {
+            is_cancelled: false,
+            is_panic: true,
+        }
+    }
+
+    /// Returns true if the task was cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.is_cancelled
+    }
+
+    /// Returns true if the task panicked.
+    pub fn is_panic(&self) -> bool {
+        self.is_panic
+    }
+}
+
+impl fmt::Display for TaskError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_panic {
+            write!(formatter, "task panicked")
+        } else {
+            write!(formatter, "task cancelled")
+        }
+    }
+}
+
+impl std::error::Error for TaskError {}
 
 impl fmt::Display for RaftRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -129,6 +179,21 @@ impl Error for RaftRuntimeError {
             Self::Transport(error) => Some(error),
             Self::Task(error) => Some(error),
             Self::InvalidTickInterval | Self::Stopped => None,
+        }
+    }
+}
+
+impl Clone for RaftRuntimeError {
+    fn clone(&self) -> Self {
+        match self {
+            Self::InvalidTickInterval => Self::InvalidTickInterval,
+            Self::Stopped => Self::Stopped,
+            Self::Raft(_) => Self::Raft(raft::Error::Store(raft::StorageError::Unavailable)),
+            Self::Node(_) => Self::Node(RaftNodeError::PendingCommitCapacity { capacity: 0 }),
+            Self::Transport(_) => Self::Transport(RaftTransportError::retryable(
+                std::io::Error::new(std::io::ErrorKind::Other, "cloned error"),
+            )),
+            Self::Task(error) => Self::Task(error.clone()),
         }
     }
 }
@@ -237,7 +302,13 @@ impl RaftRuntime {
 
     /// Waits for the owner task and returns its terminal status.
     pub async fn join(self) -> Result<(), RaftRuntimeError> {
-        self.task.await.map_err(RaftRuntimeError::Task)?
+        self.task.await.map_err(|e| {
+            if e.is_cancelled() {
+                RaftRuntimeError::Task(TaskError::cancelled())
+            } else {
+                RaftRuntimeError::Task(TaskError::panic())
+            }
+        })?
     }
 
     async fn request<F>(&self, command: F) -> Result<(), RaftRuntimeError>
@@ -332,7 +403,7 @@ fn respond(
             Ok(())
         }
         Err(error) => {
-            let _ = reply.send(Err(RaftRuntimeError::Stopped));
+            let _ = reply.send(Err(error.clone()));
             Err(error)
         }
     }

@@ -12,7 +12,7 @@ use catga_core::{
     CatchUpProjectionRunner, CatgaResult, Envelope, EventStore, LiveProjection, MessageMetadata,
     Projection, ProjectionCheckpointStore, StoredEvent,
 };
-use catga_memory::{MemoryEventStore, MemoryProjectionCheckpoints};
+use catga_core::memory::{MemoryEventStore, MemoryProjectionCheckpoints};
 
 struct SumProjection {
     total: AtomicUsize,

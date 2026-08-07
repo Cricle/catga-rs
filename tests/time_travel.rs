@@ -11,7 +11,7 @@ use catga_core::{
     MessageMetadata, Snapshot, SnapshotStore, SnapshotTimeTravelService, StreamIdsPage,
     TimeTravelService, VersionHistoryPage,
 };
-use catga_memory::{MemoryEnhancedSnapshots, MemoryEventStore};
+use catga_core::memory::{MemoryEnhancedSnapshots, MemoryEventStore};
 
 #[derive(Clone)]
 struct Counter {

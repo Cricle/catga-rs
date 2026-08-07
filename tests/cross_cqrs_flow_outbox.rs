@@ -10,7 +10,7 @@ use catga_core::{
     CatgaResult, Command, CommandHandler, Envelope, Mediator, Message, MessageMetadata,
     OutboxMessage, OutboxStore, catga_handlers,
 };
-use catga_memory::{MemoryOutbox, MemorySuspendedFlows};
+use catga_core::memory::{MemoryOutbox, MemorySuspendedFlows};
 
 // ---------------------------------------------------------------------------
 // Domain

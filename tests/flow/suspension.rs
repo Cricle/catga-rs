@@ -18,7 +18,7 @@ use catga_core::flow::{
     WaitPolicy,
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_memory::MemorySuspendedFlows;
+use catga_core::memory::MemorySuspendedFlows;
 use tokio_util::sync::CancellationToken;
 
 mod timeout_store_contract;

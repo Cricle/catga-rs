@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::SystemTime};
 
 use catga_core::{EnhancedSnapshotStore, Snapshot, SnapshotStore};
-use catga_memory::MemoryEnhancedSnapshots;
+use catga_core::memory::MemoryEnhancedSnapshots;
 
 #[tokio::test]
 async fn enhanced_snapshots_find_version_history_and_cleanup_without_mutating_readers() {

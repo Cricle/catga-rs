@@ -12,6 +12,23 @@ if #pending ~= 1 or pending[1][2] ~= ARGV[2] then return 0 end
 return redis.call('XACK', KEYS[1], ARGV[1], ARGV[3])
 "#;
 
+/// Acknowledger that removes a stream entry from Redis only if it is still assigned to this consumer.
+///
+/// This prevents acknowledging entries that were claimed by another consumer during redelivery.
+/// The Lua script `ACK_IF_OWNER` performs an atomic check-and-ack: it first verifies the entry
+/// is still assigned to this consumer via `XPENDING`, then executes `XACK` only if the check passes.
+///
+/// ## Drop semantics
+///
+/// Dropping a `RedisAcknowledger` without calling `acknowledge` or `nack` releases the entry from
+/// the in-flight tracking but does NOT call `XACK`. This means the entry remains pending in Redis
+/// and will be redelivered to the same or another consumer. Applications should always call
+/// `acknowledge` when processing succeeds, or `nack` when the entry should be redelivered.
+///
+/// ## Thread safety
+///
+/// The contained `ConnectionManager` is cloned for each acknowledgement operation, sharing the
+/// underlying connection pool across concurrent acknowledgements.
 pub(crate) struct RedisAcknowledger {
     pub(crate) connection: ConnectionManager,
     pub(crate) stream: Box<str>,

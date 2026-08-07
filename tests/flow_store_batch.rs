@@ -7,7 +7,7 @@
 use catga_core::flow::{FlowState, FlowStore, MAX_FLOW_STORE_BATCH};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_flow_store::SqlFlowStore;
-use catga_memory::MemoryFlows;
+use catga_core::memory::MemoryFlows;
 
 fn batch_state(tag: &str, sequence: usize) -> FlowState {
     FlowState::new(

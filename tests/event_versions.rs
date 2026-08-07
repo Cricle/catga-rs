@@ -5,7 +5,7 @@ use std::sync::Arc;
 use catga_core::{
     Envelope, EventStore, EventUpgrader, EventVersionRegistry, MessageMetadata, UpgradingEventStore,
 };
-use catga_memory::MemoryEventStore;
+use catga_core::memory::MemoryEventStore;
 
 struct V1ToV2;
 

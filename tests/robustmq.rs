@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, MessageMetadata, MessagePriority,
 };

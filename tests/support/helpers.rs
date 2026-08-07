@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Request};
-use catga_testing::{
+use catga_core::testing::{
     EventHandlerSpy, HandlerSpy, MessageCapture, assert_contains, assert_error_code,
     assert_failure, assert_success, assert_value,
 };

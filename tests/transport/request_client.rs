@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_codec_memorypack::{
+use catga_core::codec::memorypack::{
     MemoryPackCodec, MemoryPackRequestClient, MemoryPackRequestClientFactory,
     MemoryPackRpcResponse, MemoryPackable,
 };

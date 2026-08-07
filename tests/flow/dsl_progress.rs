@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use catga_codec_memorypack::{MemoryPackSerializer, MemoryPackable};
+use catga_core::codec::memorypack::{MemoryPackSerializer, MemoryPackable};
 use catga_core::flow::{
     DslFlow, DslFlowLifecycleHooks, DslStateCodec, DslStepProgress, DslStepProgressStore,
 };

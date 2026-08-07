@@ -14,7 +14,7 @@ use catga_core::{
     MessageMetadata, ReadModelStore, ReadModelSynchronizer, RealtimeSyncStrategy,
     ScheduledSyncStrategy, SyncStrategy,
 };
-use catga_memory::{MemoryChangeTracker, MemoryReadModels};
+use catga_core::memory::{MemoryChangeTracker, MemoryReadModels};
 
 #[tokio::test]
 async fn synchronizer_only_marks_changes_after_the_strategy_succeeds() {

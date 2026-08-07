@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_nats::jetstream::{self, kv, message::PublishMessage};
-use catga_codec_memorypack::{MemoryPackCodec, MemoryPackSerializer};
+use catga_core::codec::memorypack::{MemoryPackCodec, MemoryPackSerializer};
 use catga_core::flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
     FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,

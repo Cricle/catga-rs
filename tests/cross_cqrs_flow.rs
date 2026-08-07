@@ -9,7 +9,7 @@ use catga_core::{
     CatgaResult, Command, CommandHandler, Event, EventHandler, Mediator, Message, Request,
     catga_handlers,
 };
-use catga_memory::MemorySuspendedFlows;
+use catga_core::memory::MemorySuspendedFlows;
 use tokio::sync::Mutex;
 
 // ---------------------------------------------------------------------------

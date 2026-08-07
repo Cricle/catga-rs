@@ -28,7 +28,7 @@ use catga_core::{
     Registry, Request, RetryBehavior, TracingBehavior, current_correlation_id,
     scope_correlation_id,
 };
-use catga_memory::{
+use catga_core::memory::{
     MemoryEventStore, MemoryIdempotency, MemoryInbox, MemoryLeases, MemoryOutbox,
     MemoryPubSubTransport, MemorySuspendedFlows, MemoryTransport,
 };

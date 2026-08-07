@@ -21,7 +21,7 @@ use catga_core::{
     CatgaResult, Envelope, Handler, Mediator, Message, MessageMetadata, MessageTransport, Registry,
     Request,
 };
-use catga_memory::MemoryTransport;
+use catga_core::memory::MemoryTransport;
 
 #[path = "support/performance_report.rs"]
 mod performance_report;

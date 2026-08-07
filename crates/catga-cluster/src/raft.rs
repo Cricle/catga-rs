@@ -113,6 +113,14 @@ pub enum RaftNodeError {
         /// Maximum number of committed application commands retained for the caller.
         capacity: usize,
     },
+    /// No committed entries are available for recovery because the durable Raft log
+    /// has been compacted past the requested start index.
+    NoEntriesAvailable {
+        /// The first index that the caller requested.
+        start_index: u64,
+        /// The last committed index in the durable Raft log.
+        last_committed_index: u64,
+    },
 }
 
 impl fmt::Display for RaftNodeError {
@@ -138,6 +146,10 @@ impl fmt::Display for RaftNodeError {
                 formatter,
                 "Raft pending application commit capacity of {capacity} has been reached"
             ),
+            Self::NoEntriesAvailable { start_index, last_committed_index } => write!(
+                formatter,
+                "no Raft entries available: requested start index {start_index}, last committed index {last_committed_index}"
+            ),
         }
     }
 }
@@ -154,7 +166,8 @@ impl Error for RaftNodeError {
             | Self::LocalEndpointMismatch { .. }
             | Self::PersistedConfStateMismatch
             | Self::ZeroPendingCommitCapacity
-            | Self::PendingCommitCapacity { .. } => None,
+            | Self::PendingCommitCapacity { .. }
+            | Self::NoEntriesAvailable { .. } => None,
         }
     }
 }
@@ -586,10 +599,29 @@ impl RaftNode {
         self.storage.create_snapshot(index, data)
     }
 
+    /// Disables automatic acknowledgment of applied entries.
+    ///
+    /// By default, the Raft node automatically advances the applied index whenever
+    /// committed entries are consumed. Calling this method disables that behavior,
+    /// allowing the caller to explicitly control when to advance the applied index
+    /// using [`Self::acknowledge_applied_through`] or [`Self::acknowledge_recovered`].
+    ///
+    /// This is useful when the application needs to ensure that entries are durably
+    /// applied to business state before Raft considers them acknowledged.
     pub(crate) fn defer_application_acknowledgement(&mut self) {
         self.auto_acknowledge_apply = false;
     }
 
+    /// Advances the Raft applied index to `index`, allowing the caller to explicitly
+    /// control when committed entries are considered acknowledged.
+    ///
+    /// This method only advances the applied index if `index` is greater than the
+    /// last acknowledged index. After advancing, it processes any resulting Raft
+    /// state changes (such as readiness events) and updates metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the Raft state machine fails to advance the applied index.
     pub(crate) fn acknowledge_applied_through(&mut self, index: u64) -> raft::Result<()> {
         if self.last_acknowledged_index < index {
             self.raw.advance_apply_to(index);
@@ -600,6 +632,21 @@ impl RaftNode {
         Ok(())
     }
 
+    /// Advances the applied index to `index` during application recovery.
+    ///
+    /// This method is used during recovery to advance the Raft applied index to a
+    /// previously persisted position. It validates that the requested index does not
+    /// exceed the durable commit index, ensuring consistency between the application
+    /// state and Raft's committed state.
+    ///
+    /// Unlike [`Self::acknowledge_applied_through`], this method allows advancing to
+    /// any index up to the last committed index and is intended for recovery scenarios
+    /// when rebuilding application state from durable snapshots and committed entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index` exceeds the durable commit index, indicating that
+    /// the application state may be ahead of the durable Raft log.
     pub(crate) fn acknowledge_recovered(&mut self, index: u64) -> raft::Result<()> {
         if index == 0 {
             return Ok(());
@@ -702,6 +749,7 @@ impl RaftNode {
     }
 
     fn refill_committed(&mut self) -> Result<(), RaftNodeError> {
+        let start_index = self.next_unqueued_commit_index;
         while self.committed.len() < self.pending_commit_capacity
             && self.next_unqueued_commit_index <= self.last_committed_index
         {
@@ -710,8 +758,10 @@ impl RaftNode {
                 .storage
                 .committed_entries_page(self.next_unqueued_commit_index, available)?;
             if entries.is_empty() {
-                self.next_unqueued_commit_index = self.last_committed_index.saturating_add(1);
-                break;
+                return Err(RaftNodeError::NoEntriesAvailable {
+                    start_index,
+                    last_committed_index: self.last_committed_index,
+                });
             }
             self.record_committed(entries);
             if next_index.is_none()

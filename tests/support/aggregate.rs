@@ -1,7 +1,7 @@
 //! Contract tests for typed aggregate test scenarios.
 
 use catga_core::{Aggregate, CatgaResult, Envelope, MessageMetadata};
-use catga_testing::AggregateScenario;
+use catga_core::testing::AggregateScenario;
 
 #[derive(Clone)]
 struct Balance {

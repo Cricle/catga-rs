@@ -8,10 +8,6 @@ members = [
     "crates/catga-nats",
     "crates/catga-redis",
     "crates/catga-robustmq",
-    "crates/catga-memory",
-    "crates/catga-flow",
-    "crates/catga-testing",
-    "crates/catga-codec-memorypack",
     "tests",
     "examples",
 ]
@@ -29,15 +25,11 @@ description = "Composable CQRS, event-sourcing, workflow, and distributed-runtim
 catga-axum = { path = "crates/catga-axum", version = "0.2.0" }
 catga-cluster = { path = "crates/catga-cluster", version = "0.2.0" }
 catga-core = { path = "crates/catga-core", version = "0.2.0" }
-catga-codec-memorypack = { path = "crates/catga-codec-memorypack", version = "0.2.0" }
-catga-flow = { path = "crates/catga-flow", version = "0.2.0" }
 catga-flow-store = { path = "crates/catga-flow-store", version = "0.2.0" }
-catga-memory = { path = "crates/catga-memory", version = "0.2.0" }
 catga-memorypack-derive = { path = "crates/catga-memorypack-derive", version = "0.2.0" }
 catga-nats = { path = "crates/catga-nats", version = "0.2.0" }
 catga-redis = { path = "crates/catga-redis", version = "0.2.0" }
 catga-robustmq = { path = "crates/catga-robustmq", version = "0.2.0" }
-catga-testing = { path = "crates/catga-testing", version = "0.2.0" }
 fnv = "1.0"
 
 [workspace.lints.rust]

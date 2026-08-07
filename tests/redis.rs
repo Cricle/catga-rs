@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_codec_memorypack::MemoryPackCodec;
+use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
     FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,

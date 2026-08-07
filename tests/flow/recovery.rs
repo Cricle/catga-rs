@@ -14,7 +14,7 @@ use catga_core::flow::{
     FlowContinuation, FlowDefinition, FlowRuntime, FlowScheduler, FlowState, FlowStepOutcome,
     MemoryFlowScheduler, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
-use catga_memory::MemorySuspendedFlows;
+use catga_core::memory::MemorySuspendedFlows;
 
 struct HeartbeatBeforeClaimStore {
     inner: Arc<MemorySuspendedFlows>,

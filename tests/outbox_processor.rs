@@ -11,7 +11,7 @@ use catga_core::{
     CatgaError, CatgaResult, Delivery, Envelope, ErrorCode, MAX_OUTBOX_CLAIM_LIMIT,
     MessageMetadata, MessageTransport, OutboxMessage, OutboxProcessor, OutboxStore,
 };
-use catga_memory::{MemoryOutbox, MemoryTransport};
+use catga_core::memory::{MemoryOutbox, MemoryTransport};
 
 fn message(id: u64) -> OutboxMessage {
     OutboxMessage::new(Envelope::new(

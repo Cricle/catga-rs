@@ -14,15 +14,11 @@ bb8 = "0.9"
 bb8-tiberius = { version = "0.16", default-features = false, features = ["tds73", "with-tokio"] }
 catga-axum = { workspace = true }
 catga-core = { workspace = true }
-catga-flow = { workspace = true }
 catga-flow-store = { workspace = true, features = ["sqlite", "mysql", "postgres", "mssql"] }
-catga-codec-memorypack = { workspace = true }
 catga-cluster = { workspace = true }
-catga-memory = { workspace = true }
 catga-nats = { workspace = true }
 catga-redis = { workspace = true }
 catga-robustmq = { workspace = true }
-catga-testing = { workspace = true }
 futures = "0.3"
 hex = "0.4"
 metrics = "0.24"

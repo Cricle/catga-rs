@@ -15,7 +15,7 @@ use catga_core::flow::{
     ScheduledResume, SuspendedFlowStore,
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use catga_memory::MemorySuspendedFlows;
+use catga_core::memory::MemorySuspendedFlows;
 use tokio::sync::oneshot;
 
 struct ScheduleIdentityWriteFailureStore {

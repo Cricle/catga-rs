@@ -66,6 +66,7 @@ pub use raft::{
 };
 pub use runtime::{
     RaftRuntime, RaftRuntimeError, RaftTransport, RaftTransportError, RaftTransportResult,
+    TaskError,
 };
 pub use singleton_task::SingletonTaskRunner;
 pub use state_machine::{RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError};

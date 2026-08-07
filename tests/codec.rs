@@ -1,6 +1,6 @@
 //! Integration coverage for Catga's MemoryPack-only codec surface.
 
-use catga_codec_memorypack::{
+use catga_core::codec::memorypack::{
     MemoryPackCodec, MemoryPackRpcResponse, MemoryPackSnapshotCodec, MemoryPackable,
 };
 use catga_core::{

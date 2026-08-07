@@ -593,11 +593,19 @@ where
     C: EnvelopeCodec,
 {
     fn is_healthy(&self) -> bool {
-        true
+        // Check if the underlying NATS client is connected
+        matches!(
+            self.context.client().connection_state(),
+            async_nats::connection::State::Connected
+        )
     }
 
     fn health_status(&self) -> Option<&str> {
-        Some("NATS transport is ready")
+        if self.is_healthy() {
+            Some("NATS transport is connected")
+        } else {
+            Some("NATS transport is disconnected")
+        }
     }
 }
 

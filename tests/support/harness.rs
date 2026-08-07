@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use catga_core::{CatgaResult, Event, EventHandler, Handler, Request};
 use catga_core::flow::{FlowDefinition, FlowRuntime, FlowStepOutcome};
-use catga_testing::CatgaTestHarness;
+use catga_core::testing::CatgaTestHarness;
 
 #[derive(Clone, Debug, Eq, PartialEq, catga_core::Message)]
 struct Double(u32);

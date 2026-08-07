@@ -1,7 +1,7 @@
 //! Snapshot-store contract tests.
 
 use catga_core::{ErrorCode, Snapshot, SnapshotStore};
-use catga_memory::MemorySnapshots;
+use catga_core::memory::MemorySnapshots;
 
 #[derive(Debug, Eq, PartialEq)]
 struct OrderState {

@@ -7,7 +7,7 @@ use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, Handler, Mediator, MessageMetadata,
     OutboxBehavior, OutboxEnvelope, OutboxStore, Pipeline, Registry, Request,
 };
-use catga_memory::MemoryOutbox;
+use catga_core::memory::MemoryOutbox;
 
 #[derive(Debug)]
 struct OrderPublished(u64);

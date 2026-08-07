@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use catga_core::{
     Acknowledger, CatgaResult, Delivery, Envelope, MessageMetadata, MessageTransport,
 };
-use catga_memory::MemoryTransport;
+use catga_core::memory::MemoryTransport;
 
 struct CounterAcknowledger(Arc<AtomicUsize>);
 

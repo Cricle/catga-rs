@@ -10,7 +10,7 @@ use catga_core::flow::{
     StateMachineState, StateMachineStore,
 };
 use catga_core::{ErrorCode, Event, Message};
-use catga_memory::MemoryStateMachines;
+use catga_core::memory::MemoryStateMachines;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum State {

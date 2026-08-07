@@ -1,7 +1,7 @@
 //! Contract tests for typed Flow test contexts.
 
 use catga_core::flow::{FlowDefinition, FlowRuntime, FlowStatus, FlowStepOutcome, SuspendedFlowStore};
-use catga_testing::FlowTestContext;
+use catga_core::testing::FlowTestContext;
 
 #[tokio::test]
 async fn flow_test_context_exposes_bounded_memory_flow_dependencies() {

@@ -15,7 +15,7 @@ use catga_core::{
     SubscriptionHandler, SubscriptionLoopOptions, SubscriptionRunner, SubscriptionStore,
     VersionHistoryPage,
 };
-use catga_memory::{MemoryEventStore, MemorySubscriptions};
+use catga_core::memory::{MemoryEventStore, MemorySubscriptions};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 

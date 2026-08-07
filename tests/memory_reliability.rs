@@ -6,7 +6,7 @@ use catga_core::{
     DeadLetter, DeadLetterStore, Envelope, IdempotencyStore, InboxStore, MessageMetadata,
     ProcessingState,
 };
-use catga_memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox};
+use catga_core::memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox};
 
 #[tokio::test]
 async fn inbox_and_idempotency_claim_exclusively_cache_results_and_allow_retry_after_failure() {

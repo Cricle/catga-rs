@@ -17,7 +17,7 @@ use catga_core::{
     LeaseStore, Mediator, MessageMetadata, Pipeline, Registry, Request, RetryBehavior,
     TimeoutBehavior, current_correlation_id,
 };
-use catga_memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox, MemoryLeases};
+use catga_core::memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox, MemoryLeases};
 use tokio::sync::{Mutex, Notify};
 
 #[derive(Clone, Debug)]

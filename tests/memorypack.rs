@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use catga_codec_memorypack::{MemoryPackCodec, MemoryPackable};
+use catga_core::codec::memorypack::{MemoryPackCodec, MemoryPackable};
 use catga_core::{
     ErrorCode, Message, PayloadDecoder, PayloadEncoder, SnowflakeIdGenerator, SnowflakeLayout,
     TypedTransport,
 };
-use catga_memory::MemoryTransport;
+use catga_core::memory::MemoryTransport;
 
 #[derive(Debug, Eq, PartialEq, MemoryPackable)]
 struct Order {

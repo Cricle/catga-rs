@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime};
 
 use catga_core::flow::{FlowContinuation, FlowState, FlowStore, SuspendedFlowStore};
-use catga_memory::{MemoryFlows, MemorySuspendedFlows};
+use catga_core::memory::{MemoryFlows, MemorySuspendedFlows};
 use serde_json::json;
 
 fn state(id: &str, owner: &str) -> FlowState {

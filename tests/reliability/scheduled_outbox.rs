@@ -5,13 +5,13 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use catga_codec_memorypack::{MemoryPackScheduledOutbox, MemoryPackable};
+use catga_core::codec::memorypack::{MemoryPackScheduledOutbox, MemoryPackable};
 use catga_core::{
     DelayedMessage, DistributedIdGenerator, Envelope, EnvelopeHeaders, Event, Message,
     MessageMetadata, MessagePriority, OutboxMessage, OutboxStore, QualityOfService,
     SnowflakeIdGenerator, SnowflakeLayout, scope_transport_context,
 };
-use catga_memory::MemoryOutbox;
+use catga_core::memory::MemoryOutbox;
 
 #[derive(MemoryPackable, catga_core::Message)]
 struct ShipOrder {

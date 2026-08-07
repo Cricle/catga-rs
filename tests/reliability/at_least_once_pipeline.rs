@@ -15,7 +15,7 @@ use catga_core::{
     OutboxBehavior, OutboxEnvelope, OutboxProcessor, OutboxStore, Pipeline, QualityOfService,
     Registry, Request,
 };
-use catga_memory::{MemoryInbox, MemoryOutbox, MemoryTransport};
+use catga_core::memory::{MemoryInbox, MemoryOutbox, MemoryTransport};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 

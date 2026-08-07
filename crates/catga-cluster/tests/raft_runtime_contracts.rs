@@ -251,7 +251,7 @@ fn raft_runtime_surfaces_fatal_transport_errors_only_when_its_owner_stops() {
 
         assert!(matches!(
             runtime.campaign().await,
-            Err(RaftRuntimeError::Stopped)
+            Err(RaftRuntimeError::Transport(_))
         ));
         assert!(matches!(
             runtime.join().await,

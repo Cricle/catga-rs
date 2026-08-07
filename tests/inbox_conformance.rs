@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use catga_core::{ErrorCode, InboxStore, ProcessingState};
-use catga_memory::MemoryInbox;
+use catga_core::memory::MemoryInbox;
 
 #[tokio::test]
 async fn failed_claim_is_reclaimed_with_a_new_generation_and_fences_the_former_owner() {

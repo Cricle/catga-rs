@@ -703,13 +703,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "catga-codec-memorypack"
-version = "0.2.0"
-dependencies = [
- "catga-core",
-]
-
-[[package]]
 name = "catga-core"
 version = "0.2.0"
 dependencies = [
@@ -771,14 +764,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "catga-flow"
-version = "0.2.0"
-dependencies = [
- "catga-core",
- "futures",
-]
-
-[[package]]
 name = "catga-flow-store"
 version = "0.2.0"
 dependencies = [
@@ -795,14 +780,6 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "catga-memory"
-version = "0.2.0"
-dependencies = [
- "catga-core",
- "tokio",
 ]
 
 [[package]]
@@ -867,14 +844,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "catga-testing"
-version = "0.2.0"
-dependencies = [
- "catga-core",
- "tokio",
-]
-
-[[package]]
 name = "catga-tests"
 version = "0.2.0"
 dependencies = [
@@ -885,15 +854,11 @@ dependencies = [
  "bb8-tiberius",
  "catga-axum",
  "catga-cluster",
- "catga-codec-memorypack",
  "catga-core",
- "catga-flow",
  "catga-flow-store",
- "catga-memory",
  "catga-nats",
  "catga-redis",
  "catga-robustmq",
- "catga-testing",
  "futures",
  "hex",
  "metrics",

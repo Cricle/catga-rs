@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use catga_core::LeaseStore;
-use catga_memory::MemoryLeases;
+use catga_core::memory::MemoryLeases;
 
 #[tokio::test]
 async fn leases_exclusively_acquire_renew_expire_and_release_by_owner() {

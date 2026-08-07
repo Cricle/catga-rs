@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use catga_core::flow::{FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, flow_definition};
 use catga_core::{CatgaResult, Envelope, EventStore, MessageMetadata};
-use catga_memory::{MemoryEventStore, MemorySuspendedFlows};
+use catga_core::memory::{MemoryEventStore, MemorySuspendedFlows};
 use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------

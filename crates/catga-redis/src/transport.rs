@@ -502,11 +502,38 @@ async fn read_entry(
     }))
 }
 
+/// Tracks in-flight stream entries per stream to coordinate concurrent receivers and recovery.
+///
+/// Each entry in `streams` represents a stream the transport has received from. The entry holds
+/// the set of entry IDs currently being processed and the count of active receivers for that
+/// stream. This coordination enables:
+///
+/// - **Recovery gating**: Only one receiver at a time can attempt to reclaim idle entries from
+///   other consumers, preventing redundant reclaim attempts.
+/// - **Owned pending detection**: When all active receivers have no in-flight entries, the
+///   transport can safely read pending entries belonging to this consumer without conflicting
+///   with its own in-progress processing.
+/// - **Cursor management**: Reclaim cursors are stored per-stream to resume scanning from where
+///   the last scan left off.
+///
+/// The `reclaim_cursors` map stores the last-scanned cursor position for each stream, enabling
+/// bounded recovery that resumes rather than restarts on each poll cycle.
 pub(crate) struct InFlight {
+    /// Per-stream in-flight entry tracking and coordination state.
     streams: DashMap<Box<str>, Arc<InFlightStream>>,
+    /// Per-stream reclaim cursor positions for bounded pending entry recovery.
     reclaim_cursors: DashMap<Box<str>, Box<str>>,
 }
 
+/// Per-stream state for tracking in-flight entries and coordinating receivers.
+///
+/// Each `InFlightStream` instance manages:
+/// - `entries`: The set of entry IDs currently being processed by this transport instance.
+///   Entries are removed when acknowledged or dropped, freeing the receiver to read owned pending.
+/// - `active_receivers`: A count of concurrent receiver tasks currently polling this stream.
+///   Incremented on each `begin_receive` and decremented on `ReceiveGuard` drop.
+/// - `recovery_gate`: A boolean ensuring only one receiver attempts reclamation at a time,
+///   preventing redundant claims when multiple receivers race to reclaim the same idle entry.
 struct InFlightStream {
     entries: DashSet<Box<str>>,
     active_receivers: AtomicUsize,
