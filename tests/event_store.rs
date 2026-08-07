@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use catga_core::{Envelope, ErrorCode, EventStore, MAX_EVENT_STORE_PAGE_SIZE, MessageMetadata};
 use catga_core::memory::MemoryEventStore;
+use catga_core::{Envelope, ErrorCode, EventStore, MAX_EVENT_STORE_PAGE_SIZE, MessageMetadata};
 
 fn event(id: u64) -> Envelope {
     Envelope::new(

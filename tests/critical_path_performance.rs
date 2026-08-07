@@ -17,11 +17,11 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::flow::Flow;
+use catga_core::memory::MemoryTransport;
 use catga_core::{
     CatgaResult, Envelope, Handler, Mediator, Message, MessageMetadata, MessageTransport, Registry,
     Request,
 };
-use catga_core::memory::MemoryTransport;
 
 #[path = "support/performance_report.rs"]
 mod performance_report;

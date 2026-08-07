@@ -16,8 +16,8 @@
 //! with explicit order values.
 
 use crate::helpers::{
-    generate_field_deserialize, is_borrowed_u8_slice, is_zero_copy_field,
-    prepare_ordered_fields, should_skip_field,
+    generate_field_deserialize, is_borrowed_u8_slice, is_zero_copy_field, prepare_ordered_fields,
+    should_skip_field,
 };
 
 use quote::quote;
@@ -60,7 +60,10 @@ pub fn generate_serialize(data: &Data, is_zero_copy: bool) -> proc_macro2::Token
 }
 
 /// Generates serialize code for a struct with named fields.
-fn generate_named_serialize(fields: &syn::FieldsNamed, is_zero_copy: bool) -> proc_macro2::TokenStream {
+fn generate_named_serialize(
+    fields: &syn::FieldsNamed,
+    is_zero_copy: bool,
+) -> proc_macro2::TokenStream {
     let non_skip: Vec<_> = fields
         .named
         .iter()
@@ -167,7 +170,10 @@ pub fn generate_deserialize(data: &Data, is_zero_copy: bool) -> proc_macro2::Tok
 /// Generates deserialize code for a struct with named fields.
 ///
 /// Includes field count validation and proper ordering for `#[memorypack(order)]` fields.
-fn generate_named_deserialize(fields: &syn::FieldsNamed, is_zero_copy: bool) -> proc_macro2::TokenStream {
+fn generate_named_deserialize(
+    fields: &syn::FieldsNamed,
+    is_zero_copy: bool,
+) -> proc_macro2::TokenStream {
     let non_skip: Vec<_> = fields
         .named
         .iter()
@@ -201,8 +207,7 @@ fn generate_named_deserialize(fields: &syn::FieldsNamed, is_zero_copy: bool) -> 
     for f in &fields.named {
         if should_skip_field(f) {
             // For skipped fields, use a placeholder at the skip position
-            ordered_deserialize
-                .push(deserialize_stmts[skip_field_idx + ordered_idx].clone());
+            ordered_deserialize.push(deserialize_stmts[skip_field_idx + ordered_idx].clone());
             skip_field_idx += 1;
         } else if ordered_idx < ordered.len() {
             if let Some(field_idx) = fields
@@ -284,8 +289,7 @@ mod tests {
 
     #[test]
     fn generate_serialize_for_named_fields() {
-        let input: syn::DeriveInput =
-            syn::parse_str("struct Point { x: i32, y: i32 }").unwrap();
+        let input: syn::DeriveInput = syn::parse_str("struct Point { x: i32, y: i32 }").unwrap();
         let tokens = generate_serialize(&input.data, false);
         let output = tokens.to_string();
 
@@ -297,8 +301,7 @@ mod tests {
     #[test]
     fn generate_serialize_for_tuple_struct() {
         // Tuple struct with unnamed fields - uses self.0, self.1 indexing
-        let input: syn::DeriveInput =
-            syn::parse_str("struct Point(i32, i32);").unwrap();
+        let input: syn::DeriveInput = syn::parse_str("struct Point(i32, i32);").unwrap();
         let tokens = generate_serialize(&input.data, false);
         let output = tokens.to_string();
 
@@ -319,8 +322,7 @@ mod tests {
 
     #[test]
     fn generate_deserialize_validates_field_count() {
-        let input: syn::DeriveInput =
-            syn::parse_str("struct Point { x: i32, y: i32 }").unwrap();
+        let input: syn::DeriveInput = syn::parse_str("struct Point { x: i32, y: i32 }").unwrap();
         let tokens = generate_deserialize(&input.data, false);
         let output = tokens.to_string();
 
@@ -336,7 +338,7 @@ mod tests {
         for i in 0..256 {
             fields_str.push_str(&format!("f{}: i32, ", i));
         }
-        fields_str.push_str("}");
+        fields_str.push('}');
 
         let input: syn::DeriveInput = syn::parse_str(&fields_str).unwrap();
         let tokens = generate_serialize(&input.data, false);
@@ -344,5 +346,192 @@ mod tests {
 
         assert!(output.contains("compile_error"));
         assert!(output.contains("255"));
+    }
+
+    #[test]
+    fn generate_serialize_named_struct_single_field() {
+        // Test serialization for a struct with just one field
+        let input: syn::DeriveInput = syn::parse_str("struct Wrapper { value: i32 }").unwrap();
+        let tokens = generate_serialize(&input.data, false);
+        let output = tokens.to_string();
+
+        assert!(output.contains("write_u8"));
+        assert!(output.contains("1"));
+        assert!(output.contains("MemoryPackSerialize"));
+    }
+
+    #[test]
+    fn generate_serialize_tuple_struct_single_field() {
+        // Tuple struct with just one field
+        let input: syn::DeriveInput = syn::parse_str("struct Wrapper(i32);").unwrap();
+        let tokens = generate_serialize(&input.data, false);
+        let output = tokens.to_string();
+
+        assert!(output.contains("write_u8"));
+        assert!(output.contains("1"));
+        assert!(output.contains("self . 0"));
+    }
+
+    #[test]
+    fn generate_serialize_tuple_struct_many_fields() {
+        // Tuple struct with many fields
+        let input: syn::DeriveInput = syn::parse_str("struct Point(i32, i32, i32, i32);").unwrap();
+        let tokens = generate_serialize(&input.data, false);
+        let output = tokens.to_string();
+
+        assert!(output.contains("write_u8"));
+        assert!(output.contains("4"));
+        // Should have self.0 through self.3
+        assert!(output.contains("self . 0"));
+        assert!(output.contains("self . 3"));
+    }
+
+    #[test]
+    fn generate_deserialize_named_struct_validates_mismatch() {
+        // Generate deserialize and check error message format
+        let input: syn::DeriveInput = syn::parse_str("struct Point { x: i32, y: i32 }").unwrap();
+        let tokens = generate_deserialize(&input.data, false);
+        let output = tokens.to_string();
+
+        // Check for the error message pattern
+        assert!(output.contains("expected"));
+        assert!(output.contains("received"));
+    }
+
+    #[test]
+    fn generate_deserialize_tuple_struct_validates_mismatch() {
+        let input: syn::DeriveInput = syn::parse_str("struct Point(i32, i32);").unwrap();
+        let tokens = generate_deserialize(&input.data, false);
+        let output = tokens.to_string();
+
+        assert!(output.contains("read_u8"));
+        assert!(output.contains("expected"));
+        assert!(output.contains("received"));
+    }
+
+    #[test]
+    fn generate_deserialize_unit_struct_returns_ok_self() {
+        // Unit struct deserialize should just return Ok(Self)
+        let input: syn::DeriveInput = syn::parse_str("struct Empty;").unwrap();
+        let tokens = generate_deserialize(&input.data, false);
+        let output = tokens.to_string();
+
+        // Check for Ok followed by Self (with possible spacing)
+        assert!(output.contains("Ok") && output.contains("Self"));
+    }
+
+    #[test]
+    fn generate_serialize_with_zero_copy_for_borrowed_field() {
+        // Struct with zero_copy enabled and borrowed u8 slice field
+        let input: syn::DeriveInput = syn::parse_str("struct Data { bytes: &[u8] }").unwrap();
+        let tokens = generate_serialize(&input.data, true); // is_zero_copy = true
+        let output = tokens.to_string();
+
+        // Zero-copy byte slices should use write_i32 for length
+        assert!(output.contains("write_i32"));
+        assert!(output.contains("buffer"));
+    }
+
+    #[test]
+    fn generate_serialize_with_zero_copy_preserves_regular_serialize() {
+        // Struct with zero_copy but regular fields still use standard serialize
+        let input: syn::DeriveInput =
+            syn::parse_str("struct Data { count: i32, bytes: &[u8] }").unwrap();
+        let tokens = generate_serialize(&input.data, true);
+        let output = tokens.to_string();
+
+        // Both write_u8 for field count and write_i32 for bytes length
+        assert!(output.contains("write_u8"));
+        assert!(output.contains("write_i32"));
+    }
+
+    #[test]
+    fn named_deserialize_generates_field_vars() {
+        // Check that named struct deserialize generates field bindings
+        let input: syn::DeriveInput =
+            syn::parse_str("struct Person { name: String, age: u32 }").unwrap();
+        let tokens = generate_deserialize(&input.data, false);
+        let output = tokens.to_string();
+
+        // Should have field count validation
+        assert!(output.contains("received_field_count"));
+        // Should have enter/leave object calls
+        assert!(output.contains("enter_object"));
+        assert!(output.contains("leave_object"));
+    }
+
+    #[test]
+    fn tuple_deserialize_generates_field_vars() {
+        // Check that tuple struct deserialize generates numbered field bindings
+        let input: syn::DeriveInput = syn::parse_str("struct Point(i32, i32);").unwrap();
+        let tokens = generate_deserialize(&input.data, false);
+        let output = tokens.to_string();
+
+        // Should have field_0, field_1, etc.
+        assert!(output.contains("field_0"));
+        assert!(output.contains("field_1"));
+    }
+
+    #[test]
+    fn generate_serialize_multiple_named_fields() {
+        // Verify field count is correct for multiple fields
+        let input: syn::DeriveInput =
+            syn::parse_str("struct Big { a: i32, b: i32, c: i32, d: i32, e: i32 }").unwrap();
+        let tokens = generate_serialize(&input.data, false);
+        let output = tokens.to_string();
+
+        assert!(output.contains("write_u8"));
+        assert!(output.contains("5"));
+    }
+
+    #[test]
+    fn named_deserialize_with_explicit_order_uses_sorted_order() {
+        // Test that fields with #[memorypack(order = N)] are deserialized in order
+        let input: syn::DeriveInput = syn::parse_str(
+            "struct Ordered { #[memorypack(order = 2)] third: i32, first: i32, #[memorypack(order = 1)] second: i32 }"
+        ).unwrap();
+        let tokens = generate_deserialize(&input.data, false);
+        let output = tokens.to_string();
+
+        // Should have field count 3
+        assert!(output.contains("3"));
+        assert!(output.contains("enter_object"));
+    }
+
+    #[test]
+    fn tuple_struct_max_fields_returns_compile_error() {
+        // Verify that tuple structs with >255 fields produce compile error
+        let mut fields_str = String::from("struct Big(");
+        for i in 0..256 {
+            if i > 0 {
+                fields_str.push_str(", ");
+            }
+            fields_str.push_str("i32");
+        }
+        fields_str.push_str(");");
+
+        let input: syn::DeriveInput = syn::parse_str(&fields_str).unwrap();
+        let tokens = generate_serialize(&input.data, false);
+        let output = tokens.to_string();
+
+        assert!(output.contains("compile_error"));
+        assert!(output.contains("255"));
+    }
+
+    #[test]
+    fn tuple_deserialize_max_fields_returns_compile_error() {
+        // Verify deserialize also errors on >255 fields
+        // Use a slightly different format to avoid parse issues
+        let mut fields_str = String::from("struct Big {\n");
+        for i in 0..256 {
+            fields_str.push_str(&format!("field_{}: i32,\n", i));
+        }
+        fields_str.push('}');
+
+        let input: syn::DeriveInput = syn::parse_str(&fields_str).unwrap();
+        let tokens = generate_deserialize(&input.data, false);
+        let output = tokens.to_string();
+
+        assert!(output.contains("compile_error"));
     }
 }

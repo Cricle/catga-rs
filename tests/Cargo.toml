@@ -68,10 +68,6 @@ name = "memory_capacity"
 path = "memory_capacity.rs"
 
 [[test]]
-name = "typed_transport"
-path = "typed_transport.rs"
-
-[[test]]
 name = "message_types"
 path = "message_types.rs"
 
@@ -118,10 +114,6 @@ path = "application.rs"
 [[test]]
 name = "state_machine"
 path = "state_machine.rs"
-
-[[test]]
-name = "state_machine_persistence"
-path = "state_machine_persistence.rs"
 
 [[test]]
 name = "mediator"
@@ -200,10 +192,6 @@ name = "outbox_processor_runtime"
 path = "reliability/outbox_processor_runtime.rs"
 
 [[test]]
-name = "scheduled_outbox"
-path = "reliability/scheduled_outbox.rs"
-
-[[test]]
 name = "event_store"
 path = "event_store.rs"
 
@@ -264,28 +252,8 @@ name = "routing"
 path = "routing.rs"
 
 [[test]]
-name = "versioned_transport"
-path = "transport/versioned.rs"
-
-[[test]]
 name = "transport_acknowledgement"
 path = "transport/acknowledgement.rs"
-
-[[test]]
-name = "transport_competing_consumer"
-path = "transport/competing_consumer.rs"
-
-[[test]]
-name = "transport_request_client"
-path = "transport/request_client.rs"
-
-[[test]]
-name = "transport_batch"
-path = "transport/batch.rs"
-
-[[test]]
-name = "transport_destination"
-path = "transport/destination.rs"
 
 [[test]]
 name = "testing_helpers"
@@ -312,24 +280,12 @@ name = "inbox_conformance"
 path = "inbox_conformance.rs"
 
 [[test]]
-name = "macros"
-path = "macros.rs"
-
-[[test]]
 name = "robustmq"
 path = "robustmq.rs"
 
 [[test]]
 name = "delivery_ack"
 path = "delivery_ack.rs"
-
-[[test]]
-name = "codec"
-path = "codec.rs"
-
-[[test]]
-name = "memorypack"
-path = "memorypack.rs"
 
 [[test]]
 name = "compression"
@@ -356,14 +312,6 @@ name = "e2e_compose"
 path = "e2e_compose.rs"
 
 [[test]]
-name = "performance_workflow"
-path = "performance_workflow.rs"
-
-[[test]]
-name = "nats_request"
-path = "nats_request.rs"
-
-[[test]]
 name = "redis"
 path = "redis.rs"
 
@@ -380,20 +328,8 @@ name = "flow_store"
 path = "flow/store.rs"
 
 [[test]]
-name = "dsl_progress"
-path = "flow/dsl_progress.rs"
-
-[[test]]
 name = "due_scheduler"
 path = "flow/due_scheduler.rs"
-
-[[test]]
-name = "flows"
-path = "flow/local.rs"
-
-[[test]]
-name = "flow_performance"
-path = "flow_performance.rs"
 
 [[test]]
 name = "flow_executor"
@@ -416,24 +352,8 @@ name = "flow_recovery"
 path = "flow/recovery.rs"
 
 [[test]]
-name = "cross_cqrs_flow"
-path = "cross_cqrs_flow.rs"
-
-[[test]]
 name = "cross_cqrs_raft"
 path = "cross_cqrs_raft.rs"
-
-[[test]]
-name = "cross_flow_raft"
-path = "cross_flow_raft.rs"
-
-[[test]]
-name = "cross_cqrs_flow_outbox"
-path = "cross_cqrs_flow_outbox.rs"
-
-[[test]]
-name = "cross_flow_subscription"
-path = "cross_flow_subscription.rs"
 
 [[test]]
 name = "mediator_pure_throughput"

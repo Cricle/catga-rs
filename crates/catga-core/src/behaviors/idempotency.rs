@@ -90,3 +90,20 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idempotency_key_trait_basic() {
+        struct TestKey(String);
+        impl IdempotencyKey for TestKey {
+            fn idempotency_key(&self) -> &str {
+                &self.0
+            }
+        }
+        let test_key = TestKey(String::from("key"));
+        assert_eq!(test_key.idempotency_key(), "key");
+    }
+}

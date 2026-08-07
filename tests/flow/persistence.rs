@@ -6,8 +6,8 @@ use catga_core::flow::{
     FlowContinuation, FlowState, SuspendedFlowStore, WaitCondition, WaitPolicy,
     decode_continuation, encode_continuation,
 };
-use catga_core::{CatgaError, ErrorCode};
 use catga_core::memory::MemorySuspendedFlows;
+use catga_core::{CatgaError, ErrorCode};
 
 #[test]
 fn continuation_codec_preserves_terminal_error_and_wait_results() {

@@ -11,8 +11,9 @@ use std::{
 use async_trait::async_trait;
 use catga_core::CatgaResult;
 use catga_core::flow::{
-    FlowContinuation, FlowDefinition, FlowRuntime, FlowScheduler, FlowState, FlowStepOutcome,
-    MemoryFlowScheduler, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowContinuation, FlowRuntime, FlowScheduler, FlowState, MemoryFlowScheduler,
+    SuspendedFlowStore, WaitCondition, WaitPolicy,
+    definition::{FlowDefinition, FlowStepOutcome},
 };
 use catga_core::memory::MemorySuspendedFlows;
 

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use catga_core::{AutoSnapshotManager, EventCountSnapshotStrategy, SnapshotStore};
 use catga_core::memory::MemoryEnhancedSnapshots;
+use catga_core::{AutoSnapshotManager, EventCountSnapshotStrategy, SnapshotStore};
 
 #[tokio::test]
 async fn automatic_snapshotting_reuses_the_latest_version_without_copying_shared_state() {

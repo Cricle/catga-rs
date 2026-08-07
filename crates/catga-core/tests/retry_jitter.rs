@@ -74,8 +74,14 @@ fn retry_jitter_equality() {
     assert_eq!(RetryJitter::none(), RetryJitter::none());
     assert_eq!(RetryJitter::full(123), RetryJitter::full(123));
     assert_ne!(RetryJitter::full(123), RetryJitter::full(456));
-    assert_eq!(RetryJitter::fixed(Duration::from_secs(1)), RetryJitter::fixed(Duration::from_secs(1)));
-    assert_ne!(RetryJitter::fixed(Duration::from_secs(1)), RetryJitter::fixed(Duration::from_secs(2)));
+    assert_eq!(
+        RetryJitter::fixed(Duration::from_secs(1)),
+        RetryJitter::fixed(Duration::from_secs(1))
+    );
+    assert_ne!(
+        RetryJitter::fixed(Duration::from_secs(1)),
+        RetryJitter::fixed(Duration::from_secs(2))
+    );
 }
 
 #[test]
@@ -172,7 +178,13 @@ fn retry_jitter_delay_for_sample_full_three_quarter_sample() {
 fn retry_jitter_delay_for_sample_full_bounded() {
     let jitter = RetryJitter::full(42);
     let base = Duration::from_secs(30);
-    let samples = [0u64, u64::MAX / 4, u64::MAX / 2, (u64::MAX / 4) * 3, u64::MAX];
+    let samples = [
+        0u64,
+        u64::MAX / 4,
+        u64::MAX / 2,
+        (u64::MAX / 4) * 3,
+        u64::MAX,
+    ];
     for sample in samples {
         let delay = jitter.delay_for_sample(base, sample);
         assert!(delay >= Duration::ZERO);
@@ -189,7 +201,11 @@ fn retry_jitter_delay_for_sample_full_monotonic() {
     let samples = [u64::MAX / 2, u64::MAX / 4 * 3, u64::MAX - 1];
     for sample in samples {
         let delay = jitter.delay_for_sample(base, sample);
-        assert!(delay > Duration::ZERO, "sample {} should produce non-zero delay", sample);
+        assert!(
+            delay > Duration::ZERO,
+            "sample {} should produce non-zero delay",
+            sample
+        );
         assert!(delay < base);
     }
 }

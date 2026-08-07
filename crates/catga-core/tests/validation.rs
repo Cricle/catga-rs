@@ -1,9 +1,8 @@
 //! Tests for validation module.
 
 use catga_core::{
-    validate_required, validate_min_length, validate_max_length, validate_positive,
-    validate_range, validate_not_empty, validate_min_count,
-    EndpointValidation,
+    EndpointValidation, validate_max_length, validate_min_count, validate_min_length,
+    validate_not_empty, validate_positive, validate_range, validate_required,
 };
 
 #[test]
@@ -92,7 +91,7 @@ fn validate_required_valid() {
 fn validate_min_length_too_short() {
     let result = validate_min_length(Some("ab"), 3, "field");
     assert!(result.is_some());
-    assert!(result.unwrap().contains("3"));
+    assert!(result.expect("should have error message").contains("3"));
 }
 
 #[test]
@@ -117,7 +116,7 @@ fn validate_min_length_unicode() {
 fn validate_max_length_too_long() {
     let result = validate_max_length(Some("abcdef"), 5, "field");
     assert!(result.is_some());
-    assert!(result.unwrap().contains("5"));
+    assert!(result.expect("result should be Some").contains("5"));
 }
 
 #[test]

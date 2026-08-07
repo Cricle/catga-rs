@@ -17,7 +17,12 @@ use catga_cluster::{
     RaftTransportError,
 };
 use catga_core::flow::{
-    DslFlow, FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler,
+    DslFlow, FlowRuntime, MemoryFlowScheduler,
+    definition::{FlowDefinition, FlowStepOutcome},
+};
+use catga_core::memory::{
+    MemoryEventStore, MemoryIdempotency, MemoryInbox, MemoryLeases, MemoryOutbox,
+    MemoryPubSubTransport, MemorySuspendedFlows, MemoryTransport,
 };
 use catga_core::{
     CachedResultCodec, CatgaError, CatgaResult, CircuitBreakerBehavior, Command, CommandBehavior,
@@ -27,10 +32,6 @@ use catga_core::{
     MessageTransport, OutboxMessage, OutboxProcessor, OutboxStore, Pipeline, QualityOfService,
     Registry, Request, RetryBehavior, TracingBehavior, current_correlation_id,
     scope_correlation_id,
-};
-use catga_core::memory::{
-    MemoryEventStore, MemoryIdempotency, MemoryInbox, MemoryLeases, MemoryOutbox,
-    MemoryPubSubTransport, MemorySuspendedFlows, MemoryTransport,
 };
 use metrics::{
     Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Metadata, Recorder,

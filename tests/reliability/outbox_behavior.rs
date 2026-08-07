@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use catga_core::memory::MemoryOutbox;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, Handler, Mediator, MessageMetadata,
     OutboxBehavior, OutboxEnvelope, OutboxStore, Pipeline, Registry, Request,
 };
-use catga_core::memory::MemoryOutbox;
 
 #[derive(Debug)]
 struct OrderPublished(u64);

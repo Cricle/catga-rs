@@ -9,6 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use catga_core::memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox, MemoryLeases};
 use catga_core::{
     CachedResultCodec, CatgaError, CatgaResult, Command, CommandHandler, CommandPipeline,
     Correlated, CorrelationBehavior, DeadLetter, DeadLetterBehavior, DeadLetterEnvelope,
@@ -17,7 +18,6 @@ use catga_core::{
     LeaseStore, Mediator, MessageMetadata, Pipeline, Registry, Request, RetryBehavior,
     TimeoutBehavior, current_correlation_id,
 };
-use catga_core::memory::{MemoryDeadLetters, MemoryIdempotency, MemoryInbox, MemoryLeases};
 use tokio::sync::{Mutex, Notify};
 
 #[derive(Clone, Debug)]

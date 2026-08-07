@@ -241,9 +241,10 @@ pub use event_store::{
 pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
 pub use flow::{
-    DslFlow, DslFlowLifecycleHooks, DslQueryStep, Flow, FlowDefinition, FlowRuntime,
-    FlowRuntimeResult, FlowScheduler, FlowStepOutcome, FlowTagPolicy, MemoryFlowScheduler,
-    ScheduledResume, suspension,
+    DslFlow, DslFlowLifecycleHooks, DslQueryStep, Flow, FlowRuntime, FlowRuntimeResult,
+    FlowScheduler, FlowTagPolicy, MemoryFlowScheduler, ScheduledResume,
+    definition::{FlowDefinition, FlowStepOutcome},
+    suspension,
 };
 pub use handler::{
     CommandHandler, CommandHandlerFn, EventHandler, EventHandlerFn, Handler, RequestHandlerFn,

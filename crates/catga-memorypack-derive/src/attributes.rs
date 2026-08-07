@@ -93,15 +93,12 @@ impl AttributeFlags {
         // Handle #[repr(C)], #[repr(transparent)], #[repr(i32)], etc.
         if let syn::Meta::List(meta_list) = &attr.meta {
             for token in meta_list.tokens.clone() {
-                match token {
-                    proc_macro2::TokenTree::Ident(ident) => {
-                        match ident.to_string().as_str() {
-                            "transparent" => result.is_transparent = true,
-                            "i32" => result.has_repr_i32 = true,
-                            _ => {}
-                        }
+                if let proc_macro2::TokenTree::Ident(ident) = token {
+                    match ident.to_string().as_str() {
+                        "transparent" => result.is_transparent = true,
+                        "i32" => result.has_repr_i32 = true,
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
@@ -138,24 +135,21 @@ impl AttributeFlags {
 
         while let Some(token) = tokens_iter.next() {
             match token {
-                proc_macro2::TokenTree::Ident(ident) => {
-                    match ident.to_string().as_str() {
-                        "flags" => result.is_flags = true,
-                        "union" => result.is_union = true,
-                        "version_tolerant" => result.is_version_tolerant = true,
-                        "circular" => result.is_circular = true,
-                        "zero_copy" => result.is_zero_copy = true,
-                        _ => {}
-                    }
-                }
-                proc_macro2::TokenTree::Punct(punct) => {
-                    // Skip commas between tokens
-                    if punct.as_char() != ',' {
-                        // If it's not a comma, skip any following tokens that might be values
-                        while let Some(next) = tokens_iter.peek() {
-                            match next {
-                                proc_macro2::TokenTree::Punct(p) if p.as_char() == ',' => break,
-                                _ => { tokens_iter.next(); }
+                proc_macro2::TokenTree::Ident(ident) => match ident.to_string().as_str() {
+                    "flags" => result.is_flags = true,
+                    "union" => result.is_union = true,
+                    "version_tolerant" => result.is_version_tolerant = true,
+                    "circular" => result.is_circular = true,
+                    "zero_copy" => result.is_zero_copy = true,
+                    _ => {}
+                },
+                proc_macro2::TokenTree::Punct(punct) if punct.as_char() != ',' => {
+                    // If it's not a comma, skip any following tokens that might be values
+                    while let Some(next) = tokens_iter.peek() {
+                        match next {
+                            proc_macro2::TokenTree::Punct(p) if p.as_char() == ',' => break,
+                            _ => {
+                                tokens_iter.next();
                             }
                         }
                     }
@@ -163,55 +157,6 @@ impl AttributeFlags {
                 _ => {}
             }
         }
-    }
-
-    /// Returns true if this type supports transparent serialization.
-    ///
-    /// A type is transparent if it has exactly one `i32` field and `#[repr(transparent)]`.
-    #[inline]
-    pub const fn is_transparent_type(&self) -> bool {
-        self.is_transparent
-    }
-
-    /// Returns true if this type is a flags enum.
-    ///
-    /// Flags enums generate bitwise operation implementations (OR, AND, XOR, NOT).
-    #[inline]
-    pub const fn is_flags_type(&self) -> bool {
-        self.is_flags
-    }
-
-    /// Returns true if this type is a tagged union enum.
-    ///
-    /// Union enums serialize a tag byte followed by the variant's data.
-    #[inline]
-    pub const fn is_union_type(&self) -> bool {
-        self.is_union
-    }
-
-    /// Returns true if zero-copy deserialization is enabled.
-    ///
-    /// Zero-copy enables borrowing from the input buffer for `&str` and `&[u8]` fields.
-    #[inline]
-    pub const fn is_zero_copy_type(&self) -> bool {
-        self.is_zero_copy
-    }
-
-    /// Returns true if the type has `#[repr(i32)]`.
-    ///
-    /// This is required for C-like enums without explicit discriminants.
-    #[inline]
-    pub const fn has_i32_repr(&self) -> bool {
-        self.has_repr_i32
-    }
-
-    /// Returns true if the type has any unsupported attribute that Catga cannot handle.
-    ///
-    /// Catga's bounded MemoryPack codec does not support circular references or
-    /// version-tolerant deserialization because both features require unbounded decoding.
-    #[inline]
-    pub const fn has_unsupported_attribute(&self) -> bool {
-        self.is_circular || self.is_version_tolerant
     }
 }
 
@@ -303,33 +248,48 @@ mod tests {
     }
 
     #[test]
-    fn accessor_methods() {
-        let flags = AttributeFlags {
-            is_transparent: true,
-            is_flags: true,
-            is_union: false,
-            is_version_tolerant: false,
-            is_circular: false,
-            is_zero_copy: true,
-            has_repr_i32: true,
+    fn parse_repr_c_is_ignored() {
+        // #[repr(C)] should be ignored (not transparent or i32)
+        let attrs: Vec<syn::Attribute> = syn::parse_quote! {
+            #[repr(C)]
         };
-
-        assert!(flags.is_transparent_type());
-        assert!(flags.is_flags_type());
-        assert!(!flags.is_union_type());
-        assert!(flags.is_zero_copy_type());
-        assert!(flags.has_i32_repr());
-        assert!(!flags.has_unsupported_attribute());
+        let flags = AttributeFlags::parse(&attrs);
+        assert!(!flags.is_transparent);
+        assert!(!flags.has_repr_i32);
     }
 
     #[test]
-    fn unsupported_attributes_detected() {
-        let mut flags = AttributeFlags::default();
-        flags.is_circular = true;
-        assert!(flags.has_unsupported_attribute());
+    fn parse_repr_i32_and_transparent_combined() {
+        // #[repr(i32, transparent)] should set both flags
+        let attrs: Vec<syn::Attribute> = syn::parse_quote! {
+            #[repr(i32, transparent)]
+        };
+        let flags = AttributeFlags::parse(&attrs);
+        assert!(flags.is_transparent);
+        assert!(flags.has_repr_i32);
+    }
 
-        let mut flags = AttributeFlags::default();
-        flags.is_version_tolerant = true;
-        assert!(flags.has_unsupported_attribute());
+    #[test]
+    fn parse_unknown_memorypack_option_is_ignored() {
+        // Unknown options should be silently ignored
+        let attrs: Vec<syn::Attribute> = syn::parse_quote! {
+            #[memorypack(unknown_option)]
+        };
+        let flags = AttributeFlags::parse(&attrs);
+        // All flags should remain false
+        assert!(!flags.is_flags);
+        assert!(!flags.is_union);
+        assert!(!flags.is_zero_copy);
+    }
+
+    #[test]
+    fn repr_with_whitespace_between_tokens() {
+        // Test repr with spaces: #[repr(i32 , transparent)]
+        let attrs: Vec<syn::Attribute> = syn::parse_quote! {
+            #[repr(i32, transparent)]
+        };
+        let flags = AttributeFlags::parse(&attrs);
+        assert!(flags.is_transparent);
+        assert!(flags.has_repr_i32);
     }
 }

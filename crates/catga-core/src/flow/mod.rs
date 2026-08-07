@@ -13,6 +13,8 @@ pub mod definition;
 pub mod dsl;
 /// Checkpoint frame and work types for durable flows.
 pub mod dsl_checkpoint;
+/// Helper functions for DSL flow execution.
+pub mod dsl_helpers;
 /// Lifecycle management for DSL flows.
 pub mod dsl_lifecycle;
 /// Recovery support for parallel branch flows.
@@ -29,6 +31,8 @@ pub mod dsl_when_any;
 pub mod due_service;
 /// Flow executor for running durable flows.
 pub mod executor;
+/// Concurrency throttle for flow actions.
+pub mod flow_throttle;
 /// Local in-memory flow execution.
 pub mod local;
 /// MemoryPack codec support for flow state.
@@ -64,8 +68,7 @@ pub mod timeout;
 
 pub use child_launch::FlowChildLauncher;
 pub use completion::{FlowCompletion, FlowCompletionAdapter};
-pub use definition::{FlowDefinition, FlowStepOutcome};
-pub use dsl::{DslFlow, FlowThrottle};
+pub use dsl::DslFlow;
 pub use dsl_lifecycle::{
     DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver,
     DslFlowStepFailedHook, DslFlowStepSucceededHook, DslFlowSucceededHook,

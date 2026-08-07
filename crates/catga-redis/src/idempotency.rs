@@ -256,3 +256,196 @@ fn state(value: &[u8]) -> CatgaResult<ProcessingState> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // State function tests
+
+    #[test]
+    fn state_claimed() {
+        let value = vec![CLAIMED];
+        assert_eq!(
+            state(&value).expect("claimed state"),
+            ProcessingState::Claimed
+        );
+    }
+
+    #[test]
+    fn state_completed_empty() {
+        let value = vec![COMPLETED_EMPTY];
+        assert_eq!(
+            state(&value).expect("completed empty"),
+            ProcessingState::Completed
+        );
+    }
+
+    #[test]
+    fn state_completed_result() {
+        let value = vec![COMPLETED_RESULT, b'd', b'a', b't', b'a'];
+        assert_eq!(
+            state(&value).expect("completed result"),
+            ProcessingState::Completed
+        );
+    }
+
+    #[test]
+    fn state_failed() {
+        let value = vec![FAILED];
+        assert_eq!(
+            state(&value).expect("failed state"),
+            ProcessingState::Failed
+        );
+    }
+
+    #[test]
+    fn state_malformed_empty() {
+        let err = state(&[]).expect_err("empty fails");
+        assert_eq!(err.code(), ErrorCode::Internal);
+        assert!(err.message().contains("malformed"));
+    }
+
+    #[test]
+    fn state_malformed_unknown_byte() {
+        let value = vec![99]; // Unknown byte value
+        let err = state(&value).expect_err("unknown byte fails");
+        assert_eq!(err.code(), ErrorCode::Internal);
+        assert!(err.message().contains("malformed"));
+    }
+
+    #[test]
+    fn state_multi_byte_value_with_claimed_prefix() {
+        // Test that state only checks the first byte, regardless of remaining content
+        let value = vec![CLAIMED, 0, 0, 0];
+        assert_eq!(
+            state(&value).expect("claimed prefix"),
+            ProcessingState::Claimed
+        );
+    }
+
+    #[test]
+    fn state_multi_byte_value_with_completed_result_prefix() {
+        // Completed result with payload data still returns Completed
+        let value = vec![COMPLETED_RESULT, 1, 2, 3, 4, 5];
+        assert_eq!(
+            state(&value).expect("completed result prefix"),
+            ProcessingState::Completed
+        );
+    }
+
+    // Retention millis tests
+
+    #[test]
+    fn retention_millis_valid() {
+        let duration = Duration::from_secs(60);
+        let millis = retention_millis(duration).expect("valid");
+        assert_eq!(millis, 60_000);
+    }
+
+    #[test]
+    fn retention_millis_zero_fails() {
+        let err = retention_millis(Duration::ZERO).expect_err("zero fails");
+        assert_eq!(err.code(), ErrorCode::Validation);
+        assert!(err.message().contains("greater than zero"));
+    }
+
+    #[test]
+    fn retention_millis_with_sub_millis_rounds_up() {
+        // 1ms + 500 microseconds = 1.5ms should round up to 2ms
+        // subsec_nanos for 1.5ms = 500_000 (500 microseconds)
+        let duration = Duration::from_millis(1).saturating_add(Duration::from_micros(500));
+        let millis = retention_millis(duration).expect("valid");
+        assert_eq!(millis, 2); // 1.5ms rounds up to 2ms
+    }
+
+    #[test]
+    fn retention_millis_exceeds_max_fails() {
+        // 100 years + 1 millisecond (exceeds i64 max redis retention)
+        let duration = Duration::from_millis((MAX_REDIS_RETENTION_MILLIS as u64) + 1);
+        let err = retention_millis(duration).expect_err("exceeds max fails");
+        assert_eq!(err.code(), ErrorCode::Validation);
+        assert!(err.message().contains("100 years"));
+    }
+
+    #[test]
+    fn retention_millis_at_max() {
+        let duration = Duration::from_millis(MAX_REDIS_RETENTION_MILLIS as u64);
+        let millis = retention_millis(duration).expect("at max is valid");
+        assert_eq!(millis, MAX_REDIS_RETENTION_MILLIS);
+    }
+
+    #[test]
+    fn retention_millis_very_large() {
+        // Test with a very large but valid duration
+        let duration = Duration::from_secs(365 * 24 * 60 * 60); // 1 year
+        let millis = retention_millis(duration).expect("1 year valid");
+        assert_eq!(millis, 31_536_000_000);
+    }
+
+    #[test]
+    fn retention_millis_one_millisecond() {
+        // Minimum valid: exactly 1 millisecond
+        let duration = Duration::from_millis(1);
+        let millis = retention_millis(duration).expect("1ms valid");
+        assert_eq!(millis, 1);
+    }
+
+    #[test]
+    fn retention_millis_sub_millisecond_rounds_up() {
+        // Sub-millisecond (500 nanoseconds) should round up to 1ms
+        let duration = Duration::from_nanos(500);
+        let millis = retention_millis(duration).expect("sub-ms valid");
+        assert_eq!(millis, 1);
+    }
+
+    // Constants tests
+
+    #[test]
+    fn state_constants_are_distinct() {
+        assert_ne!(CLAIMED, COMPLETED_EMPTY);
+        assert_ne!(CLAIMED, COMPLETED_RESULT);
+        assert_ne!(CLAIMED, FAILED);
+        assert_ne!(COMPLETED_EMPTY, COMPLETED_RESULT);
+        assert_ne!(COMPLETED_EMPTY, FAILED);
+        assert_ne!(COMPLETED_RESULT, FAILED);
+    }
+
+    #[test]
+    fn max_result_bytes_value() {
+        assert_eq!(MAX_RESULT_BYTES, 1024 * 1024);
+    }
+
+    #[test]
+    fn max_redis_retention_millis_value() {
+        // Verify 100 years in milliseconds
+        let expected = 100i64 * 365 * 24 * 60 * 60 * 1_000;
+        assert_eq!(MAX_REDIS_RETENTION_MILLIS, expected);
+    }
+
+    #[test]
+    fn state_constants_are_nonzero() {
+        // All state constants should be non-zero for proper Lua byte comparison
+        assert_ne!(CLAIMED, 0);
+        assert_ne!(COMPLETED_EMPTY, 0);
+        assert_ne!(COMPLETED_RESULT, 0);
+        assert_ne!(FAILED, 0);
+    }
+
+    // Lua script tests
+
+    #[test]
+    fn claim_script_contains_expected_operations() {
+        assert!(CLAIM.contains("GET"));
+        assert!(CLAIM.contains("SET"));
+        assert!(CLAIM.contains("string.byte"));
+        assert!(CLAIM.contains("string.char"));
+    }
+
+    #[test]
+    fn transition_script_contains_expected_operations() {
+        assert!(TRANSITION.contains("GET"));
+        assert!(TRANSITION.contains("SET"));
+        assert!(TRANSITION.contains("PX")); // Millisecond expiration
+    }
+}

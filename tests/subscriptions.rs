@@ -9,13 +9,13 @@ use std::{
 };
 
 use async_trait::async_trait;
+use catga_core::memory::{MemoryEventStore, MemorySubscriptions};
 use catga_core::{
     CatgaError, CatgaResult, CompetingSubscriptionRunner, Envelope, ErrorCode, EventPage,
     EventStore, MessageMetadata, PersistentSubscription, StoredEvent, StreamIdsPage,
     SubscriptionHandler, SubscriptionLoopOptions, SubscriptionRunner, SubscriptionStore,
     VersionHistoryPage,
 };
-use catga_core::memory::{MemoryEventStore, MemorySubscriptions};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 

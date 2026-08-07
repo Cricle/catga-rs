@@ -9,13 +9,13 @@ use std::{
 };
 
 use async_trait::async_trait;
+use catga_core::memory::{MemoryInbox, MemoryOutbox, MemoryTransport};
 use catga_core::{
     CachedResultCodec, CatgaError, CatgaResult, DeliveryMode, Envelope, ErrorCode, Handler,
     InboxBehavior, InboxKey, Mediator, MessageMetadata, MessagePriority, MessageTransport,
     OutboxBehavior, OutboxEnvelope, OutboxProcessor, OutboxStore, Pipeline, QualityOfService,
     Registry, Request,
 };
-use catga_core::memory::{MemoryInbox, MemoryOutbox, MemoryTransport};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 

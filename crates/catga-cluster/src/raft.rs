@@ -146,7 +146,10 @@ impl fmt::Display for RaftNodeError {
                 formatter,
                 "Raft pending application commit capacity of {capacity} has been reached"
             ),
-            Self::NoEntriesAvailable { start_index, last_committed_index } => write!(
+            Self::NoEntriesAvailable {
+                start_index,
+                last_committed_index,
+            } => write!(
                 formatter,
                 "no Raft entries available: requested start index {start_index}, last committed index {last_committed_index}"
             ),

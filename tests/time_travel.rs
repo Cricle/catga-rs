@@ -6,12 +6,12 @@ use std::{
 };
 
 use async_trait::async_trait;
+use catga_core::memory::{MemoryEnhancedSnapshots, MemoryEventStore};
 use catga_core::{
     Aggregate, CatgaError, CatgaResult, Envelope, ErrorCode, EventPage, EventStore, EventStream,
     MessageMetadata, Snapshot, SnapshotStore, SnapshotTimeTravelService, StreamIdsPage,
     TimeTravelService, VersionHistoryPage,
 };
-use catga_core::memory::{MemoryEnhancedSnapshots, MemoryEventStore};
 
 #[derive(Clone)]
 struct Counter {

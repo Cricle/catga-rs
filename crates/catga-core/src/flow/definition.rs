@@ -15,7 +15,7 @@ type StepCompensation = Box<dyn Fn(FlowState) -> BoxFuture<'static, CatgaResult<
 /// The outcome returned by one registered durable flow step.
 ///
 /// ```no_run
-/// use catga_core::flow::FlowStepOutcome;
+/// use catga_core::flow::definition::FlowStepOutcome;
 /// use std::time::Duration;
 ///
 /// // Zero delay advances immediately.

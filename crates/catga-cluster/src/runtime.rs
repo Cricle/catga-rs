@@ -191,7 +191,7 @@ impl Clone for RaftRuntimeError {
             Self::Raft(_) => Self::Raft(raft::Error::Store(raft::StorageError::Unavailable)),
             Self::Node(_) => Self::Node(RaftNodeError::PendingCommitCapacity { capacity: 0 }),
             Self::Transport(_) => Self::Transport(RaftTransportError::retryable(
-                std::io::Error::new(std::io::ErrorKind::Other, "cloned error"),
+                std::io::Error::other("cloned error"),
             )),
             Self::Task(error) => Self::Task(error.clone()),
         }

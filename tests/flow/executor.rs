@@ -13,8 +13,8 @@ use catga_core::flow::{
     FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions, FlowResult, FlowState, FlowStatus,
     FlowStore,
 };
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::memory::MemoryFlows;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use tokio::sync::Notify;
 
 struct HeartbeatDuringTerminalUpdateStore {

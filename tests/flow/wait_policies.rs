@@ -6,10 +6,11 @@ use std::{
 };
 
 use catga_core::flow::{
-    FlowDefinition, FlowRuntime, FlowStepOutcome, MemoryFlowScheduler, WaitCondition, WaitPolicy,
+    FlowRuntime, MemoryFlowScheduler, WaitCondition, WaitPolicy,
+    definition::{FlowDefinition, FlowStepOutcome},
 };
-use catga_core::{CatgaError, ErrorCode};
 use catga_core::memory::MemorySuspendedFlows;
+use catga_core::{CatgaError, ErrorCode};
 
 fn waiting_runtime(
     store: Arc<MemorySuspendedFlows>,

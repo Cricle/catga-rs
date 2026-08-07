@@ -10,12 +10,13 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::flow::{
-    DueFlowOptions, DueFlowScheduler, FlowContinuation, FlowDefinition, FlowDueService, FlowQuery,
-    FlowRuntime, FlowScheduler, FlowState, FlowStepOutcome, FlowSummary, MemoryFlowScheduler,
-    ScheduledResume, SuspendedFlowStore,
+    DueFlowOptions, DueFlowScheduler, FlowContinuation, FlowDueService, FlowQuery, FlowRuntime,
+    FlowScheduler, FlowState, FlowSummary, MemoryFlowScheduler, ScheduledResume,
+    SuspendedFlowStore,
+    definition::{FlowDefinition, FlowStepOutcome},
 };
-use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use catga_core::memory::MemorySuspendedFlows;
+use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use tokio::sync::oneshot;
 
 struct ScheduleIdentityWriteFailureStore {

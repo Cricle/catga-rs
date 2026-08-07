@@ -83,3 +83,54 @@ impl LeaseStore for RedisLeases {
 fn ttl_millis(ttl: Duration) -> u64 {
     u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX).max(1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ttl_millis_exact() {
+        assert_eq!(ttl_millis(Duration::from_millis(1000)), 1000);
+        assert_eq!(ttl_millis(Duration::from_secs(5)), 5000);
+    }
+
+    #[test]
+    fn ttl_millis_zero_returns_one() {
+        assert_eq!(ttl_millis(Duration::ZERO), 1);
+    }
+
+    #[test]
+    fn ttl_millis_sub_millis_rounds_up() {
+        // Duration with sub-millisecond should round up
+        assert_eq!(ttl_millis(Duration::from_nanos(500)), 1);
+        assert_eq!(ttl_millis(Duration::from_micros(1)), 1);
+    }
+
+    #[test]
+    fn ttl_millis_large_value() {
+        let large = Duration::from_secs(u64::MAX / 1000);
+        // Should not panic and should return at least 1
+        assert!(ttl_millis(large) >= 1);
+    }
+
+    #[test]
+    fn lua_scripts_are_valid_strings() {
+        // Just verify the scripts are non-empty
+        assert!(!ACQUIRE.is_empty());
+        assert!(!RENEW.is_empty());
+        assert!(!RELEASE.is_empty());
+    }
+
+    #[test]
+    fn lua_scripts_contain_expected_commands() {
+        // Verify ACQUIRE contains SET NX (new acquire)
+        assert!(ACQUIRE.contains("SET"));
+        assert!(ACQUIRE.contains("NX"));
+
+        // Verify RENEW contains PEXPIRE
+        assert!(RENEW.contains("PEXPIRE"));
+
+        // Verify RELEASE contains DEL
+        assert!(RELEASE.contains("DEL"));
+    }
+}

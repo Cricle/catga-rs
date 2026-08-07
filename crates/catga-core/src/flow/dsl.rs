@@ -33,6 +33,7 @@ use crate::flow::dsl_step::{
     MergeWinner, ReplayableForEach,
 };
 use crate::flow::dsl_when_any::run_checkpointed_when_any;
+use crate::flow::flow_throttle::FlowThrottle;
 use crate::flow::metrics::{
     FLOWS_COMPLETED, FLOWS_FAILED, FlowExecution, FlowMetrics, ForEachMetrics,
 };
@@ -40,7 +41,6 @@ use crate::{
     CatgaError, CatgaResult, ErrorCode, Event, Mediator, RemoteRequest, Request, RequestClient,
 };
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::Instrument;
 
 const DEFAULT_BRANCH: u32 = u32::MAX;
@@ -107,34 +107,6 @@ pub struct DslFlow<S> {
     lifecycle_observers: Vec<Arc<dyn DslFlowLifecycleObserver>>,
     lifecycle_hooks: Option<DslFlowLifecycleHooks<S>>,
     metrics: FlowMetrics,
-}
-
-/// Shared concurrency budget for throttled flow actions.
-#[derive(Clone)]
-pub struct FlowThrottle {
-    permits: Arc<Semaphore>,
-}
-
-impl FlowThrottle {
-    /// Creates a throttle that permits at most `limit` actions at once.
-    pub fn new(limit: usize) -> CatgaResult<Self> {
-        if limit == 0 {
-            return Err(CatgaError::new(
-                ErrorCode::Validation,
-                "flow throttle limit must be greater than zero",
-            ));
-        }
-        Ok(Self {
-            permits: Arc::new(Semaphore::new(limit)),
-        })
-    }
-
-    async fn acquire(&self) -> CatgaResult<OwnedSemaphorePermit> {
-        Arc::clone(&self.permits)
-            .acquire_owned()
-            .await
-            .map_err(|_| CatgaError::new(ErrorCode::Cancelled, "flow throttle is closed"))
-    }
 }
 
 impl<S: Send> DslFlow<S> {
@@ -211,7 +183,6 @@ impl<S: Send> DslFlow<S> {
     ///
     /// ```no_run
     /// use catga_core::flow::DslFlow;
-    /// use catga_core::flow::FlowStepOutcome;
     /// use catga_core::CatgaResult;
     /// use futures::future::BoxFuture;
     ///
@@ -1724,13 +1695,7 @@ impl<S: Send> Default for DslFlow<S> {
     }
 }
 
-fn retry_delay(initial_delay: Duration, retry: usize) -> Duration {
-    let multiplier = u32::try_from(retry)
-        .ok()
-        .and_then(|retry| 1_u32.checked_shl(retry))
-        .unwrap_or(u32::MAX);
-    initial_delay.saturating_mul(multiplier)
-}
+pub use crate::flow::dsl_helpers::retry_delay;
 
 #[cfg(test)]
 mod tests {

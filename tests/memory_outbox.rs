@@ -5,12 +5,12 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
+use catga_core::memory::MemoryOutbox;
 use catga_core::{
     CatgaResult, DEFAULT_OUTBOX_MAX_RETRIES, Envelope, ErrorCode, MAX_OUTBOX_CLAIM_LEASE,
     MAX_OUTBOX_CLAIM_LIMIT, MAX_OUTBOX_FAILURE_ERROR_BYTES, MessageMetadata, OutboxMessage,
     OutboxState, OutboxStore,
 };
-use catga_core::memory::MemoryOutbox;
 
 fn message(id: u64) -> OutboxMessage {
     OutboxMessage::new(Envelope::new(

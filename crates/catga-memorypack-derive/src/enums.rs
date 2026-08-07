@@ -192,8 +192,7 @@ mod tests {
 
     #[test]
     fn generate_enum_serialize_produces_match_arms() {
-        let input: syn::DeriveInput =
-            syn::parse_str("enum Color { Red, Green, Blue }").unwrap();
+        let input: syn::DeriveInput = syn::parse_str("enum Color { Red, Green, Blue }").unwrap();
         let syn::Data::Enum(data) = input.data else {
             panic!("expected enum")
         };
@@ -202,7 +201,11 @@ mod tests {
 
         // Generated code should contain match statement with write_i32 calls
         assert!(output.contains("match"), "should contain match: {}", output);
-        assert!(output.contains("write_i32"), "should contain write_i32: {}", output);
+        assert!(
+            output.contains("write_i32"),
+            "should contain write_i32: {}",
+            output
+        );
         assert!(output.contains("Red") && output.contains("Green") && output.contains("Blue"));
     }
 
@@ -217,8 +220,16 @@ mod tests {
         let output = tokens.to_string();
 
         // Should read i32 and match on variants
-        assert!(output.contains("read_i32"), "should contain read_i32: {}", output);
-        assert!(output.contains("DeserializationError"), "should contain DeserializationError: {}", output);
+        assert!(
+            output.contains("read_i32"),
+            "should contain read_i32: {}",
+            output
+        );
+        assert!(
+            output.contains("DeserializationError"),
+            "should contain DeserializationError: {}",
+            output
+        );
         assert!(output.contains("match"), "should contain match: {}", output);
     }
 

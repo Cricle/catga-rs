@@ -2,10 +2,10 @@
 
 use std::time::Duration;
 
+use catga_core::memory::{MemoryIdempotency, MemoryInbox, MemoryOutbox};
 use catga_core::{
     Envelope, ErrorCode, IdempotencyStore, InboxStore, MessageMetadata, OutboxMessage, OutboxStore,
 };
-use catga_core::memory::{MemoryIdempotency, MemoryInbox, MemoryOutbox};
 
 fn message(id: u64) -> OutboxMessage {
     OutboxMessage::new(Envelope::new(

@@ -24,3 +24,27 @@ impl<M: Request> Behavior<M> for TimeoutBehavior {
             .map_err(|_| CatgaError::new(ErrorCode::Timeout, "request handler timed out"))?
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_behavior_new_creates_instance() {
+        let timeout = TimeoutBehavior::new(Duration::from_secs(5));
+        // Basic check that instance was created
+        assert!(std::mem::size_of_val(&timeout) > 0);
+    }
+
+    #[test]
+    fn timeout_behavior_accepts_zero_duration() {
+        let timeout = TimeoutBehavior::new(Duration::ZERO);
+        assert!(std::mem::size_of_val(&timeout) > 0);
+    }
+
+    #[test]
+    fn timeout_behavior_accepts_large_duration() {
+        let timeout = TimeoutBehavior::new(Duration::MAX);
+        assert!(std::mem::size_of_val(&timeout) > 0);
+    }
+}

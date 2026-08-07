@@ -2,11 +2,11 @@
 
 use std::{sync::Arc, time::Duration};
 
+use catga_core::memory::{MemoryOutbox, MemoryTransport};
 use catga_core::{
     CatgaResult, Envelope, ErrorCode, MessageMetadata, MessageTransport, OutboxLoopOptions,
     OutboxMessage, OutboxProcessor, OutboxStore,
 };
-use catga_core::memory::{MemoryOutbox, MemoryTransport};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 

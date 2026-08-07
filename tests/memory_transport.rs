@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
+use catga_core::memory::{MemoryPubSubTransport, MemoryTransport};
 use catga_core::{
     AsyncInitializable, CatgaResult, Envelope, HealthCheckable, MessageMetadata, MessageTransport,
     QualityOfService, Stoppable, Waitable,
 };
-use catga_core::memory::{MemoryPubSubTransport, MemoryTransport};
 use tokio_util::sync::CancellationToken;
 
 fn envelope(id: u64) -> Envelope {

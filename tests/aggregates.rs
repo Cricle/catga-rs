@@ -2,12 +2,12 @@
 
 use std::time::{Duration, SystemTime};
 
+use catga_core::memory::{MemoryEventStore, MemorySnapshots};
 use catga_core::{
     Aggregate, AggregateRepository, CompositeSnapshotStrategy, Envelope,
     EventCountSnapshotStrategy, EventStore, MessageMetadata, SnapshotStore,
     TimeBasedSnapshotStrategy,
 };
-use catga_memory::{MemoryEventStore, MemorySnapshots};
 
 #[derive(Clone)]
 struct Counter {

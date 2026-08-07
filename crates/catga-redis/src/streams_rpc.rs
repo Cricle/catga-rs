@@ -72,8 +72,7 @@ where
             ));
         }
 
-        let reply_to: Box<str> =
-            format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
+        let reply_to: Box<str> = format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
         let mut subscription = self.client.get_async_pubsub().await.map_err(|e| {
             CatgaError::new(
                 ErrorCode::Connection,
