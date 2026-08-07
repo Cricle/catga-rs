@@ -12,7 +12,7 @@ use async_nats::jetstream::{self, kv, message::PublishMessage};
 use catga_core::codec::memorypack::{MemoryPackCodec, MemoryPackSerializer};
 use catga_core::flow::{
     DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowScheduler,
-    FlowState, FlowStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
+    FlowState, FlowStore, StateMachineStore, SuspendedFlowStore, WaitCondition, WaitPolicy,
 };
 use catga_core::{
     AsyncInitializable, CatgaError, CatgaResult, DeadLetter, DeadLetterStore, Destination,
@@ -27,7 +27,8 @@ use catga_nats::{
     NatsConfig, NatsDeadLetters, NatsDestinationConfig, NatsDslStepProgress, NatsEnhancedSnapshots,
     NatsEventStore, NatsFlowScheduler, NatsFlows, NatsIdempotency, NatsInbox, NatsLeases,
     NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport,
-    NatsSnapshotStore, NatsSubscriptions, NatsSuspendedFlows, NatsTransport,
+    NatsRequestClient, NatsRequestServer, NatsSnapshotStore, NatsStateMachines,
+    NatsSubscriptions, NatsSuspendedFlows, NatsTransport, NatsPublisher, NatsPublisherConfig,
 };
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -2138,4 +2139,537 @@ async fn nats_outbox_does_not_claim_a_message_before_its_delivery_time() {
     assert!(outbox.claim("worker-a", 1).await.unwrap().is_empty());
     assert!(outbox.cancel(19).await.unwrap());
     assert!(!outbox.cancel(19).await.unwrap());
+}
+
+// ============================================================================
+// NATS Request/Reply (RPC) E2E Tests
+// ============================================================================
+
+/// Verifies that NatsRequestServer and NatsRequestClient exchange envelopes
+/// end-to-end with correct correlation and timeout behavior.
+#[tokio::test]
+async fn nats_request_server_and_client_round_trip() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("rpc_{}", std::process::id());
+
+    // Start the request server
+    let mut request_server =
+        NatsRequestServer::connect(server.url(), &format!("catga.test.{suffix}"))
+            .await?;
+
+    // Create a client and spawn the request in background
+    let client = NatsRequestClient::connect(server.url(), &format!("catga.test.{suffix}")).await?;
+
+    let request = Envelope::new(
+        1001,
+        "order.status.check",
+        vec![1, 2, 3],
+        MessageMetadata::new(1001, None),
+    );
+
+    // Send request and handle it concurrently
+    let server_handle = tokio::spawn(async move {
+        let nats_request = request_server.next().await?;
+        assert_eq!(nats_request.envelope().message_type(), "order.status.check");
+        let response = Envelope::new(
+            2001,
+            "order.status.response",
+            vec![4, 5, 6],
+            MessageMetadata::new(2001, nats_request.envelope().id().into()),
+        );
+        nats_request.respond(response).await
+    });
+
+    let response = client
+        .request(request, Duration::from_secs(5))
+        .await?;
+
+    server_handle.await.unwrap()?;
+    assert_eq!(response.message_type(), "order.status.response");
+    assert_eq!(response.payload(), [4, 5, 6]);
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that a request times out when no reply is received.
+#[tokio::test]
+async fn nats_request_client_times_out_without_server() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("timeout_{}", std::process::id());
+
+    let client = NatsRequestClient::connect(server.url(), &format!("catga.test.{suffix}")).await?;
+
+    let request = Envelope::new(
+        1002,
+        "order.status.check",
+        vec![],
+        MessageMetadata::new(1002, None),
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.request(request, Duration::from_millis(100)),
+    )
+    .await;
+
+    assert!(result.is_err(), "request should time out before the test deadline");
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that request server handles errors by responding with a typed failure.
+#[tokio::test]
+async fn nats_request_server_responds_with_error() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("error_{}", std::process::id());
+
+    let mut request_server =
+        NatsRequestServer::connect(server.url(), &format!("catga.test.{suffix}")).await?;
+    let client = NatsRequestClient::connect(server.url(), &format!("catga.test.{suffix}")).await?;
+
+    let request = Envelope::new(
+        1003,
+        "order.status.check",
+        vec![],
+        MessageMetadata::new(1003, None),
+    );
+
+    let server_handle = tokio::spawn(async move {
+        let nats_request = request_server.next().await?;
+        let error = CatgaError::new(ErrorCode::NotFound, "Order not found");
+        nats_request.respond_error(error).await
+    });
+
+    let response = client
+        .request(request, Duration::from_secs(5))
+        .await?;
+
+    server_handle.await.unwrap()?;
+
+    // The response should be a failure envelope
+    assert!(response.payload().starts_with(b"ERR:"));
+    assert_eq!(response.metadata().correlation_id(), Some(1003));
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that multiple concurrent requests are handled correctly.
+#[tokio::test]
+async fn nats_request_server_handles_concurrent_requests() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("concurrent_{}", std::process::id());
+    let subject = format!("catga.test.{suffix}");
+
+    let mut request_server = NatsRequestServer::connect(server.url(), &subject).await?;
+    let client = NatsRequestClient::connect(server.url(), &subject).await?;
+
+    let request_count = 5;
+    let mut handles = Vec::new();
+
+    // Spawn request handler
+    let server_handle = tokio::spawn(async move {
+        for i in 0..request_count {
+            let nats_request = request_server.next().await?;
+            let response = Envelope::new(
+                2000 + i as u64,
+                "order.status.response",
+                vec![i as u8],
+                MessageMetadata::new(2000 + i as u64, nats_request.envelope().id().into()),
+            );
+            nats_request.respond(response).await?;
+        }
+        Ok::<(), CatgaError>(())
+    });
+
+    // Send concurrent requests
+    for i in 0..request_count {
+        let client = client.clone();
+        let request = Envelope::new(
+            1000 + i as u64,
+            "order.status.check",
+            vec![i as u8],
+            MessageMetadata::new(1000 + i as u64, None),
+        );
+        handles.push(tokio::spawn(async move {
+            client.request(request, Duration::from_secs(5)).await
+        }));
+    }
+
+    let mut responses = Vec::new();
+    for handle in handles {
+        responses.push(handle.await.unwrap()?);
+    }
+
+    server_handle.await.unwrap()?;
+
+    // Verify all responses were received
+    assert_eq!(responses.len(), request_count);
+    for (i, response) in responses.iter().enumerate() {
+        assert_eq!(response.payload(), [i as u8]);
+    }
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+// ============================================================================
+// NATS Publisher E2E Tests
+// ============================================================================
+
+/// Verifies that NatsPublisher publishes envelopes without requiring a consumer.
+#[tokio::test]
+async fn nats_publisher_publishes_durable_messages() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("pub_{}", std::process::id());
+
+    let publisher = NatsPublisher::connect(NatsPublisherConfig {
+        server: server.url().into(),
+        stream: format!("CATGA_PUB_{suffix}").into(),
+        subject: format!("catga.pub.{suffix}").into(),
+    })
+    .await?;
+
+    assert!(publisher.is_healthy());
+    assert_eq!(publisher.health_status(), Some("NATS publisher is ready"));
+
+    publisher
+        .publish(Envelope::new(
+            3001,
+            "order.created",
+            vec![1, 2],
+            MessageMetadata::new(3001, None),
+        ))
+        .await?;
+
+    publisher
+        .publish(Envelope::new(
+            3002,
+            "order.updated",
+            vec![3, 4],
+            MessageMetadata::new(3002, None),
+        ))
+        .await?;
+
+    publisher.stop_accepting();
+    assert!(!publisher.is_accepting());
+
+    assert!(matches!(
+        publisher
+            .publish(Envelope::new(
+                3003,
+                "order.cancelled",
+                vec![],
+                MessageMetadata::new(3003, None),
+            ))
+            .await,
+        Err(error) if error.code() == ErrorCode::Unavailable
+    ));
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that NatsPublisher rejects AtMostOnce quality of service.
+#[tokio::test]
+async fn nats_publisher_rejects_at_most_once() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("pub_qos_{}", std::process::id());
+
+    let publisher = NatsPublisher::connect(NatsPublisherConfig {
+        server: server.url().into(),
+        stream: format!("CATGA_PUB_QOS_{suffix}").into(),
+        subject: format!("catga.pub.qos.{suffix}").into(),
+    })
+    .await?;
+
+    let result = publisher
+        .publish(Envelope::new(
+            3010,
+            "order.ephemeral",
+            vec![],
+            MessageMetadata::new(3010, None)
+                .with_quality_of_service(QualityOfService::AtMostOnce),
+        ))
+        .await;
+
+    assert!(matches!(result, Err(error) if error.code() == ErrorCode::Unsupported));
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that NatsPublisher supports ExactlyOnce with deduplication.
+#[tokio::test]
+async fn nats_publisher_supports_exactly_once() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("pub_exact_{}", std::process::id());
+
+    let publisher = NatsPublisher::connect(NatsPublisherConfig {
+        server: server.url().into(),
+        stream: format!("CATGA_PUB_EXACT_{suffix}").into(),
+        subject: format!("catga.pub.exact.{suffix}").into(),
+    })
+    .await?;
+
+    let envelope = Envelope::new(
+        3020,
+        "order.exactly.once",
+        vec![1],
+        MessageMetadata::new(3020, None)
+            .with_quality_of_service(QualityOfService::ExactlyOnce),
+    );
+
+    // Publish same envelope twice - second should be deduplicated by broker
+    publisher.publish(envelope.clone()).await?;
+    publisher.publish(envelope).await?;
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+// ============================================================================
+// NATS State Machines E2E Tests
+// ============================================================================
+
+#[tokio::test]
+async fn nats_state_machines_create_and_get() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("sm_{}", std::process::id());
+
+    let store = NatsStateMachines::<String>::connect(&server, format!("CATGA_SM_{suffix}")).await?;
+
+    // Create a new state machine instance
+    let snapshot = catga_core::flow::StateMachineSnapshot::new("order-123", "pending".to_string());
+
+    let created = store.create(snapshot.clone()).await?;
+    assert!(created, "first create should succeed");
+
+    // Try to create again - should fail
+    let duplicate = store.create(snapshot).await?;
+    assert!(!duplicate, "duplicate create should fail");
+
+    // Get the created state
+    let loaded = store.get("order-123").await?;
+    assert!(loaded.is_some());
+    let loaded = loaded.unwrap();
+    assert_eq!(*loaded.state(), "pending");
+    assert_eq!(loaded.version(), 0);
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that NatsStateMachines update uses compare-and-swap semantics.
+#[tokio::test]
+async fn nats_state_machines_cas_update() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("sm_cas_{}", std::process::id());
+
+    let store = NatsStateMachines::<String>::connect(&server, format!("CATGA_SM_CAS_{suffix}")).await?;
+
+    // Create initial state
+    let initial = catga_core::flow::StateMachineSnapshot::new("order-456", "pending".to_string());
+    store.create(initial.clone()).await?;
+
+    // Update with correct version using next_version
+    let updated = initial.next_version("processing".to_string())?;
+    let updated_ok = store.update(0, updated).await?;
+    assert!(updated_ok, "update with correct version should succeed");
+
+    // Try update with wrong version - should fail
+    let wrong_version = catga_core::flow::StateMachineSnapshot::new("order-456", "completed".to_string());
+    let wrong_ok = store.update(0, wrong_version).await?;
+    assert!(!wrong_ok, "update with wrong version should fail");
+
+    // Verify final state
+    let final_state = store.get("order-456").await?.unwrap();
+    assert_eq!(*final_state.state(), "processing");
+    assert_eq!(final_state.version(), 1);
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that NatsStateMachines CAS update fails for non-existent instances.
+#[tokio::test]
+async fn nats_state_machines_update_nonexistent_fails() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("sm_missing_{}", std::process::id());
+
+    let store = NatsStateMachines::<String>::connect(&server, format!("CATGA_SM_MISS_{suffix}")).await?;
+
+    let non_existent = catga_core::flow::StateMachineSnapshot::new("does-not-exist", "pending".to_string());
+
+    let result = store.update(0, non_existent).await?;
+    assert!(!result, "update on non-existent instance should fail");
+
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+// ============================================================================
+// NATS Transport Batch Publishing E2E Tests
+// ============================================================================
+
+/// Verifies that NatsTransport batch publishing works correctly.
+#[tokio::test]
+async fn nats_transport_batch_publish() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("batch_{}", std::process::id());
+
+    let transport = NatsTransport::connect(NatsConfig {
+        server: server.url().into(),
+        stream: format!("CATGA_BATCH_{suffix}").into(),
+        subject: format!("catga.batch.{suffix}").into(),
+        consumer: format!("catga_batch_{suffix}").into(),
+    })
+    .await?;
+
+    transport.initialize().await?;
+
+    let batch: Vec<_> = (0..5)
+        .map(|i| Envelope::new(5000 + i, "order.item", vec![i as u8], MessageMetadata::new(5000 + i, None)))
+        .collect();
+
+    transport.publish_batch(batch.clone()).await?;
+
+    // Receive all messages
+    let mut received = 0;
+    for _ in 0..5 {
+        match tokio::time::timeout(Duration::from_secs(2), transport.receive()).await {
+            Ok(Ok(delivery)) => {
+                transport.ack(delivery).await?;
+                received += 1;
+            }
+            _ => break,
+        }
+    }
+
+    assert_eq!(received, 5);
+
+    transport.stop_accepting();
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that batch publishing respects concurrency limits.
+#[tokio::test]
+async fn nats_transport_batch_publish_with_concurrency() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("batch_concurrent_{}", std::process::id());
+
+    let transport = NatsTransport::connect(NatsConfig {
+        server: server.url().into(),
+        stream: format!("CATGA_BATCH_CONCURRENT_{suffix}").into(),
+        subject: format!("catga.batch.concurrent.{suffix}").into(),
+        consumer: format!("catga_batch_concurrent_{suffix}").into(),
+    })
+    .await?;
+
+    transport.initialize().await?;
+
+    let batch: Vec<_> = (0..10)
+        .map(|i| {
+            Envelope::new(
+                5100 + i,
+                "order.concurrent",
+                vec![i as u8],
+                MessageMetadata::new(5100 + i, None),
+            )
+        })
+        .collect();
+
+    // Publish with limited concurrency
+    transport.publish_batch_with_concurrency(batch, 3).await?;
+
+    // Receive all messages
+    let mut received = 0;
+    for _ in 0..10 {
+        match tokio::time::timeout(Duration::from_secs(2), transport.receive()).await {
+            Ok(Ok(delivery)) => {
+                transport.ack(delivery).await?;
+                received += 1;
+            }
+            _ => break,
+        }
+    }
+
+    assert_eq!(received, 10);
+
+    transport.stop_accepting();
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
+}
+
+/// Verifies that batch publishing with zero concurrency limit is rejected.
+#[tokio::test]
+async fn nats_transport_batch_publish_zero_concurrency_rejected() -> CatgaResult<()> {
+    let server = nats_e2e::server_url().await;
+    let suffix = format!("batch_zero_{}", std::process::id());
+
+    let transport = NatsTransport::connect(NatsConfig {
+        server: server.url().into(),
+        stream: format!("CATGA_BATCH_ZERO_{suffix}").into(),
+        subject: format!("catga.batch.zero.{suffix}").into(),
+        consumer: format!("catga_batch_zero_{suffix}").into(),
+    })
+    .await?;
+
+    transport.initialize().await?;
+
+    let batch = vec![Envelope::new(
+        5200,
+        "order.zero",
+        vec![],
+        MessageMetadata::new(5200, None),
+    )];
+
+    let result = transport.publish_batch_with_concurrency(batch, 0).await;
+    assert!(matches!(result, Err(error) if error.code() == ErrorCode::Validation));
+
+    transport.stop_accepting();
+    server
+        .close()
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    Ok(())
 }

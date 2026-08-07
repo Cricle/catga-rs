@@ -366,3 +366,11 @@ path = "dispatch_table.rs"
 [[test]]
 name = "typed_mediator_bench"
 path = "typed_mediator_bench.rs"
+
+[[test]]
+name = "e2e_axum"
+path = "e2e_axum.rs"
+
+[[test]]
+name = "e2e_cluster"
+path = "e2e_cluster.rs"
