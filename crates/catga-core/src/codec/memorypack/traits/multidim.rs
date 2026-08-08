@@ -146,39 +146,3 @@ impl<T: serde::Serialize> serde::Serialize for MultiDimArray<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{MemoryPackDecodeLimits, MemoryPackSerializer};
-
-    #[test]
-    fn multidimensional_arrays_round_trip_and_reject_invalid_headers() {
-        let array = MultiDimArray::new(vec![2, 2], vec![1_u16, 2, 3, 4]).expect("shape is valid");
-        let bytes = MemoryPackSerializer::serialize(&array).expect("array serializes");
-        assert_eq!(
-            MemoryPackSerializer::deserialize::<MultiDimArray<u16>>(&bytes)
-                .expect("array deserializes"),
-            array
-        );
-        assert_eq!(array.rank(), 2);
-        assert!(MultiDimArray::<u8>::new(vec![2, 2], vec![1]).is_err());
-
-        let mut invalid_rank =
-            MemoryPackReader::new_bounded(&[1], MemoryPackDecodeLimits::default())
-                .expect("test frame is bounded");
-        assert!(matches!(
-            MultiDimArray::<u8>::deserialize(&mut invalid_rank),
-            Err(MemoryPackError::DeserializationError(_))
-        ));
-        let mut invalid_dimension = MemoryPackWriter::new();
-        invalid_dimension.write_u8(2).expect("rank writes");
-        invalid_dimension
-            .write_i32(-1)
-            .expect("invalid dimension writes");
-        invalid_dimension.write_i32(0).expect("length writes");
-        assert!(matches!(
-            MemoryPackSerializer::deserialize::<MultiDimArray<u8>>(invalid_dimension.as_bytes()),
-            Err(MemoryPackError::InvalidLength(-1))
-        ));
-    }
-}

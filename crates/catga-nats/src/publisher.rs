@@ -169,3 +169,4 @@ fn validate_config(config: &NatsPublisherConfig) -> CatgaResult<()> {
     }
     Ok(())
 }
+

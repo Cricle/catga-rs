@@ -714,3 +714,4 @@ const fn publish_mode(quality_of_service: QualityOfService) -> NatsPublishMode {
         QualityOfService::ExactlyOnce => NatsPublishMode::JetStreamDeduplicated,
     }
 }
+

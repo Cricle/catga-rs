@@ -141,7 +141,7 @@ mod compression;
 mod consumer;
 mod correlation;
 pub mod distributed_id;
-mod error;
+pub mod error;
 mod event_store;
 mod event_version;
 mod fault;
@@ -233,7 +233,7 @@ pub use correlation::{
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
 };
-pub use error::{CatgaError, CatgaResult, ErrorCode, MAX_ERROR_DETAILS_BYTES};
+pub use error::{bounded_details, CatgaError, CatgaResult, ErrorCode, MAX_ERROR_DETAILS_BYTES};
 pub use event_store::{
     EventPage, EventStore, EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage,
     VersionHistoryPage, VersionInfo, validate_event_store_page_size,

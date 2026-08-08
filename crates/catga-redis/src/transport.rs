@@ -635,3 +635,4 @@ impl Drop for RecoveryGuard {
 pub(crate) fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
 }
+

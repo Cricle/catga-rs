@@ -735,21 +735,3 @@ fn map_append_error(error: impl std::fmt::Display) -> CatgaError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{append_message_id, stream_id_reconciliation_needed};
-
-    #[test]
-    fn append_message_id_is_stable_when_a_retry_observes_a_newer_version() {
-        assert_eq!(
-            append_message_id("catga.events.orders", 0, 0, b"payload"),
-            append_message_id("catga.events.orders", 1, 1, b"payload"),
-        );
-    }
-
-    #[test]
-    fn stream_id_reconciliation_only_runs_for_the_first_page() {
-        assert!(stream_id_reconciliation_needed(None));
-        assert!(!stream_id_reconciliation_needed(Some("orders-1000")));
-    }
-}

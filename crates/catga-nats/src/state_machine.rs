@@ -182,3 +182,4 @@ fn is_revision_conflict(error: &kv::UpdateError) -> bool {
 fn map_error(error: impl std::fmt::Display) -> CatgaError {
     CatgaError::new(ErrorCode::Transient, error.to_string())
 }
+

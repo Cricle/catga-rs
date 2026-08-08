@@ -169,3 +169,4 @@ fn validate_subject(subject: &str) -> CatgaResult<()> {
     }
     Ok(())
 }
+

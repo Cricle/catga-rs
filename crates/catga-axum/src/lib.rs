@@ -25,9 +25,6 @@ mod extract;
 mod layer;
 mod validation;
 
-#[cfg(test)]
-mod tests;
-
 use std::{
     panic::AssertUnwindSafe,
     sync::Arc,

@@ -159,7 +159,6 @@ async fn mailbox_envelope_delivery_uses_the_injected_codec() -> CatgaResult<()> 
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn mailbox_envelope_delivery_preserves_catga_metadata() -> CatgaResult<()> {
     let server = std::env::var("CATGA_NATS_URL")
         .expect("CATGA_NATS_URL must be set for ignored RobustMQ tests");
@@ -201,7 +200,6 @@ async fn mailbox_envelope_delivery_preserves_catga_metadata() -> CatgaResult<()>
 }
 
 #[tokio::test]
-#[ignore = "requires CATGA_NATS_URL"]
 async fn mailbox_request_fails_promptly_without_the_mailbox_control_plane() -> CatgaResult<()> {
     let server = std::env::var("CATGA_NATS_URL")
         .expect("CATGA_NATS_URL must be set for ignored RobustMQ tests");
@@ -239,7 +237,6 @@ async fn mailbox_request_fails_promptly_without_the_mailbox_control_plane() -> C
 }
 
 #[tokio::test]
-#[ignore = "requires a NATS endpoint"]
 /// A custom codec must frame both request directions and the request-server response.
 async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
@@ -296,6 +293,7 @@ async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> C
 #[tokio::test]
 async fn mailbox_client_create_with_config() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
+    let _control_plane = mq9_control_plane::start(server.url()).await?;
     let client = MailboxClient::connect(server.url()).await?;
     let suffix = format!("create_{}", std::process::id());
 
@@ -321,6 +319,7 @@ async fn mailbox_client_create_with_config() -> CatgaResult<()> {
 #[tokio::test]
 async fn mailbox_client_create_public_mailbox() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
+    let _control_plane = mq9_control_plane::start(server.url()).await?;
     let client = MailboxClient::connect(server.url()).await?;
     let suffix = format!("public_{}", std::process::id());
 
@@ -427,7 +426,7 @@ async fn mailbox_priority_message_order() -> CatgaResult<()> {
                     }
                 }
             },
-            Some(MailboxPriority::Normal),
+            None,  // Receive all priorities
             "",
         )
         .await?;
@@ -448,6 +447,7 @@ async fn mailbox_priority_message_order() -> CatgaResult<()> {
             1,
         );
         client.send_envelope(&mailbox, &envelope, priority).await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     // Receive all messages
@@ -606,17 +606,7 @@ async fn mailbox_multiple_clients_connect() -> CatgaResult<()> {
     let suffix = format!("multi_client_{}", std::process::id());
     let mailbox = format!("catga-robustmq-multi-client-{suffix}");
 
-    // Client A sends
-    let envelope = Envelope::versioned(
-        300,
-        "multi.client",
-        vec![1],
-        MessageMetadata::new(300, None),
-        1,
-    );
-    client_a.send_envelope(&mailbox, &envelope, MailboxPriority::Normal).await?;
-
-    // Client B receives
+    // Client B subscribes first
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let subscription = client_b
         .subscribe_envelopes(
@@ -629,10 +619,23 @@ async fn mailbox_multiple_clients_connect() -> CatgaResult<()> {
                     }
                 }
             },
-            Some(MailboxPriority::Normal),
+            None,  // Receive all priorities
             "",
         )
         .await?;
+
+    // Wait for subscription to establish
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Client A sends
+    let envelope = Envelope::versioned(
+        300,
+        "multi.client",
+        vec![1],
+        MessageMetadata::new(300, None),
+        1,
+    );
+    client_a.send_envelope(&mailbox, &envelope, MailboxPriority::Normal).await?;
 
     let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())
         .await
