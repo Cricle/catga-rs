@@ -59,6 +59,10 @@ done
 command -v cargo >/dev/null || die 'Cargo must be available on PATH'
 command -v cargo-tarpaulin >/dev/null || die 'cargo-tarpaulin must be available on PATH'
 e2e_script="$repository_root/scripts/e2e.sh"
+
+# Build proc-macro dylibs first to ensure rejection tests can run
+cargo build -p catga-memorypack-derive
+
 if [[ "$run_e2e" == true ]]; then
     [[ -x "$e2e_script" || -f "$e2e_script" ]] || die "E2E runner does not exist: $e2e_script"
 fi
