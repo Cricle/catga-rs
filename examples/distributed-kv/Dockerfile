@@ -13,23 +13,32 @@ RUN if [ -n "$CARGO_REGISTRY_SPARSE_MIRROR" ]; then \
          "$CARGO_REGISTRY_SPARSE_MIRROR" > "$CARGO_HOME/config.toml"; \
     fi
 
+# Add MUSL target for static linking
+RUN rustup target add x86_64-unknown-linux-musl
+
 # catga-sorock builds protobuf at compile time: sorock's gRPC build script
 # needs protoc on PATH, and raft-proto's protobuf-build rejects protoc >= 4
 # (and the 2x line). bookworm ships protoc 3.21.x, which satisfies both.
 # libprotobuf-dev carries the well-known type imports (google/protobuf/*.proto)
 # that sorock.proto references; protobuf-compiler alone ships only the binary.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
+    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev upx \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 COPY . .
-RUN cargo build --locked --release -p distributed-kv --bin distributed-kv
 
-FROM debian:bookworm-slim
+# Static build with MUSL (fully static, no libc dependencies)
+RUN cargo build --locked --release \
+    --target x86_64-unknown-linux-musl \
+    -p distributed-kv --bin distributed-kv
 
-# The slim base ships no CA certificates; reqwest(rustls) needs them for client
-# construction even on plain HTTP. Copy the bundle from the build stage (offline-safe).
-COPY --from=build /etc/ssl/certs /etc/ssl/certs
-COPY --from=build /workspace/target/release/distributed-kv /usr/local/bin/distributed-kv
-ENTRYPOINT ["/usr/local/bin/distributed-kv"]
+# UPX compression for even smaller image
+RUN upx --best --ultra-brute /workspace/target/x86_64-unknown-linux-musl/release/distributed-kv
+
+FROM scratch
+
+# Copy the compressed static binary (no SSL certs needed - using rustls)
+COPY --from=build /workspace/target/x86_64-unknown-linux-musl/release/distributed-kv /distributed-kv
+
+ENTRYPOINT ["/distributed-kv"]
