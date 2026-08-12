@@ -47,7 +47,8 @@ fn derive_dylib() -> PathBuf {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or_default();
-            name.starts_with("catga_memorypack_derive-")
+            (name.starts_with("catga_memorypack_derive-")
+                || name.starts_with("libcatga_memorypack_derive-"))
                 && name.ends_with(std::env::consts::DLL_SUFFIX)
         })
         .collect();
