@@ -20,8 +20,9 @@ jobs:
         run: |
           PROTOBUF_VERSION=3.20.3
           curl -sLO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
-          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" bin/protoc -d /usr/local/bin
-          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" 'include/*' -d /usr/local
+          mkdir -p /usr/local/include /usr/local/bin
+          unzip -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" bin/protoc -d /usr/local/bin
+          unzip -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" 'include/*' -d /usr/local/include
           rm "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
       - uses: Swatinem/rust-cache@v2
         with:
@@ -98,8 +99,9 @@ jobs:
         run: |
           PROTOBUF_VERSION=3.20.3
           curl -sLO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
-          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" bin/protoc -d /usr/local/bin
-          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" 'include/*' -d /usr/local
+          mkdir -p /usr/local/include /usr/local/bin
+          unzip -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" bin/protoc -d /usr/local/bin
+          unzip -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" 'include/*' -d /usr/local/include
           rm "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
       - uses: Swatinem/rust-cache@v2
       - run: test -n "$CARGO_REGISTRY_TOKEN"
