@@ -587,8 +587,7 @@ async fn transport_lifecycle_shutdown_drained() {
     let transport = MockTransport::new();
     let lifecycle = TransportLifecycle::new(transport);
 
-    let options =
-        TransportLifecycleOptions::new(Duration::from_secs(1)).expect("valid timeout");
+    let options = TransportLifecycleOptions::new(Duration::from_secs(1)).expect("valid timeout");
     let token = CancellationToken::new();
 
     let result = lifecycle
@@ -604,8 +603,7 @@ async fn transport_lifecycle_shutdown_completes() {
     let lifecycle = TransportLifecycle::new(transport);
 
     // With no pending operations, drain completes immediately
-    let options =
-        TransportLifecycleOptions::new(Duration::from_secs(10)).expect("valid timeout");
+    let options = TransportLifecycleOptions::new(Duration::from_secs(10)).expect("valid timeout");
     let token = CancellationToken::new();
 
     let result = lifecycle
@@ -615,4 +613,3 @@ async fn transport_lifecycle_shutdown_completes() {
     // With no pending operations, should complete as Drained
     assert!(matches!(result, TransportShutdown::Drained));
 }
-

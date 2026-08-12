@@ -57,7 +57,7 @@ done
 [[ "$e2e_jobs" =~ ^[1-9][0-9]*$ ]] || die '--e2e-jobs must be a positive integer'
 
 command -v cargo >/dev/null || die 'Cargo must be available on PATH'
-command -v cargo-llvm-cov >/dev/null || die 'cargo-llvm-cov must be available on PATH'
+command -v cargo-tarpaulin >/dev/null || die 'cargo-tarpaulin must be available on PATH'
 e2e_script="$repository_root/scripts/e2e.sh"
 if [[ "$run_e2e" == true ]]; then
     [[ -x "$e2e_script" || -f "$e2e_script" ]] || die "E2E runner does not exist: $e2e_script"
@@ -74,11 +74,10 @@ fi
 mkdir -p "$output_directory"
 results_path="$output_directory/e2e-results.json"
 rm -f "$results_path"
-run_coverage llvm-cov clean --workspace
-# Integration targets are executed below by the strict E2E matrix. Running them here as well
-# only duplicates process startup and service setup while contributing the same instrumentation.
-run_coverage llvm-cov test --workspace --all-features --no-report
 
+# Run E2E with coverage instrumentation if enabled.
+# Note: tarpaulin measures unit+integration test coverage in one pass below;
+# E2E scenarios remain a pass-rate-only gate (not accumulated into coverage %).
 if [[ "$run_e2e" == true ]]; then
     e2e_arguments=(--profile "$profile" --coverage --jobs "$e2e_jobs" --required-pass-percentage "$required_e2e_pass_percentage"
         --health-timeout-seconds "$health_timeout_seconds" --matrix-path "$matrix_path" --results-path "$results_path")
@@ -90,8 +89,49 @@ if [[ "$run_e2e" == true ]]; then
     ' "$results_path" >/dev/null || die 'E2E result artifact does not satisfy the strict scenario gate'
 fi
 
-run_coverage llvm-cov report --lcov --output-path "$output_directory/lcov.info"
-run_coverage llvm-cov report --json --output-path "$output_directory/coverage.json"
-run_coverage llvm-cov report --html --output-dir "$output_directory/html"
-run_coverage llvm-cov report --fail-under-lines "$required_line_coverage" --fail-under-regions "$required_region_coverage"
+# Tarpaulin is single-invocation: run tests + produce all output formats + apply line coverage gate.
+# --engine llvm    : required on Windows (uses LLVM for instrumentation)
+# --fail-under     : line coverage threshold (maps to required_line_coverage)
+# --exclude-files  : exclude proc-macro crates from coverage metrics
+# --out Lcov       : LCOV format for CI tools (e.g. codecov, coveralls)
+# --out Json       : JSON format for tooling integration
+# --out Html       : HTML report for human review
+#
+# Notes on branch vs region coverage:
+# - tarpaulin's --branch flag is present but NOT IMPLEMENTED (no-op in 0.37.1)
+# - region coverage is a llvm-cov concept; tarpaulin has only line coverage
+# - required_region_coverage is accepted as a flag for backward compatibility but not used
+# - line coverage (--fail-under) is the sole coverage gate
+
+# Primary run: Lcov output + line coverage gate.
+run_coverage tarpaulin run \
+    --workspace \
+    --all-features \
+    --engine llvm \
+    --exclude-files '*/src/macros/proc-macros/*' \
+    --fail-under "$required_line_coverage" \
+    --out Lcov \
+    --output-path "$output_directory/lcov.info"
+
+# Subsequent runs with --skip-clean to reuse compiled artifacts.
+# Json output.
+run_coverage tarpaulin run \
+    --workspace \
+    --all-features \
+    --engine llvm \
+    --exclude-files '*/src/macros/proc-macros/*' \
+    --out Json \
+    --output-path "$output_directory/coverage.json" \
+    --skip-clean
+
+# Html output.
+run_coverage tarpaulin run \
+    --workspace \
+    --all-features \
+    --engine llvm \
+    --exclude-files '*/src/macros/proc-macros/*' \
+    --out Html \
+    --output-dir "$output_directory/html" \
+    --skip-clean
+
 printf 'Strict coverage gate passed; artifacts: %s\n' "$output_directory"

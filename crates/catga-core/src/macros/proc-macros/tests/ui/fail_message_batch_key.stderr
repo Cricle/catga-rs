@@ -1,0 +1,35 @@
+error: duplicate Catga batch key field
+ --> tests/ui/fail_message_batch_key.rs:4:26
+  |
+4 | #[catga(batch_key = "a", batch_key = "b")]
+  |                          ^^^^^^^^^^^^^^^
+
+error: Catga batch key must be a string field name
+  --> tests/ui/fail_message_batch_key.rs:11:9
+   |
+11 | #[catga(batch_key = 1)]
+   |         ^^^^^^^^^^^^^
+
+error: Catga batch key field must not be empty
+  --> tests/ui/fail_message_batch_key.rs:17:21
+   |
+17 | #[catga(batch_key = "")]
+   |                     ^^
+
+error: Catga batch key can only be declared on a struct with named fields
+  --> tests/ui/fail_message_batch_key.rs:24:6
+   |
+24 | enum BatchKeyOnEnum {
+   |      ^^^^^^^^^^^^^^
+
+error: Catga batch key can only reference a named struct field
+  --> tests/ui/fail_message_batch_key.rs:30:8
+   |
+30 | struct BatchKeyOnTupleStruct(u64);
+   |        ^^^^^^^^^^^^^^^^^^^^^
+
+error: Catga batch key field does not exist
+  --> tests/ui/fail_message_batch_key.rs:33:21
+   |
+33 | #[catga(batch_key = "missing")]
+   |                     ^^^^^^^^^

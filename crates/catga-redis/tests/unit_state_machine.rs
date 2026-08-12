@@ -1,7 +1,5 @@
 //! Unit tests for state-machine helper functions.
 
-use catga_core::CatgaError;
-
 const MAX_CAS_RETRIES: usize = 8;
 
 const COMPARE_AND_SET: &str = r#"
@@ -23,20 +21,26 @@ fn max_cas_retries_value() {
 
 #[test]
 fn max_cas_retries_reasonable() {
-    assert!(MAX_CAS_RETRIES > 0);
-    assert!(MAX_CAS_RETRIES <= 32);
+    const { assert!(MAX_CAS_RETRIES > 0) };
+    const { assert!(MAX_CAS_RETRIES <= 32) };
 }
 
 #[test]
 fn compare_and_set_script_checks_equality() {
     assert!(COMPARE_AND_SET.contains("GET"), "should GET current value");
-    assert!(COMPARE_AND_SET.contains("== ARGV[1]"), "should compare with expected");
+    assert!(
+        COMPARE_AND_SET.contains("== ARGV[1]"),
+        "should compare with expected"
+    );
 }
 
 #[test]
 fn compare_and_set_script_sets_on_match() {
     assert!(COMPARE_AND_SET.contains("SET"), "should SET new value");
-    assert!(COMPARE_AND_SET.contains("ARGV[2]"), "should use new value arg");
+    assert!(
+        COMPARE_AND_SET.contains("ARGV[2]"),
+        "should use new value arg"
+    );
 }
 
 #[test]

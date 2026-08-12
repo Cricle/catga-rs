@@ -145,4 +145,3 @@ impl<T: serde::Serialize> serde::Serialize for MultiDimArray<T> {
         state.end()
     }
 }
-

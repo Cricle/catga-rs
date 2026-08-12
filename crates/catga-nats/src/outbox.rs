@@ -24,12 +24,28 @@ pub struct NatsOutbox {
 }
 impl NatsOutbox {
     /// Connects and provisions a one-history KV bucket for outbox messages.
+    ///
+    /// A one-history KV bucket keeps only the latest state of each outbox message.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsOutbox;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let outbox = NatsOutbox::connect("nats://127.0.0.1:4222", "app-outbox").await?;
+    /// # drop(outbox);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             store,
             codec: MemoryPackCodec::default(),
@@ -41,7 +57,11 @@ impl NatsOutbox {
 
     async fn entry_for_id(&self, id: u64) -> CatgaResult<Option<(String, kv::Entry)>> {
         let modern_key = Self::key(id);
-        if let Some(entry) = self.store.entry(&modern_key).await.map_err(map_error)?
+        if let Some(entry) = self
+            .store
+            .entry(&modern_key)
+            .await
+            .map_err(CatgaError::transient)?
             && !matches!(
                 entry.operation,
                 kv::Operation::Delete | kv::Operation::Purge
@@ -50,12 +70,17 @@ impl NatsOutbox {
             return Ok(Some((modern_key, entry)));
         }
 
-        let mut keys = self.store.keys().await.map_err(map_error)?;
-        while let Some(key) = keys.try_next().await.map_err(map_error)? {
+        let mut keys = self.store.keys().await.map_err(CatgaError::transient)?;
+        while let Some(key) = keys.try_next().await.map_err(CatgaError::transient)? {
             if key == modern_key {
                 continue;
             }
-            let Some(entry) = self.store.entry(&key).await.map_err(map_error)? else {
+            let Some(entry) = self
+                .store
+                .entry(&key)
+                .await
+                .map_err(CatgaError::transient)?
+            else {
                 continue;
             };
             if matches!(
@@ -115,10 +140,15 @@ impl OutboxStore for NatsOutbox {
             let now_unix_ms = current_unix_ms()?;
             // JetStream KV has no ordered range query. Stream the server-side key listing instead
             // of materializing it, retaining only the earliest `limit` eligible keys locally.
-            let mut keys = self.store.keys().await.map_err(map_error)?;
+            let mut keys = self.store.keys().await.map_err(CatgaError::transient)?;
             let mut candidates = BinaryHeap::with_capacity(limit);
-            while let Some(key) = keys.try_next().await.map_err(map_error)? {
-                let Some(entry) = self.store.entry(&key).await.map_err(map_error)? else {
+            while let Some(key) = keys.try_next().await.map_err(CatgaError::transient)? {
+                let Some(entry) = self
+                    .store
+                    .entry(&key)
+                    .await
+                    .map_err(CatgaError::transient)?
+                else {
                     continue;
                 };
                 let record = decode(&self.codec, &entry.value)?;
@@ -137,7 +167,12 @@ impl OutboxStore for NatsOutbox {
             let candidates = candidates.into_sorted_vec();
             let mut claimed = Vec::with_capacity(candidates.len());
             for key in candidates {
-                let Some(entry) = self.store.entry(&key).await.map_err(map_error)? else {
+                let Some(entry) = self
+                    .store
+                    .entry(&key)
+                    .await
+                    .map_err(CatgaError::transient)?
+                else {
                     continue;
                 };
                 let record = decode(&self.codec, &entry.value)?;
@@ -153,7 +188,7 @@ impl OutboxStore for NatsOutbox {
                 match self.store.update(&key, next.into(), entry.revision).await {
                     Ok(_) => claimed.push(message),
                     Err(error) if is_revision_conflict(&error) => {}
-                    Err(error) => return Err(map_error(error)),
+                    Err(error) => return Err(CatgaError::transient(error)),
                 }
             }
             Ok(claimed)
@@ -178,7 +213,7 @@ impl OutboxStore for NatsOutbox {
                         entry.revision,
                     )
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
             }
             Ok(())
         })
@@ -202,7 +237,7 @@ impl OutboxStore for NatsOutbox {
                         entry.revision,
                     )
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
             }
             Ok(())
         })
@@ -237,7 +272,7 @@ impl OutboxStore for NatsOutbox {
                     entry.revision,
                 )
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             Ok(())
         })
         .await
@@ -273,10 +308,15 @@ impl OutboxStore for NatsOutbox {
             if limit == 0 {
                 return Ok(Vec::new());
             }
-            let mut keys = self.store.keys().await.map_err(map_error)?;
+            let mut keys = self.store.keys().await.map_err(CatgaError::transient)?;
             let mut published = Vec::with_capacity(limit);
-            while let Some(key) = keys.try_next().await.map_err(map_error)? {
-                let Some(entry) = self.store.entry(&key).await.map_err(map_error)? else {
+            while let Some(key) = keys.try_next().await.map_err(CatgaError::transient)? {
+                let Some(entry) = self
+                    .store
+                    .entry(&key)
+                    .await
+                    .map_err(CatgaError::transient)?
+                else {
                     continue;
                 };
                 let mut record = decode(&self.codec, &entry.value)?;
@@ -312,15 +352,20 @@ impl OutboxStore for NatsOutbox {
                 )
             })?;
             let now = current_unix_ms()?;
-            let mut keys = self.store.keys().await.map_err(map_error)?;
+            let mut keys = self.store.keys().await.map_err(CatgaError::transient)?;
             let mut inspected = 0;
             let mut removed = 0;
             while inspected < limit {
-                let Some(key) = keys.try_next().await.map_err(map_error)? else {
+                let Some(key) = keys.try_next().await.map_err(CatgaError::transient)? else {
                     break;
                 };
                 inspected += 1;
-                let Some(entry) = self.store.entry(&key).await.map_err(map_error)? else {
+                let Some(entry) = self
+                    .store
+                    .entry(&key)
+                    .await
+                    .map_err(CatgaError::transient)?
+                else {
                     continue;
                 };
                 let mut record = decode(&self.codec, &entry.value)?;
@@ -676,10 +721,6 @@ fn decode_legacy(codec: &MemoryPackCodec, value: &[u8]) -> CatgaResult<StoredRec
         message,
     })
 }
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-
 fn current_unix_ms() -> CatgaResult<u64> {
     system_time_unix_ms(SystemTime::now())
 }

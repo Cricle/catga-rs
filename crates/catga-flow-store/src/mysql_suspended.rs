@@ -26,4 +26,4 @@ pub(crate) async fn migrate(pool: &MySqlPool) -> catga_core::CatgaResult<()> {
     Ok(())
 }
 
-define_server_suspended!(MySqlPool, false, "MySQL");
+define_server_suspended!(MySqlPool, false, false, "MySQL");

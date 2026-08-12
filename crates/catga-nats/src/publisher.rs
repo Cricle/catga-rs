@@ -26,6 +26,24 @@ where
 
 impl NatsPublisher<MemoryPackCodec> {
     /// Connects and idempotently provisions only the configured JetStream stream.
+    ///
+    /// Use this publish-only handle when the process never consumes: it creates no
+    /// durable consumer, only the retaining stream.
+    ///
+    /// ```no_run
+    /// use catga_nats::{NatsPublisher, NatsPublisherConfig};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let config = NatsPublisherConfig {
+    ///     server: "nats://127.0.0.1:4222".into(),
+    ///     stream: "orders".into(),
+    ///     subject: "orders.created".into(),
+    /// };
+    /// let publisher = NatsPublisher::connect(config).await?;
+    /// # drop(publisher);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(config: NatsPublisherConfig) -> CatgaResult<Self> {
         Self::connect_with_codec(config, MemoryPackCodec::default()).await
     }
@@ -48,7 +66,7 @@ where
         validate_config(&config)?;
         let client = async_nats::connect(config.server.as_ref())
             .await
-            .map_err(transport::map_error)?;
+            .map_err(CatgaError::transient)?;
         Self::from_client_with_codec(client, config, codec).await
     }
 
@@ -67,7 +85,7 @@ where
                 ..Default::default()
             })
             .await
-            .map_err(transport::map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             context,
             subject: config.subject,
@@ -92,9 +110,9 @@ where
                         transport::encode_envelope(&self.codec, &envelope)?.into(),
                     )
                     .await
-                    .map_err(transport::map_error)?
+                    .map_err(CatgaError::transient)?
                     .await
-                    .map_err(transport::map_error)
+                    .map_err(CatgaError::transient)
                     .map(|_| ()),
                 QualityOfService::ExactlyOnce => {
                     let acknowledgement = self
@@ -106,9 +124,9 @@ where
                                 .message_id(envelope.metadata().message_id().to_string()),
                         )
                         .await
-                        .map_err(transport::map_error)?
+                        .map_err(CatgaError::transient)?
                         .await
-                        .map_err(transport::map_error)?;
+                        .map_err(CatgaError::transient)?;
                     transport::record_broker_duplicate(acknowledgement.duplicate);
                     Ok(())
                 }
@@ -169,4 +187,3 @@ fn validate_config(config: &NatsPublisherConfig) -> CatgaResult<()> {
     }
     Ok(())
 }
-

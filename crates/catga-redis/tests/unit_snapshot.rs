@@ -130,9 +130,11 @@ fn snapshot_unix_millis_before_epoch() {
 
 #[test]
 fn snapshot_unix_millis_large_time() {
-    let time = UNIX_EPOCH + Duration::from_millis(u64::MAX);
+    // 8e14 ms (~year 27,000) is the portable ceiling; u64::MAX ms overflows the
+    // Windows SystemTime range and panics inside `+`.
+    let time = UNIX_EPOCH + Duration::from_millis(800_000_000_000_000);
     let result = unix_millis(time);
-    assert_eq!(result, u64::MAX);
+    assert_eq!(result, 800_000_000_000_000);
 }
 
 // ==================== from_unix_millis tests ====================
@@ -162,11 +164,11 @@ fn snapshot_from_unix_millis_roundtrip() {
     let restored = from_unix_millis(millis);
     assert_eq!(original, restored);
 }
-
 #[test]
-fn snapshot_from_unix_millis_max() {
-    let result = from_unix_millis(u64::MAX);
-    assert_eq!(result, UNIX_EPOCH + Duration::from_millis(u64::MAX));
+fn snapshot_from_unix_millis_large_portable_value() {
+    let millis = 800_000_000_000_000_u64;
+    let result = from_unix_millis(millis);
+    assert_eq!(result, UNIX_EPOCH + Duration::from_millis(millis));
 }
 
 // ==================== map_save_error tests ====================
@@ -210,28 +212,28 @@ fn snapshot_map_save_error_connection_error() {
 fn version_member_zero() {
     // Version 0 XOR with (1 << 63) gives us the sign bit flipped
     let result = version_member(0);
-    let parsed = parse_version_member(&result).unwrap();
+    let parsed = parse_version_member(&result).expect("test value must be present");
     assert_eq!(parsed, 0);
 }
 
 #[test]
 fn version_member_positive() {
     let result = version_member(42);
-    let parsed = parse_version_member(&result).unwrap();
+    let parsed = parse_version_member(&result).expect("test value must be present");
     assert_eq!(parsed, 42);
 }
 
 #[test]
 fn version_member_negative() {
     let result = version_member(-1);
-    let parsed = parse_version_member(&result).unwrap();
+    let parsed = parse_version_member(&result).expect("test value must be present");
     assert_eq!(parsed, -1);
 }
 
 #[test]
 fn version_member_large() {
     let result = version_member(i64::MAX);
-    let parsed = parse_version_member(&result).unwrap();
+    let parsed = parse_version_member(&result).expect("test value must be present");
     assert_eq!(parsed, i64::MAX);
 }
 
@@ -247,7 +249,7 @@ fn version_member_roundtrip() {
     let versions = [0, 1, 42, -1, i64::MAX, i64::MIN];
     for version in versions {
         let encoded = version_member(version);
-        let decoded = parse_version_member(&encoded).unwrap();
+        let decoded = parse_version_member(&encoded).expect("test value must be present");
         assert_eq!(decoded, version, "roundtrip failed for {}", version);
     }
 }
@@ -271,7 +273,7 @@ fn parse_version_member_invalid_length() {
 fn enhanced_unix_millis_at_epoch() {
     let result = enhanced_unix_millis(UNIX_EPOCH);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 0);
+    assert_eq!(result.expect("test value must be present"), 0);
 }
 
 #[test]
@@ -279,7 +281,7 @@ fn enhanced_unix_millis_after_epoch() {
     let time = UNIX_EPOCH + Duration::from_secs(3600);
     let result = enhanced_unix_millis(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 3600000);
+    assert_eq!(result.expect("test value must be present"), 3600000);
 }
 
 #[test]
@@ -287,7 +289,7 @@ fn enhanced_unix_millis_before_epoch() {
     let before = UNIX_EPOCH - Duration::from_secs(3600);
     let result = enhanced_unix_millis(before);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), -3600000);
+    assert_eq!(result.expect("test value must be present"), -3600000);
 }
 
 #[test]
@@ -295,7 +297,7 @@ fn enhanced_unix_millis_negative_boundary() {
     let time = UNIX_EPOCH - Duration::from_millis(1);
     let result = enhanced_unix_millis(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), -1);
+    assert_eq!(result.expect("test value must be present"), -1);
 }
 
 // ==================== enhanced_from_unix_millis tests ====================
@@ -304,35 +306,41 @@ fn enhanced_unix_millis_negative_boundary() {
 fn enhanced_from_unix_millis_zero() {
     let result = enhanced_from_unix_millis(0);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), UNIX_EPOCH);
+    assert_eq!(result.expect("test value must be present"), UNIX_EPOCH);
 }
 
 #[test]
 fn enhanced_from_unix_millis_positive() {
     let result = enhanced_from_unix_millis(3600000);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), UNIX_EPOCH + Duration::from_secs(3600));
+    assert_eq!(
+        result.expect("test value must be present"),
+        UNIX_EPOCH + Duration::from_secs(3600)
+    );
 }
 
 #[test]
 fn enhanced_from_unix_millis_negative() {
     let result = enhanced_from_unix_millis(-3600000);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), UNIX_EPOCH - Duration::from_secs(3600));
+    assert_eq!(
+        result.expect("test value must be present"),
+        UNIX_EPOCH - Duration::from_secs(3600)
+    );
 }
 
 #[test]
 fn enhanced_from_unix_millis_roundtrip_positive() {
     let original = UNIX_EPOCH + Duration::from_secs(100000);
-    let millis = enhanced_unix_millis(original).unwrap();
-    let restored = enhanced_from_unix_millis(millis).unwrap();
+    let millis = enhanced_unix_millis(original).expect("test value must be present");
+    let restored = enhanced_from_unix_millis(millis).expect("test value must be present");
     assert_eq!(original, restored);
 }
 
 #[test]
 fn enhanced_from_unix_millis_roundtrip_negative() {
     let original = UNIX_EPOCH - Duration::from_secs(100000);
-    let millis = enhanced_unix_millis(original).unwrap();
-    let restored = enhanced_from_unix_millis(millis).unwrap();
+    let millis = enhanced_unix_millis(original).expect("test value must be present");
+    let restored = enhanced_from_unix_millis(millis).expect("test value must be present");
     assert_eq!(original, restored);
 }

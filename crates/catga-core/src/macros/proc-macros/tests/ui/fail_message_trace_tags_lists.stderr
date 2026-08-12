@@ -1,0 +1,35 @@
+error: Catga bulk trace tag include must be declared at most once
+ --> tests/ui/fail_message_trace_tags_lists.rs:4:37
+  |
+4 | #[catga(trace_tags(include = ["a"], include = ["b"]))]
+  |                                     ^^^^^^^^^^^^^^^
+
+error: Catga bulk trace tag exclude must be declared at most once
+  --> tests/ui/fail_message_trace_tags_lists.rs:10:37
+   |
+10 | #[catga(trace_tags(exclude = ["a"], exclude = ["b"]))]
+   |                                     ^^^^^^^^^^^^^^^
+
+error: Catga bulk trace tag include must be a string array
+  --> tests/ui/fail_message_trace_tags_lists.rs:16:30
+   |
+16 | #[catga(trace_tags(include = "a"))]
+   |                              ^^^
+
+error: Catga bulk trace tag exclude must be a string array
+  --> tests/ui/fail_message_trace_tags_lists.rs:22:30
+   |
+22 | #[catga(trace_tags(exclude = "a"))]
+   |                              ^^^
+
+error: Catga bulk trace tag include entries must be strings
+  --> tests/ui/fail_message_trace_tags_lists.rs:28:31
+   |
+28 | #[catga(trace_tags(include = [1]))]
+   |                               ^
+
+error: Catga bulk trace tag include entries must not be empty
+  --> tests/ui/fail_message_trace_tags_lists.rs:34:31
+   |
+34 | #[catga(trace_tags(include = [""]))]
+   |                               ^^

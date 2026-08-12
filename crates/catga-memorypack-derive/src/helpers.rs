@@ -261,4 +261,3 @@ pub fn generate_field_deserialize(
 
     quote! { let #name = MemoryPackDeserialize::deserialize(reader)?; }
 }
-

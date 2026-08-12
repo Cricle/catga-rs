@@ -1,6 +1,6 @@
 //! Unit tests for dead_letter module helper functions.
 
-use catga_core::{ErrorCode, DeadLetter, DeadLetterDiagnostics};
+use catga_core::{DeadLetter, DeadLetterDiagnostics};
 
 /// Replicated key construction functions for testing.
 fn sequence_key(prefix: &str) -> String {
@@ -175,22 +175,15 @@ fn dead_letter_diagnostics_try_at_valid() {
 
 #[test]
 fn dead_letter_diagnostics_try_at_empty_stage() {
-    let result = DeadLetterDiagnostics::try_at(
-        1700000000000,
-        catga_core::ErrorCode::Internal,
-        "",
-    );
+    let result = DeadLetterDiagnostics::try_at(1700000000000, catga_core::ErrorCode::Internal, "");
     // Empty stage is invalid
     assert!(result.is_err());
 }
 
 #[test]
 fn dead_letter_diagnostics_try_at_whitespace_stage() {
-    let result = DeadLetterDiagnostics::try_at(
-        1700000000000,
-        catga_core::ErrorCode::Internal,
-        "   ",
-    );
+    let result =
+        DeadLetterDiagnostics::try_at(1700000000000, catga_core::ErrorCode::Internal, "   ");
     // Whitespace-only stage is invalid (only ASCII alphanumeric, dot, underscore, hyphen allowed)
     assert!(result.is_err());
 }
@@ -203,10 +196,7 @@ fn dead_letter_diagnostics_try_at_whitespace_stage() {
 fn dead_letter_new_requires_envelope() {
     use catga_core::Envelope;
     use catga_core::MessageMetadata;
-    use catga_core::EnvelopeCodec;
-    use catga_core::codec::memorypack::MemoryPackCodec;
 
-    let codec = MemoryPackCodec::default();
     let metadata = MessageMetadata::new(1, None);
     let envelope = Envelope::new(1, "test.type", vec![1, 2, 3], metadata);
 
@@ -219,10 +209,7 @@ fn dead_letter_new_requires_envelope() {
 fn dead_letter_with_diagnostics() {
     use catga_core::Envelope;
     use catga_core::MessageMetadata;
-    use catga_core::EnvelopeCodec;
-    use catga_core::codec::memorypack::MemoryPackCodec;
 
-    let codec = MemoryPackCodec::default();
     let metadata = MessageMetadata::new(1, None);
     let envelope = Envelope::new(1, "test.type", vec![], metadata);
 
@@ -230,14 +217,10 @@ fn dead_letter_with_diagnostics() {
         1700000000000,
         catga_core::ErrorCode::Transient,
         "processing",
-    ).unwrap();
+    )
+    .expect("test value must be present");
 
-    let letter = DeadLetter::try_with_diagnostics(
-        envelope,
-        "connection lost",
-        5,
-        diagnostics,
-    );
+    let letter = DeadLetter::try_with_diagnostics(envelope, "connection lost", 5, diagnostics);
 
     // try_with_diagnostics may fail due to validation, but that's expected
     // This test verifies the API is callable

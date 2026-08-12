@@ -3,10 +3,8 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, LeaseStore, telemetry};
+use catga_core::{CatgaError, CatgaResult, LeaseStore, telemetry};
 use redis::{Script, aio::ConnectionManager};
-
-use crate::transport::map_error;
 
 const ACQUIRE: &str = "local current=redis.call('GET',KEYS[1]); if not current then return redis.call('SET',KEYS[1],ARGV[1],'PX',ARGV[2],'NX') and 1 or 0 end; if current==ARGV[1] then return redis.call('PEXPIRE',KEYS[1],ARGV[2]) end; return 0";
 const RENEW: &str = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('PEXPIRE',KEYS[1],ARGV[2]) end; return 0";
@@ -21,15 +19,28 @@ pub struct RedisLeases {
 
 impl RedisLeases {
     /// Connects to Redis and prefixes every lease resource key.
+    ///
+    /// Acquire, renew, and release are server-side conditional mutations, which keeps lease
+    /// ownership decisions atomic across failover.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisLeases;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let leases = RedisLeases::connect("redis://127.0.0.1/", "app.leases").await?;
+    /// # drop(leases);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -53,7 +64,7 @@ impl RedisLeases {
         let result: i32 = invocation
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(result != 0)
     }
 }

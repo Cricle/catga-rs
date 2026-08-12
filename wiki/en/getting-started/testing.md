@@ -1,28 +1,26 @@
 # Testing Guide
 
-## catga-testing
+## `catga_core::testing`
 
-The testing utility library provides mocking and assertion capabilities.
+The testing utilities (spies, capture, harness, assertions) ship with catga-core in the `catga_core::testing` module — no extra crate required.
 
 ## HandlerSpy
 
-Intercept messages for testing:
+Wraps a request handler and records every call for assertions:
 
 ```rust
-use catga_core::Message;
-use catga_testing::HandlerSpy;
+use catga_core::testing::HandlerSpy;
+use catga_core::Handler;
 
-let spy = HandlerSpy::<Ping>::default();
+// Wrap a real handler; or use HandlerSpy::with_action(|msg: Ping| async move { ... }) to skip declaring a handler type
+let spy = HandlerSpy::new(PingHandler);
 
-// Mock handler
-let handler = spy.as_handler();
-
-// Send message
-handler.handle(Ping).await?;
+// The spy is itself a Handler: register or call it as usual
+spy.handle(Ping).await?;
 
 // Assert
-assert_eq!(spy.count(), 1);
-assert_eq!(spy.get(0), Some(&Ping));
+assert_eq!(spy.call_count(), 1);
+assert_eq!(spy.last_call(), Some(Ping));
 ```
 
 ## EventHandlerSpy
@@ -30,81 +28,83 @@ assert_eq!(spy.get(0), Some(&Ping));
 Event handler testing:
 
 ```rust
-use catga_testing::EventHandlerSpy;
+use catga_core::testing::EventHandlerSpy;
+use catga_core::EventHandler;
 
-let spy = EventHandlerSpy::<UserCreated>::new();
+let spy = EventHandlerSpy::<UserCreated>::new();        // Records only, no side effects
+// or EventHandlerSpy::with_handler(real_projection)    records then delegates to the real handler
 
-let projection = spy.delegating_handler(real_projection);
+spy.handle(UserCreated { id: "1".into() }).await?;
 
-projection.handle(UserCreated { id: "1".into() }).await?;
-
-// Verify event was handled
-assert!(spy.contains(&UserCreated { id: "1".into() }));
+// Verify the event was handled
+assert_eq!(spy.call_count(), 1);
 ```
 
 ## FlowTestContext
 
-Flow workflow testing:
+In-memory dependencies for durable Flow runtime tests (isolated suspended-flow store + deterministic scheduler):
 
 ```rust
-use catga_flow_testing::FlowTestContext;
+use catga_core::testing::FlowTestContext;
 
 let ctx = FlowTestContext::new();
-let flow = TestFlow::new(&ctx);
 
-// Trigger event
-flow.trigger(CreateOrder { items: vec![] }).await?;
-
-// Assert state
-assert_eq!(flow.state(), TestFlow::Processing);
+// Clone out and construct the FlowRuntime under test directly
+let suspended = ctx.suspended_flows();  // Arc<MemorySuspendedFlows>
+let scheduler = ctx.scheduler();        // Arc<MemoryFlowScheduler>
 ```
 
 ## Integration Tests
 
-```rust
-#[tokio::test]
-async fn test_order_workflow() {
-    // Initialize test environment
-    let store = InMemoryEventStore::new();
-    let transport = MemoryTransport::new();
+`CatgaTestHarness` builds a typed, in-process test environment: registration stays separate from execution, and messages are captured automatically:
 
-    let app = AutoApp::builder()
-        .with_store(store.clone())
-        .with_transport(transport.clone())
-        .handler(order_handler)?
-        .build()?;
+```rust
+use catga_core::testing::CatgaTestHarness;
+use catga_core::CatgaResult;
+
+#[tokio::test]
+async fn test_order_workflow() -> CatgaResult<()> {
+    let mut harness = CatgaTestHarness::new()?;
+    harness.register_captured_request::<CreateOrder, _>(CreateOrderHandler)?;
+    harness.capture_event::<OrderCreated>(); // Captures every publication (no application handler required)
+
+    let running = harness.start();
 
     // Execute command
-    app.handle()
-        .send_command(CreateOrder { items: vec![item] })
-        .await?;
+    running.mediator().send(CreateOrder { /* ... */ }).await?;
 
-    // Verify result
-    let order = store.find::<Order>("order-1").await?;
-    assert_eq!(order.status(), OrderStatus::Created);
+    // Assert captured messages
+    assert_eq!(running.consumed_of::<CreateOrder>().len(), 1);
+    assert_eq!(running.published_of::<OrderCreated>().len(), 1);
+
+    Ok(())
 }
 ```
 
-## Mock Messages
+## Message Capture
+
+`MessageCapture` is a concurrently safe message recorder for custom assertions:
 
 ```rust
-use catga_testing::MockMessage;
+use catga_core::testing::MessageCapture;
 
-let msg = MockMessage::<UserCreated>::new()
-    .with_id("test-id")
-    .withcorrelation_id("corr-id");
+let capture = MessageCapture::<UserCreated>::default();
 
-assert_eq!(msg.id(), "test-id");
+capture.record_published(UserCreated { id: "1".into() });
+
+assert_eq!(capture.published().len(), 1);
+assert!(capture.consumed().is_empty());
+capture.clear();
 ```
 
 ## Assertion Helpers
 
+`assert_success` / `assert_failure` / `assert_value` / `assert_error_code` are plain functions (not macros):
+
 ```rust
-use catga_testing::{assert_success, assert_failure, assert_error_code};
+use catga_core::testing::{assert_error_code, assert_success};
+use catga_core::ErrorCode;
 
-let result = handler.handle(msg).await?;
-
-assert_success!(result);
-assert_failure!(result, ErrorCode::Validation);
-assert_error_code!(result, ErrorCode::Conflict);
+let value = assert_success(handler.handle(msg).await);                          // Success: returns T
+let err = assert_error_code(handler.handle(msg).await, ErrorCode::Conflict);    // Failure with matching code: returns CatgaError
 ```

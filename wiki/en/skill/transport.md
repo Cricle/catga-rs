@@ -35,12 +35,12 @@ let envelope = Envelope::new(
 - Backends that don't support nack return `ErrorCode::Unsupported` instead of silently dropping messages.
 - `Delivery::attempts()` reads the backend's delivery attempt count.
 
-## Memory Transport (`catga-memory`)
+## Memory Transport (`catga_core::memory`)
 
 For local composition and deterministic testing, capacity is bounded:
 
 ```rust,ignore
-use catga_memory::MemoryTransport;
+use catga_core::memory::MemoryTransport;
 
 let transport = MemoryTransport::new(16)?;              // Bounded capacity
 transport.publish(envelope).await?;

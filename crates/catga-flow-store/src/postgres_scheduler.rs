@@ -15,6 +15,7 @@ define_server_scheduler!(
     sqlx::PgPool,
     sqlx::postgres::PgRow,
     true,
+    false,
     "PostgreSQL",
     "CREATE TABLE IF NOT EXISTS catga_flow_schedules (\
        schedule_id TEXT PRIMARY KEY NOT NULL, target_key BYTEA NOT NULL UNIQUE, \

@@ -72,6 +72,25 @@ enum NatsPublishMode {
 
 impl NatsTransport<MemoryPackCodec> {
     /// Connects and idempotently provisions the configured stream and default durable consumer.
+    ///
+    /// Construction performs no polling; deliveries are pulled explicitly by the caller,
+    /// and the durable consumer retains redelivery state across restarts.
+    ///
+    /// ```no_run
+    /// use catga_nats::{NatsConfig, NatsTransport};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let config = NatsConfig {
+    ///     server: "nats://127.0.0.1:4222".into(),
+    ///     stream: "orders".into(),
+    ///     subject: "orders.created".into(),
+    ///     consumer: "orders-worker".into(),
+    /// };
+    /// let transport = NatsTransport::connect(config).await?;
+    /// # drop(transport);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(config: NatsConfig) -> CatgaResult<Self> {
         Self::connect_with_options(config, NatsTransportOptions::default()).await
     }
@@ -209,7 +228,7 @@ where
         validate_config(&config)?;
         let client = async_nats::connect(config.server.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Self::from_client_with_codec_and_options(client, config, codec, options).await
     }
 
@@ -304,7 +323,7 @@ where
                 ..Default::default()
             })
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let consumer = provision_consumer(
             &stream,
             config.subject.as_ref(),
@@ -350,7 +369,7 @@ where
                 ..Default::default()
             })
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let consumer = stream
             .get_or_create_consumer(
                 config.consumer.as_ref(),
@@ -362,7 +381,7 @@ where
                 },
             )
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let resource = NatsDestination {
             subject: config.subject,
             consumer,
@@ -401,18 +420,18 @@ where
                         .message_id(envelope.metadata().message_id().to_string()),
                 )
                 .await
-                .map_err(map_error)?
+                .map_err(CatgaError::transient)?
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             record_broker_duplicate(acknowledgement.duplicate);
             Ok(())
         } else {
             self.context
                 .publish(subject.to_owned(), payload.into())
                 .await
-                .map_err(map_error)?
+                .map_err(CatgaError::transient)?
                 .await
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
                 .map(|_| ())
         }
     }
@@ -432,7 +451,7 @@ where
                         .expires(Duration::from_secs(30))
                         .messages()
                         .await
-                        .map_err(map_error)?,
+                        .map_err(CatgaError::transient)?,
                 );
             }
             let Some(active_batch) = batch.as_mut() else {
@@ -442,7 +461,7 @@ where
                 *batch = None;
                 continue;
             };
-            let message = message.map_err(map_error)?;
+            let message = message.map_err(CatgaError::transient)?;
             let envelope = decode_envelope(&self.codec, &message.payload)?;
             // JetStream embeds delivery metadata in the acknowledgement subject. `info` parses
             // that borrowed subject without allocating, so capture it before moving `message`
@@ -490,9 +509,9 @@ where
                             encode_envelope(&self.codec, &envelope)?.into(),
                         )
                         .await
-                        .map_err(map_error)?
+                        .map_err(CatgaError::transient)?
                         .await
-                        .map_err(map_error)
+                        .map_err(CatgaError::transient)
                         .map(|_| ())
                 })
                 .await
@@ -509,9 +528,9 @@ where
                                 .message_id(envelope.metadata().message_id().to_string()),
                         )
                         .await
-                        .map_err(map_error)?
+                        .map_err(CatgaError::transient)?
                         .await
-                        .map_err(map_error)?;
+                        .map_err(CatgaError::transient)?;
                     record_broker_duplicate(acknowledgement.duplicate);
                     Ok(())
                 })
@@ -623,10 +642,6 @@ where
     }
 }
 
-pub(crate) fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-
 /// Delegates envelope encoding to the codec selected when the transport was constructed.
 pub(crate) fn encode_envelope<C: EnvelopeCodec>(
     codec: &C,
@@ -688,9 +703,12 @@ async fn provision_consumer(
             stream
                 .get_or_create_consumer(name, config)
                 .await
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         }
-        NatsConsumerMode::Ephemeral => stream.create_consumer(config).await.map_err(map_error),
+        NatsConsumerMode::Ephemeral => stream
+            .create_consumer(config)
+            .await
+            .map_err(CatgaError::transient),
     }
 }
 
@@ -714,4 +732,3 @@ const fn publish_mode(quality_of_service: QualityOfService) -> NatsPublishMode {
         QualityOfService::ExactlyOnce => NatsPublishMode::JetStreamDeduplicated,
     }
 }
-

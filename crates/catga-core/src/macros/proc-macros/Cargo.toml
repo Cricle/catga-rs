@@ -14,3 +14,13 @@ proc-macro = true
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
+
+# The macro expansions reference `::catga_core`, so compile-pass tests must link the real
+# crate; Cargo permits this dev-dependency cycle (catga-core depends on this crate).
+[dev-dependencies]
+async-trait = "0.1"
+catga-core = { path = "../../.." } # path-only: versioned dev-dep would deadlock publish order (catga-core depends on this crate)
+tokio = { version = "1", features = ["macros", "rt"] }
+# Compile-fail/pass harness: the macro rejection arms only execute during real compilation,
+# so trybuild UI tests are the only way to exercise them from the tests/ directory.
+trybuild = "1"

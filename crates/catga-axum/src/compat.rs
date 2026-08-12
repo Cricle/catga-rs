@@ -10,7 +10,9 @@ use std::{future::Future, sync::Arc};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Extension},
+    extract::{DefaultBodyLimit, Extension, Request as AxumRequest},
+    middleware::Next,
+    response::Response,
     routing::{on, post},
 };
 use catga_cluster::{RaftInboundPolicy, RaftInboundRejection, RaftMessage, RaftPeerIdentity};
@@ -92,6 +94,28 @@ fn is_protobuf_content_type(headers: &HeaderMap) -> bool {
         })
 }
 
+/// Copies the static peer-identity header into the extension [`raft_message_route`] requires.
+///
+/// Apply with `axum::middleware::from_fn(raft_peer_identity_middleware)` on the Raft ingress
+/// router and configure [`crate::HttpRaftTransport::with_peer_identity`] on every peer so the
+/// built-in client and server authenticate each other out of the box.
+///
+/// A self-asserted header is only safe on trusted networks or demos: any client can claim any
+/// identity. Production deployments must replace this with middleware that derives
+/// [`RaftPeerIdentity`] from the authenticated transport (for example an mTLS
+/// client-certificate SAN) and never from a caller-controlled value.
+pub async fn raft_peer_identity_middleware(mut request: AxumRequest, next: Next) -> Response {
+    if let Some(value) = request
+        .headers()
+        .get(crate::RAFT_PEER_IDENTITY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        && let Ok(identity) = RaftPeerIdentity::new(value)
+    {
+        request.extensions_mut().insert(identity);
+    }
+    next.run(request).await
+}
+
 /// Builds the leader-side forwarding route for one explicitly registered request type.
 ///
 /// The route path defaults to `/api/catga/forward/{RequestType}`. Use
@@ -135,6 +159,35 @@ where
 ///
 /// For full flexibility with extractors, paths, and methods, prefer a standard Axum handler
 /// with [`crate::MediatorState`].
+///
+/// ```
+/// use std::sync::Arc;
+/// use catga_axum::mediator_route;
+/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+///
+/// #[derive(serde::Serialize, serde::Deserialize)]
+/// struct GetBalance;
+/// impl Message for GetBalance {}
+/// struct GetBalanceTypeId;
+/// impl MessageTypeId for GetBalanceTypeId { const NAME: &'static str = "GetBalance"; }
+/// impl Request for GetBalance { type Response = u64; type TypeId = GetBalanceTypeId; }
+///
+/// # fn run() -> CatgaResult<()> {
+/// let mut registry = Registry::new();
+/// registry.register_request::<GetBalance, _>(request_handler(|_: GetBalance| async {
+///     Ok(42_u64)
+/// }))?;
+/// let mediator = Arc::new(Mediator::new(registry));
+/// let router = mediator_route::<GetBalance>("/api/balance", mediator)?;
+///
+/// // Paths must be absolute; a relative path is rejected at registration time.
+/// let mediator = Arc::new(Mediator::new(Registry::new()));
+/// assert!(mediator_route::<GetBalance>("api/balance", mediator).is_err());
+/// # drop(router);
+/// # Ok(())
+/// # }
+/// # run().expect("route example");
+/// ```
 pub fn mediator_route<M>(path: &str, mediator: Arc<Mediator>) -> CatgaResult<Router>
 where
     M: Request + DeserializeOwned,
@@ -168,6 +221,30 @@ where
 /// Builds one typed JSON endpoint that publishes an event through a mediator.
 ///
 /// Valid inbound W3C trace context remains scoped through the complete event publication.
+///
+/// ```
+/// use std::sync::Arc;
+/// use catga_axum::event_route;
+/// use catga_core::{CatgaResult, Event, Mediator, Message, MessageTypeId, Registry};
+///
+/// #[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// struct BalanceChanged;
+/// impl Message for BalanceChanged {}
+/// struct BalanceChangedTypeId;
+/// impl MessageTypeId for BalanceChangedTypeId { const NAME: &'static str = "BalanceChanged"; }
+/// impl Event for BalanceChanged { type TypeId = BalanceChangedTypeId; }
+///
+/// # fn run() -> CatgaResult<()> {
+/// let mediator = Arc::new(Mediator::new(Registry::new()));
+/// let router = event_route::<BalanceChanged>("/api/balance-changed", mediator)?;
+///
+/// let mediator = Arc::new(Mediator::new(Registry::new()));
+/// assert!(event_route::<BalanceChanged>("api/balance-changed", mediator).is_err());
+/// # drop(router);
+/// # Ok(())
+/// # }
+/// # run().expect("route example");
+/// ```
 pub fn event_route<E>(path: &str, mediator: Arc<Mediator>) -> CatgaResult<Router>
 where
     E: Event + DeserializeOwned,

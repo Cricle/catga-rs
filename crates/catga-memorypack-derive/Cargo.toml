@@ -1,9 +1,10 @@
 [package]
 name = "catga-memorypack-derive"
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
+repository.workspace = true
 description = "Derive macros for Catga's bounded MemoryPack wire format"
 
 [lib]
@@ -14,3 +15,8 @@ path = "src/lib.rs"
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
+
+# The derive expansion names `catga_core` codec types, so compile-pass tests must link the
+# real crate; Cargo permits this dev-dependency cycle (catga-core depends on this crate).
+[dev-dependencies]
+catga-core = { path = "../catga-core" } # path-only: a versioned dev-dep would force crates.io to already have catga-core at publish time (cycle)

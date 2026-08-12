@@ -77,4 +77,3 @@ impl MessageSigner for HmacMessageSigner {
         self.mac(payload).verify_slice(&signature).is_ok()
     }
 }
-

@@ -19,11 +19,9 @@ use catga_core::{
     SnapshotInfo, SnapshotStore,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};
-
-const MAX_CAS_RETRIES: usize = 8;
+use catga_core::hash::sha256_digest;
 
 /// A JetStream KV store retaining multiple immutable snapshots for one concrete aggregate state.
 ///
@@ -42,6 +40,18 @@ where
     MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
     /// Connects with compact MemoryPack encoding for aggregate state `S`.
+    ///
+    /// Aggregate snapshots use compact MemoryPack encoding inside one KV bucket.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsEnhancedSnapshots;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let snapshots = NatsEnhancedSnapshots::<u64>::connect("nats://127.0.0.1:4222", "app-snapshots").await?;
+    /// # drop(snapshots);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
         Self::with_codec(server, bucket, MemoryPackSnapshotCodec::default()).await
     }
@@ -58,11 +68,15 @@ where
         bucket: impl Into<Box<str>>,
         codec: C,
     ) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             store,
             codec,
@@ -85,7 +99,7 @@ where
     }
 
     async fn entry(&self, key: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.store.entry(key).await.map_err(map_error)
+        self.store.entry(key).await.map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(&self, key: &str, value: Vec<u8>, revision: u64) -> CatgaResult<bool> {
@@ -93,7 +107,7 @@ where
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = matches!(
                     self.store.entry(key).await,
                     Ok(Some(entry))
@@ -115,7 +129,7 @@ where
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = match self.store.entry(key).await {
                     Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                         record.matches(&decode_record(&entry.value)?)
@@ -199,7 +213,7 @@ where
         );
         let key = stream_key(snapshot.stream_id());
         let next = self.entry_from_snapshot(&snapshot)?;
-        for _ in 0..MAX_CAS_RETRIES {
+        for _ in 0..crate::kv::MAX_CAS_RETRIES {
             let Some(entry) = self.entry(&key).await? else {
                 if self
                     .create(&key, &StoredHistory::with(next.clone()))
@@ -245,7 +259,7 @@ where
                 return Ok(());
             }
         }
-        Err(cas_error("save"))
+        Err(crate::kv::cas_error("enhanced snapshot", "save"))
     }
 
     async fn load<T>(&self, stream_id: &str) -> CatgaResult<Option<Snapshot<T>>>
@@ -266,7 +280,7 @@ where
 
     async fn delete(&self, stream_id: &str) -> CatgaResult<()> {
         let key = stream_key(stream_id);
-        for _ in 0..MAX_CAS_RETRIES {
+        for _ in 0..crate::kv::MAX_CAS_RETRIES {
             let Some(entry) = self.entry(&key).await? else {
                 return Ok(());
             };
@@ -285,7 +299,7 @@ where
                 return Ok(());
             }
         }
-        Err(cas_error("delete"))
+        Err(crate::kv::cas_error("enhanced snapshot", "delete"))
     }
 }
 
@@ -368,7 +382,7 @@ where
         transform: impl Fn(&mut StoredHistory) -> bool,
     ) -> CatgaResult<()> {
         let key = stream_key(stream_id);
-        for _ in 0..MAX_CAS_RETRIES {
+        for _ in 0..crate::kv::MAX_CAS_RETRIES {
             let Some(entry) = self.entry(&key).await? else {
                 return Ok(());
             };
@@ -403,7 +417,7 @@ where
                 return Ok(());
             }
         }
-        Err(cas_error("mutate"))
+        Err(crate::kv::cas_error("enhanced snapshot", "mutate"))
     }
 }
 
@@ -438,7 +452,7 @@ struct StoredSnapshot {
 }
 
 fn stream_key(stream_id: &str) -> String {
-    format!("s{}", hex::encode(Sha256::digest(stream_id.as_bytes())))
+    format!("s{}", hex::encode(sha256_digest(stream_id.as_bytes())))
 }
 
 fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
@@ -460,13 +474,6 @@ fn is_revision_conflict(error: &kv::UpdateError) -> bool {
         })
 }
 
-fn cas_error(operation: &str) -> CatgaError {
-    CatgaError::new(
-        ErrorCode::Transient,
-        format!("NATS enhanced snapshot {operation} compare-and-set did not stabilize"),
-    )
-}
-
 fn unix_millis(time: SystemTime) -> u64 {
     u64::try_from(
         time.duration_since(UNIX_EPOCH)
@@ -475,8 +482,3 @@ fn unix_millis(time: SystemTime) -> u64 {
     )
     .unwrap_or(u64::MAX)
 }
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-

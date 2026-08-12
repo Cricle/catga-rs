@@ -73,21 +73,30 @@ fn dsl_progress_key_format() {
 fn dsl_progress_key_includes_flow_id() {
     let key1 = dsl_progress_key("p", "flow-a", 0);
     let key2 = dsl_progress_key("p", "flow-b", 0);
-    assert_ne!(key1, key2, "different flow ids should produce different keys");
+    assert_ne!(
+        key1, key2,
+        "different flow ids should produce different keys"
+    );
 }
 
 #[test]
 fn dsl_progress_key_includes_step_index() {
     let key1 = dsl_progress_key("p", "flow", 0);
     let key2 = dsl_progress_key("p", "flow", 1);
-    assert_ne!(key1, key2, "different step indices should produce different keys");
+    assert_ne!(
+        key1, key2,
+        "different step indices should produce different keys"
+    );
 }
 
 #[test]
 fn dsl_progress_key_different_prefixes() {
     let key1 = dsl_progress_key("prefix-a", "flow", 0);
     let key2 = dsl_progress_key("prefix-b", "flow", 0);
-    assert_ne!(key1, key2, "different prefixes should produce different keys");
+    assert_ne!(
+        key1, key2,
+        "different prefixes should produce different keys"
+    );
 }
 
 #[test]

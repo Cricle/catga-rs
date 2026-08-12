@@ -1,0 +1,23 @@
+error: Catga message version must be a positive integer
+ --> tests/ui/fail_message_version.rs:4:9
+  |
+4 | #[catga(version = "one")]
+  |         ^^^^^^^^^^^^^^^
+
+error: Catga message version must be declared once and be greater than zero
+ --> tests/ui/fail_message_version.rs:8:19
+  |
+8 | #[catga(version = 0)]
+  |                   ^
+
+error: Catga message version must be declared once and be greater than zero
+  --> tests/ui/fail_message_version.rs:12:32
+   |
+12 | #[catga(version = 2, version = 3)]
+   |                                ^
+
+error: number too large to fit in target type
+  --> tests/ui/fail_message_version.rs:16:19
+   |
+16 | #[catga(version = 99999999999999999999999999)]
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -169,16 +169,16 @@ impl<S: Send> DslFlow<S> {
     }
 
     /// Appends one state-mutating asynchronous action that returns a
-    /// [`crate::flow::FlowStepOutcome`].
+    /// [`crate::flow::definition::FlowStepOutcome`].
     ///
     /// This is a convenience method that eliminates the `Ok::<_, CatgaError>(...)` wrapper
     /// when writing simple steps. The async block should return a
-    /// [`crate::flow::FlowStepOutcome`] directly;
+    /// [`crate::flow::definition::FlowStepOutcome`] directly;
     /// it is automatically converted to `CatgaResult<()>` where `Ok(())` signals success and
     /// allows the flow to proceed according to the returned outcome.
     ///
     /// The `catga_core::flow_outcome!` macro wraps an async block returning
-    /// [`crate::flow::FlowStepOutcome`]
+    /// [`crate::flow::definition::FlowStepOutcome`]
     /// into the required closure type. Alternatively, write the closure directly:
     ///
     /// ```no_run

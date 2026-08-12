@@ -32,19 +32,12 @@ pub fn expand_impl_handlers(
         })
         .collect();
 
-    // Get original method tokens by iterating items and collecting async ones
+    // Re-emit every impl member unchanged; only async message handlers gain wrappers, but
+    // sync methods, constants, and nested types must survive the expansion untouched.
     let original_method_tokens: Vec<TokenStream> = impl_item
         .items
         .iter()
-        .filter_map(|item| {
-            if let syn::ImplItem::Fn(method) = item
-                && method.sig.asyncness.is_some()
-            {
-                Some(quote::ToTokens::to_token_stream(method))
-            } else {
-                None
-            }
-        })
+        .map(quote::ToTokens::to_token_stream)
         .collect();
 
     // Generate output based on whether we're creating a typed mediator

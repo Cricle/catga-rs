@@ -67,7 +67,6 @@ pub(crate) fn command_connection_manager_config() -> ConnectionManagerConfig {
     RedisCommandOptions::default().connection_manager_config()
 }
 
-
 /// Bounded Redis Streams recovery policy for deliveries abandoned by another consumer.
 ///
 /// Every scan examines at most one pending entry and claims at most one eligible entry. The

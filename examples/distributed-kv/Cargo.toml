@@ -1,0 +1,28 @@
+[package]
+name = "distributed-kv"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+catga-axum = { workspace = true }
+catga-cluster = { workspace = true }
+catga-core = { workspace = true }
+# The only backend-specific dependency beyond the raft path: the sorock
+# multi-Raft consensus backend (gRPC transport). Application code still talks
+# to it exclusively through the catga-core consensus traits.
+catga-sorock = { path = "../../crates/catga-sorock" }
+protobuf = "2.28"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = "0.3"

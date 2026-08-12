@@ -38,13 +38,12 @@ fn retention_millis(duration: Duration) -> catga_core::CatgaResult<u64> {
             "Redis idempotency record retention must be greater than zero",
         ));
     }
-    let millis = u64::try_from(duration.as_millis())
-        .map_err(|_| {
-            catga_core::CatgaError::new(
-                ErrorCode::Validation,
-                "Redis idempotency record retention exceeds u64",
-            )
-        })?;
+    let millis = u64::try_from(duration.as_millis()).map_err(|_| {
+        catga_core::CatgaError::new(
+            ErrorCode::Validation,
+            "Redis idempotency record retention exceeds u64",
+        )
+    })?;
     if millis > (MAX_REDIS_RETENTION_MILLIS as u64) {
         return Err(catga_core::CatgaError::new(
             ErrorCode::Validation,

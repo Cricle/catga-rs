@@ -6,7 +6,7 @@
 
 ```toml
 [dependencies]
-catga-core = "0.0.2"
+catga-core = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -64,9 +64,9 @@ async fn main() -> CatgaResult<()> {
 }
 ```
 
-### 零分配 typed mediator (可选)
+### Typed mediator：免分配的派发选项 (可选)
 
-使用 `#[catga_service(MyMediator)]` 生成零分配中介者：
+默认 `Mediator` 使用方便，但每层 behavior 每次请求会装箱一次 `BoxFuture`（经注册表 Arc 动态派发）。`#[catga_service(MyMediator)]` 生成的 typed mediator 静态直调 Handler，是免分配的派发选项：
 
 ```rust
 use catga_core::{catga_request, catga_command, catga_service};
@@ -160,8 +160,9 @@ let result = Flow::new("order_checkout")
 | --- | --- |
 | [simple_handler.rs](examples/src/quickstart/simple_handler.rs) | 显式 Handler trait 实现 |
 | [service_handler.rs](examples/src/quickstart/service_handler.rs) | #[catga_service] 服务处理器 |
-| [typed_mediator.rs](examples/src/quickstart/typed_mediator.rs) | 零分配 typed mediator |
+| [typed_mediator.rs](examples/src/quickstart/typed_mediator.rs) | 免分配 typed mediator |
 | [flow.rs](examples/src/quickstart/flow.rs) | 工作流与补偿 |
+| [distributed-kv](examples/distributed-kv) | 三节点 Raft KV 集群：领导者转发、快照、故障转移实测；双后端 `--backend raft\|sorock`(raft-rs over HTTP / sorock 多 Raft over gRPC) |
 
 运行示例：
 
@@ -181,6 +182,7 @@ cargo run --example flow
 | `catga-nats` | NATS JetStream 传输层 |
 | `catga-redis` | Redis 队列和发布订阅 |
 | `catga-axum` | Axum HTTP 集成 |
+| `catga-sorock` | sorock 多 Raft 共识后端 (gRPC/redb) |
 
 ## 测试
 

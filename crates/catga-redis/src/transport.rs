@@ -47,6 +47,27 @@ where
 
 impl RedisTransport<MemoryPackCodec> {
     /// Connects with the default bounded cross-consumer pending-delivery recovery policy.
+    ///
+    /// Connecting provisions the configured stream and consumer group idempotently and starts
+    /// no background receive loop; deliveries are pulled explicitly through the transport
+    /// contracts. Use [`Self::connect_with_reclaim_options`] to tune abandoned-delivery
+    /// recovery.
+    ///
+    /// ```no_run
+    /// use catga_redis::{RedisConfig, RedisTransport};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let config = RedisConfig {
+    ///     server: "redis://127.0.0.1/".into(),
+    ///     stream: "orders".into(),
+    ///     group: "order-workers".into(),
+    ///     consumer: "order-worker-1".into(),
+    /// };
+    /// let transport = RedisTransport::connect(config).await?;
+    /// # drop(transport);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(config: RedisConfig) -> CatgaResult<Self> {
         Self::connect_with_codec(config, MemoryPackCodec::default()).await
     }
@@ -111,7 +132,7 @@ where
     /// The codec is retained by value, so no global serializer registry or dynamic dispatch is
     /// required on the hot path.
     pub async fn connect_with_codec(config: RedisConfig, codec: C) -> CatgaResult<Self> {
-        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(config.server.as_ref()).map_err(CatgaError::transient)?;
         Self::from_client_with_codec(client, config, codec).await
     }
 
@@ -124,7 +145,7 @@ where
         reclaim_options: RedisPendingReclaimOptions,
         codec: C,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(config.server.as_ref()).map_err(CatgaError::transient)?;
         Self::connect_with_client_with_codec(client, config, reclaim_options, codec).await
     }
 
@@ -173,7 +194,7 @@ where
         let mut commands = client
             .get_connection_manager_with_config(manager_config)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
 
         match commands
             .xgroup_create_mkstream(config.stream.as_ref(), config.group.as_ref(), "0")
@@ -181,7 +202,7 @@ where
         {
             Ok(()) => {}
             Err(error) if error.code() == Some("BUSYGROUP") => {}
-            Err(error) => return Err(map_error(error)),
+            Err(error) => return Err(CatgaError::transient(error)),
         }
 
         Ok(Self {
@@ -210,7 +231,7 @@ where
                 &AsyncConnectionConfig::new().set_response_timeout(None),
             )
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     async fn ensure_consumer_group(&self, stream: &str) -> CatgaResult<()> {
@@ -221,7 +242,7 @@ where
         {
             Ok(()) => Ok(()),
             Err(error) if error.code() == Some("BUSYGROUP") => Ok(()),
-            Err(error) => Err(map_error(error)),
+            Err(error) => Err(CatgaError::transient(error)),
         }
     }
 
@@ -236,7 +257,7 @@ where
         let pending: StreamPendingCountReply = connection
             .xpending_count(stream, self.group.as_ref(), entry_id, entry_id, 1)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let entry = pending
             .ids
             .into_iter()
@@ -263,7 +284,7 @@ where
             let pending: StreamPendingCountReply = connection
                 .xpending_count(stream, self.group.as_ref(), cursor.as_ref(), "+", 1)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let Some(pending) = pending.ids.into_iter().next() else {
                 self.in_flight.set_reclaim_cursor(stream, "-".into());
                 return Ok(None);
@@ -286,7 +307,7 @@ where
                     &[pending.id.as_str()],
                 )
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             if let Some(entry) = claimed.ids.into_iter().next() {
                 return Ok(Some(entry));
             }
@@ -377,7 +398,7 @@ where
             let _: Option<String> = connection
                 .xadd(self.stream.as_ref(), "*", &[("payload", payload)])
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             Ok(())
         })
         .await
@@ -405,7 +426,7 @@ where
             let _: Option<String> = connection
                 .xadd(stream.as_ref(), "*", &[("payload", payload)])
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             Ok(())
         })
         .await
@@ -492,7 +513,7 @@ async fn read_entry(
     let reply: Option<StreamReadReply> = connection
         .xread_options::<_, _, Option<StreamReadReply>>(&[stream], &[entry_id], &options)
         .await
-        .map_err(map_error)?;
+        .map_err(CatgaError::transient)?;
     Ok(reply.and_then(|reply| {
         reply
             .keys
@@ -631,8 +652,3 @@ impl Drop for RecoveryGuard {
         self.in_flight.recovery_gate.store(false, Ordering::SeqCst);
     }
 }
-
-pub(crate) fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-

@@ -158,9 +158,11 @@ fn unix_millis_before_epoch() {
 
 #[test]
 fn unix_millis_large_time() {
-    let time = UNIX_EPOCH + Duration::from_millis(u64::MAX);
+    // 9e17 ms (~year 27,000) fits both Unix and Windows SystemTime ranges;
+    // u64::MAX ms overflows the Windows range and panics inside `+`.
+    let time = UNIX_EPOCH + Duration::from_millis(800_000_000_000_000);
     let result = unix_millis(time);
-    assert_eq!(result, u64::MAX);
+    assert_eq!(result, 800_000_000_000_000);
 }
 
 // unix_millis tests are designed to test values that fit within Duration bounds
@@ -194,9 +196,12 @@ fn from_unix_millis_roundtrip() {
 }
 
 #[test]
-fn from_unix_millis_max() {
-    let result = from_unix_millis(u64::MAX);
-    assert_eq!(result, UNIX_EPOCH + Duration::from_millis(u64::MAX));
+fn from_unix_millis_large_portable_value() {
+    // u64::MAX ms cannot be constructed into a SystemTime on Windows; use a large
+    // value both platforms represent and assert an exact round-trip.
+    let millis = 800_000_000_000_000_u64;
+    let result = from_unix_millis(millis);
+    assert_eq!(result, UNIX_EPOCH + Duration::from_millis(millis));
 }
 
 #[test]
@@ -212,21 +217,24 @@ fn from_unix_millis_large_value() {
 fn stream_entry_id_zero() {
     let result = stream_entry_id(0);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "1-0");
+    assert_eq!(result.expect("test value must be present"), "1-0");
 }
 
 #[test]
 fn stream_entry_id_one() {
     let result = stream_entry_id(1);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "2-0");
+    assert_eq!(result.expect("test value must be present"), "2-0");
 }
 
 #[test]
 fn stream_entry_id_large_value() {
     let result = stream_entry_id(u64::MAX - 1);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), format!("{}-0", u64::MAX));
+    assert_eq!(
+        result.expect("test value must be present"),
+        format!("{}-0", u64::MAX)
+    );
 }
 
 #[test]
@@ -237,9 +245,12 @@ fn stream_entry_id_overflow() {
 
 #[test]
 fn stream_entry_id_format() {
-    let id = stream_entry_id(42).unwrap();
+    let id = stream_entry_id(42).expect("test value must be present");
     assert!(id.ends_with("-0"));
-    let base: u64 = id.trim_end_matches("-0").parse().unwrap();
+    let base: u64 = id
+        .trim_end_matches("-0")
+        .parse()
+        .expect("test value must be present");
     assert_eq!(base, 43);
 }
 
@@ -362,5 +373,5 @@ fn increment_version(value: &str) -> String {
         result.insert(0, b'1');
     }
 
-    String::from_utf8(result).unwrap()
+    String::from_utf8(result).expect("test value must be present")
 }

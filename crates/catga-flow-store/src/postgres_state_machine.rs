@@ -16,4 +16,4 @@ pub(crate) async fn migrate(pool: &PgPool) -> catga_core::CatgaResult<()> {
     .await
 }
 
-define_server_state_machine!(PgPool, true, "PostgreSQL");
+define_server_state_machine!(PgPool, true, false, "PostgreSQL");

@@ -20,7 +20,7 @@ use redis::{
     streams::{StreamId, StreamRangeReply},
 };
 
-use crate::{RedisCommandOptions, transport::map_error};
+use crate::RedisCommandOptions;
 
 const APPEND: &str = r#"
 local current = redis.call('GET', KEYS[1])
@@ -76,6 +76,19 @@ pub struct RedisEventStore {
 
 impl RedisEventStore {
     /// Connects to Redis and namespaces all event streams beneath `prefix`.
+    ///
+    /// The connection is a multiplexed command connection; every stream append, read, and
+    /// version check is one bounded Redis round trip.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisEventStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = RedisEventStore::connect("redis://127.0.0.1/", "app.events").await?;
+    /// # drop(store);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
@@ -91,11 +104,11 @@ impl RedisEventStore {
         prefix: impl Into<Box<str>>,
         command_options: RedisCommandOptions,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(command_options.connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -130,7 +143,7 @@ impl RedisEventStore {
         let reply: StreamRangeReply = connection
             .xrange_count(self.stream_key(stream_id), start, "+", max_count)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         reply
             .ids
             .iter()
@@ -154,7 +167,7 @@ impl RedisEventStore {
         let reply: StreamRangeReply = connection
             .xrange_count(self.stream_key(stream_id), start, end, max_count)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         reply
             .ids
             .iter()
@@ -203,7 +216,7 @@ impl EventStore for RedisEventStore {
                 let version: Option<i64> = connection
                     .get(self.version_key(stream_id))
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
                 return Ok(version.unwrap_or(-1));
             }
             let payloads: CatgaResult<Vec<_>> = events
@@ -265,7 +278,7 @@ impl EventStore for RedisEventStore {
             let version: Option<i64> = connection
                 .get(self.version_key(stream_id))
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             Ok(version.unwrap_or(-1))
         })
         .await
@@ -380,7 +393,7 @@ impl EventStore for RedisEventStore {
                     .arg(max_count)
                     .query_async(&mut connection)
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
                 for id in scanned {
                     if after.is_some_and(|cursor| id.as_str() <= cursor) {
                         continue;
@@ -440,6 +453,6 @@ fn map_append_error(error: redis::RedisError) -> CatgaError {
     } else if message.contains("CATGA_VERSION_EXHAUSTED") {
         CatgaError::new(ErrorCode::Internal, "event stream version is exhausted")
     } else {
-        map_error(message)
+        CatgaError::transient(message)
     }
 }

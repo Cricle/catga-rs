@@ -8,8 +8,6 @@ use catga_core::{
 };
 use redis::{AsyncCommands, aio::ConnectionManager};
 
-use crate::transport::map_error;
-
 /// Redis hash-backed checkpoints, partitioned by projection name.
 pub struct RedisProjectionCheckpoints {
     connection: ConnectionManager,
@@ -18,15 +16,28 @@ pub struct RedisProjectionCheckpoints {
 
 impl RedisProjectionCheckpoints {
     /// Connects and namespaces checkpoint hashes beneath `prefix`.
+    ///
+    /// Checkpoints are partitioned by projection name, so one projection's progress never
+    /// contends with another's keyspace.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisProjectionCheckpoints;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let checkpoints = RedisProjectionCheckpoints::connect("redis://127.0.0.1/", "app.projections").await?;
+    /// # drop(checkpoints);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -54,7 +65,7 @@ impl ProjectionCheckpointStore for RedisProjectionCheckpoints {
                 value,
             )
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     async fn load(
@@ -66,7 +77,7 @@ impl ProjectionCheckpointStore for RedisProjectionCheckpoints {
         let value: Option<String> = connection
             .hget(self.key(projection_name), stream_id)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         value
             .map(|value| decode(projection_name, stream_id, &value))
             .transpose()
@@ -77,7 +88,7 @@ impl ProjectionCheckpointStore for RedisProjectionCheckpoints {
         connection
             .hdel(self.key(projection_name), stream_id)
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     async fn delete_all(&self, projection_name: &str) -> CatgaResult<()> {
@@ -85,7 +96,7 @@ impl ProjectionCheckpointStore for RedisProjectionCheckpoints {
         connection
             .del(self.key(projection_name))
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 }
 

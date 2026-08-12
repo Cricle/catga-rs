@@ -12,8 +12,7 @@ use catga_core::flow::{
 };
 use catga_core::{CatgaError, CatgaResult, ErrorCode, MessageTransport, Stoppable};
 use catga_redis::{
-    RedisFlowScheduler, RedisFlows, RedisPubSubConfig, RedisPubSubTransport,
-    RedisSuspendedFlows,
+    RedisFlowScheduler, RedisFlows, RedisPubSubConfig, RedisPubSubTransport, RedisSuspendedFlows,
 };
 use redis::AsyncCommands;
 
@@ -41,14 +40,20 @@ async fn e2e_redis_connection_and_flow_creation() -> CatgaResult<()> {
     // Retrieve it
     let retrieved = store.get("test-flow-1").await?;
     assert!(retrieved.is_some());
-    let retrieved = retrieved.unwrap();
+    let retrieved = retrieved.expect("test value must be present");
     assert_eq!(retrieved.id(), "test-flow-1");
     assert_eq!(retrieved.version(), 0);
 
     // Verify keys exist in Redis
     let client = redis::Client::open(url.clone()).map_err(map_redis_error)?;
-    let mut conn = client.get_multiplexed_async_connection().await.map_err(map_redis_error)?;
-    let keys: Vec<String> = conn.keys(format!("{prefix}:*")).await.map_err(map_redis_error)?;
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(map_redis_error)?;
+    let keys: Vec<String> = conn
+        .keys(format!("{prefix}:*"))
+        .await
+        .map_err(map_redis_error)?;
     assert!(!keys.is_empty(), "Redis must contain keys for the flow");
 
     Ok(())
@@ -76,13 +81,19 @@ async fn e2e_redis_flow_persists_across_reconnections() -> CatgaResult<()> {
         let store = RedisFlows::connect(&url, prefix.clone()).await?;
         let recovered = store.get(flow_id).await?;
         assert!(recovered.is_some(), "flow must persist across reconnection");
-        assert_eq!(recovered.unwrap().version(), 0);
+        assert_eq!(recovered.expect("test value must be present").version(), 0);
     }
 
     // Cleanup
     let client = redis::Client::open(url.clone()).map_err(map_redis_error)?;
-    let mut conn = client.get_multiplexed_async_connection().await.map_err(map_redis_error)?;
-    let _: () = conn.del(format!("{prefix}:*")).await.map_err(map_redis_error)?;
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(map_redis_error)?;
+    let _: () = conn
+        .del(format!("{prefix}:*"))
+        .await
+        .map_err(map_redis_error)?;
 
     Ok(())
 }
@@ -114,7 +125,9 @@ async fn e2e_redis_pubsub_message_broadcast_and_receive() -> CatgaResult<()> {
     // Receive it back
     let delivery = tokio::time::timeout(Duration::from_secs(5), transport.receive())
         .await
-        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "timeout waiting for pub/sub message"))??;
+        .map_err(|_| {
+            CatgaError::new(ErrorCode::Timeout, "timeout waiting for pub/sub message")
+        })??;
     assert_eq!(delivery.envelope().message_type(), "test.message");
 
     transport.stop_accepting();
@@ -137,27 +150,24 @@ async fn e2e_redis_pubsub_exactly_once_deduplication() -> CatgaResult<()> {
     let transport = RedisPubSubTransport::connect(config).await?;
 
     // Create message with exactly-once QoS
-    let metadata = catga_core::MessageMetadata::new(42, None);
-    let envelope = catga_core::Envelope::new(
-        1,
-        "exactly.once.message",
-        b"test".to_vec(),
-        metadata,
-    );
+    let metadata = catga_core::MessageMetadata::new(42, None)
+        .with_quality_of_service(catga_core::QualityOfService::ExactlyOnce);
+    let envelope = catga_core::Envelope::new(1, "exactly.once.message", b"test".to_vec(), metadata);
 
     // Publish twice (simulating retry)
     transport.publish(envelope.clone()).await?;
     transport.publish(envelope.clone()).await?;
 
     // Should only receive once
-    let delivery = tokio::time::timeout(Duration::from_secs(5), transport.receive())
+    let _delivery = tokio::time::timeout(Duration::from_secs(5), transport.receive())
         .await
-        .map_err(|_| CatgaError::new(ErrorCode::Timeout, "timeout waiting for first pub/sub message"))??;
-    let second_result = tokio::time::timeout(
-        Duration::from_millis(500),
-        transport.receive(),
-    )
-    .await;
+        .map_err(|_| {
+            CatgaError::new(
+                ErrorCode::Timeout,
+                "timeout waiting for first pub/sub message",
+            )
+        })??;
+    let second_result = tokio::time::timeout(Duration::from_millis(500), transport.receive()).await;
 
     assert!(second_result.is_err(), "duplicate should be deduplicated");
 
@@ -203,7 +213,9 @@ async fn e2e_redis_scheduler_due_work_and_acknowledgement() -> CatgaResult<()> {
     assert_eq!(claims[0].state_id(), "process-step");
 
     // Acknowledge completion
-    let ack_result = scheduler.ack_due("worker-1", &claims[0].schedule_id()).await?;
+    let ack_result = scheduler
+        .ack_due("worker-1", claims[0].schedule_id())
+        .await?;
     assert!(ack_result, "acknowledgement should succeed");
 
     // Verify work is no longer claimable
@@ -246,11 +258,17 @@ async fn e2e_redis_suspended_flows_with_wait_correlation() -> CatgaResult<()> {
     // Query by wait correlation
     let by_correlation = store.get_by_wait_correlation(correlation).await?;
     assert!(by_correlation.is_some());
-    assert_eq!(by_correlation.unwrap().state().id(), flow_id);
+    assert_eq!(
+        by_correlation
+            .expect("test value must be present")
+            .state()
+            .id(),
+        flow_id
+    );
 
     // Query all suspended flows
     let all_suspended = store
-        .query(&FlowQuery::new(10, 10).unwrap())
+        .query(&FlowQuery::new(10, 10).expect("test value must be present"))
         .await?;
     assert_eq!(all_suspended.len(), 1);
 
@@ -262,7 +280,10 @@ async fn e2e_redis_suspended_flows_with_wait_correlation() -> CatgaResult<()> {
     );
 
     // Verify wait result was recorded
-    let updated = store.get(flow_id).await?.unwrap();
+    let updated = store
+        .get(flow_id)
+        .await?
+        .expect("test value must be present");
     let wait = updated.wait().expect("wait must exist");
     assert_eq!(wait.results().len(), 1);
 
@@ -300,7 +321,10 @@ async fn e2e_redis_timeout_poll_and_receipt_handling() -> CatgaResult<()> {
     let poll = TimedOutFlowPoll::new(now, 1, 10)?;
     let receipts = store.poll_timed_out(&poll).await?;
     assert_eq!(receipts.len(), 1);
-    let receipt = receipts.into_iter().next().unwrap();
+    let receipt = receipts
+        .into_iter()
+        .next()
+        .expect("test value must be present");
     assert_eq!(receipt.flow_id(), flow_id);
 
     // Poll again - should be empty (receipt is leased)
@@ -315,7 +339,10 @@ async fn e2e_redis_timeout_poll_and_receipt_handling() -> CatgaResult<()> {
     assert_eq!(re_polled.len(), 1);
 
     // Acknowledge to complete
-    let re_receipt = re_polled.into_iter().next().unwrap();
+    let re_receipt = re_polled
+        .into_iter()
+        .next()
+        .expect("test value must be present");
     store.ack_timed_out(&re_receipt).await?;
 
     // Final poll should be empty
@@ -342,31 +369,46 @@ async fn e2e_redis_concurrent_updates_are_atomically_serialized() -> CatgaResult
         store.create(state).await?;
     }
 
-    // Concurrent updates from multiple "workers"
+    // Concurrent updates from multiple "workers" that both observed version 0.
+    let first_worker = {
+        let store = RedisFlows::connect(&url, prefix.clone()).await?;
+        let current = store
+            .get(flow_id)
+            .await?
+            .expect("test value must be present");
+        (store, current.version(), current.next_version()?)
+    };
+    let second_worker = {
+        let store = RedisFlows::connect(&url, prefix.clone()).await?;
+        let current = store
+            .get(flow_id)
+            .await?
+            .expect("test value must be present");
+        (store, current.version(), current.next_version()?)
+    };
     let (result1, result2) = tokio::join!(
+        async { first_worker.0.update(first_worker.1, first_worker.2).await },
         async {
-            let store = RedisFlows::connect(&url, prefix.clone()).await?;
-            let current = store.get(flow_id).await?.unwrap();
-            let version = current.version();
-            let next = current.next_version()?;
-            store.update(version, next).await
-        },
-        async {
-            let store = RedisFlows::connect(&url, prefix.clone()).await?;
-            let current = store.get(flow_id).await?.unwrap();
-            let version = current.version();
-            let next = current.next_version()?;
-            store.update(version, next).await
+            second_worker
+                .0
+                .update(second_worker.1, second_worker.2)
+                .await
         }
     );
 
     // Exactly one should succeed (atomic CAS)
     let success_count = usize::from(result1?) + usize::from(result2?);
-    assert_eq!(success_count, 1, "exactly one concurrent update must succeed");
+    assert_eq!(
+        success_count, 1,
+        "exactly one concurrent update must succeed"
+    );
 
     // Verify final state
     let store = RedisFlows::connect(&url, prefix.clone()).await?;
-    let final_state = store.get(flow_id).await?.unwrap();
+    let final_state = store
+        .get(flow_id)
+        .await?
+        .expect("test value must be present");
     assert_eq!(final_state.version(), 1);
 
     Ok(())
@@ -386,8 +428,8 @@ async fn e2e_redis_flow_claiming_with_heartbeat_staleness() -> CatgaResult<()> {
     let stale_time = std::time::SystemTime::UNIX_EPOCH;
 
     // Create a stale flow (heartbeat in the past)
-    let stale_state = FlowState::new(flow_id, "payment", Vec::new(), "node-a")
-        .heartbeated_at(stale_time);
+    let stale_state =
+        FlowState::new(flow_id, "payment", Vec::new(), "node-a").heartbeated_at(stale_time);
     assert!(store.create(stale_state).await?);
 
     // Claim should succeed
@@ -395,7 +437,7 @@ async fn e2e_redis_flow_claiming_with_heartbeat_staleness() -> CatgaResult<()> {
         .try_claim("payment", "new-worker", Duration::from_secs(86400))
         .await?;
     assert!(claimed.is_some());
-    assert_eq!(claimed.unwrap().id(), flow_id);
+    assert_eq!(claimed.expect("test value must be present").id(), flow_id);
 
     // Second claim should fail (already claimed by new-worker)
     let not_claimed = store

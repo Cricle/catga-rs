@@ -1,7 +1,16 @@
-//! Shared SQLx server-dialect operations for durable state-machine snapshots.
+//! Shared sqlx-dialect operations for durable state-machine snapshots.
+//!
+//! `define_server_state_machine!` is one arm of the crate's dialect-macro pattern (see the
+//! crate-level "Dialect architecture" section): `mysql_state_machine`, `postgres_state_machine`,
+//! and `sqlite_state_machine` instantiate it with their pool type, schema DDL, and error label.
+//! The `$postgres` flag rewrites `?` bind placeholders to `$1..$n` via `sql_backend::statement`,
+//! and, together with the `$sqlite` flag, selects the `ON CONFLICT(instance_key) DO NOTHING`
+//! insert admission shared by PostgreSQL and SQLite; MySQL instead keeps its duplicate-key-error
+//! admission path. Create/get/update share one statement body across all three drivers while the
+//! caller-supplied `SnapshotCodec` keeps state encoding driver-independent.
 
 macro_rules! define_server_state_machine {
-    ($pool:ty, $postgres:expr, $label:literal) => {
+    ($pool:ty, $postgres:expr, $sqlite:expr, $label:literal) => {
         use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
         use catga_core::flow::StateMachineSnapshot;
         use sqlx::Row;
@@ -28,7 +37,7 @@ macro_rules! define_server_state_machine {
             C: SnapshotCodec<S>,
         {
             let key = flow_key(snapshot.instance_id());
-            let insert = if $postgres {
+            let insert = if $postgres || $sqlite {
                 "INSERT INTO catga_state_machine_snapshots (instance_key, instance_id, version, revision, payload) VALUES (?, ?, ?, 0, ?) ON CONFLICT(instance_key) DO NOTHING"
             } else {
                 "INSERT INTO catga_state_machine_snapshots (instance_key, instance_id, version, revision, payload) VALUES (?, ?, ?, 0, ?)"
@@ -42,7 +51,7 @@ macro_rules! define_server_state_machine {
                 .await;
             let created = match result {
                 Ok(result) => result.rows_affected() == 1,
-                Err(error) if !$postgres && is_mysql_duplicate_key(&error) => false,
+                Err(error) if !$postgres && !$sqlite && is_mysql_duplicate_key(&error) => false,
                 Err(error) => return Err(database_error(concat!("create ", $label, " state-machine snapshot"), error)),
             };
             if created {

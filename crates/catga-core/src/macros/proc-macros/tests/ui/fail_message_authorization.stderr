@@ -1,0 +1,23 @@
+error: expected `authorize`, `roles("...")`, `policy("...")`, `batch_key = "field"`, or `batch(...)`
+ --> tests/ui/fail_message_authorization.rs:4:9
+  |
+4 | #[catga(bogus)]
+  |         ^^^^^
+
+error: duplicate Catga authorization policy
+ --> tests/ui/fail_message_authorization.rs:8:22
+  |
+8 | #[catga(policy("a"), policy("b"))]
+  |                      ^^^^^^^^^^^
+
+error: expected string literal
+  --> tests/ui/fail_message_authorization.rs:12:15
+   |
+12 | #[catga(roles(1))]
+   |               ^
+
+error: expected string literal
+  --> tests/ui/fail_message_authorization.rs:16:16
+   |
+16 | #[catga(policy(admin))]
+   |                ^^^^^

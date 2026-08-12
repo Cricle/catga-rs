@@ -1,7 +1,7 @@
 //! Unit tests for flow module helper functions.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha256};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn flow_key(prefix: &str, id: &str) -> String {
     hashed_key(prefix, "flow", id)
@@ -19,10 +19,10 @@ fn hashed_key(prefix: &str, kind: &str, value: &str) -> String {
 }
 
 fn unix_millis(time: SystemTime) -> Result<u64, String> {
-    let duration = time.duration_since(UNIX_EPOCH)
+    let duration = time
+        .duration_since(UNIX_EPOCH)
         .map_err(|_| "precedes Unix epoch".to_string())?;
-    u64::try_from(duration.as_millis())
-        .map_err(|_| "exceeds range".to_string())
+    u64::try_from(duration.as_millis()).map_err(|_| "exceeds range".to_string())
 }
 
 fn stale_before(stale_after: Duration) -> Result<u64, String> {
@@ -128,14 +128,14 @@ fn unix_millis_valid_time() {
     let time = UNIX_EPOCH + Duration::from_millis(1000);
     let result = unix_millis(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 1000);
+    assert_eq!(result.expect("test value must be present"), 1000);
 }
 
 #[test]
 fn unix_millis_at_epoch() {
     let result = unix_millis(UNIX_EPOCH);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 0);
+    assert_eq!(result.expect("test value must be present"), 0);
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn unix_millis_before_epoch_error() {
     let before = UNIX_EPOCH - Duration::from_secs(1);
     let result = unix_millis(before);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("precedes"));
+    assert!(result.expect_err("expected an error").contains("precedes"));
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn unix_millis_one_second() {
     let time = UNIX_EPOCH + Duration::from_secs(1);
     let result = unix_millis(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 1000);
+    assert_eq!(result.expect("test value must be present"), 1000);
 }
 
 #[test]
@@ -159,8 +159,8 @@ fn stale_before_returns_past_timestamp() {
     let stale = Duration::from_secs(30);
     let result = stale_before(stale);
     assert!(result.is_ok());
-    let stale_before_time = result.unwrap();
-    let now = unix_millis(SystemTime::now()).unwrap();
+    let stale_before_time = result.expect("test value must be present");
+    let now = unix_millis(SystemTime::now()).expect("test value must be present");
     assert!(stale_before_time < now);
     assert!(stale_before_time >= now - 31000);
 }
@@ -169,8 +169,8 @@ fn stale_before_returns_past_timestamp() {
 fn stale_before_zero_duration() {
     let result = stale_before(Duration::ZERO);
     assert!(result.is_ok());
-    let stale_before_time = result.unwrap();
-    let now = unix_millis(SystemTime::now()).unwrap();
+    let stale_before_time = result.expect("test value must be present");
+    let now = unix_millis(SystemTime::now()).expect("test value must be present");
     assert!(stale_before_time <= now);
 }
 
@@ -179,7 +179,7 @@ fn stale_before_large_duration() {
     let stale = Duration::from_secs(u64::MAX);
     let result = stale_before(stale);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 0);
+    assert_eq!(result.expect("test value must be present"), 0);
 }
 
 #[test]

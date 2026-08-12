@@ -122,7 +122,7 @@ fn raft_node_applies_backpressure_before_pending_commits_grow_unbounded() {
     assert_eq!(node.pending_commit_count(), 1);
 
     assert!(matches!(
-        node.try_propose(b"second"),
+        node.propose(b"second"),
         Err(catga_cluster::RaftNodeError::PendingCommitCapacity { capacity: 1 })
     ));
     assert_eq!(node.pending_commit_count(), 1);

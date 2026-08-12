@@ -16,16 +16,31 @@ fn leadership_snapshot_clone_is_independent() {
 
     assert_eq!(cloned.epoch, 42);
     assert_eq!(cloned.leader_node_id.as_deref(), Some("node-1"));
-    assert_eq!(cloned.leader_endpoint.as_deref(), Some("http://localhost:8080"));
+    assert_eq!(
+        cloned.leader_endpoint.as_deref(),
+        Some("http://localhost:8080")
+    );
 
     // Verify Arc interning - clones share the same underlying data
     assert!(Arc::ptr_eq(
-        original.leader_node_id.as_ref().unwrap(),
-        cloned.leader_node_id.as_ref().unwrap()
+        original
+            .leader_node_id
+            .as_ref()
+            .expect("test value must be present"),
+        cloned
+            .leader_node_id
+            .as_ref()
+            .expect("test value must be present")
     ));
     assert!(Arc::ptr_eq(
-        original.leader_endpoint.as_ref().unwrap(),
-        cloned.leader_endpoint.as_ref().unwrap()
+        original
+            .leader_endpoint
+            .as_ref()
+            .expect("test value must be present"),
+        cloned
+            .leader_endpoint
+            .as_ref()
+            .expect("test value must be present")
     ));
 }
 
@@ -114,7 +129,10 @@ fn leadership_snapshot_max_values() {
 
     assert_eq!(snapshot.epoch, u128::MAX);
     assert_eq!(snapshot.leader_node_id.as_deref(), Some("max-leader"));
-    assert_eq!(snapshot.leader_endpoint.as_deref(), Some("http://max-endpoint:65535"));
+    assert_eq!(
+        snapshot.leader_endpoint.as_deref(),
+        Some("http://max-endpoint:65535")
+    );
 }
 
 #[test]
@@ -145,7 +163,10 @@ async fn leadership_subscription_recv_receives_election() {
     let mut subscription = follower.subscribe_leadership();
 
     // Initial snapshot should have leader as leader
-    assert_eq!(subscription.snapshot().leader_node_id.as_deref(), Some("leader"));
+    assert_eq!(
+        subscription.snapshot().leader_node_id.as_deref(),
+        Some("leader")
+    );
 
     // Trigger election
     cluster.elect("follower");
@@ -197,7 +218,10 @@ async fn leadership_subscription_closed_channel() {
 
     // After both are dropped, the Weak pointer can't upgrade, so Lagged -> Closed
     let result = subscription.recv().await;
-    assert!(matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)));
+    assert!(matches!(
+        result,
+        Err(tokio::sync::broadcast::error::RecvError::Closed)
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -234,7 +258,10 @@ async fn leadership_subscription_snapshot_is_arc_shared() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn leadership_subscription_multiple_subscribers() {
-    let cluster = MemoryCluster::new("leader", ["http://leader", "http://node-a", "http://node-b"]);
+    let cluster = MemoryCluster::new(
+        "leader",
+        ["http://leader", "http://node-a", "http://node-b"],
+    );
 
     // Get nodes first
     let node1 = cluster.node("leader").expect("leader must exist");
@@ -348,7 +375,10 @@ async fn leadership_subscription_recv_error_closed() {
     drop(cluster);
 
     let err = sub.recv().await.expect_err("must return error");
-    assert!(matches!(err, tokio::sync::broadcast::error::RecvError::Closed));
+    assert!(matches!(
+        err,
+        tokio::sync::broadcast::error::RecvError::Closed
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -430,7 +460,13 @@ fn leadership_snapshot_very_long_endpoint() {
         leader_endpoint: Some(Arc::from(long_string)),
     };
 
-    assert!(snapshot.leader_endpoint.unwrap().len() > 9000);
+    assert!(
+        snapshot
+            .leader_endpoint
+            .expect("test value must be present")
+            .len()
+            > 9000
+    );
 }
 
 #[test]
@@ -550,8 +586,26 @@ fn leadership_snapshot_arc_sharing() {
     };
 
     // Both snapshots share the same Arc data
-    assert!(Arc::ptr_eq(snapshot1.leader_node_id.as_ref().unwrap(), snapshot2.leader_node_id.as_ref().unwrap()));
-    assert!(Arc::ptr_eq(snapshot1.leader_endpoint.as_ref().unwrap(), snapshot2.leader_endpoint.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(
+        snapshot1
+            .leader_node_id
+            .as_ref()
+            .expect("test value must be present"),
+        snapshot2
+            .leader_node_id
+            .as_ref()
+            .expect("test value must be present")
+    ));
+    assert!(Arc::ptr_eq(
+        snapshot1
+            .leader_endpoint
+            .as_ref()
+            .expect("test value must be present"),
+        snapshot2
+            .leader_endpoint
+            .as_ref()
+            .expect("test value must be present")
+    ));
 
     // They are still equal
     assert_eq!(snapshot1, snapshot2);

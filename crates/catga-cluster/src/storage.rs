@@ -10,12 +10,18 @@ use raft::{
 };
 use raft_engine::{Command, Config, Engine, LogBatch, MessageExt};
 
-use crate::RaftNodeError;
+use crate::{RaftMember, RaftNodeError};
 
 const RAFT_GROUP_ID: u64 = 1;
 const HARD_STATE_KEY: &[u8] = b"catga/hard-state";
 const CONF_STATE_KEY: &[u8] = b"catga/conf-state";
 const SNAPSHOT_KEY: &[u8] = b"catga/snapshot";
+/// Raw-byte record of the member endpoints bound to the persisted conf state.
+///
+/// The native Raft [`ConfState`] carries member identifiers only, so the
+/// endpoint map is stored next to it to restore the coordinator view (and any
+/// transport member map) after a restart.
+const MEMBERS_KEY: &[u8] = b"catga/members";
 
 /// The entry adapter required by `raft-engine`'s protobuf log API.
 struct RaftEntry;
@@ -43,8 +49,9 @@ impl RaftStorage {
     pub(crate) fn open_persistent(
         directory: &Path,
         conf_state: ConfState,
+        members: &[RaftMember],
     ) -> Result<Self, RaftNodeError> {
-        PersistentRaftStorage::open(directory, conf_state).map(Self::Persistent)
+        PersistentRaftStorage::open(directory, conf_state, members).map(Self::Persistent)
     }
 
     pub(crate) fn persist(
@@ -83,6 +90,36 @@ impl RaftStorage {
                 Ok(())
             }
             Self::Persistent(storage) => storage.persist_commit(commit),
+        }
+    }
+
+    /// Durably records the latest applied voter configuration and its member
+    /// endpoints.
+    ///
+    /// For the persistent backend the conf state and the endpoint map land in
+    /// one synced `LogBatch`, matching the atomicity discipline of the other
+    /// protocol-state writes. The in-memory backend only needs the conf state
+    /// override so a later checkpoint snapshots the current membership.
+    pub(crate) fn persist_membership(
+        &self,
+        conf_state: &ConfState,
+        members: &[RaftMember],
+    ) -> RaftResult<()> {
+        match self {
+            Self::InMemory(storage) => {
+                storage.storage.wl().set_conf_state(conf_state.clone());
+                Ok(())
+            }
+            Self::Persistent(storage) => storage.persist_membership(conf_state, members),
+        }
+    }
+
+    /// Returns the member endpoint map persisted alongside the conf state, if
+    /// this backend stores one.
+    pub(crate) fn persisted_members(&self) -> RaftResult<Option<Vec<RaftMember>>> {
+        match self {
+            Self::InMemory(_) => Ok(None),
+            Self::Persistent(storage) => storage.persisted_members(),
         }
     }
 
@@ -285,7 +322,17 @@ pub(crate) struct PersistentRaftStorage {
 }
 
 impl PersistentRaftStorage {
-    fn open(directory: &Path, conf_state: ConfState) -> Result<Self, RaftNodeError> {
+    /// Opens the durable log, bootstrapping membership only on a fresh directory.
+    ///
+    /// A directory that already holds a conf state always wins over the
+    /// supplied configuration: cluster membership changes are applied through
+    /// committed Raft conf-change entries, so a stale static configuration must
+    /// never roll a restarted node back to an obsolete voter set.
+    fn open(
+        directory: &Path,
+        conf_state: ConfState,
+        members: &[RaftMember],
+    ) -> Result<Self, RaftNodeError> {
         let engine = Engine::open(Config {
             dir: directory.to_string_lossy().into_owned(),
             ..Config::default()
@@ -295,23 +342,21 @@ impl PersistentRaftStorage {
             engine: std::sync::Arc::new(engine),
         };
 
-        match storage.conf_state().map_err(RaftNodeError::Raft)? {
-            Some(existing) if existing != conf_state => {
-                Err(RaftNodeError::PersistedConfStateMismatch)
-            }
-            Some(_) => Ok(storage),
-            None => {
-                let mut batch = LogBatch::default();
-                batch
-                    .put_message(RAFT_GROUP_ID, CONF_STATE_KEY.to_vec(), &conf_state)
-                    .map_err(RaftNodeError::RaftEngine)?;
-                storage
-                    .engine
-                    .write(&mut batch, true)
-                    .map_err(RaftNodeError::RaftEngine)?;
-                Ok(storage)
-            }
+        if storage.conf_state().map_err(RaftNodeError::Raft)?.is_some() {
+            return Ok(storage);
         }
+        let mut batch = LogBatch::default();
+        batch
+            .put_message(RAFT_GROUP_ID, CONF_STATE_KEY.to_vec(), &conf_state)
+            .map_err(RaftNodeError::RaftEngine)?;
+        batch
+            .put(RAFT_GROUP_ID, MEMBERS_KEY.to_vec(), encode_members(members))
+            .map_err(RaftNodeError::RaftEngine)?;
+        storage
+            .engine
+            .write(&mut batch, true)
+            .map_err(RaftNodeError::RaftEngine)?;
+        Ok(storage)
     }
 
     fn hard_state(&self) -> RaftResult<HardState> {
@@ -421,6 +466,25 @@ impl PersistentRaftStorage {
         self.engine.write(&mut batch, true).map_err(engine_error)?;
         Ok(())
     }
+
+    fn persist_membership(&self, conf_state: &ConfState, members: &[RaftMember]) -> RaftResult<()> {
+        let mut batch = LogBatch::default();
+        batch
+            .put_message(RAFT_GROUP_ID, CONF_STATE_KEY.to_vec(), conf_state)
+            .map_err(engine_error)?;
+        batch
+            .put(RAFT_GROUP_ID, MEMBERS_KEY.to_vec(), encode_members(members))
+            .map_err(engine_error)?;
+        self.engine.write(&mut batch, true).map_err(engine_error)?;
+        Ok(())
+    }
+
+    fn persisted_members(&self) -> RaftResult<Option<Vec<RaftMember>>> {
+        self.engine
+            .get(RAFT_GROUP_ID, MEMBERS_KEY)
+            .map(|bytes| decode_members(&bytes))
+            .transpose()
+    }
 }
 
 impl Storage for PersistentRaftStorage {
@@ -510,4 +574,49 @@ impl Storage for PersistentRaftStorage {
 
 fn engine_error(error: raft_engine::Error) -> Error {
     Error::Store(StorageError::Other(Box::new(error)))
+}
+
+/// Encodes the member endpoint map as `u32 count` followed by `(u64 id,
+/// u32 length, UTF-8 endpoint)` records, all little-endian.
+fn encode_members(members: &[RaftMember]) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    encoded.extend_from_slice(&(members.len() as u32).to_le_bytes());
+    for member in members {
+        encoded.extend_from_slice(&member.id().to_le_bytes());
+        encoded.extend_from_slice(&(member.endpoint().len() as u32).to_le_bytes());
+        encoded.extend_from_slice(member.endpoint().as_bytes());
+    }
+    encoded
+}
+
+fn decode_members(bytes: &[u8]) -> RaftResult<Vec<RaftMember>> {
+    fn malformed() -> Error {
+        Error::Store(StorageError::Other(
+            "malformed persisted Raft member map".into(),
+        ))
+    }
+
+    fn take<'a>(bytes: &mut &'a [u8], len: usize) -> RaftResult<&'a [u8]> {
+        if bytes.len() < len {
+            return Err(malformed());
+        }
+        let (head, tail) = bytes.split_at(len);
+        *bytes = tail;
+        Ok(head)
+    }
+
+    let mut rest = bytes;
+    let count = u32::from_le_bytes(take(&mut rest, 4)?.try_into().map_err(|_| malformed())?);
+    let mut members = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let id = u64::from_le_bytes(take(&mut rest, 8)?.try_into().map_err(|_| malformed())?);
+        let len = u32::from_le_bytes(take(&mut rest, 4)?.try_into().map_err(|_| malformed())?);
+        let endpoint =
+            std::str::from_utf8(take(&mut rest, len as usize)?).map_err(|_| malformed())?;
+        members.push(RaftMember::new(id, endpoint));
+    }
+    if !rest.is_empty() {
+        return Err(malformed());
+    }
+    Ok(members)
 }

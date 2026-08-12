@@ -3,17 +3,12 @@
 //! These tests verify end-to-end cluster behavior including leadership election,
 //! member coordination, and persistent Raft node recovery using real async runtime.
 
-use std::{
-    collections::HashMap,
-    io,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, io, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use catga_cluster::{
-    ClusterCoordinator, RaftMember, RaftMessage, RaftNode, RaftRuntime,
-    RaftTransport, RaftTransportError, RaftTransportResult,
+    ClusterCoordinator, RaftMember, RaftMessage, RaftNode, RaftRuntime, RaftTransport,
+    RaftTransportError, RaftTransportResult,
 };
 use tokio::sync::RwLock;
 
@@ -25,7 +20,10 @@ struct E2eChannelTransport {
 
 impl E2eChannelTransport {
     async fn register(&self, runtime: &RaftRuntime) {
-        self.routes.write().await.insert(runtime.id(), runtime.inbox());
+        self.routes
+            .write()
+            .await
+            .insert(runtime.id(), runtime.inbox());
     }
 }
 
@@ -79,12 +77,10 @@ async fn e2e_raft_runtime_achieves_leadership() {
     // Wait for all nodes to observe leadership
     let wait_result = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if runtimes.iter().all(|r| {
-                r.coordinator()
-                    .leader_endpoint()
-                    .as_deref()
-                    == Some("http://node-1")
-            }) {
+            if runtimes
+                .iter()
+                .all(|r| r.coordinator().leader_endpoint().as_deref() == Some("http://node-1"))
+            {
                 break;
             }
             tokio::task::yield_now().await;
@@ -136,7 +132,15 @@ async fn e2e_raft_runtime_replicates_proposals() {
     // Establish leadership
     runtimes[0].campaign().await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
-        while runtimes.iter().any(|r| !r.coordinator().is_leader()) {
+        // Exactly one leader exists, so wait until every node observes it rather
+        // than for every node to be leader (which can never happen).
+        loop {
+            if runtimes
+                .iter()
+                .all(|r| r.coordinator().leader_endpoint().as_deref() == Some("http://node-1"))
+            {
+                break;
+            }
             tokio::task::yield_now().await;
         }
     })
@@ -154,10 +158,10 @@ async fn e2e_raft_runtime_replicates_proposals() {
         let committed = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let entries = runtime.drain_committed().await;
-                if let Ok(entries) = entries {
-                    if entries.iter().any(|e| e.data == b"create-order:42") {
-                        return entries;
-                    }
+                if let Ok(entries) = entries
+                    && entries.iter().any(|e| e.data == b"create-order:42")
+                {
+                    return entries;
                 }
                 tokio::task::yield_now().await;
             }
@@ -182,7 +186,11 @@ async fn e2e_memory_cluster_elects_leader() {
 
     let cluster = MemoryCluster::new(
         "node-1",
-        ["http://cluster/node-1", "http://cluster/node-2", "http://cluster/node-3"],
+        [
+            "http://cluster/node-1",
+            "http://cluster/node-2",
+            "http://cluster/node-3",
+        ],
     );
 
     let node1 = cluster.node("node-1").expect("node-1 exists");
@@ -226,10 +234,7 @@ async fn e2e_memory_cluster_elects_leader() {
 async fn e2e_leadership_subscription_delivers_transitions() {
     use catga_cluster::MemoryCluster;
 
-    let cluster = MemoryCluster::new(
-        "node-1",
-        ["http://cluster/node-1", "http://cluster/node-2"],
-    );
+    let cluster = MemoryCluster::new("node-1", ["http://cluster/node-1", "http://cluster/node-2"]);
 
     let node = cluster.node("node-1").expect("node exists");
     let mut subscription = node.subscribe_leadership();
@@ -257,10 +262,7 @@ async fn e2e_leadership_subscription_delivers_transitions() {
 async fn e2e_wait_for_leadership_returns_when_leader() {
     use catga_cluster::MemoryCluster;
 
-    let cluster = MemoryCluster::new(
-        "node-1",
-        ["http://cluster/node-1", "http://cluster/node-2"],
-    );
+    let cluster = MemoryCluster::new("node-1", ["http://cluster/node-1", "http://cluster/node-2"]);
 
     let node = cluster.node("node-2").expect("node exists");
     assert!(!node.is_leader());
@@ -287,22 +289,18 @@ async fn e2e_wait_for_leadership_returns_when_leader() {
 #[tokio::test]
 async fn e2e_persistent_raft_node_recovers_after_restart() {
     let directory = tempfile::tempdir().unwrap();
-    let members = vec![
-        RaftMember::new(1, "http://node-1"),
-        RaftMember::new(2, "http://node-2"),
-    ];
+    // Single-member cluster: the test verifies durability across restart, and a
+    // two-member cluster could never elect with only one runtime online.
+    let members = vec![RaftMember::new(1, "http://node-1")];
 
     // First instance: campaign and propose
     {
         let node = RaftNode::open_persistent(1, "http://node-1", members.clone(), directory.path())
             .unwrap();
         let transport = E2eChannelTransport::default();
-        let runtime = RaftRuntime::spawn(
-            node,
-            Arc::new(transport.clone()),
-            Duration::from_millis(10),
-        )
-        .unwrap();
+        let runtime =
+            RaftRuntime::spawn(node, Arc::new(transport.clone()), Duration::from_millis(10))
+                .unwrap();
         transport.register(&runtime).await;
 
         runtime.campaign().await.unwrap();
@@ -325,10 +323,10 @@ async fn e2e_persistent_raft_node_recovers_after_restart() {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let entries = runtime.drain_committed().await;
-                if let Ok(entries) = entries {
-                    if entries.iter().any(|e| e.data == b"durable-order:42") {
-                        break;
-                    }
+                if let Ok(entries) = entries
+                    && entries.iter().any(|e| e.data == b"durable-order:42")
+                {
+                    break;
                 }
                 tokio::task::yield_now().await;
             }
@@ -345,12 +343,9 @@ async fn e2e_persistent_raft_node_recovers_after_restart() {
         let node = RaftNode::open_persistent(1, "http://node-1", members.clone(), directory.path())
             .unwrap();
         let transport = E2eChannelTransport::default();
-        let runtime = RaftRuntime::spawn(
-            node,
-            Arc::new(transport.clone()),
-            Duration::from_millis(10),
-        )
-        .unwrap();
+        let runtime =
+            RaftRuntime::spawn(node, Arc::new(transport.clone()), Duration::from_millis(10))
+                .unwrap();
 
         // Campaign to become leader and verify no duplicate commits
         runtime.campaign().await.unwrap();
@@ -430,7 +425,8 @@ async fn e2e_raft_runtime_handles_sequential_proposals() {
     // Verify all entries are committed
     let mut all_entries = Vec::new();
     for _ in 0..proposal_count {
-        let result = tokio::time::timeout(Duration::from_secs(2), runtimes[0].drain_committed()).await;
+        let result =
+            tokio::time::timeout(Duration::from_secs(2), runtimes[0].drain_committed()).await;
         if let Ok(Ok(entries)) = result {
             all_entries.extend(entries);
         }

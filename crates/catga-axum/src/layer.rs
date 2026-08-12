@@ -37,10 +37,11 @@ static NEXT_LAYER_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
 /// is present, a monotonic process-local identifier is generated. The numeric scope remains
 /// populated for compatibility with typed transport code.
 ///
-/// ```no_run
+/// ```
 /// # use axum::Router;
 /// # use catga_axum::CorrelationLayer;
-/// # let app: Router<()> = Router::new()
+/// // Composes with any Axum router; no server is started.
+/// let app: Router<()> = Router::new()
 ///     .layer(CorrelationLayer::new());
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
@@ -140,10 +141,11 @@ where
 /// Invalid or missing `traceparent` headers leave the request unscoped. An invalid
 /// `tracestate` is discarded while a valid parent is retained.
 ///
-/// ```no_run
+/// ```
 /// # use axum::Router;
 /// # use catga_axum::TraceContextLayer;
-/// # let app: Router<()> = Router::new()
+/// // Composes with any Axum router; no server is started.
+/// let app: Router<()> = Router::new()
 ///     .layer(TraceContextLayer::new());
 /// ```
 #[derive(Clone, Copy, Debug, Default)]

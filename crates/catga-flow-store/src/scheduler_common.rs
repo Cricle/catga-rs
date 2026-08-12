@@ -29,4 +29,3 @@ pub(crate) fn schedule_times(due_at: SystemTime) -> CatgaResult<(i64, i64)> {
 pub(crate) fn current_millis() -> CatgaResult<i64> {
     unix_millis(SystemTime::now())
 }
-

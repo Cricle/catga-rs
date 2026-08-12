@@ -3,3 +3,9 @@
 /target/
 **/*.rs.bk
 .codegraph/
+
+# Qoder agent session artifacts
+.qoder/
+
+# llvm-cov artifacts
+*.profraw

@@ -60,6 +60,9 @@ services:
       retries: 60
     volumes:
       - mysql-data:/var/lib/mysql
+      # Grants the e2e user on the per-test catga_edge_% databases created by
+      # the catga-flow-store mysql_edges suite (fresh volumes only).
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
 
   postgres:
     image: ${CATGA_CONTAINER_IMAGE_PREFIX:-docker.io}/library/postgres:17-alpine

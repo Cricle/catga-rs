@@ -318,6 +318,23 @@ impl CatgaError {
         }
     }
 
+    /// Creates a retryable [`ErrorCode::Transient`] error from a displayable source error.
+    ///
+    /// The source's `Display` output becomes the error message. Adapters use this to
+    /// classify backend failures that are safe to retry.
+    ///
+    /// ```
+    /// use catga_core::{CatgaError, ErrorCode};
+    ///
+    /// let error = CatgaError::transient("connection refused");
+    /// assert_eq!(error.code(), ErrorCode::Transient);
+    /// assert_eq!(error.message(), "connection refused");
+    /// assert!(error.is_retryable());
+    /// ```
+    pub fn transient(error: impl fmt::Display) -> Self {
+        Self::new(ErrorCode::Transient, error.to_string())
+    }
+
     /// Attaches optional diagnostic details, retaining at most
     /// [`MAX_ERROR_DETAILS_BYTES`] without splitting a UTF-8 character.
     pub fn with_details(mut self, details: impl AsRef<str>) -> Self {

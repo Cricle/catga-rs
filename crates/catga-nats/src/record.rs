@@ -77,4 +77,3 @@ fn encode_record(token: [u8; 16], payload: &[u8]) -> Vec<u8> {
     value.extend_from_slice(payload);
     value
 }
-

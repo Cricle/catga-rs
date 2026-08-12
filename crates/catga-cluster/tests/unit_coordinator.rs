@@ -5,10 +5,17 @@ use std::time::{Duration, Instant};
 
 use catga_cluster::{ClusterCoordinator, ClusterCoordinatorExt, MemoryCluster};
 
-fn new_cluster() -> (MemoryCluster, Arc<catga_cluster::MemoryClusterNode>, Arc<catga_cluster::MemoryClusterNode>) {
-    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b", "http://node-c"]);
-    let node_a = cluster.node("node-a").unwrap();
-    let node_b = cluster.node("node-b").unwrap();
+fn new_cluster() -> (
+    MemoryCluster,
+    Arc<catga_cluster::MemoryClusterNode>,
+    Arc<catga_cluster::MemoryClusterNode>,
+) {
+    let cluster = MemoryCluster::new(
+        "node-a",
+        ["http://node-a", "http://node-b", "http://node-c"],
+    );
+    let node_a = cluster.node("node-a").expect("test value must be present");
+    let node_b = cluster.node("node-b").expect("test value must be present");
     (cluster, node_a, node_b)
 }
 
@@ -27,9 +34,9 @@ fn node_id_returns_stable_identifier() {
 fn node_id_does_not_change_after_leadership_transitions() {
     let (cluster, node_a, _) = new_cluster();
     assert_eq!(node_a.node_id(), "node-a");
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     assert_eq!(node_a.node_id(), "node-a");
-    cluster.elect("node-c").unwrap();
+    cluster.elect("node-c").expect("test value must be present");
     assert_eq!(node_a.node_id(), "node-a");
 }
 
@@ -55,7 +62,7 @@ fn is_leader_reflects_leadership_change() {
     assert!(node_a.is_leader());
     assert!(!node_b.is_leader());
 
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     assert!(!node_a.is_leader());
     assert!(node_b.is_leader());
 }
@@ -64,7 +71,7 @@ fn is_leader_reflects_leadership_change() {
 fn is_leader_stable_after_reelecting_same_leader() {
     let (cluster, node_a, _) = new_cluster();
     assert!(node_a.is_leader());
-    cluster.elect("node-a").unwrap(); // re-elect same leader
+    cluster.elect("node-a").expect("test value must be present"); // re-elect same leader
     assert!(node_a.is_leader());
 }
 
@@ -83,7 +90,7 @@ fn leader_endpoint_reflects_leadership_change() {
     let (cluster, _, node_b) = new_cluster();
     assert_eq!(node_b.leader_endpoint(), Some(Arc::from("http://node-a")));
 
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     assert_eq!(node_b.leader_endpoint(), Some(Arc::from("http://node-b")));
 }
 
@@ -91,13 +98,13 @@ fn leader_endpoint_reflects_leadership_change() {
 fn leader_endpoint_returns_leader_endpoint_when_available() {
     // When leader is in the endpoints list, leader_endpoint returns that endpoint
     let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
-    let node_b = cluster.node("node-b").unwrap();
+    let node_b = cluster.node("node-b").expect("test value must be present");
 
     // Initially node-a is leader, and its endpoint is in the list
     assert_eq!(node_b.leader_endpoint(), Some(Arc::from("http://node-a")));
 
     // When node-b becomes leader, its endpoint is returned
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     assert_eq!(node_b.leader_endpoint(), Some(Arc::from("http://node-b")));
 }
 
@@ -126,7 +133,7 @@ fn leadership_snapshot_epoch_increments_on_election() {
     let snapshot0 = node_a.leadership_snapshot();
     assert_eq!(snapshot0.epoch, 0);
 
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     let snapshot1 = node_a.leadership_snapshot();
     assert_eq!(snapshot1.epoch, 1);
     assert_eq!(snapshot1.leader_node_id, Some(Arc::from("node-b")));
@@ -135,7 +142,7 @@ fn leadership_snapshot_epoch_increments_on_election() {
 #[test]
 fn leadership_snapshot_epoch_no_change_on_same_leader_reelection() {
     let (cluster, node_a, _) = new_cluster();
-    cluster.elect("node-a").unwrap(); // same leader
+    cluster.elect("node-a").expect("test value must be present"); // same leader
     let snapshot = node_a.leadership_snapshot();
     assert_eq!(snapshot.epoch, 0);
 }
@@ -143,15 +150,15 @@ fn leadership_snapshot_epoch_no_change_on_same_leader_reelection() {
 #[test]
 fn leadership_snapshot_multiple_elections_increment_epoch() {
     let (cluster, _, _) = new_cluster();
-    let node = cluster.node("node-a").unwrap();
+    let node = cluster.node("node-a").expect("test value must be present");
 
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     assert_eq!(node.leadership_snapshot().epoch, 1);
 
-    cluster.elect("node-c").unwrap();
+    cluster.elect("node-c").expect("test value must be present");
     assert_eq!(node.leadership_snapshot().epoch, 2);
 
-    cluster.elect("node-a").unwrap();
+    cluster.elect("node-a").expect("test value must be present");
     assert_eq!(node.leadership_snapshot().epoch, 3);
 }
 
@@ -183,7 +190,7 @@ fn subscribe_leadership_returns_initial_snapshot() {
 fn subscribe_leadership_captures_current_state_atomically() {
     let (cluster, _, node_b) = new_cluster();
     let sub = node_b.subscribe_leadership();
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     // subscription still has old epoch at registration time
     assert_eq!(sub.snapshot().epoch, 0);
     assert_eq!(sub.snapshot().leader_node_id, Some(Arc::from("node-a")));
@@ -209,9 +216,9 @@ async fn subscription_recv_receives_transitions() {
     let (cluster, _, node_b) = new_cluster();
     let mut sub = node_b.subscribe_leadership();
 
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
 
-    let snap = sub.recv().await.unwrap();
+    let snap = sub.recv().await.expect("test value must be present");
     assert_eq!(snap.epoch, 1);
     assert_eq!(snap.leader_node_id, Some(Arc::from("node-b")));
 }
@@ -222,11 +229,11 @@ async fn subscription_recv_coalesces_multiple_transitions() {
     let mut sub = node_b.subscribe_leadership();
 
     // Rapid transitions — subscription may lag
-    cluster.elect("node-b").unwrap();
-    cluster.elect("node-c").unwrap();
-    cluster.elect("node-a").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
+    cluster.elect("node-c").expect("test value must be present");
+    cluster.elect("node-a").expect("test value must be present");
 
-    let snap = sub.recv().await.unwrap();
+    let snap = sub.recv().await.expect("test value must be present");
     // Receives the latest snapshot (epoch 3) after lagging
     assert!(snap.epoch >= 1);
 }
@@ -238,18 +245,27 @@ async fn subscription_recv_returns_same_epoch_after_lagged() {
 
     // Trigger enough transitions to potentially overflow the broadcast buffer (size 64)
     for i in 0..70 {
-        cluster.elect(if i % 2 == 0 { "node-b" } else { "node-c" }).unwrap();
+        cluster
+            .elect(if i % 2 == 0 { "node-b" } else { "node-c" })
+            .expect("test value must be present");
     }
 
-    let snap = sub.recv().await.unwrap();
+    let snap = sub.recv().await.expect("test value must be present");
     // Should recover with latest snapshot (epoch 69 after 70 elections)
     assert!(snap.epoch >= 70);
 }
 
 #[tokio::test]
 async fn subscription_recv_returns_error_on_close() {
-    let mut cluster = Some(MemoryCluster::new("node-a", ["http://node-a", "http://node-b", "http://node-c"]));
-    let node_b = cluster.as_ref().unwrap().node("node-b").unwrap();
+    let mut cluster = Some(MemoryCluster::new(
+        "node-a",
+        ["http://node-a", "http://node-b", "http://node-c"],
+    ));
+    let node_b = cluster
+        .as_ref()
+        .expect("test value must be present")
+        .node("node-b")
+        .expect("test value must be present");
     let mut sub = node_b.subscribe_leadership();
 
     // Drop the cluster and node to close the broadcast channel
@@ -278,7 +294,7 @@ fn member_endpoints_returns_all_members() {
 fn member_endpoints_immutable_snapshot() {
     let (cluster, node_a, _) = new_cluster();
     let endpoints1 = node_a.member_endpoints();
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     let endpoints2 = node_a.member_endpoints();
     // The Arc slice is a snapshot — both contain all members
     assert_eq!(endpoints1.len(), endpoints2.len());
@@ -326,14 +342,14 @@ async fn wait_for_leadership_returns_true_when_leader_elected_before_timeout() {
         let cluster = Arc::new(cluster);
         async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
-            cluster.elect("node-b").unwrap();
+            cluster.elect("node-b").expect("test value must be present");
         }
     });
 
     let result = node_b.wait_for_leadership(Duration::from_secs(2)).await;
     let elapsed = start.elapsed();
 
-    handle.await.unwrap();
+    handle.await.expect("test value must be present");
     assert!(result);
     assert!(elapsed < Duration::from_secs(2));
 }
@@ -344,7 +360,7 @@ async fn wait_for_leadership_zero_duration_returns_current_state() {
     let result = node_b.wait_for_leadership(Duration::ZERO).await;
     assert!(!result);
 
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
     let result = node_b.wait_for_leadership(Duration::ZERO).await;
     assert!(result);
 }
@@ -387,7 +403,7 @@ async fn wait_for_leadership_change_waits_for_transition() {
         let cluster = Arc::new(cluster);
         async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
-            cluster.elect("node-b").unwrap();
+            cluster.elect("node-b").expect("test value must be present");
         }
     });
 
@@ -396,7 +412,7 @@ async fn wait_for_leadership_change_waits_for_transition() {
     let result = node_b.wait_for_leadership_change(false).await;
     let elapsed = start.elapsed();
 
-    handle.await.unwrap();
+    handle.await.expect("test value must be present");
     assert!(result); // after election, node_b is leader
     assert!(elapsed >= Duration::from_millis(30));
 }
@@ -410,7 +426,7 @@ async fn wait_for_leadership_change_detects_loss_of_leadership() {
         let cluster = Arc::new(cluster);
         async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
-            cluster.elect("node-b").unwrap();
+            cluster.elect("node-b").expect("test value must be present");
         }
     });
 
@@ -418,7 +434,7 @@ async fn wait_for_leadership_change_detects_loss_of_leadership() {
     let result = node_a.wait_for_leadership_change(true).await;
     let elapsed = start.elapsed();
 
-    handle.await.unwrap();
+    handle.await.expect("test value must be present");
     assert!(!result); // node_a lost leadership
     assert!(elapsed >= Duration::from_millis(30));
 }
@@ -433,15 +449,15 @@ async fn wait_for_leadership_change_transition_back_to_original_state() {
         let cluster = Arc::clone(&cluster_arc);
         async move {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            cluster.elect("node-b").unwrap();
+            cluster.elect("node-b").expect("test value must be present");
             tokio::time::sleep(Duration::from_millis(20)).await;
-            cluster.elect("node-a").unwrap();
+            cluster.elect("node-a").expect("test value must be present");
         }
     });
 
     // Wait for the first transition (loss of leadership)
     let result = node_a.wait_for_leadership_change(true).await;
-    handle.await.unwrap();
+    handle.await.expect("test value must be present");
 
     // After node-b election, node_a is no longer leader
     // The function returns false because is_leader() is now false
@@ -458,7 +474,7 @@ fn endpoint_node_id_extracts_suffix() {
     // The helper is private but exercised through public API
     // Testing via leader_endpoint which uses it internally
     let (cluster, _, _) = new_cluster();
-    let node = cluster.node("node-a").unwrap();
+    let node = cluster.node("node-a").expect("test value must be present");
 
     // With URLs like http://node-a, the suffix after last / is "node-a"
     assert_eq!(node.leader_endpoint(), Some(Arc::from("http://node-a")));
@@ -467,7 +483,9 @@ fn endpoint_node_id_extracts_suffix() {
 #[test]
 fn endpoint_node_id_handles_paths_without_slash() {
     let cluster = MemoryCluster::new("simple-id", ["simple-id"]);
-    let node = cluster.node("simple-id").unwrap();
+    let node = cluster
+        .node("simple-id")
+        .expect("test value must be present");
     assert_eq!(node.node_id(), "simple-id");
     assert_eq!(node.leader_endpoint(), Some(Arc::from("simple-id")));
 }
@@ -475,7 +493,7 @@ fn endpoint_node_id_handles_paths_without_slash() {
 #[test]
 fn endpoint_node_id_handles_deeply_nested_paths() {
     let cluster = MemoryCluster::new("node-z", ["http://host:8080/cluster/zone1/node-z"]);
-    let node = cluster.node("node-z").unwrap();
+    let node = cluster.node("node-z").expect("test value must be present");
     assert_eq!(node.node_id(), "node-z");
     assert_eq!(
         node.leader_endpoint(),
@@ -488,7 +506,7 @@ fn endpoint_node_id_handles_trailing_slash() {
     // Trailing slash causes endpoint_node_id to return "" - this is a known behavior
     // The function splits on '/' and takes the last element, so "http://node-y/" -> ""
     let cluster = MemoryCluster::new("node-y", ["http://node-y"]);
-    let node = cluster.node("node-y").unwrap();
+    let node = cluster.node("node-y").expect("test value must be present");
     assert_eq!(node.node_id(), "node-y");
     assert_eq!(node.leader_endpoint(), Some(Arc::from("http://node-y")));
 }
@@ -513,7 +531,7 @@ fn elect_returns_some_for_valid_node() {
 fn elect_same_leader_does_not_increment_epoch() {
     let (cluster, node_a, _) = new_cluster();
     let epoch_before = node_a.leadership_snapshot().epoch;
-    cluster.elect("node-a").unwrap();
+    cluster.elect("node-a").expect("test value must be present");
     let epoch_after = node_a.leadership_snapshot().epoch;
     assert_eq!(epoch_before, epoch_after);
 }
@@ -527,13 +545,13 @@ async fn elect_triggers_all_waiters() {
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
-    cluster.elect("node-b").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
 
     let result = tokio::time::timeout(Duration::from_secs(1), handle).await;
     assert!(result.is_ok(), "timeout expired");
-    let inner = result.unwrap();
+    let inner = result.expect("test value must be present");
     assert!(inner.is_ok(), "task panicked");
-    assert_eq!(inner.unwrap(), true);
+    assert!(inner.expect("test value must be present"));
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +575,7 @@ fn node_returns_none_for_invalid_id() {
 #[test]
 fn node_returns_arc_shared_with_cluster() {
     let (cluster, node_a, node_b) = new_cluster();
-    let node_a2 = cluster.node("node-a").unwrap();
+    let node_a2 = cluster.node("node-a").expect("test value must be present");
     // Both references should point to same node identity
     assert_eq!(node_a.node_id(), node_a2.node_id());
     assert_eq!(node_a.is_leader(), node_a2.is_leader());
@@ -598,7 +616,7 @@ fn leadership_snapshot_clone_is_independent() {
     drop(snap2);
 
     let (cluster, _, _) = new_cluster();
-    let node = cluster.node("node-a").unwrap();
+    let node = cluster.node("node-a").expect("test value must be present");
     let snap3 = node.leadership_snapshot();
     assert_eq!(snap3.epoch, 0);
 }
@@ -612,8 +630,14 @@ fn leadership_snapshot_eq_by_content() {
     let (cluster1, _, _) = new_cluster();
     let (cluster2, _, _) = new_cluster();
 
-    let snap1 = cluster1.node("node-a").unwrap().leadership_snapshot();
-    let snap2 = cluster2.node("node-a").unwrap().leadership_snapshot();
+    let snap1 = cluster1
+        .node("node-a")
+        .expect("test value must be present")
+        .leadership_snapshot();
+    let snap2 = cluster2
+        .node("node-a")
+        .expect("test value must be present")
+        .leadership_snapshot();
 
     // Different clusters with same config have equal snapshots
     assert_eq!(snap1, snap2);
@@ -624,9 +648,17 @@ fn leadership_snapshot_neq_after_transition() {
     let (cluster1, _, _) = new_cluster();
     let (cluster2, _, _) = new_cluster();
 
-    let snap1 = cluster1.node("node-a").unwrap().leadership_snapshot();
-    cluster2.elect("node-b").unwrap();
-    let snap2 = cluster2.node("node-a").unwrap().leadership_snapshot();
+    let snap1 = cluster1
+        .node("node-a")
+        .expect("test value must be present")
+        .leadership_snapshot();
+    cluster2
+        .elect("node-b")
+        .expect("test value must be present");
+    let snap2 = cluster2
+        .node("node-a")
+        .expect("test value must be present")
+        .leadership_snapshot();
 
     assert_ne!(snap1, snap2);
     assert_eq!(snap1.epoch, 0);
@@ -640,7 +672,7 @@ fn leadership_snapshot_neq_after_transition() {
 #[test]
 fn single_node_cluster() {
     let cluster = MemoryCluster::new("solo", ["http://solo"]);
-    let node = cluster.node("solo").unwrap();
+    let node = cluster.node("solo").expect("test value must be present");
     assert_eq!(node.node_id(), "solo");
     assert!(node.is_leader());
     assert_eq!(node.leader_endpoint(), Some(Arc::from("http://solo")));
@@ -652,17 +684,17 @@ fn single_node_cluster() {
 #[test]
 fn two_node_cluster_alternating_leadership() {
     let cluster = MemoryCluster::new("n1", ["n1", "n2"]);
-    let n1 = cluster.node("n1").unwrap();
-    let n2 = cluster.node("n2").unwrap();
+    let n1 = cluster.node("n1").expect("test value must be present");
+    let n2 = cluster.node("n2").expect("test value must be present");
 
     assert!(n1.is_leader());
     assert!(!n2.is_leader());
 
-    cluster.elect("n2").unwrap();
+    cluster.elect("n2").expect("test value must be present");
     assert!(!n1.is_leader());
     assert!(n2.is_leader());
 
-    cluster.elect("n1").unwrap();
+    cluster.elect("n1").expect("test value must be present");
     assert!(n1.is_leader());
     assert!(!n2.is_leader());
 }
@@ -671,7 +703,7 @@ fn two_node_cluster_alternating_leadership() {
 fn large_cluster_member_endpoints() {
     let members: Vec<_> = (0..50).map(|i| format!("http://node-{}", i)).collect();
     let cluster = MemoryCluster::new("node-0", members.clone());
-    let node = cluster.node("node-0").unwrap();
+    let node = cluster.node("node-0").expect("test value must be present");
 
     let endpoints = node.member_endpoints();
     assert_eq!(endpoints.len(), 50);
@@ -681,7 +713,7 @@ fn large_cluster_member_endpoints() {
 fn concurrent_leadership_checks() {
     // Verify is_leader is consistent under concurrent access
     let (cluster, _, _) = new_cluster();
-    let node = cluster.node("node-a").unwrap();
+    let node = cluster.node("node-a").expect("test value must be present");
 
     std::thread::scope(|s| {
         for _ in 0..100 {
@@ -695,7 +727,7 @@ fn concurrent_leadership_checks() {
 #[tokio::test]
 async fn concurrent_snapshot_reads() {
     let (cluster, _, _) = new_cluster();
-    let node = cluster.node("node-a").unwrap();
+    let node = cluster.node("node-a").expect("test value must be present");
 
     let handles: Vec<_> = (0..10)
         .map(|_| {
@@ -711,7 +743,7 @@ async fn concurrent_snapshot_reads() {
         .collect();
 
     for h in handles {
-        h.await.unwrap();
+        h.await.expect("test value must be present");
     }
 }
 
@@ -721,9 +753,9 @@ fn subscription_snapshot_does_not_update_after_creation() {
     let sub = node_b.subscribe_leadership();
 
     // Multiple elections before any recv
-    cluster.elect("node-b").unwrap();
-    cluster.elect("node-c").unwrap();
-    cluster.elect("node-a").unwrap();
+    cluster.elect("node-b").expect("test value must be present");
+    cluster.elect("node-c").expect("test value must be present");
+    cluster.elect("node-a").expect("test value must be present");
 
     // Snapshot still reflects state at subscription time
     assert_eq!(sub.snapshot().epoch, 0);
@@ -733,21 +765,21 @@ fn subscription_snapshot_does_not_update_after_creation() {
 #[test]
 fn epoch_increments_on_different_leader_elections() {
     let cluster = MemoryCluster::new("a", ["a", "b"]);
-    let node = cluster.node("a").unwrap();
+    let node = cluster.node("a").expect("test value must be present");
 
     // epoch is u128 — practically never overflows in tests
     // epoch starts at 0
     assert_eq!(node.leadership_snapshot().epoch, 0);
 
     // re-electing same leader doesn't increment epoch
-    cluster.elect("a").unwrap();
+    cluster.elect("a").expect("test value must be present");
     assert_eq!(node.leadership_snapshot().epoch, 0);
 
     // electing different leader increments epoch
-    cluster.elect("b").unwrap();
+    cluster.elect("b").expect("test value must be present");
     assert_eq!(node.leadership_snapshot().epoch, 1);
 
-    cluster.elect("a").unwrap();
+    cluster.elect("a").expect("test value must be present");
     assert_eq!(node.leadership_snapshot().epoch, 2);
 }
 
@@ -778,7 +810,7 @@ async fn execute_if_leader_cancellable_returns_unavailable_when_not_leader() {
         .execute_if_leader_cancellable(|_| async { Ok(42) })
         .await;
     assert!(result.is_err());
-    let err = result.unwrap_err();
+    let err = result.expect_err("expected an error");
     assert_eq!(err.code(), ErrorCode::Unavailable);
 }
 
@@ -789,7 +821,7 @@ async fn execute_if_leader_cancellable_runs_action_when_leader() {
         .execute_if_leader_cancellable(|_| async { Ok::<_, catga_core::CatgaError>(42) })
         .await;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 42);
+    assert_eq!(result.expect("test value must be present"), 42);
 }
 
 #[tokio::test]
@@ -803,7 +835,7 @@ async fn execute_if_leader_cancellable_cancelled_on_leadership_loss() {
         let cluster = Arc::new(cluster);
         async move {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            cluster.elect("node-b").unwrap();
+            cluster.elect("node-b").expect("test value must be present");
         }
     });
 
@@ -814,10 +846,10 @@ async fn execute_if_leader_cancellable_cancelled_on_leadership_loss() {
         })
         .await;
 
-    handle.await.unwrap();
+    handle.await.expect("test value must be present");
 
     assert!(result.is_err());
-    let err = result.unwrap_err();
+    let err = result.expect_err("expected an error");
     assert_eq!(err.code(), ErrorCode::Cancelled);
     assert!(start.elapsed() >= Duration::from_millis(20));
 }

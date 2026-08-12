@@ -17,4 +17,4 @@ pub(crate) async fn migrate(pool: &PgPool) -> catga_core::CatgaResult<()> {
     .await
 }
 
-define_server_dsl_progress!(PgPool, true, "PostgreSQL");
+define_server_dsl_progress!(PgPool, true, false, "PostgreSQL");

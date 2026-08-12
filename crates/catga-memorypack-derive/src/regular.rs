@@ -282,4 +282,3 @@ fn generate_tuple_deserialize(fields: &syn::FieldsUnnamed) -> proc_macro2::Token
         result
     }
 }
-

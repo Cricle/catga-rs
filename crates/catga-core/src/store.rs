@@ -789,4 +789,3 @@ pub trait OutboxStore: Send + Sync {
         ))
     }
 }
-

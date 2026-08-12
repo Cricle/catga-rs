@@ -1,6 +1,6 @@
 # Flow: Compensating Flow and Workflow
 
-`catga-flow` provides three execution models, **select based on persistence and waiting needs**:
+The `flow` module of `catga-core` provides three execution models, **select based on persistence and waiting needs**:
 
 | Model | Use Case | Persistence | Wait External/Timed |
 | --- | --- | --- | --- |
@@ -13,12 +13,12 @@
 Steps are compensated in reverse order: when a later step fails, compensation closures of completed steps execute in opposite order.
 
 ```rust,ignore
-use catga_flow::Flow;
+use catga_core::flow::Flow;
 
 let result = Flow::new("checkout")
     // First closure executes step; second closure compensates this step when later steps fail
-    .step(|| async { reserve() }, || async { release() })
-    .step(|| async { charge() }, || async { refund() })
+    .step(|| async move { reserve().await }, || async move { release().await })
+    .step(|| async move { charge().await }, || async move { refund().await })
     .run()
     .await;
 
@@ -28,10 +28,10 @@ assert_eq!(result.completed_steps(), 2);
 
 - Shared context: `.step_with(context.clone(), |ctx| async move { .. }, |ctx| async move { .. })`.
 - Other entry points: `run_until_cancelled(token)`, `run_from(start_step, max_compensations)`.
-- The `compensating_flow!` macro makes "action -> compensation" more readable:
+- The `compensating_flow!` macro (exported at the `catga_core` crate root) makes "action -> compensation" more readable:
 
 ```rust,ignore
-use catga_flow::compensating_flow;
+use catga_core::compensating_flow;
 
 let flow = compensating_flow! {
     "reserve-order";
@@ -47,52 +47,57 @@ let flow = compensating_flow! {
 
 A flow owns a caller-provided mutable state `S`, and steps read/write it. **Runs only while the caller keeps the future alive**; does not model durable timers or external waits.
 
+Every step is a plain closure `Fn(&mut S) -> BoxFuture<CatgaResult<()>>` — write `Box::pin(async move { .. })` inline; no helper macros are required:
+
 ```rust,ignore
-use catga_flow::{DslFlow, dsl_action, dsl_each_action};
+use std::time::Duration;
+use catga_core::flow::DslFlow;
 
 struct State { total: u32 }
 
 let flow = DslFlow::new()
-    .action(dsl_action!(|state: &mut State| async move {
-        state.total += 1;
-        Ok::<_, catga_core::CatgaError>(())
-    }))
-    // Retry / timeout wrap single action
-    .retry(3, Duration::from_millis(10), dsl_action!(|s: &mut State| async move { .. }))
-    .timeout(Duration::from_secs(1), dsl_action!(|s: &mut State| async move { .. }))
+    .action(|state: &mut State| {
+        Box::pin(async move {
+            state.total += 1;
+            Ok(())
+        })
+    })
+    // Retry / timeout wrap a single action
+    .retry(3, Duration::from_millis(10), |s: &mut State| Box::pin(async move { .. }))
+    .timeout(Duration::from_secs(1), |s: &mut State| Box::pin(async move { .. }))
     // Conditional branch / match branch / parallel / race
     .if_else(condition, then_branch, else_branch)
     .match_on(selector, cases, default_branch)
     .parallel(branches, merge)
     .when_any(branches, merge_winner)
     // Collection iteration (including continue_on_error / replayable / stream variants)
-    .for_each(|s: &State| items, dsl_each_action!(|s: &mut State, item: u32| async move { .. }));
+    .for_each(
+        |s: &State| vec![1_u32, 2, 3],
+        |s: &mut State, item: u32| Box::pin(async move { .. }),
+    );
 
 let mut state = State { total: 0 };
 flow.run(&mut state).await?;
 ```
 
 - CQRS integration: `.send(mediator, |state| request)` / `.send_into(..)` / `.publish(mediator, |state| event)` / `.remote_send(client, ..)`.
-- Shared concurrency budget: `FlowThrottle::new(limit)?` + `.throttle(throttle, action)`; branch limit `MAX_DSL_PARALLEL_BRANCHES`.
+- Shared concurrency budget: `FlowThrottle::new(limit)?` (`catga_core::flow::flow_throttle::FlowThrottle`) + `.throttle(throttle, action)`; branch limit `MAX_DSL_PARALLEL_BRANCHES`.
 - Lifecycle observation: `with_lifecycle_observer` / `with_lifecycle_hooks`.
 - `run_checkpointed(..)` can persist checkpoints for nested branches, replayable for_each, and parallel branches, but still **does not include** durable timer/external waiting — use `FlowDefinition` when needed.
-- Helper macros: `dsl_action!`, `dsl_each_action!` convert natural async closures to boxed futures.
 
 ## 3. Durable Flow: `FlowDefinition` + `FlowRuntime`
 
 ### Definition
 
-Steps have **stable names**, handlers receive input and return `FlowStepOutcome`:
+Steps have **stable names**, handlers receive the current `FlowState` and return `FlowStepOutcome`:
 
 ```rust,ignore
-use catga_flow::{FlowStepOutcome, flow_definition};
+use catga_core::{FlowDefinition, FlowStepOutcome};
 
-let definition = flow_definition! {
-    "checkout";
-    "reserve" => |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::Advance) };
-    "charge"  => |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::complete()) };
-};
-// Equivalent: FlowDefinition::new("checkout").step("reserve", h1).step("charge", h2)
+let definition = FlowDefinition::new("checkout")
+    .step("reserve", |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::Advance) })
+    .step("charge", |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::complete()) });
+// Rollback-capable steps: .step_with_compensation("charge", handler, compensation)
 ```
 
 `FlowStepOutcome`:
@@ -105,7 +110,7 @@ let definition = flow_definition! {
 
 ```rust,ignore
 use std::sync::Arc;
-use catga_flow::FlowRuntime;
+use catga_core::flow::FlowRuntime;
 
 // store: SuspendedFlowStore (e.g., SqlSuspendedFlowStore); scheduler: FlowScheduler (e.g., SqlFlowScheduler / MemoryFlowScheduler)
 let runtime = FlowRuntime::new(store, scheduler, definition, "worker-1")
@@ -126,7 +131,7 @@ runtime.cancel("order-42").await?;                        // Barrier subsequent 
 Adapters never create background tasks; your supervisor task drives them:
 
 ```rust,ignore
-use catga_flow::FlowDueService;
+use catga_core::flow::FlowDueService;
 
 // Run in application-spawned task; schedule is acknowledged only after resume completes; failed claim releases for retry
 due_service.run(cancellation_token).await?;

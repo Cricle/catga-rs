@@ -1,4 +1,7 @@
-use super::*;
+//! Unit tests for public API contracts.
+use catga_core::ErrorCode;
+use catga_nats::*;
+use std::time::Duration;
 
 #[test]
 fn receive_and_consumer_options_keep_safe_defaults_and_validate_overrides() {
@@ -60,8 +63,7 @@ fn consumer_mode_default_is_durable() {
 
 #[test]
 fn consumer_options_with_inactive_threshold() {
-    let options =
-        NatsConsumerOptions::durable().with_inactive_threshold(Duration::from_secs(300));
+    let options = NatsConsumerOptions::durable().with_inactive_threshold(Duration::from_secs(300));
     assert_eq!(options.inactive_threshold(), Some(Duration::from_secs(300)));
     let options2 = options.with_inactive_threshold(Duration::from_secs(600));
     assert_eq!(
@@ -188,8 +190,7 @@ fn receive_options_rejects_size_overflow() {
 
 #[test]
 fn consumer_options_clone_independence() {
-    let options1 =
-        NatsConsumerOptions::durable().with_inactive_threshold(Duration::from_secs(60));
+    let options1 = NatsConsumerOptions::durable().with_inactive_threshold(Duration::from_secs(60));
     let options2 = options1;
     let options3 = options1.with_inactive_threshold(Duration::from_secs(120));
     assert_eq!(options1.inactive_threshold(), options2.inactive_threshold());

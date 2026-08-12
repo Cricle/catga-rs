@@ -1,0 +1,17 @@
+error: #[catga_auto] module contains no handlers
+ --> tests/ui/fail_catga_auto.rs:4:5
+  |
+4 | mod no_handlers {
+  |     ^^^^^^^^^^^
+
+error: `impl Handler<M>` requires a typed trait impl (`impl Handler<M>`)
+  --> tests/ui/fail_catga_auto.rs:11:10
+   |
+11 |     impl Handler for UntypedHandler {}
+   |          ^^^^^^^
+
+error: expected `mod`
+  --> tests/ui/fail_catga_auto.rs:15:5
+   |
+15 | pub struct NotAModule;
+   |     ^^^^^^

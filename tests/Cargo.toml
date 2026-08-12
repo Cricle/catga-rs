@@ -374,3 +374,7 @@ path = "e2e_axum.rs"
 [[test]]
 name = "e2e_cluster"
 path = "e2e_cluster.rs"
+
+[[test]]
+name = "cluster_cqrs_flow"
+path = "cluster_cqrs_flow.rs"

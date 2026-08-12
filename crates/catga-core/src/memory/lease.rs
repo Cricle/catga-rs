@@ -2,7 +2,7 @@
 
 use std::{
     sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use crate::{CatgaResult, LeaseStore, telemetry};
@@ -41,7 +41,8 @@ impl LeaseStore for MemoryLeases {
                 true
             }
             Entry::Occupied(mut entry)
-                if entry.get().expires_at_millis.load(Ordering::Acquire) <= now_millis() =>
+                if entry.get().expires_at_millis.load(Ordering::Acquire)
+                    <= crate::time::now_unix_millis() =>
             {
                 entry.insert(Lease {
                     owner: owner.into(),
@@ -61,7 +62,7 @@ impl LeaseStore for MemoryLeases {
                 return Ok(false);
             };
             if lease.owner.as_ref() != owner
-                || lease.expires_at_millis.load(Ordering::Acquire) <= now_millis()
+                || lease.expires_at_millis.load(Ordering::Acquire) <= crate::time::now_unix_millis()
             {
                 return Ok(false);
             }
@@ -87,13 +88,7 @@ impl LeaseStore for MemoryLeases {
     }
 }
 
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        })
-}
 fn expiry(ttl: Duration) -> u64 {
-    now_millis().saturating_add(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX))
+    crate::time::now_unix_millis()
+        .saturating_add(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX))
 }

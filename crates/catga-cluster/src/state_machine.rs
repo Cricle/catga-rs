@@ -86,6 +86,51 @@ impl From<RaftNodeError> for RaftStateMachineError {
 ///
 /// The driver is intentionally not `Sync`: calling it from one owner task or
 /// thread avoids lock contention while preserving exactly ordered application.
+///
+/// A single-node in-memory cluster applies a proposal synchronously, which makes
+/// the driver convenient for deterministic state-machine tests:
+///
+/// ```
+/// use catga_cluster::{
+///     RaftCommittedEntry, RaftMember, RaftNode, RaftStateMachine, RaftStateMachineDriver,
+/// };
+///
+/// /// Counts applied entries; a real machine would decode `entry.data` here.
+/// #[derive(Default)]
+/// struct Counter {
+///     applied: u64,
+/// }
+///
+/// impl RaftStateMachine for Counter {
+///     fn apply(&mut self, entry: &RaftCommittedEntry) -> catga_core::CatgaResult<()> {
+///         self.applied += 1;
+///         Ok(())
+///     }
+///     fn snapshot(&self) -> catga_core::CatgaResult<Vec<u8>> {
+///         Ok(self.applied.to_le_bytes().to_vec())
+///     }
+///     fn restore(&mut self, bytes: &[u8]) -> catga_core::CatgaResult<()> {
+///         let raw: [u8; 8] = bytes.try_into().unwrap_or_default();
+///         self.applied = u64::from_le_bytes(raw);
+///         Ok(())
+///     }
+/// }
+///
+/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let members = vec![RaftMember::new(1, "http://node-1")];
+/// let node = RaftNode::new(1, "http://node-1", members)?;
+/// let mut driver = RaftStateMachineDriver::new(node, Counter::default())?;
+/// driver.campaign()?;
+/// driver.propose(b"increment".to_vec())?;
+/// // The election's empty no-op entry occupies log index 1 but is never
+/// // delivered to the machine, so one apply advances the index to 2.
+/// assert_eq!(driver.apply_committed()?, 1);
+/// assert_eq!(driver.applied_index(), 2);
+/// assert_eq!(driver.machine().applied, 1);
+/// # Ok(())
+/// # }
+/// # run().expect("driver example");
+/// ```
 pub struct RaftStateMachineDriver<M> {
     node: RaftNode,
     machine: M,
@@ -131,6 +176,14 @@ where
         self.applied_index
     }
 
+    /// Returns the greatest log index present in the owned Raft log.
+    ///
+    /// Immediately after a successful [`Self::propose`] on the leader this is
+    /// the index the new entry was assigned.
+    pub(crate) fn last_log_index(&self) -> u64 {
+        self.node.last_log_index()
+    }
+
     /// Returns the lock-free coordinator associated with the owned Raft node.
     pub fn coordinator(&self) -> Arc<RaftClusterNode> {
         self.node.coordinator()
@@ -160,8 +213,21 @@ where
     }
 
     /// Proposes one application command on the current leader.
-    pub fn propose(&mut self, data: impl Into<Vec<u8>>) -> raft::Result<()> {
+    ///
+    /// Returns [`RaftNodeError::PendingCommitCapacity`] when the bounded
+    /// pending-commit queue is full, so callers can apply backpressure.
+    pub fn propose(&mut self, data: impl Into<Vec<u8>>) -> Result<(), RaftNodeError> {
         self.node.propose(data)
+    }
+
+    /// Proposes adding one voter; see [`crate::RaftStateMachineRuntime::add_voter`].
+    pub(crate) fn add_voter(&mut self, id: u64, endpoint: Arc<str>) -> Result<(), RaftNodeError> {
+        self.node.propose_add_voter(id, endpoint)
+    }
+
+    /// Proposes removing one voter; see [`crate::RaftStateMachineRuntime::remove_voter`].
+    pub(crate) fn remove_voter(&mut self, id: u64) -> Result<(), RaftNodeError> {
+        self.node.propose_remove_voter(id)
     }
 
     /// Takes Raft protocol messages for transport delivery.
@@ -172,6 +238,11 @@ where
     /// Applies every currently committed command in ascending log-index order.
     ///
     /// An application failure leaves that entry pending for an explicit retry.
+    ///
+    /// Raft protocol entries — such as the empty no-op entry a new leader commits after an
+    /// election — occupy log indexes and advance [`Self::applied_index`] without being
+    /// delivered to the machine. The returned count covers only entries actually passed to
+    /// [`RaftStateMachine::apply`].
     pub fn apply_committed(&mut self) -> Result<usize, RaftStateMachineError> {
         self.pending_snapshots
             .extend(self.node.drain_installed_snapshots());

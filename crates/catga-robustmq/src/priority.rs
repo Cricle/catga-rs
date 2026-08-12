@@ -27,6 +27,15 @@ impl MailboxPriority {
     ///
     /// RobustMQ exposes three broker levels, so Catga's `High` and `Critical`
     /// priorities both map to its highest level.
+    ///
+    /// ```
+    /// use catga_core::{Envelope, MessageMetadata, MessagePriority};
+    /// use catga_robustmq::MailboxPriority;
+    ///
+    /// let metadata = MessageMetadata::new(1, None).with_priority(MessagePriority::Critical);
+    /// let envelope = Envelope::new(1, "Order", Vec::new(), metadata);
+    /// assert_eq!(MailboxPriority::from_envelope(&envelope), MailboxPriority::Critical);
+    /// ```
     pub fn from_envelope(envelope: &Envelope) -> Self {
         Self::from(envelope.metadata().priority())
     }
@@ -51,4 +60,3 @@ impl From<MessagePriority> for MailboxPriority {
         }
     }
 }
-

@@ -12,8 +12,6 @@ use catga_core::{
 };
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
-use crate::transport::map_error;
-
 const CLAIMED: u8 = 1;
 const COMPLETED_EMPTY: u8 = 2;
 const COMPLETED_RESULT: u8 = 3;
@@ -82,15 +80,28 @@ pub struct RedisInbox {
 
 impl RedisInbox {
     /// Connects and namespaces message records beneath `prefix`.
+    ///
+    /// Per-message processing transitions are applied atomically in Redis, so competing
+    /// consumers cannot double-process one delivery.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisInbox;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let inbox = RedisInbox::connect("redis://127.0.0.1/", "app.inbox").await?;
+    /// # drop(inbox);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -113,7 +124,7 @@ impl RedisInbox {
             .arg(claim.generation())
             .invoke_async::<i64>(&mut connection)
             .await
-            .map_err(map_error)?
+            .map_err(CatgaError::transient)?
         {
             1 => Ok(()),
             -1 => Err(CatgaError::new(
@@ -150,7 +161,7 @@ impl InboxStore for RedisInbox {
                 .arg(expires_at)
                 .invoke_async::<i64>(&mut connection)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             if generation == 0 {
                 return Ok(None);
             }
@@ -197,7 +208,7 @@ impl InboxStore for RedisInbox {
                 .arg(claim.message_id())
                 .invoke_async::<i64>(&mut connection)
                 .await
-                .map_err(map_error)?
+                .map_err(CatgaError::transient)?
             {
                 1 => Ok(()),
                 -1 => Err(CatgaError::new(
@@ -226,7 +237,7 @@ impl InboxStore for RedisInbox {
             let value: Option<Vec<u8>> = connection
                 .get(self.key(message_id))
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             value.map(|value| state(&value)).transpose()
         })
         .await
@@ -238,7 +249,7 @@ impl InboxStore for RedisInbox {
             let value: Option<Vec<u8>> = connection
                 .get(self.key(message_id))
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             Ok(value.and_then(|value| {
                 (value.first() == Some(&COMPLETED_RESULT)).then(|| Arc::from(&value[1..]))
             }))
@@ -267,7 +278,7 @@ impl InboxStore for RedisInbox {
                 .arg(&*self.prefix)
                 .invoke_async::<usize>(&mut connection)
                 .await
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         })
         .await
     }

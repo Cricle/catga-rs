@@ -9,8 +9,6 @@ use catga_core::{
 use futures::StreamExt;
 use redis::AsyncCommands;
 
-use crate::transport::map_error;
-
 /// A Redis Pub/Sub request client using one temporary reply subscription per request.
 #[derive(Clone)]
 pub struct RedisRequestClient {
@@ -34,12 +32,15 @@ impl RedisRequestServer {
                 "Redis request destination must not be empty",
             ));
         }
-        let client = redis::Client::open(server).map_err(map_error)?;
-        let mut subscription = client.get_async_pubsub().await.map_err(map_error)?;
+        let client = redis::Client::open(server).map_err(CatgaError::transient)?;
+        let mut subscription = client
+            .get_async_pubsub()
+            .await
+            .map_err(CatgaError::transient)?;
         subscription
             .subscribe(destination)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             client,
             subscription,
@@ -105,11 +106,11 @@ impl RedisRequest {
             .client
             .get_multiplexed_async_connection()
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let _: usize = commands
             .publish(reply_to, payload)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(())
     }
 
@@ -130,7 +131,7 @@ impl RedisRequestClient {
     /// Connects a client to Redis.
     pub fn connect(server: &str) -> CatgaResult<Self> {
         Ok(Self {
-            client: redis::Client::open(server).map_err(map_error)?,
+            client: redis::Client::open(server).map_err(CatgaError::transient)?,
             codec: MemoryPackCodec::default(),
         })
     }
@@ -157,22 +158,26 @@ impl RedisRequestClient {
         tokio::time::timeout(timeout, async {
             let reply_to: Box<str> =
                 format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
-            let mut subscription = self.client.get_async_pubsub().await.map_err(map_error)?;
+            let mut subscription = self
+                .client
+                .get_async_pubsub()
+                .await
+                .map_err(CatgaError::transient)?;
             subscription
                 .subscribe(reply_to.as_ref())
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let request = request.with_reply_to(reply_to);
             let payload = self.codec.encode(&request)?;
             let mut commands = self
                 .client
                 .get_multiplexed_async_connection()
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let _: usize = commands
                 .publish(destination, payload)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let reply = subscription.on_message().next().await.ok_or_else(|| {
                 CatgaError::new(ErrorCode::Transient, "Redis reply subscription closed")
             })?;

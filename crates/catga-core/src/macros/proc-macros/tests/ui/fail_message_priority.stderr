@@ -1,0 +1,23 @@
+error: Catga message priority must be one of: low, normal, high, critical
+ --> tests/ui/fail_message_priority.rs:4:9
+  |
+4 | #[catga(priority = 3)]
+  |         ^^^^^^^^^^^^
+
+error: Catga message priority must be one of: low, normal, high, critical
+ --> tests/ui/fail_message_priority.rs:8:20
+  |
+8 | #[catga(priority = a::b)]
+  |                    ^^^^
+
+error: Catga message priority must be one of: low, normal, high, critical
+  --> tests/ui/fail_message_priority.rs:12:20
+   |
+12 | #[catga(priority = urgent)]
+   |                    ^^^^^^
+
+error: Catga message priority must be declared at most once
+  --> tests/ui/fail_message_priority.rs:16:26
+   |
+16 | #[catga(priority = high, priority = low)]
+   |                          ^^^^^^^^^^^^^^

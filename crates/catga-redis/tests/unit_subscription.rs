@@ -176,7 +176,7 @@ fn event_types_separator_is_unit_separator() {
     // The code uses \u{1f} (UNIT SEPARATOR, ASCII 0x1F) as separator between event types
     let separator = "\u{1f}";
     assert_eq!(separator.len(), 1);
-    assert_eq!(separator.as_bytes().len(), 1); // single byte ASCII
+    assert_eq!(separator.len(), 1); // single byte ASCII
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn event_types_split_empty_removes_empty() {
 
 #[test]
 fn event_types_join_with_separator() {
-    let types = vec!["EventA", "EventB", "EventC"];
+    let types = ["EventA", "EventB", "EventC"];
     let joined = types.join("\u{1f}");
     assert_eq!(joined, "EventA\u{1f}EventB\u{1f}EventC");
 }
@@ -243,8 +243,8 @@ fn persistent_subscription_new() {
 #[test]
 fn persistent_subscription_with_event_types() {
     use catga_core::PersistentSubscription;
-    let sub = PersistentSubscription::new("my-sub", "events.>")
-        .with_event_types(["EventA", "EventB"].into_iter());
+    let sub =
+        PersistentSubscription::new("my-sub", "events.>").with_event_types(["EventA", "EventB"]);
     let types: Vec<&str> = sub.event_types().iter().map(|s| s.as_ref()).collect();
     assert_eq!(types.len(), 2);
     assert!(types.contains(&"EventA"));

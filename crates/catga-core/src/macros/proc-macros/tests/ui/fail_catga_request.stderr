@@ -1,0 +1,27 @@
+error: #[catga_request(response = TypeName)] required
+ --> tests/ui/fail_catga_request.rs:4:12
+  |
+4 | pub struct MissingResponse;
+  |            ^^^^^^^^^^^^^^^
+
+error: response type must not be empty
+ --> tests/ui/fail_catga_request.rs:6:1
+  |
+6 | #[catga_core_macros::catga_request(response =)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `catga_core_macros::catga_request` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: invalid type in response
+ --> tests/ui/fail_catga_request.rs:9:1
+  |
+9 | #[catga_core_macros::catga_request(response = 7)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `catga_core_macros::catga_request` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: expected one of: `struct`, `enum`, `union`
+  --> tests/ui/fail_catga_request.rs:13:5
+   |
+13 | pub fn not_a_message() {}
+   |     ^^

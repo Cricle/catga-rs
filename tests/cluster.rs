@@ -7,9 +7,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use async_trait::async_trait;
 use catga_cluster::{
     ClusterCoordinator, ClusterCoordinatorExt, ClusterForwarder, ForwardToLeaderBehavior,
-    LeaderOnlyBehavior, MemoryCluster, SingletonTaskRunner,
+    LeaderOnlyBehavior, LeadershipSnapshot, LeadershipSubscription, MemoryCluster,
+    MemoryClusterNode, SingletonTaskRunner,
 };
-use catga_core::{CatgaResult, ErrorCode, Handler, Mediator, Pipeline, Registry, Request};
+use catga_core::{
+    CatgaError, CatgaResult, ErrorCode, Handler, Mediator, Pipeline, Registry, Request,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -247,7 +250,7 @@ async fn nonleader_cancellable_execution_returns_unavailable_without_calling_act
     assert!(!action_called.load(Ordering::SeqCst));
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct LeaderWork;
 
 impl catga_core::Message for LeaderWork {}
@@ -322,6 +325,222 @@ async fn forward_to_leader_behavior_uses_the_known_leader_without_running_the_lo
     assert_eq!(mediator.send_with(LeaderWork, &pipeline).await.unwrap(), 99);
     assert_eq!(forwards.load(Ordering::Relaxed), 1);
     assert_eq!(executions.load(Ordering::Relaxed), 0);
+}
+
+struct ScriptedForwarder {
+    attempts: Arc<AtomicUsize>,
+    remaining_failures: AtomicUsize,
+    code: ErrorCode,
+}
+
+impl ScriptedForwarder {
+    fn new(attempts: Arc<AtomicUsize>, failures: usize, code: ErrorCode) -> Self {
+        Self {
+            attempts,
+            remaining_failures: AtomicUsize::new(failures),
+            code,
+        }
+    }
+}
+
+#[async_trait]
+impl ClusterForwarder<LeaderWork> for ScriptedForwarder {
+    async fn forward(&self, _: LeaderWork, leader_endpoint: &str) -> CatgaResult<u32> {
+        assert_eq!(leader_endpoint, "http://node-a");
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        if self.remaining_failures.load(Ordering::Relaxed) > 0 {
+            self.remaining_failures.fetch_sub(1, Ordering::Relaxed);
+            return Err(CatgaError::new(self.code, "scripted forward failure"));
+        }
+        Ok(99)
+    }
+}
+
+fn forwarding_mediator() -> Mediator {
+    let mut registry = Registry::new();
+    registry
+        .register_request::<LeaderWork, _>(LeaderHandler(Arc::new(AtomicUsize::new(0))))
+        .expect("leader work handler registers");
+    Mediator::new(registry)
+}
+
+#[tokio::test]
+async fn forward_to_leader_behavior_without_retry_makes_a_single_attempt() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mediator = forwarding_mediator();
+    let pipeline = Pipeline::new().with(ForwardToLeaderBehavior::new(
+        cluster.node("node-b").expect("configured node-b"),
+        Arc::new(ScriptedForwarder::new(
+            Arc::clone(&attempts),
+            usize::MAX,
+            ErrorCode::Transient,
+        )),
+    ));
+
+    let error = mediator
+        .send_with(LeaderWork, &pipeline)
+        .await
+        .expect_err("transient forward failure propagates without retry");
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn forward_to_leader_behavior_retries_transient_failures_until_success() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mediator = forwarding_mediator();
+    let pipeline = Pipeline::new().with(
+        ForwardToLeaderBehavior::new(
+            cluster.node("node-b").expect("configured node-b"),
+            Arc::new(ScriptedForwarder::new(
+                Arc::clone(&attempts),
+                2,
+                ErrorCode::Transient,
+            )),
+        )
+        .with_retry(5, Duration::from_millis(1)),
+    );
+
+    assert_eq!(
+        mediator
+            .send_with(LeaderWork, &pipeline)
+            .await
+            .expect("forward succeeds once transient failures subside"),
+        99
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn forward_to_leader_behavior_returns_the_last_error_after_max_attempts() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mediator = forwarding_mediator();
+    let pipeline = Pipeline::new().with(
+        ForwardToLeaderBehavior::new(
+            cluster.node("node-b").expect("configured node-b"),
+            Arc::new(ScriptedForwarder::new(
+                Arc::clone(&attempts),
+                usize::MAX,
+                ErrorCode::Transient,
+            )),
+        )
+        .with_retry(3, Duration::from_millis(1)),
+    );
+
+    let error = mediator
+        .send_with(LeaderWork, &pipeline)
+        .await
+        .expect_err("forward keeps failing after attempts are exhausted");
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(attempts.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn forward_to_leader_behavior_does_not_retry_non_retryable_errors() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mediator = forwarding_mediator();
+    let pipeline = Pipeline::new().with(
+        ForwardToLeaderBehavior::new(
+            cluster.node("node-b").expect("configured node-b"),
+            Arc::new(ScriptedForwarder::new(
+                Arc::clone(&attempts),
+                usize::MAX,
+                ErrorCode::Validation,
+            )),
+        )
+        .with_retry(5, Duration::from_millis(1)),
+    );
+
+    let error = mediator
+        .send_with(LeaderWork, &pipeline)
+        .await
+        .expect_err("validation failure propagates immediately");
+    assert_eq!(error.code(), ErrorCode::Validation);
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+}
+
+struct FlappingLeaderCoordinator {
+    inner: Arc<MemoryClusterNode>,
+    lookups: AtomicUsize,
+}
+
+impl ClusterCoordinator for FlappingLeaderCoordinator {
+    fn node_id(&self) -> &str {
+        self.inner.node_id()
+    }
+
+    fn is_leader(&self) -> bool {
+        false
+    }
+
+    fn leader_endpoint(&self) -> Option<Arc<str>> {
+        if self.lookups.fetch_add(1, Ordering::SeqCst) < 2 {
+            None
+        } else {
+            self.inner.leader_endpoint()
+        }
+    }
+
+    fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
+        self.inner.leadership_snapshot()
+    }
+
+    fn subscribe_leadership(&self) -> LeadershipSubscription {
+        self.inner.subscribe_leadership()
+    }
+
+    fn member_endpoints(&self) -> Arc<[Arc<str>]> {
+        self.inner.member_endpoints()
+    }
+
+    fn wait_for_leadership(
+        &self,
+        timeout: Duration,
+    ) -> impl std::future::Future<Output = bool> + Send {
+        self.inner.wait_for_leadership(timeout)
+    }
+
+    fn wait_for_leadership_change(
+        &self,
+        was_leader: bool,
+    ) -> impl std::future::Future<Output = bool> + Send {
+        self.inner.wait_for_leadership_change(was_leader)
+    }
+}
+
+#[tokio::test]
+async fn forward_to_leader_behavior_retries_while_no_leader_is_known() {
+    let cluster = MemoryCluster::new("node-a", ["http://node-a", "http://node-b"]);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mediator = forwarding_mediator();
+    let coordinator = FlappingLeaderCoordinator {
+        inner: cluster.node("node-b").expect("configured node-b"),
+        lookups: AtomicUsize::new(0),
+    };
+    let pipeline = Pipeline::new().with(
+        ForwardToLeaderBehavior::new(
+            Arc::new(coordinator),
+            Arc::new(ScriptedForwarder::new(
+                Arc::clone(&attempts),
+                0,
+                ErrorCode::Transient,
+            )),
+        )
+        .with_retry(5, Duration::from_millis(1)),
+    );
+
+    assert_eq!(
+        mediator
+            .send_with(LeaderWork, &pipeline)
+            .await
+            .expect("a known leader appears before the retry budget runs out"),
+        99
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]

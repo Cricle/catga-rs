@@ -3,6 +3,18 @@
 use std::time::Duration;
 
 use async_nats::jetstream::{self, kv, stream};
+use catga_core::{CatgaError, ErrorCode};
+
+/// Maximum read/compare/write attempts for a contested KV entry.
+pub(crate) const MAX_CAS_RETRIES: usize = 8;
+
+/// Reports exhaustion of a bounded KV revision compare-and-set retry loop.
+pub(crate) fn cas_error(component: &str, operation: &str) -> CatgaError {
+    CatgaError::new(
+        ErrorCode::Transient,
+        format!("NATS {component} {operation} compare-and-set did not stabilize"),
+    )
+}
 
 /// Opens a bucket or provisions the documented KV stream shape.
 pub(crate) async fn open_or_create(
@@ -40,4 +52,3 @@ pub(crate) async fn open_or_create(
         .await
         .map_err(|error| error.to_string())
 }
-

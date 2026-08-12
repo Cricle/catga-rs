@@ -1,0 +1,23 @@
+error: `#[catga_handler]` requires a trait impl block (`impl Handler<M> for T` etc.)
+ --> tests/ui/fail_catga_handler.rs:6:6
+  |
+6 | impl NotATraitImpl {}
+  |      ^^^^^^^^^^^^^
+
+error: `#[catga_handler]` only supports `Handler`, `CommandHandler`, or `EventHandler`, not `PartialEq < u8 >` (impl for `WrongTrait`)
+  --> tests/ui/fail_catga_handler.rs:11:6
+   |
+11 | impl PartialEq<u8> for WrongTrait {}
+   |      ^^^^^^^^^^^^^
+
+error: `#[catga_handler]` requires a typed trait impl (`impl Handler<M>`)
+  --> tests/ui/fail_catga_handler.rs:16:6
+   |
+16 | impl Handler for UntypedTraitImpl {}
+   |      ^^^^^^^
+
+error: expected `impl`
+  --> tests/ui/fail_catga_handler.rs:19:1
+   |
+19 | pub struct NotAnImplBlock;
+   | ^^^

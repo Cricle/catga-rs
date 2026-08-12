@@ -396,4 +396,3 @@ impl Drop for ProbeGuard<'_> {
 fn circuit_open_error() -> CatgaError {
     CatgaError::new(ErrorCode::Transient, "circuit breaker is open")
 }
-

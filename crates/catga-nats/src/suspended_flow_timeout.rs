@@ -23,31 +23,31 @@ pub(crate) async fn poll(
         .expires(Duration::from_millis(100))
         .messages()
         .await
-        .map_err(map_error)?;
+        .map_err(CatgaError::transient)?;
     let mut receipts = Vec::with_capacity(poll.limit());
     while let Some(message) = messages.next().await {
-        let message = message.map_err(map_error)?;
+        let message = message.map_err(CatgaError::transient)?;
         if message.payload.is_empty() {
-            message.ack().await.map_err(map_error)?;
+            message.ack().await.map_err(CatgaError::transient)?;
             continue;
         }
         let continuation = decode_continuation(decode_record(&message.payload)?.payload())?;
         let Some(deadline) = flow_timeout_deadline_unix_ms(&continuation)? else {
-            message.ack().await.map_err(map_error)?;
+            message.ack().await.map_err(CatgaError::transient)?;
             continue;
         };
         if deadline > now {
             message
                 .ack_with(AckKind::Nak(Some(Duration::from_millis(deadline - now))))
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             continue;
         }
         if receipts.len() == poll.limit() {
             message
                 .ack_with(AckKind::Nak(None))
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             continue;
         }
         let reply = message.reply.as_ref().ok_or_else(|| {
@@ -78,26 +78,21 @@ async fn settle(client: &Client, receipt: &TimedOutFlowReceipt, kind: AckKind) -
     client
         .publish(subject.to_owned(), kind.into())
         .await
-        .map_err(map_error)
+        .map_err(CatgaError::transient)
 }
 
 fn unix_millis(time: std::time::SystemTime) -> CatgaResult<u64> {
-    let elapsed = time
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map_err(|_| {
-            CatgaError::new(
-                ErrorCode::Validation,
-                "NATS timeout poll precedes the Unix epoch",
-            )
-        })?;
-    u64::try_from(elapsed.as_millis()).map_err(|_| {
+    catga_core::time::checked_unix_millis(time).map_err(|error| {
         CatgaError::new(
             ErrorCode::Validation,
-            "NATS timeout poll exceeds the supported millisecond range",
+            match error {
+                catga_core::time::UnixMillisError::BeforeEpoch => {
+                    "NATS timeout poll precedes the Unix epoch"
+                }
+                catga_core::time::UnixMillisError::ExceedsRange => {
+                    "NATS timeout poll exceeds the supported millisecond range"
+                }
+            },
         )
     })
-}
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }

@@ -300,4 +300,3 @@ fn decode_wait_policy(value: u8) -> Result<WaitPolicy, MemoryPackError> {
         ))),
     }
 }
-

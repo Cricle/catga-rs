@@ -11,7 +11,7 @@ use catga_core::flow::{
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
-use crate::{suspended_flow_timeout, transport::map_error};
+use crate::suspended_flow_timeout;
 
 const MAX_CAS_RETRIES: usize = 8;
 const RECEIPT_LEASE_MILLIS: u64 = 30_000;
@@ -33,11 +33,11 @@ impl RedisSuspendedFlows {
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -62,7 +62,7 @@ impl RedisSuspendedFlows {
 
     async fn load_raw(&self, key: &str) -> CatgaResult<Option<Vec<u8>>> {
         let mut connection = self.connection.clone();
-        connection.get(key).await.map_err(map_error)
+        connection.get(key).await.map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(
@@ -91,7 +91,7 @@ impl RedisSuspendedFlows {
             .arg(i64::from(correlations.next.is_some()))
             .invoke_async::<i64>(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(updated == 1)
     }
 
@@ -115,7 +115,7 @@ impl RedisSuspendedFlows {
             .arg(i64::from(correlation.is_some()))
             .invoke_async::<i64>(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(deleted == 1)
     }
 
@@ -185,7 +185,7 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
                 .arg(i64::from(continuation.wait().is_some()))
                 .invoke_async::<i64>(&mut connection)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
         Ok(inserted == 1)
     }
 
@@ -204,7 +204,7 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
         let flow_ids: Vec<String> = connection
             .zrange(self.wait_correlation_key(correlation_id), 0, 1)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         if flow_ids.len() > 1 {
             return Err(CatgaError::new(
                 ErrorCode::Conflict,
@@ -232,7 +232,7 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
         let flow_ids: Vec<String> = connection
             .zrange(self.records_key(), 0, stop)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         if flow_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -244,7 +244,7 @@ impl SuspendedFlowStore for RedisSuspendedFlows {
             .arg(keys)
             .query_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let mut summaries = Vec::with_capacity(query.max_results());
         for raw in raws {
             if summaries.len() == query.max_results() {
@@ -414,7 +414,7 @@ impl TimedOutFlowStore for RedisSuspendedFlows {
             .arg(receipt_expiry)
             .invoke_async::<Vec<String>>(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         if values.len() % 2 != 0 {
             return Err(CatgaError::new(
                 ErrorCode::Internal,
@@ -440,7 +440,7 @@ impl TimedOutFlowStore for RedisSuspendedFlows {
             .invoke_async::<i64>(&mut connection)
             .await
             .map(|_| ())
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     async fn release_timed_out(&self, receipt: &TimedOutFlowReceipt) -> CatgaResult<()> {
@@ -457,7 +457,7 @@ impl TimedOutFlowStore for RedisSuspendedFlows {
             .invoke_async::<i64>(&mut connection)
             .await
             .map(|_| ())
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 }
 
@@ -475,4 +475,3 @@ fn system_time_unix_ms(time: SystemTime) -> CatgaResult<u64> {
         )
     })
 }
-

@@ -68,7 +68,10 @@ fn delay_for_sample_full_jitter_varies_across_samples() {
 
     // All results should be within valid bounds (0 to base)
     for result in &results {
-        assert!(*result <= base, "jitter result should not exceed base duration");
+        assert!(
+            *result <= base,
+            "jitter result should not exceed base duration"
+        );
     }
 }
 
@@ -81,7 +84,10 @@ fn delay_for_sample_full_jitter_deterministic() {
     // Same seed + same sample = same result
     let result1 = jitter.delay_for_sample(base, 42);
     let result2 = jitter.delay_for_sample(base, 42);
-    assert_eq!(result1, result2, "Full jitter should be deterministic for same seed and sample");
+    assert_eq!(
+        result1, result2,
+        "Full jitter should be deterministic for same seed and sample"
+    );
 }
 
 #[test]

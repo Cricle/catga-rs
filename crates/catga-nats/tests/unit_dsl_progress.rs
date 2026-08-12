@@ -96,8 +96,8 @@ fn max_cas_retries_constant() {
 
 #[test]
 fn max_cas_retries_is_reasonable() {
-    assert!(MAX_CAS_RETRIES > 0);
-    assert!(MAX_CAS_RETRIES <= 32);
+    const { assert!(MAX_CAS_RETRIES > 0) };
+    const { assert!(MAX_CAS_RETRIES <= 32) };
 }
 
 #[test]

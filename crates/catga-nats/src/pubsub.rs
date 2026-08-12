@@ -28,11 +28,28 @@ pub struct NatsPubSubTransport {
 
 impl NatsPubSubTransport {
     /// Connects and subscribes to the configured nonblank Core NATS subject.
+    ///
+    /// The subscription is registered before this method returns, so a publisher on the
+    /// same subject cannot race past the local receiver.
+    ///
+    /// ```no_run
+    /// use catga_nats::{NatsPubSubConfig, NatsPubSubTransport};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let config = NatsPubSubConfig {
+    ///     server: "nats://127.0.0.1:4222".into(),
+    ///     subject: "orders.notifications".into(),
+    /// };
+    /// let transport = NatsPubSubTransport::connect(config).await?;
+    /// # drop(transport);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(config: NatsPubSubConfig) -> CatgaResult<Self> {
         validate_subject(config.subject.as_ref())?;
         let client = async_nats::connect(config.server.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Self::from_client(client, config).await
     }
 
@@ -64,7 +81,10 @@ impl NatsPubSubTransport {
     async fn initialize(client: async_nats::Client, config: NatsPubSubConfig) -> CatgaResult<Self> {
         validate_subject(config.subject.as_ref())?;
         let subject: async_nats::Subject = config.subject.to_string().into();
-        let subscription = client.subscribe(subject.clone()).await.map_err(map_error)?;
+        let subscription = client
+            .subscribe(subject.clone())
+            .await
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             client,
             subject,
@@ -90,7 +110,7 @@ impl MessageTransport for NatsPubSubTransport {
             self.client
                 .publish(self.subject.clone(), self.codec.encode(&envelope)?.into())
                 .await
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         })
         .await
     }
@@ -156,10 +176,6 @@ impl Waitable for NatsPubSubTransport {
     }
 }
 
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-
 fn validate_subject(subject: &str) -> CatgaResult<()> {
     if subject.trim().is_empty() {
         return Err(CatgaError::new(
@@ -169,4 +185,3 @@ fn validate_subject(subject: &str) -> CatgaResult<()> {
     }
     Ok(())
 }
-

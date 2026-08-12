@@ -1,0 +1,53 @@
+error: Catga bulk trace tags must be declared at most once
+ --> tests/ui/fail_message_trace_tags_bulk.rs:4:40
+  |
+4 | #[catga(trace_tags(all_public = true), trace_tags(all_public = false))]
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Catga bulk trace tags require `prefix`, `include`, `exclude`, or `all_public` options
+  --> tests/ui/fail_message_trace_tags_bulk.rs:10:20
+   |
+10 | #[catga(trace_tags(all_public))]
+   |                    ^^^^^^^^^^
+
+error: Catga bulk trace tag option names must be identifiers
+  --> tests/ui/fail_message_trace_tags_bulk.rs:16:20
+   |
+16 | #[catga(trace_tags(a::b = true))]
+   |                    ^^^^
+
+error: expected `prefix`, `include`, `exclude`, or `all_public` for Catga bulk trace tags
+  --> tests/ui/fail_message_trace_tags_bulk.rs:22:20
+   |
+22 | #[catga(trace_tags(bogus = 1))]
+   |                    ^^^^^
+
+error: Catga bulk trace tag prefix must be declared at most once
+  --> tests/ui/fail_message_trace_tags_bulk.rs:28:35
+   |
+28 | #[catga(trace_tags(prefix = "a.", prefix = "b."))]
+   |                                   ^^^^^^^^^^^^^
+
+error: Catga bulk trace tag prefix must be a string
+  --> tests/ui/fail_message_trace_tags_bulk.rs:34:20
+   |
+34 | #[catga(trace_tags(prefix = 1))]
+   |                    ^^^^^^^^^^
+
+error: Catga bulk trace tag prefix must not be empty
+  --> tests/ui/fail_message_trace_tags_bulk.rs:40:29
+   |
+40 | #[catga(trace_tags(prefix = ""))]
+   |                             ^^
+
+error: Catga bulk trace tag all_public must be declared at most once
+  --> tests/ui/fail_message_trace_tags_bulk.rs:46:39
+   |
+46 | #[catga(trace_tags(all_public = true, all_public = false))]
+   |                                       ^^^^^^^^^^^^^^^^^^
+
+error: Catga bulk trace tag all_public must be true or false
+  --> tests/ui/fail_message_trace_tags_bulk.rs:52:20
+   |
+52 | #[catga(trace_tags(all_public = 1))]
+   |                    ^^^^^^^^^^^^^^

@@ -1,13 +1,11 @@
 //! Redis persistence for versioned, application-encoded DSL step progress.
 
 use async_trait::async_trait;
-use catga_core::CatgaResult;
 use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::flow::{DslStepProgress, DslStepProgressStore};
+use catga_core::hash::sha256_concat_digest;
+use catga_core::{CatgaError, CatgaResult};
 use redis::{Script, aio::ConnectionManager};
-use sha2::{Digest, Sha256};
-
-use crate::transport::map_error;
 
 const CREATE: &str = r#"
 if redis.call('EXISTS', KEYS[1]) ~= 0 then return 0 end
@@ -38,11 +36,11 @@ impl RedisDslStepProgress {
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -51,14 +49,16 @@ impl RedisDslStepProgress {
     }
 
     fn key(&self, flow_id: &str, step_index: u32) -> String {
-        let mut digest = Sha256::new();
-        digest.update(flow_id.len().to_be_bytes());
-        digest.update(flow_id.as_bytes());
-        digest.update(step_index.to_be_bytes());
+        let flow_id_len = flow_id.len().to_be_bytes();
+        let step_index = step_index.to_be_bytes();
         format!(
             "{}:dsl-progress:{}",
             self.prefix,
-            hex::encode(digest.finalize())
+            hex::encode(sha256_concat_digest(&[
+                &flow_id_len,
+                flow_id.as_bytes(),
+                &step_index
+            ]))
         )
     }
 }
@@ -74,7 +74,7 @@ impl DslStepProgressStore for RedisDslStepProgress {
             .arg(value)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(created == 1)
     }
 
@@ -91,7 +91,7 @@ impl DslStepProgressStore for RedisDslStepProgress {
             .arg(value)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(updated == 1)
     }
 
@@ -102,7 +102,7 @@ impl DslStepProgressStore for RedisDslStepProgress {
         let value: Option<Vec<u8>> = connection
             .hget(self.key(flow_id, step_index), "value")
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         value
             .map(|value| self.codec.decode_value(&value))
             .transpose()
@@ -115,7 +115,7 @@ impl DslStepProgressStore for RedisDslStepProgress {
         let deleted: i64 = connection
             .del(self.key(flow_id, step_index))
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(deleted == 1)
     }
 }

@@ -20,9 +20,11 @@
 //! or replaces them according to the deployment's trust boundary.
 
 mod client;
+mod cluster;
 mod compat;
 mod extract;
 mod layer;
+mod tls;
 mod validation;
 
 use std::{
@@ -55,12 +57,21 @@ pub use client::{
     CorrelationHttpClient, DEFAULT_FORWARD_PATH_PREFIX,
     DEFAULT_HTTP_CLUSTER_FORWARD_RESPONSE_LIMIT_BYTES, HttpClusterForwarder, HttpRaftTransport,
 };
+pub use cluster::{
+    ConsensusMachineBridge, DEFAULT_RAFT_HTTP_REQUEST_TIMEOUT, RAFT_HTTP_HEALTH_PATH,
+    RAFT_HTTP_STATUS_PATH, RaftHttpCluster, RaftHttpClusterBuilder, shutdown_signal,
+};
 pub use compat::{
     event_route, event_route_with_method, leader_forward_route, leader_forward_route_at,
-    mediator_route, mediator_route_with_method, raft_message_route,
+    mediator_route, mediator_route_with_method, raft_message_route, raft_peer_identity_middleware,
 };
 pub use extract::MediatorState;
 pub use layer::{CorrelationLayer, CorrelationService, TraceContextLayer, TraceContextService};
+pub use tls::{
+    DevCertificateAuthority, DevNodeIdentity, MtlsAcceptor, PeerCertificateService,
+    TlsPeerCertificates, mtls_peer_identity_middleware, mtls_reqwest_client,
+    mtls_server_tls_config, peer_identity_from_certificate, serve_mtls,
+};
 pub use validation::{
     EndpointValidation, validate_max_length, validate_min_count, validate_min_length,
     validate_not_empty, validate_positive, validate_range, validate_required,
@@ -86,6 +97,16 @@ pub const MAX_RAFT_MESSAGE_BYTES: usize = 1024 * 1024;
 
 /// HTTP endpoint used to receive raw protobuf Raft protocol messages.
 pub const RAFT_MESSAGE_PATH: &str = "/api/catga/raft";
+
+/// Header carrying the authenticated Raft peer identity on inbound protocol frames.
+///
+/// [`HttpRaftTransport::with_peer_identity`](crate::HttpRaftTransport) sends it and
+/// [`raft_peer_identity_middleware`] turns it into
+/// the verified extension that [`raft_message_route`] policies
+/// require. A self-asserted header is only safe on trusted networks or demos; production
+/// deployments must derive the identity from the authenticated transport (for example an
+/// mTLS client-certificate SAN) with their own middleware instead.
+pub const RAFT_PEER_IDENTITY_HEADER: &str = "x-catga-peer";
 
 // ---------------------------------------------------------------------------
 // CatgaError → HTTP response (zero-cost error mapping)

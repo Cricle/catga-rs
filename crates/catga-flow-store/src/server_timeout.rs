@@ -1,7 +1,18 @@
-//! Shared server-SQL timeout leasing implementation.
+//! Shared sqlx-dialect timeout receipt leasing.
+//!
+//! `define_server_timeout!` is one arm of the crate's dialect-macro pattern (see the
+//! crate-level "Dialect architecture" section): `mysql_timeout`, `postgres_timeout`, and
+//! `sqlite_timeout` instantiate it with their pool type, sqlx database marker, and error label.
+//! The `$postgres` flag rewrites `?` bind placeholders to `$1..$n` via `sql_backend::statement`.
+//! MySQL and PostgreSQL lease expired waits inside one transaction with `FOR UPDATE SKIP LOCKED`
+//! selection and fence every leased row with one generated receipt token. The `$sqlite` flag
+//! instead selects SQLite's single `UPDATE ... RETURNING` statement, where candidate selection
+//! and lease acquisition happen under the write lock and each row receives its own
+//! `randomblob(16)` token. On either path, settlement is fenced by the continuation row's
+//! current token.
 
 macro_rules! define_server_timeout {
-    ($pool:ty, $database:ty, $postgres:expr, $label:literal) => {
+    ($pool:ty, $database:ty, $postgres:expr, $sqlite:expr, $label:literal) => {
         use std::time::Duration;
         use catga_core::{CatgaError, CatgaResult, ErrorCode};
         use catga_core::flow::{TimedOutFlowPoll, TimedOutFlowReceipt};
@@ -17,6 +28,28 @@ macro_rules! define_server_timeout {
             let lease = i64::try_from(RECEIPT_LEASE.as_millis()).map_err(|_| CatgaError::new(ErrorCode::Internal, concat!($label, " timeout receipt lease exceeds signed milliseconds")))?;
             let lease_until = now.checked_add(lease).ok_or_else(|| CatgaError::new(ErrorCode::Validation, concat!($label, " timeout receipt deadline overflows")))?;
             let candidate_limit = poll.limit().min(poll.scan_limit());
+            if $sqlite {
+                let candidate_limit = i64::try_from(candidate_limit).map_err(|_| CatgaError::new(ErrorCode::Validation, concat!($label, " timeout poll limit exceeds i64")))?;
+                let rows = sqlx::query(statement(
+                    "UPDATE catga_flow_continuations SET due_token = randomblob(16), lease_until_ms = ?, \
+                         revision = revision + 1 \
+                     WHERE flow_key IN (\
+                         SELECT flow_key FROM catga_flow_continuations \
+                         WHERE deadline_ms IS NOT NULL AND deadline_ms <= ? \
+                           AND (due_token IS NULL OR lease_until_ms IS NULL OR lease_until_ms <= ?) \
+                         ORDER BY deadline_ms ASC, flow_key ASC LIMIT ?\
+                     ) \
+                     AND deadline_ms IS NOT NULL AND deadline_ms <= ? \
+                     AND (due_token IS NULL OR lease_until_ms IS NULL OR lease_until_ms <= ?) \
+                     RETURNING flow_id, due_token", $postgres))
+                    .bind(lease_until).bind(now).bind(now).bind(candidate_limit).bind(now).bind(now)
+                    .fetch_all(pool).await.map_err(|error| database_error(concat!("poll ", $label, " timed-out continuations"), error))?;
+                return rows.into_iter().map(|row| {
+                    let flow_id: String = row.try_get("flow_id").map_err(|error| database_error(concat!("decode ", $label, " timeout receipt"), error))?;
+                    let token: Vec<u8> = row.try_get("due_token").map_err(|error| database_error(concat!("decode ", $label, " timeout receipt token"), error))?;
+                    Ok(TimedOutFlowReceipt::new(flow_id, token))
+                }).collect();
+            }
             let scan = i64::try_from(candidate_limit).map_err(|_| CatgaError::new(ErrorCode::Validation, "timeout poll candidate limit exceeds i64"))?;
             let mut tx = pool.begin().await.map_err(|error| database_error(concat!("begin ", $label, " timeout poll"), error))?;
             let rows = sqlx::query(statement("SELECT flow_key, flow_id FROM catga_flow_continuations WHERE deadline_ms IS NOT NULL AND deadline_ms <= ? AND (due_token IS NULL OR lease_until_ms IS NULL OR lease_until_ms <= ?) ORDER BY deadline_ms ASC, flow_key ASC LIMIT ? FOR UPDATE SKIP LOCKED", $postgres))

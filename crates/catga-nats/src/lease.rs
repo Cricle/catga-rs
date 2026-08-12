@@ -1,10 +1,10 @@
 //! JetStream KV revision-CAS distributed leases.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
-use catga_core::{CatgaError, CatgaResult, ErrorCode, LeaseStore, telemetry};
+use catga_core::{CatgaError, CatgaResult, LeaseStore, telemetry};
 
 /// A JetStream KV lease store using entry revisions for conditional updates.
 pub struct NatsLeases {
@@ -13,16 +13,35 @@ pub struct NatsLeases {
 
 impl NatsLeases {
     /// Connects and idempotently provisions a KV bucket for lease resources.
+    ///
+    /// Lease ownership transitions use KV compare-and-set, staying atomic across failover.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsLeases;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let leases = NatsLeases::connect("nats://127.0.0.1:4222", "app-leases").await?;
+    /// # drop(leases);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self { store })
     }
     async fn entry(&self, resource: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.store.entry(resource).await.map_err(map_error)
+        self.store
+            .entry(resource)
+            .await
+            .map_err(CatgaError::transient)
     }
 }
 
@@ -45,7 +64,7 @@ impl LeaseStore for NatsLeases {
             let Some((current_owner, expires)) = parse(&entry.value) else {
                 return Ok(false);
             };
-            if current_owner != owner && expires > now_millis() {
+            if current_owner != owner && expires > catga_core::time::now_unix_millis() {
                 return Ok(false);
             }
             Ok(self
@@ -64,7 +83,7 @@ impl LeaseStore for NatsLeases {
             let Some((current_owner, expires)) = parse(&entry.value) else {
                 return Ok(false);
             };
-            if current_owner != owner || expires <= now_millis() {
+            if current_owner != owner || expires <= catga_core::time::now_unix_millis() {
                 return Ok(false);
             }
             Ok(self
@@ -96,21 +115,12 @@ impl LeaseStore for NatsLeases {
 fn value(owner: &str, ttl: Duration) -> String {
     format!(
         "{owner}\t{}",
-        now_millis().saturating_add(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX).max(1))
+        catga_core::time::now_unix_millis()
+            .saturating_add(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX).max(1))
     )
 }
 fn parse(value: &[u8]) -> Option<(&str, u64)> {
     let text = std::str::from_utf8(value).ok()?;
     let (owner, expiry) = text.rsplit_once('\t')?;
     Some((owner, expiry.parse().ok()?))
-}
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }

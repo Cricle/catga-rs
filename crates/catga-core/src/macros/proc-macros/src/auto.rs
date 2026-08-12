@@ -33,8 +33,11 @@ fn first_type_arg(path: &syn::Path) -> Option<&syn::Type> {
     })
 }
 
-/// Expands `#[catga_handler]` on an impl block into registration code.
-#[allow(dead_code)]
+/// Expands `#[catga_handler]` on an impl block.
+///
+/// The impl must implement `Handler<M>`, `CommandHandler<M>`, or `EventHandler<M>` with an
+/// explicit message type `M`; after validation the impl block is re-emitted unchanged.
+/// Registration is discovered by the `#[catga_auto]` module macro scanning impl blocks.
 pub fn expand_handler(impl_item: ItemImpl) -> Result<TokenStream> {
     let trait_path = match extract_trait_info(&impl_item) {
         Some((path, _)) if last_segment_is(path, "Handler") => path,
@@ -59,32 +62,14 @@ pub fn expand_handler(impl_item: ItemImpl) -> Result<TokenStream> {
         }
     };
 
-    let _message_type = match first_type_arg(trait_path) {
-        Some(ty) => ty,
-        None => {
-            return Err(syn::Error::new_spanned(
-                trait_path,
-                "`#[catga_handler]` requires a typed trait impl (`impl Handler<M>`)",
-            ));
-        }
-    };
+    if first_type_arg(trait_path).is_none() {
+        return Err(syn::Error::new_spanned(
+            trait_path,
+            "`#[catga_handler]` requires a typed trait impl (`impl Handler<M>`)",
+        ));
+    }
 
-    let struct_name = &impl_item.self_ty;
-    let handler_ident = quote::format_ident!(
-        "__CatgaHandler_{}",
-        quote::quote!(#struct_name)
-            .to_string()
-            .replace(['<', '>', ' ', ',', ':', '&', '(', ')', '[', ']'], "_")
-    );
-
-    Ok(quote! {
-        {
-            struct #handler_ident;
-            impl #impl_item
-            #handler_ident
-        }
-        ::catga_core::CatgaResult::<()>
-    })
+    Ok(quote! { #impl_item })
 }
 
 pub fn expand_auto(input: TokenStream) -> proc_macro::TokenStream {
@@ -183,9 +168,13 @@ fn expand_auto_impl(input: TokenStream) -> Result<TokenStream> {
                                 }
                             };
 
-                            // All async fn handlers are treated as request handlers for now
+                            // Free async fns register as request handlers. Function items do
+                            // not implement `Handler`, so they are wrapped in the crate's
+                            // closure-based `request_handler` adapter.
                             let registration = quote! {
-                                __catga_auto_registry.register_request::<#message_type, _>(#fn_name)?;
+                                __catga_auto_registry.register_request::<#message_type, _>(
+                                    ::catga_core::request_handler::<#message_type, _, _>(#fn_name),
+                                )?;
                             };
                             registrations.push(registration);
                         }

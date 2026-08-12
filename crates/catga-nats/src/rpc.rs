@@ -24,9 +24,23 @@ pub struct NatsRequestClient {
 
 impl NatsRequestClient {
     /// Connects a request client to one NATS service subject.
+    ///
+    /// Requests are correlated over one subject; the server half is [`NatsRequestServer`].
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsRequestClient;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let client = NatsRequestClient::connect("nats://127.0.0.1:4222", "orders.service").await?;
+    /// # drop(client);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, subject: &str) -> CatgaResult<Self> {
         validate_subject(subject)?;
-        let client = async_nats::connect(server).await.map_err(map_error)?;
+        let client = async_nats::connect(server)
+            .await
+            .map_err(CatgaError::transient)?;
         Self::from_client(client, subject)
     }
 
@@ -81,7 +95,7 @@ impl NatsRequestClient {
         )
         .await
         .map_err(|_| CatgaError::new(ErrorCode::Timeout, "NATS request timed out"))?
-        .map_err(map_error)?;
+        .map_err(CatgaError::transient)?;
         self.codec.decode(&reply.payload)
     }
 
@@ -124,9 +138,23 @@ pub struct NatsRequestServer {
 
 impl NatsRequestServer {
     /// Connects a request server to one NATS service subject.
+    ///
+    /// The server subscribes before returning, so an early client request is not lost.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsRequestServer;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let server = NatsRequestServer::connect("nats://127.0.0.1:4222", "orders.service").await?;
+    /// # drop(server);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, subject: &str) -> CatgaResult<Self> {
         validate_subject(subject)?;
-        let client = async_nats::connect(server).await.map_err(map_error)?;
+        let client = async_nats::connect(server)
+            .await
+            .map_err(CatgaError::transient)?;
         Self::from_client(client, subject).await
     }
 
@@ -156,7 +184,7 @@ impl NatsRequestServer {
         let subscription = client
             .subscribe(async_nats::Subject::from(subject))
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             client,
             subscription,
@@ -227,7 +255,7 @@ impl NatsRequest {
         self.client
             .publish(self.reply, payload.into())
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     /// Serializes and sends a typed successful response with propagated correlation metadata.
@@ -241,10 +269,6 @@ impl NatsRequest {
         let envelope = self.codec.typed_failure(&self.envelope, error)?;
         self.respond(envelope).await
     }
-}
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }
 
 fn validate_subject(subject: &str) -> CatgaResult<()> {

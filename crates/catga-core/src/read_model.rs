@@ -214,7 +214,7 @@ where
                 ));
             }
             let last = state & TIMESTAMP;
-            let now = now_millis();
+            let now = crate::time::now_unix_millis_or(1);
             if last != 0 && now.saturating_sub(last) < self.interval_millis {
                 return Err(CatgaError::new(
                     crate::ErrorCode::Transient,
@@ -323,7 +323,8 @@ where
             .map(|change| change.id().into())
             .collect::<Vec<Box<str>>>();
         self.tracker.mark_synced(&ids).await?;
-        self.last_sync_millis.store(now_millis(), Ordering::Release);
+        self.last_sync_millis
+            .store(crate::time::now_unix_millis_or(1), Ordering::Release);
         Ok(())
     }
     /// Returns the latest successful synchronization time.
@@ -342,12 +343,4 @@ pub trait ReadModelStore<M: Send + Sync + 'static>: Send + Sync {
     async fn save(&self, id: &str, model: Arc<M>) -> CatgaResult<()>;
     /// Removes one read model.
     async fn delete(&self, id: &str) -> CatgaResult<()>;
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(1, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        })
 }

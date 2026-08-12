@@ -38,6 +38,39 @@ use crate::backend::Backend;
 ///
 /// Calling `migrate` once creates only durable state. This type never creates a worker, timer,
 /// or background task; applications call `DueFlowScheduler::claim_due` themselves.
+///
+/// # Leasing semantics
+///
+/// Each resume is stored once per `(flow_id, state_id)` pair behind a fixed-width target key, so
+/// rescheduling the same suspended step replaces the due time instead of accumulating duplicate
+/// rows. `claim_due` takes a bounded batch of due rows inside one transaction with skip-locked
+/// selection (or the dialect's equivalent guarded update), stamps the caller's lease, and returns
+/// the receipts. The owner then acknowledges completion with `ack_due`, returns the row to the
+/// pool with `release_due`, or extends its lease with `renew_due`; a lease that expires makes the
+/// row claimable by another owner.
+///
+/// ```
+/// use std::time::{Duration, SystemTime};
+/// use catga_core::flow::{DueFlowScheduler, FlowScheduler};
+/// use catga_flow_store::SqlFlowScheduler;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let directory = tempfile::tempdir()?;
+/// let url = format!("sqlite://{}", directory.path().join("schedules.db").display());
+/// let scheduler = SqlFlowScheduler::connect_sqlite(&url).await?;
+/// scheduler.migrate().await?;
+///
+/// let already_due = SystemTime::now() - Duration::from_secs(1);
+/// let schedule_id = scheduler.schedule_resume("flow-7", "state-7", already_due).await?;
+/// let claimed = scheduler
+///     .claim_due("worker-a", SystemTime::now(), Duration::from_secs(30), 8)
+///     .await?;
+/// assert_eq!(claimed.len(), 1);
+/// assert!(scheduler.ack_due("worker-a", &schedule_id).await?);
+/// # Ok(())
+/// # }
+/// ```
 pub struct SqlFlowScheduler {
     #[cfg_attr(
         not(any(
@@ -53,6 +86,16 @@ pub struct SqlFlowScheduler {
 
 impl SqlFlowScheduler {
     /// Opens a SQL Server scheduler with a bounded bb8/Tiberius pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowScheduler;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let scheduler = SqlFlowScheduler::connect_mssql("server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true").await?;
+    /// scheduler.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql(url: &str) -> CatgaResult<Self> {
         let manager = bb8_tiberius::ConnectionManager::build(url)
@@ -67,6 +110,20 @@ impl SqlFlowScheduler {
     }
 
     /// Adopts an application-owned SQL Server pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowScheduler;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let manager = bb8_tiberius::ConnectionManager::build(
+    ///     "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true",
+    /// )?;
+    /// let pool = bb8::Pool::builder().max_size(8).build(manager).await?;
+    /// let scheduler = SqlFlowScheduler::from_mssql_pool(pool);
+    /// scheduler.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub fn from_mssql_pool(pool: crate::MssqlPool) -> Self {
         Self {
@@ -75,6 +132,16 @@ impl SqlFlowScheduler {
     }
 
     /// Opens a MySQL 8 scheduler with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowScheduler;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let scheduler = SqlFlowScheduler::connect_mysql("mysql://catga:catga@localhost/catga").await?;
+    /// scheduler.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql(url: &str) -> CatgaResult<Self> {
         use sqlx::mysql::MySqlPoolOptions;
@@ -88,6 +155,20 @@ impl SqlFlowScheduler {
     }
 
     /// Adopts an application-owned MySQL pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowScheduler;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::mysql::MySqlPoolOptions::new()
+    ///     .max_connections(8)
+    ///     .connect("mysql://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let scheduler = SqlFlowScheduler::from_mysql_pool(pool);
+    /// scheduler.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub fn from_mysql_pool(pool: sqlx::MySqlPool) -> Self {
         Self {
@@ -96,6 +177,16 @@ impl SqlFlowScheduler {
     }
 
     /// Opens a PostgreSQL scheduler with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowScheduler;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let scheduler = SqlFlowScheduler::connect_postgres("postgres://catga:catga@localhost/catga").await?;
+    /// scheduler.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres(url: &str) -> CatgaResult<Self> {
         use sqlx::postgres::PgPoolOptions;
@@ -109,6 +200,20 @@ impl SqlFlowScheduler {
     }
 
     /// Adopts an application-owned PostgreSQL pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowScheduler;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::postgres::PgPoolOptions::new()
+    ///     .max_connections(8)
+    ///     .connect("postgres://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let scheduler = SqlFlowScheduler::from_postgres_pool(pool);
+    /// scheduler.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub fn from_postgres_pool(pool: sqlx::PgPool) -> Self {
         Self {
@@ -117,6 +222,19 @@ impl SqlFlowScheduler {
     }
 
     /// Opens a SQLite scheduler with a bounded WAL pool.
+    ///
+    /// ```
+    /// use catga_flow_store::SqlFlowScheduler;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let url = format!("sqlite://{}", directory.path().join("schedules.db").display());
+    /// let scheduler = SqlFlowScheduler::connect_sqlite(&url).await?;
+    /// scheduler.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
         use sqlx::sqlite::{
@@ -141,6 +259,10 @@ impl SqlFlowScheduler {
     }
 
     /// Applies this backend's idempotent scheduler schema migration.
+    ///
+    /// Creates the schedule table and its due-time index once; rerunning is a no-op. Poll
+    /// `claim_due` only after the migration has completed successfully — the scheduler performs
+    /// no implicit migration on first use.
     #[cfg(any(
         feature = "sqlite",
         feature = "mysql",

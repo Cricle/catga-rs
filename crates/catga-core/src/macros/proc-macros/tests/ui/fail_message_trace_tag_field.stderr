@@ -1,0 +1,23 @@
+error: Catga trace tag must be a string name
+ --> tests/ui/fail_message_trace_tag_field.rs:5:13
+  |
+5 |     #[catga(trace_tag = 1)]
+  |             ^^^^^^^^^^^^^
+
+error: Catga trace tag must not be empty
+  --> tests/ui/fail_message_trace_tag_field.rs:11:25
+   |
+11 |     #[catga(trace_tag = "")]
+   |                         ^^
+
+error: expected `trace_tag` or `trace_tag = "name"` on a Catga message field
+  --> tests/ui/fail_message_trace_tag_field.rs:17:13
+   |
+17 |     #[catga(bogus)]
+   |             ^^^^^
+
+error: duplicate Catga trace tag for a field
+  --> tests/ui/fail_message_trace_tag_field.rs:23:5
+   |
+23 |     #[catga(trace_tag, trace_tag)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

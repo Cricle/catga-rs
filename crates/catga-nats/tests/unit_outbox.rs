@@ -1,16 +1,6 @@
 //! Unit tests for outbox helper functions.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use catga_core::{Envelope, MessageMetadata, OutboxMessage};
-
-fn message() -> OutboxMessage {
-    OutboxMessage::new(Envelope::new(
-        7,
-        "test.message",
-        vec![1, 2, 3],
-        MessageMetadata::new(7, Some(9)),
-    ))
-}
 
 fn key(id: u64) -> String {
     format!("m{id:020}")
@@ -45,10 +35,26 @@ fn stored_state_decode_rejects_invalid_codes() {
 
 #[test]
 fn stored_state_encode_decode_roundtrip() {
-    assert_eq!(stored_state_decode(stored_state_encode(StoredState::Pending)).unwrap(), StoredState::Pending);
-    assert_eq!(stored_state_decode(stored_state_encode(StoredState::Claimed)).unwrap(), StoredState::Claimed);
-    assert_eq!(stored_state_decode(stored_state_encode(StoredState::Failed)).unwrap(), StoredState::Failed);
-    assert_eq!(stored_state_decode(stored_state_encode(StoredState::Published)).unwrap(), StoredState::Published);
+    assert_eq!(
+        stored_state_decode(stored_state_encode(StoredState::Pending))
+            .expect("test value must be present"),
+        StoredState::Pending
+    );
+    assert_eq!(
+        stored_state_decode(stored_state_encode(StoredState::Claimed))
+            .expect("test value must be present"),
+        StoredState::Claimed
+    );
+    assert_eq!(
+        stored_state_decode(stored_state_encode(StoredState::Failed))
+            .expect("test value must be present"),
+        StoredState::Failed
+    );
+    assert_eq!(
+        stored_state_decode(stored_state_encode(StoredState::Published))
+            .expect("test value must be present"),
+        StoredState::Published
+    );
 }
 
 #[test]
@@ -83,7 +89,7 @@ fn outbox_message_key_consistency() {
 fn system_time_unix_ms_at_epoch() {
     let result = system_time_unix_ms(UNIX_EPOCH);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 0);
+    assert_eq!(result.expect("test value must be present"), 0);
 }
 
 #[test]
@@ -98,7 +104,7 @@ fn system_time_unix_ms_one_second() {
     let time = UNIX_EPOCH + Duration::from_secs(1);
     let result = system_time_unix_ms(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 1000);
+    assert_eq!(result.expect("test value must be present"), 1000);
 }
 
 #[test]
@@ -106,15 +112,21 @@ fn system_time_unix_ms_large_value() {
     let time = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     let result = system_time_unix_ms(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 1_700_000_000_000);
+    assert_eq!(
+        result.expect("test value must be present"),
+        1_700_000_000_000
+    );
 }
 
 #[test]
-fn system_time_unix_ms_max_u64() {
-    let time = UNIX_EPOCH + Duration::from_millis(u64::MAX);
+fn system_time_unix_ms_large_portable_value() {
+    // 100 trillion milliseconds (~year 5138) fits both Unix and Windows SystemTime ranges;
+    // u64::MAX milliseconds overflows the Windows range and panics inside `+`.
+    let millis = 100_000_000_000_000_u64;
+    let time = UNIX_EPOCH + Duration::from_millis(millis);
     let result = system_time_unix_ms(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), u64::MAX);
+    assert_eq!(result.expect("test value must be present"), millis);
 }
 
 #[test]
@@ -174,10 +186,10 @@ fn stored_state_decode(value: u8) -> Result<StoredState, catga_core::CatgaError>
 }
 
 fn system_time_unix_ms(time: SystemTime) -> Result<u64, String> {
-    let elapsed = time.duration_since(UNIX_EPOCH)
+    let elapsed = time
+        .duration_since(UNIX_EPOCH)
         .map_err(|_| "precedes Unix epoch".to_string())?;
-    u64::try_from(elapsed.as_millis())
-        .map_err(|_| "exceeds range".to_string())
+    u64::try_from(elapsed.as_millis()).map_err(|_| "exceeds range".to_string())
 }
 
 fn map_error(error: impl std::fmt::Display) -> catga_core::CatgaError {

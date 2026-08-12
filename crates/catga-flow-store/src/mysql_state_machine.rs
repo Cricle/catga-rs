@@ -20,4 +20,4 @@ pub(crate) async fn migrate(pool: &MySqlPool) -> catga_core::CatgaResult<()> {
     })
 }
 
-define_server_state_machine!(MySqlPool, false, "MySQL");
+define_server_state_machine!(MySqlPool, false, false, "MySQL");

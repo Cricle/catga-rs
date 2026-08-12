@@ -41,7 +41,10 @@ fn state_claimed() {
     let value = vec![CLAIMED, 100, 50, 58]; // CLAIMED followed by expiry:generation:
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Claimed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Claimed
+    );
 }
 
 #[test]
@@ -49,7 +52,10 @@ fn state_completed_empty() {
     let value = vec![COMPLETED_EMPTY];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Completed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Completed
+    );
 }
 
 #[test]
@@ -57,7 +63,10 @@ fn state_completed_with_result() {
     let value = vec![COMPLETED_RESULT, b'd', b'a', b't', b'a'];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Completed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Completed
+    );
 }
 
 #[test]
@@ -65,7 +74,10 @@ fn state_failed() {
     let value = vec![FAILED, 0, 0, 0];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Failed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Failed
+    );
 }
 
 #[test]
@@ -73,7 +85,7 @@ fn state_empty_value() {
     let value = vec![];
     let result = state(&value);
     assert!(result.is_err());
-    let error = result.unwrap_err();
+    let error = result.expect_err("expected an error");
     assert_eq!(error.code(), ErrorCode::Internal);
     assert!(error.message().contains("malformed"));
 }
@@ -83,7 +95,10 @@ fn state_zero_byte() {
     let value = vec![0];
     let result = state(&value);
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err().code(), ErrorCode::Internal);
+    assert_eq!(
+        result.expect_err("expected an error").code(),
+        ErrorCode::Internal
+    );
 }
 
 #[test]
@@ -91,7 +106,10 @@ fn state_invalid_state_byte() {
     let value = vec![5]; // 5 is not a valid state
     let result = state(&value);
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err().code(), ErrorCode::Internal);
+    assert_eq!(
+        result.expect_err("expected an error").code(),
+        ErrorCode::Internal
+    );
 }
 
 #[test]
@@ -99,7 +117,10 @@ fn state_invalid_state_high_byte() {
     let value = vec![255];
     let result = state(&value);
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err().code(), ErrorCode::Internal);
+    assert_eq!(
+        result.expect_err("expected an error").code(),
+        ErrorCode::Internal
+    );
 }
 
 // =============================================================================
@@ -193,19 +214,10 @@ fn state_constants_are_distinct() {
 
 #[test]
 fn state_constants_are_non_zero() {
-    assert!(CLAIMED > 0);
-    assert!(COMPLETED_EMPTY > 0);
-    assert!(COMPLETED_RESULT > 0);
-    assert!(FAILED > 0);
-}
-
-#[test]
-fn state_constants_are_single_byte() {
-    // u8 is guaranteed to be a single byte (0-255)
-    assert!(CLAIMED <= u8::MAX);
-    assert!(COMPLETED_EMPTY <= u8::MAX);
-    assert!(COMPLETED_RESULT <= u8::MAX);
-    assert!(FAILED <= u8::MAX);
+    const { assert!(CLAIMED > 0) };
+    const { assert!(COMPLETED_EMPTY > 0) };
+    const { assert!(COMPLETED_RESULT > 0) };
+    const { assert!(FAILED > 0) };
 }
 
 // =============================================================================
@@ -217,7 +229,10 @@ fn state_with_only_claimed_byte() {
     let value = vec![CLAIMED];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Claimed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Claimed
+    );
 }
 
 #[test]
@@ -225,7 +240,10 @@ fn state_with_only_failed_byte() {
     let value = vec![FAILED];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Failed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Failed
+    );
 }
 
 #[test]
@@ -234,7 +252,10 @@ fn state_completed_empty_followed_by_data() {
     let value = vec![COMPLETED_EMPTY, 1, 2, 3, 4, 5];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Completed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Completed
+    );
 }
 
 #[test]
@@ -243,7 +264,10 @@ fn state_claimed_with_extended_data() {
     let value = vec![CLAIMED, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Claimed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Claimed
+    );
 }
 
 #[test]
@@ -252,7 +276,10 @@ fn state_failed_with_extended_data() {
     let value = vec![FAILED, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     let result = state(&value);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), ProcessingState::Failed);
+    assert_eq!(
+        result.expect("test value must be present"),
+        ProcessingState::Failed
+    );
 }
 
 // =============================================================================

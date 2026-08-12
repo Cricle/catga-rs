@@ -45,6 +45,38 @@ use crate::backend::Backend;
 ///
 /// Migrate the selected backend once before use. The store maintains a physical revision in addition to
 /// the Flow business version so a stale continuation cannot overwrite a heartbeat or wait result.
+///
+/// # Continuation and timeout semantics
+///
+/// A continuation row joins the suspended [`FlowState`](catga_core::flow::FlowState), the step to
+/// resume, any wait condition, and the compensation stack. Mutations are compare-and-set guarded:
+/// `update`, `claim`, and the `record_wait_*` results apply only at the expected version, and
+/// `delete` removes a row only at its expected version. The same table backs
+/// [`TimedOutFlowStore`](catga_core::flow::TimedOutFlowStore): expired waits are leased out as
+/// fenced receipts, so acknowledging or releasing a receipt after a concurrent resume is rejected
+/// by the row's revision instead of double-driving the flow.
+///
+/// ```
+/// use catga_core::flow::{FlowContinuation, FlowState, SuspendedFlowStore};
+/// use catga_flow_store::SqlSuspendedFlowStore;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let directory = tempfile::tempdir()?;
+/// let url = format!("sqlite://{}", directory.path().join("suspended.db").display());
+/// let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+/// store.migrate().await?;
+///
+/// let continuation = FlowContinuation::new(
+///     FlowState::new("flow-9", "payment", [], "node-a").suspended(),
+///     "finish",
+/// );
+/// assert!(store.create(continuation).await?);
+/// let stored = store.get("flow-9").await?.expect("the continuation was just created");
+/// assert_eq!(stored.step_name(), "finish");
+/// # Ok(())
+/// # }
+/// ```
 pub struct SqlSuspendedFlowStore {
     #[cfg_attr(
         not(any(
@@ -60,6 +92,16 @@ pub struct SqlSuspendedFlowStore {
 
 impl SqlSuspendedFlowStore {
     /// Opens a SQL Server continuation store with a bounded bb8/Tiberius pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlSuspendedFlowStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlSuspendedFlowStore::connect_mssql("server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql(url: &str) -> CatgaResult<Self> {
         let manager = bb8_tiberius::ConnectionManager::build(url)
@@ -74,6 +116,20 @@ impl SqlSuspendedFlowStore {
     }
 
     /// Adopts an application-owned SQL Server pool without allocating another pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlSuspendedFlowStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let manager = bb8_tiberius::ConnectionManager::build(
+    ///     "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true",
+    /// )?;
+    /// let pool = bb8::Pool::builder().max_size(8).build(manager).await?;
+    /// let store = SqlSuspendedFlowStore::from_mssql_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub fn from_mssql_pool(pool: crate::MssqlPool) -> Self {
         Self {
@@ -82,6 +138,16 @@ impl SqlSuspendedFlowStore {
     }
 
     /// Opens a MySQL 8 continuation store with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlSuspendedFlowStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlSuspendedFlowStore::connect_mysql("mysql://catga:catga@localhost/catga").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql(url: &str) -> CatgaResult<Self> {
         use sqlx::mysql::MySqlPoolOptions;
@@ -95,6 +161,20 @@ impl SqlSuspendedFlowStore {
     }
 
     /// Adopts an application-owned MySQL pool without allocating another pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlSuspendedFlowStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::mysql::MySqlPoolOptions::new()
+    ///     .max_connections(8)
+    ///     .connect("mysql://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let store = SqlSuspendedFlowStore::from_mysql_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub fn from_mysql_pool(pool: sqlx::MySqlPool) -> Self {
         Self {
@@ -103,6 +183,16 @@ impl SqlSuspendedFlowStore {
     }
 
     /// Opens a PostgreSQL continuation store with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlSuspendedFlowStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlSuspendedFlowStore::connect_postgres("postgres://catga:catga@localhost/catga").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres(url: &str) -> CatgaResult<Self> {
         use sqlx::postgres::PgPoolOptions;
@@ -116,6 +206,20 @@ impl SqlSuspendedFlowStore {
     }
 
     /// Adopts an application-owned PostgreSQL pool without allocating another pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlSuspendedFlowStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::postgres::PgPoolOptions::new()
+    ///     .max_connections(8)
+    ///     .connect("postgres://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let store = SqlSuspendedFlowStore::from_postgres_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub fn from_postgres_pool(pool: sqlx::PgPool) -> Self {
         Self {
@@ -124,6 +228,19 @@ impl SqlSuspendedFlowStore {
     }
 
     /// Opens a SQLite continuation store with a bounded WAL pool.
+    ///
+    /// ```
+    /// use catga_flow_store::SqlSuspendedFlowStore;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let url = format!("sqlite://{}", directory.path().join("suspended.db").display());
+    /// let store = SqlSuspendedFlowStore::connect_sqlite(&url).await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
         use sqlx::sqlite::{
@@ -149,6 +266,10 @@ impl SqlSuspendedFlowStore {
     }
 
     /// Applies this backend's idempotent continuation schema migration.
+    ///
+    /// Creates the continuation table and its wait-correlation and timeout indexes once;
+    /// rerunning is a no-op. Suspend or poll flows only after the migration has completed
+    /// successfully — the store performs no implicit migration on first use.
     #[cfg(any(
         feature = "sqlite",
         feature = "mysql",

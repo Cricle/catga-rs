@@ -13,8 +13,8 @@ use std::{
 use async_trait::async_trait;
 use catga_cluster::{
     RaftCommittedEntry, RaftMember, RaftNode, RaftRuntime, RaftRuntimeError, RaftStateMachine,
-    RaftStateMachineDriver, RaftStateMachineRuntime, RaftStateMachineRuntimeError, RaftTransport,
-    RaftTransportError,
+    RaftStateMachineDriver, RaftStateMachineRuntime, RaftStateMachineRuntimeError, RaftStopKind,
+    RaftTransport, RaftTransportError,
 };
 use catga_core::flow::{
     DslFlow, FlowRuntime, MemoryFlowScheduler,
@@ -639,9 +639,9 @@ fn raft_node_reports_pending_commands_and_rejected_proposals() {
     )
     .expect("a single-node Raft cluster is valid");
 
-    assert!(node.try_propose(b"not-leader").is_err());
+    assert!(node.propose(b"not-leader").is_err());
     node.campaign().expect("the single node can become leader");
-    node.try_propose(b"apply-command")
+    node.propose(b"apply-command")
         .expect("the leader accepts one bounded command");
     assert_eq!(recorder.gauge("catga.cluster.raft.pending_commits|"), 1.0);
     let entries = node.drain_committed();
@@ -674,11 +674,25 @@ async fn raft_runtime_reports_queue_depth_and_transport_failures() {
     )
     .expect("the runtime starts");
 
-    assert!(matches!(
-        runtime.campaign().await,
-        Err(RaftRuntimeError::Stopped)
-    ));
-    runtime.shutdown();
+    // Sends only queue frames for per-peer workers, so the fatal transport
+    // failure surfaces asynchronously: the next send observes the recorded
+    // worker failure and the owner task stops with the Transport error.
+    runtime
+        .campaign()
+        .await
+        .expect("queued delivery must not fail the campaign");
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while runtime.is_alive() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fatal transport failure must stop the runtime"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        runtime.stop_reason().map(|reason| reason.kind()),
+        Some(RaftStopKind::Transport)
+    );
     assert!(matches!(
         runtime.join().await,
         Err(RaftRuntimeError::Transport(_))
@@ -751,11 +765,25 @@ async fn state_machine_runtime_reports_queue_depth_and_transport_failures() {
     )
     .expect("the runtime starts");
 
-    assert!(matches!(
-        runtime.campaign().await,
-        Err(RaftStateMachineRuntimeError::Stopped)
-    ));
-    runtime.shutdown();
+    // Sends only queue frames for per-peer workers, so the fatal transport
+    // failure surfaces asynchronously: the next send observes the recorded
+    // worker failure and the owner task stops with the Transport error.
+    runtime
+        .campaign()
+        .await
+        .expect("queued delivery must not fail the campaign");
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while runtime.is_alive() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fatal transport failure must stop the runtime"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        runtime.stop_reason().map(|reason| reason.kind()),
+        Some(RaftStopKind::Transport)
+    );
     assert!(matches!(
         runtime.join().await,
         Err(RaftStateMachineRuntimeError::Transport(_))

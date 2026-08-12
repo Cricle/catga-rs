@@ -597,4 +597,3 @@ fn response_metadata(request: &Envelope) -> MessageMetadata {
 fn map_memorypack_error(error: MemoryPackError) -> CatgaError {
     CatgaError::new(ErrorCode::Validation, error.to_string())
 }
-

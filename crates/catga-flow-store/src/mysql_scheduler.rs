@@ -6,6 +6,7 @@ define_server_scheduler!(
     sqlx::MySqlPool,
     sqlx::mysql::MySqlRow,
     false,
+    false,
     "MySQL",
     "CREATE TABLE IF NOT EXISTS catga_flow_schedules (\
        schedule_id CHAR(36) PRIMARY KEY NOT NULL, target_key BINARY(32) NOT NULL UNIQUE, \

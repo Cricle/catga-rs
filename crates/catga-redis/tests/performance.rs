@@ -10,6 +10,9 @@ use catga_core::{
     Stoppable, codec::memorypack::MemoryPackCodec,
 };
 
+#[path = "support/service_url.rs"]
+mod service_url;
+
 /// Test envelope encoding/decoding throughput.
 #[tokio::test]
 #[ignore = "requires Redis server"]
@@ -56,8 +59,11 @@ async fn envelope_encoding_decoding_throughput() -> Result<(), Box<dyn std::erro
 async fn connection_establishment() -> Result<(), Box<dyn std::error::Error>> {
     use catga_redis::{RedisConfig, RedisTransport};
 
+    let Some(url) = service_url::redis_url()? else {
+        return Ok(());
+    };
     let config = RedisConfig {
-        server: "redis://127.0.0.1/".into(),
+        server: url.into(),
         stream: "perf_test".into(),
         group: "perf_group".into(),
         consumer: "perf_consumer".into(),
@@ -167,8 +173,11 @@ async fn error_handling_under_failure() -> Result<(), Box<dyn std::error::Error>
 async fn batch_publish_throughput() -> Result<(), Box<dyn std::error::Error>> {
     use catga_redis::{RedisConfig, RedisTransport};
 
+    let Some(url) = service_url::redis_url()? else {
+        return Ok(());
+    };
     let config = RedisConfig {
-        server: "redis://127.0.0.1/".into(),
+        server: url.into(),
         stream: "batch_test".into(),
         group: "batch_group".into(),
         consumer: "batch_consumer".into(),

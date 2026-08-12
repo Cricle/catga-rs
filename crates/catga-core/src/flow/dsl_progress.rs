@@ -255,4 +255,3 @@ pub trait DslStepProgressStore: Send + Sync {
     /// Deletes progress for one flow step and reports whether a record existed.
     async fn delete(&self, flow_id: &str, step_index: u32) -> CatgaResult<bool>;
 }
-

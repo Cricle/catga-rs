@@ -1,0 +1,17 @@
+error: `#[catga_main]` does not accept `transport = ...`: `AutoAppBuilder` has no transport hook, so bind the transport explicitly inside the function body
+ --> tests/ui/fail_catga_main.rs:3:33
+  |
+3 | #[catga_core_macros::catga_main(transport = ())]
+  |                                 ^^^^^^^^^
+
+error: `#[catga_main]` takes no arguments
+ --> tests/ui/fail_catga_main.rs:6:33
+  |
+6 | #[catga_core_macros::catga_main(bogus)]
+  |                                 ^^^^^
+
+error: expected `fn`
+  --> tests/ui/fail_catga_main.rs:10:5
+   |
+10 | pub struct NotAFunction;
+   |     ^^^^^^

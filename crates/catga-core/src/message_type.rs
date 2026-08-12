@@ -152,4 +152,3 @@ fn alias_conflict() -> CatgaError {
         "a message type name is already registered for another message",
     )
 }
-

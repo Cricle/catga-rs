@@ -135,6 +135,18 @@ impl RaftClusterConfig {
     ///
     /// `node_id` is a zero-based process index, matching Catga's C# helper;
     /// it is converted to Raft's non-zero numeric member identifier internally.
+    ///
+    /// ```
+    /// use catga_cluster::RaftClusterConfig;
+    ///
+    /// let config = RaftClusterConfig::local(0, 3, 9000).expect("valid dimensions");
+    /// let members = config.members().expect("valid members");
+    /// // The member list contains this node plus the two remote members.
+    /// assert_eq!(members.len(), 3);
+    /// // Raft member identifiers are 1-based even though `local` takes a 0-based index.
+    /// assert_eq!(members[0].id(), 1);
+    /// assert_eq!(members[0].endpoint(), "http://localhost:9000");
+    /// ```
     pub fn local(
         node_id: u64,
         total_nodes: u64,
@@ -186,6 +198,19 @@ impl RaftClusterConfig {
     }
 
     /// Converts millisecond durations to the `raft-rs` tick configuration.
+    ///
+    /// Returns [`RaftClusterConfigError::InvalidTiming`] when any duration is zero or the
+    /// election timeout does not exceed the heartbeat interval, both before and after the
+    /// millisecond-to-tick ceiling conversion.
+    ///
+    /// ```
+    /// use catga_cluster::RaftClusterConfig;
+    ///
+    /// let config = RaftClusterConfig::local(0, 1, 9000).expect("valid dimensions");
+    /// let timing = config.raft_timing().expect("default timing is valid");
+    /// assert_eq!(timing.tick_interval(), std::time::Duration::from_millis(10));
+    /// assert!(timing.election_ticks() > timing.heartbeat_ticks());
+    /// ```
     pub fn raft_timing(&self) -> Result<RaftTiming, RaftClusterConfigError> {
         if self.tick_interval_ms == 0
             || self.heartbeat_interval_ms == 0
@@ -275,4 +300,3 @@ const fn default_election_timeout_ms() -> u64 {
 const fn default_heartbeat_interval_ms() -> u64 {
     DEFAULT_HEARTBEAT_INTERVAL_MS
 }
-

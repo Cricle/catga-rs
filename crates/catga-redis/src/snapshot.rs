@@ -12,8 +12,6 @@ use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Snapshot, SnapshotCodec, SnapshotStore};
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
-use crate::transport::map_error;
-
 const SAVE: &str = r#"
 local current = redis.call('HGET', KEYS[1], 'version')
 if current == false then current = -1 else current = tonumber(current) end
@@ -57,11 +55,11 @@ where
         prefix: impl Into<Box<str>>,
         codec: C,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -127,15 +125,21 @@ where
         Self::require_state::<T>()?;
         let key = self.key(stream_id);
         let mut connection = self.connection.clone();
-        let version: Option<i64> = connection.hget(&key, "version").await.map_err(map_error)?;
+        let version: Option<i64> = connection
+            .hget(&key, "version")
+            .await
+            .map_err(CatgaError::transient)?;
         let Some(version) = version else {
             return Ok(None);
         };
         let timestamp: Option<u64> = connection
             .hget(&key, "timestamp")
             .await
-            .map_err(map_error)?;
-        let payload: Option<Vec<u8>> = connection.hget(&key, "state").await.map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
+        let payload: Option<Vec<u8>> = connection
+            .hget(&key, "state")
+            .await
+            .map_err(CatgaError::transient)?;
         let timestamp = timestamp.ok_or_else(|| {
             CatgaError::new(
                 ErrorCode::Internal,
@@ -162,7 +166,10 @@ where
 
     async fn delete(&self, stream_id: &str) -> CatgaResult<()> {
         let mut connection = self.connection.clone();
-        connection.del(self.key(stream_id)).await.map_err(map_error)
+        connection
+            .del(self.key(stream_id))
+            .await
+            .map_err(CatgaError::transient)
     }
 }
 
@@ -186,6 +193,6 @@ fn map_save_error(error: redis::RedisError) -> CatgaError {
             "a newer snapshot already exists for this stream",
         )
     } else {
-        map_error(error)
+        CatgaError::transient(error)
     }
 }

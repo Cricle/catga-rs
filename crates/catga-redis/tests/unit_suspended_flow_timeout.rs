@@ -130,8 +130,14 @@ fn create_script_optional_ready_flag() {
 
 #[test]
 fn compare_and_set_script_validates_version() {
-    assert!(COMPARE_AND_SET.contains("~="), "not-equal check for version");
-    assert!(COMPARE_AND_SET.contains("return 0"), "returns 0 on mismatch");
+    assert!(
+        COMPARE_AND_SET.contains("~="),
+        "not-equal check for version"
+    );
+    assert!(
+        COMPARE_AND_SET.contains("return 0"),
+        "returns 0 on mismatch"
+    );
 }
 
 #[test]
@@ -144,12 +150,18 @@ fn compare_and_set_script_updates_all_structures() {
 
 #[test]
 fn compare_and_set_script_handles_empty_timeout() {
-    assert!(COMPARE_AND_SET.contains("ARGV[4] == ''"), "checks empty timeout");
+    assert!(
+        COMPARE_AND_SET.contains("ARGV[4] == ''"),
+        "checks empty timeout"
+    );
 }
 
 #[test]
 fn compare_and_set_script_conditional_ready_removal() {
-    assert!(COMPARE_AND_SET.contains("ARGV[5] == '1'"), "checks ready flag");
+    assert!(
+        COMPARE_AND_SET.contains("ARGV[5] == '1'"),
+        "checks ready flag"
+    );
     assert!(COMPARE_AND_SET.contains("ZCARD"), "checks set cardinality");
     assert!(COMPARE_AND_SET.contains("DEL"), "deletes empty set");
 }
@@ -173,7 +185,10 @@ fn delete_if_equal_removes_all_structures() {
 
 #[test]
 fn delete_if_equal_conditional_cleanup() {
-    assert!(DELETE_IF_EQUAL.contains("ARGV[3] == '1'"), "checks cleanup flag");
+    assert!(
+        DELETE_IF_EQUAL.contains("ARGV[3] == '1'"),
+        "checks cleanup flag"
+    );
     assert!(DELETE_IF_EQUAL.contains("ZCARD"), "checks cardinality");
 }
 

@@ -8,12 +8,10 @@ use catga_core::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackSerialize, MemoryPackSerializer,
 };
 use catga_core::flow::{DslStepProgress, DslStepProgressStore};
+use catga_core::hash::sha256_concat_digest;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
-use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};
-
-const MAX_CAS_RETRIES: usize = 8;
 
 /// A JetStream KV store for versioned, application-encoded DSL step progress.
 ///
@@ -25,12 +23,28 @@ pub struct NatsDslStepProgress {
 
 impl NatsDslStepProgress {
     /// Connects to `server`, opening or creating the named JetStream KV `bucket`.
+    ///
+    /// Step progress is kept in one KV bucket shared by every worker of the flow.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsDslStepProgress;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let progress = NatsDslStepProgress::connect("nats://127.0.0.1:4222", "app-dsl-progress").await?;
+    /// # drop(progress);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self { store })
     }
 
@@ -38,7 +52,7 @@ impl NatsDslStepProgress {
         self.store
             .entry(&key(flow_id, step_index))
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(&self, key: &str, value: Vec<u8>, revision: u64) -> CatgaResult<bool> {
@@ -46,7 +60,7 @@ impl NatsDslStepProgress {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = matches!(self.store.entry(key).await, Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) && entry.value.as_ref() == value.as_slice());
                 if committed { Ok(true) } else { Err(reported) }
             }
@@ -67,7 +81,7 @@ impl DslStepProgressStore for NatsDslStepProgress {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = match self.store.entry(&key).await {
                     Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                         record.matches(&decode_record(&entry.value)?)
@@ -117,7 +131,7 @@ impl DslStepProgressStore for NatsDslStepProgress {
 
     async fn delete(&self, flow_id: &str, step_index: u32) -> CatgaResult<bool> {
         let key = key(flow_id, step_index);
-        for _ in 0..MAX_CAS_RETRIES {
+        for _ in 0..crate::kv::MAX_CAS_RETRIES {
             let Some(entry) = self.entry(flow_id, step_index).await? else {
                 return Ok(false);
             };
@@ -136,18 +150,18 @@ impl DslStepProgressStore for NatsDslStepProgress {
                 return Ok(true);
             }
         }
-        Err(CatgaError::new(
-            ErrorCode::Transient,
-            "NATS DSL progress delete compare-and-set did not stabilize",
-        ))
+        Err(crate::kv::cas_error("DSL progress", "delete"))
     }
 }
 
 fn key(flow_id: &str, step_index: u32) -> String {
-    let mut digest = Sha256::new();
-    digest.update(flow_id.as_bytes());
-    digest.update(step_index.to_be_bytes());
-    format!("d{}", hex::encode(digest.finalize()))
+    format!(
+        "d{}",
+        hex::encode(sha256_concat_digest(&[
+            flow_id.as_bytes(),
+            &step_index.to_be_bytes()
+        ]))
+    )
 }
 
 fn encode<T: MemoryPackSerialize>(value: &T) -> CatgaResult<Vec<u8>> {
@@ -166,7 +180,4 @@ fn is_revision_conflict(error: &kv::UpdateError) -> bool {
         .is_some_and(|source| {
             source.kind() == jetstream::context::PublishErrorKind::WrongLastSequence
         })
-}
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }

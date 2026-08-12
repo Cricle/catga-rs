@@ -3,10 +3,11 @@
 use std::borrow::Cow;
 
 pub(crate) use crate::sql_common::{
-    MAX_CAS_RETRIES, cas_error, deadline_millis, is_stale, stale_before_unix_millis, status_code,
-    status_from_code, system_time_from_unix_millis_and_subsec_nanos, unix_millis,
-    unix_millis_and_subsec_nanos,
+    MAX_CAS_RETRIES, cas_error, deadline_millis, status_code, status_from_code,
+    system_time_from_unix_millis_and_subsec_nanos, unix_millis, unix_millis_and_subsec_nanos,
 };
+#[cfg(any(feature = "mysql", feature = "postgres"))]
+pub(crate) use crate::sql_common::{is_stale, stale_before_unix_millis};
 
 /// Converts the canonical `?` bind template into the selected server dialect.
 pub(crate) fn statement<'a>(

@@ -110,6 +110,7 @@ fn mailbox_priority_uses_envelope_metadata() {
 /// The lightweight mq9 raw-mailbox API runs directly over the real NATS test container, so no
 /// RobustMQ control plane is required for this wire-contract test.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_envelope_delivery_uses_the_injected_codec() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let codec = TaggedEnvelopeCodec::default();
@@ -159,6 +160,7 @@ async fn mailbox_envelope_delivery_uses_the_injected_codec() -> CatgaResult<()> 
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_NATS_URL and a running NATS server"]
 async fn mailbox_envelope_delivery_preserves_catga_metadata() -> CatgaResult<()> {
     let server = std::env::var("CATGA_NATS_URL")
         .expect("CATGA_NATS_URL must be set for ignored RobustMQ tests");
@@ -200,6 +202,7 @@ async fn mailbox_envelope_delivery_preserves_catga_metadata() -> CatgaResult<()>
 }
 
 #[tokio::test]
+#[ignore = "requires CATGA_NATS_URL and a running NATS server"]
 async fn mailbox_request_fails_promptly_without_the_mailbox_control_plane() -> CatgaResult<()> {
     let server = std::env::var("CATGA_NATS_URL")
         .expect("CATGA_NATS_URL must be set for ignored RobustMQ tests");
@@ -237,6 +240,7 @@ async fn mailbox_request_fails_promptly_without_the_mailbox_control_plane() -> C
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 /// A custom codec must frame both request directions and the request-server response.
 async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
@@ -291,6 +295,7 @@ async fn mailbox_request_server_replies_through_the_private_reply_mailbox() -> C
 
 /// Verifies that mailbox creation with MailboxConfig works correctly.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_client_create_with_config() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let _control_plane = mq9_control_plane::start(server.url()).await?;
@@ -317,6 +322,7 @@ async fn mailbox_client_create_with_config() -> CatgaResult<()> {
 
 /// Verifies that mailbox creation with public visibility works.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_client_create_public_mailbox() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let _control_plane = mq9_control_plane::start(server.url()).await?;
@@ -347,6 +353,7 @@ async fn mailbox_client_create_public_mailbox() -> CatgaResult<()> {
 
 /// Verifies that multiple messages can be delivered to a mailbox subscription.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_envelope_delivery_multiple_messages() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let client = MailboxClient::connect(server.url()).await?;
@@ -380,7 +387,9 @@ async fn mailbox_envelope_delivery_multiple_messages() -> CatgaResult<()> {
             MessageMetadata::new(i as u64, None),
             1,
         );
-        client.send_envelope(&mailbox, &envelope, MailboxPriority::Normal).await?;
+        client
+            .send_envelope(&mailbox, &envelope, MailboxPriority::Normal)
+            .await?;
     }
 
     // Receive all messages
@@ -408,6 +417,7 @@ async fn mailbox_envelope_delivery_multiple_messages() -> CatgaResult<()> {
 
 /// Verifies that messages with different priorities are delivered according to priority.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_priority_message_order() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let client = MailboxClient::connect(server.url()).await?;
@@ -426,7 +436,7 @@ async fn mailbox_priority_message_order() -> CatgaResult<()> {
                     }
                 }
             },
-            None,  // Receive all priorities
+            None, // Receive all priorities
             "",
         )
         .await?;
@@ -475,6 +485,7 @@ async fn mailbox_priority_message_order() -> CatgaResult<()> {
 
 /// Verifies that MailboxRequestServer can handle typed requests using handle_next.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_request_server_handle_next() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let control_plane = mq9_control_plane::start(server.url()).await?;
@@ -523,6 +534,7 @@ async fn mailbox_request_server_handle_next() -> CatgaResult<()> {
 
 /// Verifies that MailboxRequestServer can be created and subscribed.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_request_server_subscription() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let control_plane = mq9_control_plane::start(server.url()).await?;
@@ -530,11 +542,8 @@ async fn mailbox_request_server_subscription() -> CatgaResult<()> {
     let suffix = format!("sub_{}", std::process::id());
     let mailbox = format!("catga-robustmq-sub-{suffix}");
 
-    // Create and subscribe a request server
+    // Create and subscribe a request server; a successful subscribe is the assertion.
     let _request_server = MailboxRequestServer::subscribe(client.clone(), &mailbox, 8).await?;
-
-    // The subscription should be active
-    assert!(true, "request server subscription should be created");
 
     control_plane.close().await?;
     server
@@ -550,6 +559,7 @@ async fn mailbox_request_server_subscription() -> CatgaResult<()> {
 
 /// Verifies that raw send and subscribe work with bytes (not envelopes).
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_raw_bytes_delivery() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let client = MailboxClient::connect(server.url()).await?;
@@ -574,7 +584,9 @@ async fn mailbox_raw_bytes_delivery() -> CatgaResult<()> {
     // Send raw bytes
     let raw_payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
     let envelope = Envelope::new(0, "", raw_payload.clone(), MessageMetadata::new(0, None));
-    client.send(&mailbox, &envelope, MailboxPriority::Normal).await?;
+    client
+        .send(&mailbox, &envelope, MailboxPriority::Normal)
+        .await?;
 
     // Receive raw bytes
     let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())
@@ -598,6 +610,7 @@ async fn mailbox_raw_bytes_delivery() -> CatgaResult<()> {
 
 /// Verifies that multiple clients can connect to the same server.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_multiple_clients_connect() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
 
@@ -619,7 +632,7 @@ async fn mailbox_multiple_clients_connect() -> CatgaResult<()> {
                     }
                 }
             },
-            None,  // Receive all priorities
+            None, // Receive all priorities
             "",
         )
         .await?;
@@ -635,7 +648,9 @@ async fn mailbox_multiple_clients_connect() -> CatgaResult<()> {
         MessageMetadata::new(300, None),
         1,
     );
-    client_a.send_envelope(&mailbox, &envelope, MailboxPriority::Normal).await?;
+    client_a
+        .send_envelope(&mailbox, &envelope, MailboxPriority::Normal)
+        .await?;
 
     let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())
         .await
@@ -654,6 +669,7 @@ async fn mailbox_multiple_clients_connect() -> CatgaResult<()> {
 
 /// Verifies that request timeout is respected.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn mailbox_request_timeout_respected() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let control_plane = mq9_control_plane::start(server.url()).await?;
@@ -678,7 +694,10 @@ async fn mailbox_request_timeout_respected() -> CatgaResult<()> {
     )
     .await;
 
-    assert!(result.is_err() || result.unwrap().is_err(), "request should time out");
+    assert!(
+        result.is_err() || result.unwrap().is_err(),
+        "request should time out"
+    );
 
     control_plane.close().await?;
     server

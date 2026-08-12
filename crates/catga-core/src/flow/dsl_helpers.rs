@@ -6,9 +6,5 @@ use std::time::Duration;
 ///
 /// Each retry doubles the `initial_delay` and saturates at `Duration::MAX`.
 pub fn retry_delay(initial_delay: Duration, retry: usize) -> Duration {
-    let multiplier = u32::try_from(retry)
-        .ok()
-        .and_then(|retry| 1_u32.checked_shl(retry))
-        .unwrap_or(u32::MAX);
-    initial_delay.saturating_mul(multiplier)
+    crate::resilience::retry_delay(initial_delay, retry)
 }

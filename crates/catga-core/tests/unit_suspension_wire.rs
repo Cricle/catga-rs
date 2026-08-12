@@ -3,8 +3,8 @@
 use std::time::{Duration, UNIX_EPOCH};
 
 use catga_core::codec::memorypack::MemoryPackSerializer;
-use catga_core::flow::suspension::{FlowContinuation, WaitCondition, WaitPolicy};
 use catga_core::flow::FlowState;
+use catga_core::flow::suspension::{FlowContinuation, WaitCondition, WaitPolicy};
 
 #[test]
 fn wait_condition_wire_round_trip_basic() {
@@ -77,7 +77,8 @@ fn flow_continuation_wire_round_trip_delayed() {
     let resume_at = UNIX_EPOCH + Duration::from_secs(120);
     let continuation = FlowContinuation::new(state.clone(), "retry-step").delayed_until(resume_at);
 
-    let bytes = MemoryPackSerializer::serialize(&continuation).expect("delayed continuation serializes");
+    let bytes =
+        MemoryPackSerializer::serialize(&continuation).expect("delayed continuation serializes");
     let deserialized: FlowContinuation =
         MemoryPackSerializer::deserialize(&bytes).expect("delayed continuation deserializes");
 
@@ -89,6 +90,7 @@ fn flow_continuation_wire_round_trip_delayed() {
 fn flow_state_wire_round_trip() {
     let state = FlowState::new("order-123", "processing", [1_u8, 2, 3], "worker");
     let bytes = MemoryPackSerializer::serialize(&state).expect("state serializes");
-    let deserialized: FlowState = MemoryPackSerializer::deserialize(&bytes).expect("state deserializes");
+    let deserialized: FlowState =
+        MemoryPackSerializer::deserialize(&bytes).expect("state deserializes");
     assert_eq!(deserialized.id(), "order-123");
 }

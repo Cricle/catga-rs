@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use catga_core::{
-    CatgaError, CircuitBreakerOptions, ErrorCode, ResilienceExecutor, ResilienceOptions, RetryJitter,
+    CatgaError, CircuitBreakerOptions, ErrorCode, ResilienceExecutor, ResilienceOptions,
+    RetryJitter,
 };
 
 #[test]
@@ -85,8 +86,7 @@ fn resilience_executor_with_policies_accepts_valid_input() {
     let circuit_options = CircuitBreakerOptions::builder(5, Duration::from_secs(30))
         .build()
         .expect("valid options");
-    let executor =
-        ResilienceExecutor::with_policies(options, circuit_options, RetryJitter::none());
+    let executor = ResilienceExecutor::with_policies(options, circuit_options, RetryJitter::none());
     assert!(executor.is_ok());
 }
 
@@ -99,8 +99,7 @@ fn resilience_executor_jitter_policy_returns_configured_policy() {
     assert_eq!(executor.jitter_policy(), RetryJitter::none());
 
     let fixed_jitter = RetryJitter::fixed(Duration::from_millis(100));
-    let executor =
-        ResilienceExecutor::with_jitter(options, fixed_jitter).expect("valid options");
+    let executor = ResilienceExecutor::with_jitter(options, fixed_jitter).expect("valid options");
     assert_eq!(executor.jitter_policy(), fixed_jitter);
 }
 

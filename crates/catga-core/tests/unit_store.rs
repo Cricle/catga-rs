@@ -1,14 +1,12 @@
 //! Unit tests for store types, envelopes, and outbox messages.
 
-use std::{
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use catga_core::{
-    Envelope, EnvelopeHeaders, ErrorCode, MessageMetadata, OutboxMessage,
+    DEFAULT_OUTBOX_MAX_RETRIES, Envelope, EnvelopeHeaders, ErrorCode, MAX_OUTBOX_CLAIM_LEASE,
+    MAX_OUTBOX_CLAIM_LIMIT, MAX_OUTBOX_FAILURE_ERROR_BYTES, MessageMetadata, OutboxMessage,
     OutboxState, validate_outbox_claim_lease, validate_outbox_claim_limit,
-    validate_outbox_message_id, MAX_OUTBOX_CLAIM_LEASE, MAX_OUTBOX_CLAIM_LIMIT,
-    MAX_OUTBOX_FAILURE_ERROR_BYTES, DEFAULT_OUTBOX_MAX_RETRIES,
+    validate_outbox_message_id,
 };
 
 fn make_envelope() -> Envelope {

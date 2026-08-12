@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use catga_core::{
     CatgaError, CatgaResult, Command, CommandBehavior, CommandHandler, CommandNext,
-    CommandPipeline, DefaultMessageTypeId, ErrorCode, Event, EventHandler, Handler, MAX_MEDIATOR_BATCH_SIZE,
-    MAX_PIPELINE_DEPTH, Mediator, MediatorHandle, Message, Registry, Request,
+    CommandPipeline, DefaultMessageTypeId, ErrorCode, Event, EventHandler, Handler,
+    MAX_MEDIATOR_BATCH_SIZE, MAX_PIPELINE_DEPTH, Mediator, MediatorHandle, Message, Registry,
+    Request,
 };
 
 #[test]
@@ -164,9 +165,7 @@ async fn send_batch_rejects_oversized_batch() {
         .expect("registration should succeed");
     let mediator = Mediator::new(registry);
 
-    let oversized: Vec<TestRequest> = (0..=MAX_MEDIATOR_BATCH_SIZE)
-        .map(|_| TestRequest)
-        .collect();
+    let oversized: Vec<TestRequest> = (0..=MAX_MEDIATOR_BATCH_SIZE).map(|_| TestRequest).collect();
 
     let result = mediator.send_batch(oversized, 1).await;
     assert!(result.is_err());

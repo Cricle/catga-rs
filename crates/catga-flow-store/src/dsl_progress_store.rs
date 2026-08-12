@@ -40,6 +40,28 @@ use crate::backend::Backend;
 /// before accepting recoverable DSL flow traffic. Rows use a SHA-256 flow identity key plus the
 /// step index, retain the original ID for collision detection, and perform mutations through
 /// version and physical-revision compare-and-set guards. The store creates no background tasks.
+///
+/// ```
+/// use catga_core::flow::{DslStepProgress, DslStepProgressStore};
+/// use catga_flow_store::SqlDslStepProgressStore;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let directory = tempfile::tempdir()?;
+/// let url = format!("sqlite://{}", directory.path().join("progress.db").display());
+/// let store = SqlDslStepProgressStore::connect_sqlite(&url).await?;
+/// store.migrate().await?;
+///
+/// let progress = DslStepProgress::new("flow-3", 0, []);
+/// assert!(store.create(progress).await?);
+/// let stored = store
+///     .get("flow-3", 0)
+///     .await?
+///     .expect("the checkpoint was just created");
+/// assert_eq!(stored.step_index(), 0);
+/// # Ok(())
+/// # }
+/// ```
 pub struct SqlDslStepProgressStore {
     #[cfg_attr(
         not(any(
@@ -55,6 +77,16 @@ pub struct SqlDslStepProgressStore {
 
 impl SqlDslStepProgressStore {
     /// Opens a SQL Server progress store with a bounded bb8/Tiberius pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlDslStepProgressStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlDslStepProgressStore::connect_mssql("server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql(url: &str) -> CatgaResult<Self> {
         let manager = bb8_tiberius::ConnectionManager::build(url)
@@ -69,6 +101,20 @@ impl SqlDslStepProgressStore {
     }
 
     /// Adopts an application-owned SQL Server pool without allocating another pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlDslStepProgressStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let manager = bb8_tiberius::ConnectionManager::build(
+    ///     "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true",
+    /// )?;
+    /// let pool = bb8::Pool::builder().max_size(8).build(manager).await?;
+    /// let store = SqlDslStepProgressStore::from_mssql_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub fn from_mssql_pool(pool: crate::MssqlPool) -> Self {
         Self {
@@ -77,6 +123,16 @@ impl SqlDslStepProgressStore {
     }
 
     /// Opens a MySQL 8 progress store with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlDslStepProgressStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlDslStepProgressStore::connect_mysql("mysql://catga:catga@localhost/catga").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql(url: &str) -> CatgaResult<Self> {
         use sqlx::mysql::MySqlPoolOptions;
@@ -91,6 +147,20 @@ impl SqlDslStepProgressStore {
     }
 
     /// Adopts an application-owned MySQL pool without allocating another pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlDslStepProgressStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::mysql::MySqlPoolOptions::new()
+    ///     .max_connections(8)
+    ///     .connect("mysql://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let store = SqlDslStepProgressStore::from_mysql_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub fn from_mysql_pool(pool: sqlx::MySqlPool) -> Self {
         Self {
@@ -99,6 +169,16 @@ impl SqlDslStepProgressStore {
     }
 
     /// Opens a PostgreSQL progress store with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlDslStepProgressStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlDslStepProgressStore::connect_postgres("postgres://catga:catga@localhost/catga").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres(url: &str) -> CatgaResult<Self> {
         use sqlx::postgres::PgPoolOptions;
@@ -113,6 +193,20 @@ impl SqlDslStepProgressStore {
     }
 
     /// Adopts an application-owned PostgreSQL pool without allocating another pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlDslStepProgressStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::postgres::PgPoolOptions::new()
+    ///     .max_connections(8)
+    ///     .connect("postgres://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let store = SqlDslStepProgressStore::from_postgres_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub fn from_postgres_pool(pool: sqlx::PgPool) -> Self {
         Self {
@@ -121,6 +215,19 @@ impl SqlDslStepProgressStore {
     }
 
     /// Opens a SQLite progress store with a bounded WAL pool and five-second busy timeout.
+    ///
+    /// ```
+    /// use catga_flow_store::SqlDslStepProgressStore;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let url = format!("sqlite://{}", directory.path().join("progress.db").display());
+    /// let store = SqlDslStepProgressStore::connect_sqlite(&url).await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
         use sqlx::sqlite::{
@@ -146,6 +253,10 @@ impl SqlDslStepProgressStore {
     }
 
     /// Applies this backend's idempotent DSL step-progress schema migration.
+    ///
+    /// Creates the checkpoint table once; rerunning is a no-op. Record or resume DSL progress
+    /// only after the migration has completed successfully — the store performs no implicit
+    /// migration on first use.
     #[cfg(any(
         feature = "sqlite",
         feature = "mysql",

@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{RedisPubSubConfig, transport::map_error};
+use crate::RedisPubSubConfig;
 
 const DEDUPLICATION_TTL_MILLISECONDS: u64 = 300_000;
 
@@ -55,8 +55,22 @@ impl RedisPubSubTransport {
     ///
     /// The subscription is created before this method returns, preventing a race in which a
     /// caller publishes the first broadcast before its local receiver is registered.
+    ///
+    /// ```no_run
+    /// use catga_redis::{RedisPubSubConfig, RedisPubSubTransport};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let config = RedisPubSubConfig {
+    ///     server: "redis://127.0.0.1/".into(),
+    ///     channel: "orders.notifications".into(),
+    /// };
+    /// let transport = RedisPubSubTransport::connect(config).await?;
+    /// # drop(transport);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(config: RedisPubSubConfig) -> CatgaResult<Self> {
-        let client = redis::Client::open(config.server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(config.server.as_ref()).map_err(CatgaError::transient)?;
         Self::from_client(client, config).await
     }
 
@@ -92,11 +106,14 @@ impl RedisPubSubTransport {
                 "Redis Pub/Sub channel must not be empty or whitespace-only",
             ));
         }
-        let mut subscription = client.get_async_pubsub().await.map_err(map_error)?;
+        let mut subscription = client
+            .get_async_pubsub()
+            .await
+            .map_err(CatgaError::transient)?;
         subscription
             .subscribe(config.channel.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             client,
             channel: config.channel,
@@ -127,13 +144,13 @@ impl RedisPubSubTransport {
             .client
             .get_multiplexed_async_connection()
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let claimed: i64 = Script::new(CLAIM_RECEIVED_EXACTLY_ONCE)
             .key(key.as_ref())
             .arg(DEDUPLICATION_TTL_MILLISECONDS)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(claimed == 1)
     }
 }
@@ -149,7 +166,7 @@ impl MessageTransport for RedisPubSubTransport {
                 .client
                 .get_multiplexed_async_connection()
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             if envelope
                 .metadata()
                 .quality_of_service()
@@ -163,12 +180,12 @@ impl MessageTransport for RedisPubSubTransport {
                     .arg(payload)
                     .invoke_async(&mut connection)
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
             } else {
                 let _: usize = connection
                     .publish(self.channel.as_ref(), payload)
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
             }
             Ok(())
         })

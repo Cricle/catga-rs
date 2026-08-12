@@ -40,7 +40,12 @@ fn validate_destination_accepts_valid() {
 fn validate_destination_rejects_empty() {
     let result = validate_destination("");
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("empty"));
+    assert!(
+        result
+            .expect_err("expected an error")
+            .to_string()
+            .contains("empty")
+    );
 }
 
 #[test]
@@ -59,7 +64,12 @@ fn validate_timeout_accepts_positive() {
 fn validate_timeout_rejects_zero() {
     let result = validate_timeout(0);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("timeout"));
+    assert!(
+        result
+            .expect_err("expected an error")
+            .to_string()
+            .contains("timeout")
+    );
 }
 
 #[test]

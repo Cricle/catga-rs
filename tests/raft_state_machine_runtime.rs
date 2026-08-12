@@ -23,12 +23,27 @@ use tokio::sync::{RwLock, mpsc};
 #[derive(Default)]
 struct BlockingTransport {
     entered_send: AtomicU64,
+    released_send: AtomicU64,
+}
+
+/// Marks the transport once the runtime drops the blocked send future.
+struct BlockingSend<'a> {
+    released_send: &'a AtomicU64,
+}
+
+impl Drop for BlockingSend<'_> {
+    fn drop(&mut self) {
+        self.released_send.store(1, Ordering::Release);
+    }
 }
 
 #[async_trait]
 impl RaftTransport for BlockingTransport {
     async fn send(&self, _message: RaftMessage) -> RaftTransportResult {
         self.entered_send.store(1, Ordering::Release);
+        let _in_flight = BlockingSend {
+            released_send: &self.released_send,
+        };
         std::future::pending().await
     }
 }
@@ -429,15 +444,16 @@ async fn state_machine_runtime_shutdown_cancels_a_blocked_transport_send() {
     )
     .unwrap();
     let driver = RaftStateMachineDriver::new(node, SharedCounter::default()).unwrap();
-    let runtime = Arc::new(
+    let runtime =
         RaftStateMachineRuntime::spawn(driver, Arc::clone(&transport), Duration::from_millis(1))
-            .unwrap(),
-    );
-    let campaign = {
-        let runtime = Arc::clone(&runtime);
-        tokio::spawn(async move { runtime.campaign().await })
-    };
+            .unwrap();
 
+    // Delivery is queued for the per-peer worker, so the campaign completes
+    // even though the worker stays blocked inside the transport send.
+    runtime
+        .campaign()
+        .await
+        .expect("queued delivery must not block the campaign");
     tokio::time::timeout(Duration::from_secs(1), async {
         while transport.entered_send.load(Ordering::Acquire) == 0 {
             tokio::task::yield_now().await;
@@ -447,18 +463,18 @@ async fn state_machine_runtime_shutdown_cancels_a_blocked_transport_send() {
     .expect("campaign must start transport delivery");
 
     runtime.shutdown();
-    assert!(matches!(
-        campaign.await.unwrap(),
-        Err(catga_cluster::RaftStateMachineRuntimeError::Stopped)
-    ));
-    let runtime = match Arc::try_unwrap(runtime) {
-        Ok(runtime) => runtime,
-        Err(_) => panic!("campaign task released the runtime"),
-    };
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while transport.released_send.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shutdown must cancel the blocked transport send");
+    assert!(runtime.stop_reason().is_none());
     tokio::time::timeout(Duration::from_secs(1), runtime.join())
         .await
-        .expect("shutdown must cancel a blocked transport send")
-        .unwrap();
+        .expect("shutdown must stop the runtime despite the blocked peer send")
+        .expect("a blocked peer send must not fail the runtime");
 }
 
 #[tokio::test]

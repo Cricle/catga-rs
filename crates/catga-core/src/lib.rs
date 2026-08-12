@@ -135,9 +135,11 @@ mod auto_snapshot;
 mod behaviors;
 mod cache;
 mod cancellation;
+mod cluster;
 pub mod codec;
 mod codec_traits;
 mod compression;
+mod consensus;
 mod consumer;
 mod correlation;
 pub mod distributed_id;
@@ -147,6 +149,7 @@ mod event_version;
 mod fault;
 pub mod flow;
 mod handler;
+pub mod hash;
 mod lease;
 mod lifecycle;
 pub mod local;
@@ -180,6 +183,7 @@ mod store;
 mod subscription;
 pub mod telemetry;
 pub mod testing;
+pub mod time;
 mod time_travel;
 mod trace_context;
 mod transport;
@@ -208,6 +212,7 @@ pub use behaviors::{
 };
 pub use cache::CachedResultCodec;
 pub use cancellation::{current_cancellation, scope_cancellation};
+pub use cluster::{ClusterHealth, LeaderOnlyBehavior, LeaderOnlyCommand, cluster_health};
 pub use codec::{
     bincode::{BincodeCodec, MAX_BINCODE_FRAME_BYTES},
     memorypack::{
@@ -221,6 +226,7 @@ pub use compression::{
     CompressionAlgorithm, CompressionStats, DEFAULT_MAX_DECOMPRESSED_BYTES, compress,
     compress_into, compress_to_slice, decompress, decompress_limited, is_compressed,
 };
+pub use consensus::{ConsensusCoordinator, ConsensusRuntime, ConsensusStateMachine};
 pub use consumer::{
     CompetingConsumer, ConsumerRun, DeliveryHandler, TypedDeliveryHandler,
     TypedDeliveryHandlerAdapter,
@@ -233,7 +239,7 @@ pub use correlation::{
 pub use distributed_id::{
     DistributedIdGenerator, IdMetadata, SnowflakeIdGenerator, SnowflakeLayout,
 };
-pub use error::{bounded_details, CatgaError, CatgaResult, ErrorCode, MAX_ERROR_DETAILS_BYTES};
+pub use error::{CatgaError, CatgaResult, ErrorCode, MAX_ERROR_DETAILS_BYTES, bounded_details};
 pub use event_store::{
     EventPage, EventStore, EventStream, MAX_EVENT_STORE_PAGE_SIZE, StoredEvent, StreamIdsPage,
     VersionHistoryPage, VersionInfo, validate_event_store_page_size,

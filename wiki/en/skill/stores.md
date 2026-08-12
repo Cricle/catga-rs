@@ -52,9 +52,9 @@ Rules:
 3. Multiple SQL features can coexist in the same binary; constructors select pools by type, no dynamic SQL.
 4. Write throughput is dominated by fsync per commit: increase concurrency (database group commit) or batch writes rather than disable persistence.
 
-## catga-memory (Testing and Local Composition)
+## In-Memory Adapters `catga_core::memory` (Testing and Local Composition)
 
-Bounded in-memory implementations of all store contracts (capacity limit `DEFAULT_MEMORY_RECORD_CAPACITY`):
+Bounded in-memory implementations of all store contracts, built into catga-core's `catga_core::memory` module (capacity limit `DEFAULT_MEMORY_RECORD_CAPACITY`):
 
 `MemoryFlows`, `MemoryOutbox`, `MemoryInbox`, `MemoryIdempotency`, `MemoryEventStore`, `MemoryLeases`, `MemorySnapshots`, `MemoryEnhancedSnapshots`, `MemoryProjectionCheckpoints`, `MemoryReadModels`, `MemoryChangeTracker`, `MemoryDeadLetters`, `MemoryStateMachines`, `MemoryDslStepProgress`, `MemoryPubSubTransport`.
 

@@ -28,6 +28,18 @@ where
     MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
     /// Connects using compact MemoryPack state serialization.
+    ///
+    /// State snapshots use compact MemoryPack serialization inside one KV bucket.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsSnapshotStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let snapshots = NatsSnapshotStore::<u64>::connect("nats://127.0.0.1:4222", "app-snapshots").await?;
+    /// # drop(snapshots);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
         Self::with_codec(server, bucket, MemoryPackSnapshotCodec::default()).await
     }
@@ -44,11 +56,15 @@ where
         bucket: impl Into<Box<str>>,
         codec: C,
     ) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             store,
             codec,
@@ -88,12 +104,10 @@ where
         }
         let (version, value) = value.split_at(8);
         let (timestamp, state) = value.split_at(8);
-        let version = i64::from_be_bytes(version.try_into().map_err(|_| {
-            CatgaError::new(ErrorCode::Internal, "NATS snapshot version is malformed")
-        })?);
-        let timestamp = u64::from_be_bytes(timestamp.try_into().map_err(|_| {
-            CatgaError::new(ErrorCode::Internal, "NATS snapshot timestamp is malformed")
-        })?);
+        // The length guard above pins both header splits to exactly 8 bytes.
+        let version = i64::from_be_bytes(version.try_into().expect("version header is 8 bytes"));
+        let timestamp =
+            u64::from_be_bytes(timestamp.try_into().expect("timestamp header is 8 bytes"));
         Ok((
             version,
             UNIX_EPOCH + Duration::from_millis(timestamp),
@@ -132,7 +146,7 @@ where
                 .store
                 .entry(snapshot.stream_id())
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let Some(entry) = entry else {
                 if self
                     .store
@@ -185,7 +199,12 @@ where
         T: Send + Sync + 'static,
     {
         Self::require_state::<T>()?;
-        let Some(value) = self.store.get(stream_id).await.map_err(map_error)? else {
+        let Some(value) = self
+            .store
+            .get(stream_id)
+            .await
+            .map_err(CatgaError::transient)?
+        else {
             return Ok(None);
         };
         let (version, timestamp, state) = self.decode(&value)?;
@@ -202,7 +221,10 @@ where
     }
 
     async fn delete(&self, stream_id: &str) -> CatgaResult<()> {
-        self.store.delete(stream_id).await.map_err(map_error)
+        self.store
+            .delete(stream_id)
+            .await
+            .map_err(CatgaError::transient)
     }
 }
 
@@ -214,8 +236,3 @@ fn unix_millis(time: SystemTime) -> u64 {
     )
     .unwrap_or(u64::MAX)
 }
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-

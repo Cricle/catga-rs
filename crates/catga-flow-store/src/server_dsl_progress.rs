@@ -1,7 +1,16 @@
-//! Shared SQLx server-dialect operations for durable DSL step progress.
+//! Shared sqlx-dialect operations for durable DSL step progress.
+//!
+//! `define_server_dsl_progress!` is one arm of the crate's dialect-macro pattern (see the
+//! crate-level "Dialect architecture" section): `mysql_dsl_progress`, `postgres_dsl_progress`,
+//! and `sqlite_dsl_progress` instantiate it with their pool type, schema DDL, and error label.
+//! The `$postgres` flag rewrites `?` bind placeholders to `$1..$n` via `sql_backend::statement`
+//! and, together with the `$sqlite` flag, selects the `ON CONFLICT(flow_key, step_index) DO
+//! NOTHING` insert admission shared by PostgreSQL and SQLite; MySQL instead keeps its
+//! duplicate-key-error admission path. Version and physical-revision guards are identical across
+//! all three drivers.
 
 macro_rules! define_server_dsl_progress {
-    ($pool:ty, $postgres:expr, $label:literal) => {
+    ($pool:ty, $postgres:expr, $sqlite:expr, $label:literal) => {
         use catga_core::{CatgaError, CatgaResult, ErrorCode};
         use catga_core::flow::DslStepProgress;
         use sqlx::Row;
@@ -26,7 +35,7 @@ macro_rules! define_server_dsl_progress {
             validate_progress(&progress)?;
             let key = flow_key(progress.flow_id());
             let step_index = i64::from(progress.step_index());
-            let insert = if $postgres {
+            let insert = if $postgres || $sqlite {
                 "INSERT INTO catga_dsl_step_progress (flow_key, flow_id, step_index, version, revision, payload) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key, step_index) DO NOTHING"
             } else {
                 "INSERT INTO catga_dsl_step_progress (flow_key, flow_id, step_index, version, revision, payload) VALUES (?, ?, ?, ?, 0, ?)"
@@ -41,7 +50,7 @@ macro_rules! define_server_dsl_progress {
                 .await;
             let created = match result {
                 Ok(result) => result.rows_affected() == 1,
-                Err(error) if !$postgres && is_mysql_duplicate_key(&error) => false,
+                Err(error) if !$postgres && !$sqlite && is_mysql_duplicate_key(&error) => false,
                 Err(error) => return Err(database_error(concat!("create ", $label, " DSL step progress"), error)),
             };
             if created {

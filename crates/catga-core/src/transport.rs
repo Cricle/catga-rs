@@ -308,4 +308,3 @@ pub trait DestinationTransport: MessageTransport {
         Ok(())
     }
 }
-

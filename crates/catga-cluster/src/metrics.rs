@@ -62,6 +62,19 @@ pub(crate) fn record_failure(kind: &'static str) {
     metrics::counter!("catga.cluster.raft.failures", "kind" => kind).increment(1);
 }
 
+/// Counts one terminal runtime owner stop under a fixed, low-cardinality kind.
+pub(crate) fn record_runtime_stop(kind: crate::RaftStopKind) {
+    let label = match kind {
+        crate::RaftStopKind::Storage => "storage",
+        crate::RaftStopKind::Application => "application",
+        crate::RaftStopKind::Transport => "transport",
+        crate::RaftStopKind::Raft => "raft",
+        crate::RaftStopKind::Task => "task",
+        crate::RaftStopKind::Internal => "internal",
+    };
+    metrics::counter!("catga.cluster.runtime.stopped", "kind" => label).increment(1);
+}
+
 /// Counts one application command that completed deterministic state-machine application.
 pub(crate) fn record_applied_command() {
     metrics::counter!("catga.cluster.raft.commands.applied").increment(1);
@@ -85,4 +98,3 @@ fn record_role(role: StateRole) {
     metrics::gauge!("catga.cluster.raft.role", "role" => "pre_candidate")
         .set((role == StateRole::PreCandidate) as u8 as f64);
 }
-

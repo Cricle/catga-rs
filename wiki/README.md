@@ -33,31 +33,38 @@ cqrs-es   : ~50KB   (动态分片)
 节省内存   : 25x less
 ```
 
-详细性能分析：[Performance](./performance.md)
+详细性能分析：[Performance](./zh/advanced/performance.md)
 
 ## 快速开始
 
 ```toml
 [dependencies]
-catga-auto = "0.1"
-catga-memory = "0.1"
+catga-core = "0.2"
+async-trait = "0.1"
 ```
 
 ```rust
-use catga_auto::AutoApp;
-use catga_core::{Message, Request, CatgaResult};
+use catga_core::auto::AutoApp;
+use catga_core::{CatgaResult, Handler, Message, Request};
 
 struct Add(i64);
 impl Message for Add {}
-impl Request for Add { type Response = i64; }
+impl Request for Add {
+    type Response = i64;
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
-async fn add_handler(msg: Add) -> CatgaResult<i64> {
-    Ok(msg.0 * 2)
+struct AddHandler;
+#[async_trait::async_trait]
+impl Handler<Add> for AddHandler {
+    async fn handle(&self, msg: Add) -> CatgaResult<i64> {
+        Ok(msg.0 * 2)
+    }
 }
 
 # async fn run() -> CatgaResult<()> {
 let app = AutoApp::builder()
-    .handler(add_handler)?
+    .handler(AddHandler)?
     .build()?;
 # Ok(())
 # }
@@ -75,7 +82,7 @@ let app = AutoApp::builder()
 │  └── Behaviors (横切关注点)                                 │
 ├─────────────────────────────────────────────────────────────┤
 │  Transport Layer (可插拔)                                    │
-│  ├── catga-memory  (进程内)                                 │
+│  ├── catga-core::memory (进程内)                            │
 │  ├── catga-nats    (NATS JetStream)                        │
 │  ├── catga-redis   (Redis Streams)                         │
 │  └── catga-robustmq (RocketMQ)                             │
@@ -90,31 +97,55 @@ let app = AutoApp::builder()
 ## 文档目录
 
 ### 入门指南
-- [安装与配置](./getting-started/installation.md)
-- [第一个应用](./getting-started/first-app.md)
-- [核心概念](./getting-started/concepts.md)
+- [安装与配置](./zh/getting-started/installation.md)
+- [第一个应用](./zh/getting-started/first-app.md)
+- [核心概念](./zh/getting-started/concepts.md)
+- [测试指南](./zh/getting-started/testing.md)
 
 ### 核心模块
-- [Message & Handler](./core/message-handler.md)
-- [Mediator & Registry](./core/mediator-registry.md)
-- [CQRS 模式](./core/cqrs.md)
-- [Event Sourcing](./core/event-sourcing.md)
+- [Message & Handler](./zh/core/message-handler.md)
+- [Mediator & Registry](./zh/core/mediator-registry.md)
+- [CQRS 模式](./zh/core/cqrs.md)
+- [Event Sourcing](./zh/core/event-sourcing.md)
 
 ### 分布式
-- [NATS 传输](./distributed/nats.md)
-- [Redis Streams](./distributed/redis.md)
-- [RocketMQ](./distributed/robustmq.md)
-- [集群模式](./distributed/cluster.md)
+- [NATS 传输](./zh/distributed/nats.md)
+- [Redis Streams](./zh/distributed/redis.md)
+- [RocketMQ](./zh/distributed/robustmq.md)
+- [集群模式](./zh/distributed/cluster.md)
+- [sorock 多 Raft 后端](./zh/distributed/sorock.md)
 
 ### 工作流
-- [Flow 概述](./flow/overview.md)
-- [状态机](./flow/state-machine.md)
-- [补偿事务](./flow/compensation.md)
+- [Flow 概述](./zh/flow/overview.md)
+- [状态机](./zh/flow/state-machine.md)
+- [补偿事务](./zh/flow/compensation.md)
 
 ### 高级主题
-- [性能优化](./advanced/performance.md)
-- [类型系统](./advanced/type-system.md)
-- [生命周期管理](./advanced/lifecycle.md)
+- [性能优化](./zh/advanced/performance.md)
+- [类型系统](./zh/advanced/type-system.md)
+- [生命周期管理](./zh/advanced/lifecycle.md)
+- [CI 分级与发布](./zh/advanced/ci-release.md)
+
+### 对比
+- [Catga vs cqrs-es 深度对比](./zh/comparison/cqrs-es.md)
+
+### Skill（应用开发指南）
+- [应用开发指南（SKILL）](./zh/skill/SKILL.md)
+- [Mediator：消息、处理器与派发](./zh/skill/mediator.md)
+- [Pipeline：请求策略与内置 Behavior](./zh/skill/pipeline.md)
+- [Flow：补偿流程与工作流](./zh/skill/flow.md)
+- [StateMachine：事件驱动的持久化状态机](./zh/skill/state-machine.md)
+- [Transport：消息传输契约与适配器](./zh/skill/transport.md)
+- [消息可靠性模式：Outbox / Inbox / 幂等 / 死信 / 订阅 / 消费循环](./zh/skill/reliability.md)
+- [事件溯源、投影与读模型](./zh/skill/event-sourcing.md)
+- [Stores：持久化存储](./zh/skill/stores.md)
+- [分布式构件：集群 / Raft / 分布式 ID / 租约 / 任务调度](./zh/skill/distributed.md)
+- [HTTP 集成（catga-axum）](./zh/skill/http.md)
+- [编解码、压缩与消息签名](./zh/skill/codec.md)
+- [错误处理、幂等与生产检查清单](./zh/skill/production.md)
+- [Catga Auto 与运行时正确性实施计划](./zh/skill/auto-plan.md)
+- [catga-auto design](./zh/skill/auto-design.md)
+- [Catga Auto 示例实施计划](./zh/skill/auto-examples-plan.md)
 
 ## 社区与支持
 

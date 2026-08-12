@@ -17,6 +17,18 @@ pub struct NatsInbox {
 
 impl NatsInbox {
     /// Connects and provisions a one-history KV bucket for inbox message IDs.
+    ///
+    /// A one-history KV bucket records each processed message identifier exactly once.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsInbox;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let inbox = NatsInbox::connect("nats://127.0.0.1:4222", "app-inbox").await?;
+    /// # drop(inbox);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
         NatsIdempotency::connect(server, bucket)
             .await
@@ -94,4 +106,3 @@ impl InboxStore for NatsInbox {
         .await
     }
 }
-

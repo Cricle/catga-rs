@@ -34,7 +34,7 @@ base64 = "0.23"
 bincode-next = "3"
 byteorder = "1"
 brotli = "8"
-catga-core-macros = { path = "src/macros/proc-macros" }
+catga-core-macros = { path = "src/macros/proc-macros", version = "0.2.0" }
 catga-memorypack-derive = { workspace = true }
 dashmap = "6"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

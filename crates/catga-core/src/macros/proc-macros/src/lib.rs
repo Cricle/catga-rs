@@ -1,5 +1,15 @@
 #![forbid(unsafe_code)]
 //! Internal procedural macros for catga-core.
+//!
+//! Every macro in this crate expands to code that references `::catga_core` (or unqualified
+//! handler traits) at the use site, so the macros are only usable from crates that depend on
+//! `catga-core`; applications consume them through the `catga_core` re-exports
+//! (`catga_core::Message`, `catga_core::catga_handlers!`, and so on) rather than by depending on
+//! this crate directly.
+//!
+//! Because this proc-macro crate has no `catga-core` dependency, positive usage examples below
+//! are marked `ignore` with an on-page reason; rejection contracts are covered by `compile_fail`
+//! doctests, which fail during macro expansion before any `catga_core` name is resolved.
 
 mod auto;
 mod catga_main;
@@ -14,6 +24,61 @@ mod typed_mediator;
 use proc_macro::TokenStream;
 
 /// Implements `catga_core::Message` with the fully qualified, monomorphized Rust type name.
+///
+/// # Generated code
+///
+/// The impl provides `message_type()` as `core::any::type_name::<Self>()` plus the attribute
+/// overrides below; every type parameter gains a `Send + Sync + 'static` bound. Depending on the
+/// `#[catga(...)]` options present, the derive additionally emits:
+///
+/// - `AuthorizedRequest` — for `authorize`, `roles("...", ...)`, and/or `policy("...")`
+///   (bare `authorize` requires an authenticated caller),
+/// - `BatchKeyProvider` — for `batch_key = "field"` on a named-field struct; the field must
+///   exist and is stringified per message,
+/// - `BatchOptionsProvider` — for `batch(max_batch_size = N, timeout_ms = N, max_queue_length
+///   = N, max_shards = N, flush_concurrency = N)`; every value must be a positive integer,
+/// - a `visit_trace_tags` override — for field-level `#[catga(trace_tag)]` /
+///   `#[catga(trace_tag = "name")]` or the bulk `trace_tags(prefix = "...",
+///   include = [...], exclude = [...], all_public = ...)` form (prefix defaults to
+///   `catga.message.`, `all_public` defaults to `true`).
+///
+/// `version = N` (positive, declared at most once; default `1`) feeds `schema_version()`, and
+/// `priority = low|normal|high|critical` (at most once) feeds `priority()`. Invalid or
+/// duplicated options are compile-time errors raised during expansion:
+///
+/// ```compile_fail
+/// // Message versions must be positive.
+/// use catga_core_macros::Message;
+///
+/// #[derive(Message)]
+/// #[catga(version = 0)]
+/// struct Payment;
+/// ```
+///
+/// ```compile_fail
+/// // A batch key must name an existing field of the struct.
+/// use catga_core_macros::Message;
+///
+/// #[derive(Message)]
+/// #[catga(batch_key = "account_id")]
+/// struct Payment { id: u64 }
+/// ```
+///
+/// # Example
+///
+/// ```ignore
+/// // Ignored: the expansion implements `::catga_core` traits, and this proc-macro crate
+/// // has no `catga-core` dependency to link a doctest against.
+/// use catga_core::Message;
+///
+/// #[derive(Message)]
+/// #[catga(version = 2, priority = high, authorize, roles("admin", "ops"))]
+/// struct Refund {
+///     #[catga(trace_tag)]
+///     order_id: u64,
+///     amount_cents: u64,
+/// }
+/// ```
 #[proc_macro_derive(Message, attributes(catga))]
 pub fn derive_message(input: TokenStream) -> TokenStream {
     message::expand_message(input.into()).into()
@@ -21,6 +86,51 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
 
 /// Builds an explicit `catga_core::CatgaResult<Registry>` from typed request, command, and
 /// event handler expressions.
+///
+/// # Grammar
+///
+/// ```text
+/// catga_handlers! {
+///     request  <MessagePath> => <handler expr>;
+///     command  <MessagePath> => <handler expr>;
+///     event    <MessagePath> => [<handler expr>, ...];
+///     ...
+/// }
+/// ```
+///
+/// Entries are separated by `;`. A request or command message may appear at most once and an
+/// event entry must list at least one handler; violations are compile-time errors raised during
+/// expansion, before any handler expression is type-checked:
+///
+/// ```compile_fail
+/// // A request message cannot have two handlers.
+/// use catga_core_macros::catga_handlers;
+///
+/// catga_handlers! {
+///     request GetBalance => read_balance;
+///     request GetBalance => read_balance_replica;
+/// }
+/// ```
+///
+/// # Generated code
+///
+/// The expansion is a block expression of type `CatgaResult<Registry>`: it creates a
+/// `Registry::new()`, registers each entry in order (`register_request`/`register_command`
+/// propagate registration conflicts with `?`; every event handler is registered with
+/// `register_event`), and yields the populated registry.
+///
+/// ```ignore
+/// // Ignored: the expansion references `::catga_core::Registry`, and this proc-macro crate
+/// // has no `catga-core` dependency to link a doctest against.
+/// use catga_core::{Mediator, catga_handlers, request_handler};
+///
+/// # async fn run() -> catga_core::CatgaResult<()> {
+/// let mediator = Mediator::new(catga_handlers! {
+///     request GetBalance => request_handler(|q: GetBalance| async move { Ok(42_u64) });
+/// }?);
+/// # Ok(())
+/// # }
+/// ```
 #[proc_macro]
 pub fn catga_handlers(input: TokenStream) -> TokenStream {
     handlers::expand(input.into())
@@ -29,6 +139,61 @@ pub fn catga_handlers(input: TokenStream) -> TokenStream {
 }
 
 /// Generates a fully monomorphized mediator struct with zero-allocation dispatch.
+///
+/// # Grammar
+///
+/// ```text
+/// catga_typed_mediator! {
+///     [pub] struct <MediatorName>;
+///     request  <MessagePath> => <handler expr>;
+///     command  <MessagePath> => <handler expr>;
+///     event    <MessagePath> => [<handler expr>, ...];
+///     ...
+/// }
+/// ```
+///
+/// Duplicate request or command messages and empty event handler lists are compile-time errors
+/// raised during expansion:
+///
+/// ```compile_fail
+/// // A command message cannot be registered twice.
+/// use catga_core_macros::catga_typed_mediator;
+///
+/// catga_typed_mediator! {
+///     pub struct BankMediator;
+///     command Transfer => transfer_a;
+///     command Transfer => transfer_b;
+/// }
+/// ```
+///
+/// # Generated code
+///
+/// The expansion defines `<MediatorName>` with one typed field per registration (event handlers
+/// are stored as fixed-size arrays in registration order), a `new` constructor taking the
+/// handlers positionally, and inherent `send`/`send_command`/`publish` methods. Dispatch goes
+/// through per-message `SealedRequestDispatch`/`SealedCommandDispatch`/`SealedEventDispatch`
+/// impls, so sending an unregistered message type is a compile-time error and the hot path has
+/// no `dyn`, downcast, or heap allocation. Event fan-out is sequential in registration order and
+/// returns the first handler error after all handlers ran.
+///
+/// ```ignore
+/// // Ignored: the expansion references `::catga_core` sealed dispatch traits, and this
+/// // proc-macro crate has no `catga-core` dependency to link a doctest against.
+/// use catga_core::catga_typed_mediator;
+///
+/// catga_typed_mediator! {
+///     pub struct ShopMediator;
+///     request GetCart => CartReader;
+///     command Checkout => CheckoutWriter;
+///     event OrderPlaced => [Projector, Notifier];
+/// }
+///
+/// # async fn run() -> catga_core::CatgaResult<()> {
+/// let mediator = ShopMediator::new(CartReader, CheckoutWriter, [Projector, Notifier]);
+/// let cart = mediator.send(GetCart { id: 1 }).await?;
+/// # Ok(())
+/// # }
+/// ```
 #[proc_macro]
 pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
     typed_mediator::expand(input.into())
@@ -37,6 +202,46 @@ pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
 }
 
 /// Scans a module for handlers and generates registration code.
+///
+/// # Generated code
+///
+/// Applied to an inline `mod`, the macro re-emits the module and adds
+/// `pub fn __catga_auto_register(Registry) -> CatgaResult<Registry>` inside it. Discovered
+/// registrations:
+///
+/// - `impl Handler<M> for H`, `impl CommandHandler<M> for H`, and `impl EventHandler<M> for H`
+///   blocks register `M` with a unit-struct literal `H {}` — discovered handler types must
+///   therefore be unit structs,
+/// - free `async fn`s register as request handlers for their first (non-`self`) parameter type.
+///
+/// A module with no discoverable handlers is a compile-time error raised during expansion:
+///
+/// ```compile_fail
+/// // The module must contain at least one handler impl or async fn.
+/// use catga_core_macros::catga_auto;
+///
+/// #[catga_auto]
+/// mod handlers {
+///     pub struct NotAHandler;
+/// }
+/// ```
+///
+/// ```ignore
+/// // Ignored: the expansion references `::catga_core::Registry`, and this proc-macro crate
+/// // has no `catga-core` dependency to link a doctest against.
+/// use catga_core::{Registry, catga_auto};
+///
+/// #[catga_auto]
+/// mod handlers {
+///     pub struct PingHandler;
+///     #[async_trait::async_trait]
+///     impl catga_core::Handler<Ping> for PingHandler {
+///         async fn handle(&self, _: Ping) -> catga_core::CatgaResult<()> { Ok(()) }
+///     }
+/// }
+///
+/// let registry = handlers::__catga_auto_register(Registry::new())?;
+/// ```
 #[proc_macro_attribute]
 pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
     auto::expand_auto(item.into())
@@ -54,9 +259,13 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// # Typed Mediator (Optional)
 ///
-/// Pass a name to generate a zero-allocation typed mediator:
+/// Pass a name to generate a zero-allocation typed mediator. Each generated wrapper stores a
+/// clone of the service, so the service type must be `Clone`; without a name the wrappers share
+/// one `Arc` of the service instead:
 ///
 /// ```ignore
+/// // Ignored: the expansion references `::catga_core` handler traits, and this proc-macro
+/// // crate has no `catga-core` dependency to link a doctest against.
 /// #[catga_service(BankMediator)]
 /// impl BankService {
 ///     async fn get_balance(&self, msg: GetBalance) -> CatgaResult<u64> { ... }
@@ -74,6 +283,8 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Wrapper structs implementing `Handler<M>`, `CommandHandler<C>`, or `EventHandler<E>` for each method
 ///
 /// ```ignore
+/// // Ignored: the expansion references `::catga_core` types, and this proc-macro crate
+/// // has no `catga-core` dependency to link a doctest against.
 /// use catga_core::{CatgaResult, auto::AutoApp, catga_request, catga_command, catga_service};
 ///
 /// #[catga_request(response = u64)]
@@ -116,6 +327,34 @@ pub fn catga_service(attr: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Implements `catga_core::Message` and `catga_core::Request` with the response type
 /// specified via `#[catga_request(response = TypeName)]`.
+///
+/// # Generated code
+///
+/// The annotated item is re-emitted unchanged; the macro adds a `<Name>TypeId` unit struct with
+/// a `MessageTypeId` impl (`NAME` is the stringified type name), a marker `Message` impl, and a
+/// `Request` impl with `type Response` taken from the attribute. Every type parameter gains
+/// `Clone + Send + Sync + 'static` bounds so generic messages satisfy `Message` (existing
+/// bounds on a parameter are preserved). The response type accepts any syntactically valid type
+/// expression, including qualified paths and generic arguments.
+///
+/// The `response` key is required; omitting it is a compile-time error raised during expansion:
+///
+/// ```compile_fail
+/// // #[catga_request] requires `response = <type>`.
+/// use catga_core_macros::catga_request;
+///
+/// #[catga_request]
+/// struct GetBalance { account_id: u64 }
+/// ```
+///
+/// ```ignore
+/// // Ignored: the expansion implements `::catga_core` traits, and this proc-macro crate
+/// // has no `catga-core` dependency to link a doctest against.
+/// use catga_core::catga_request;
+///
+/// #[catga_request(response = u64)]
+/// struct GetBalance { account_id: u64 }
+/// ```
 #[proc_macro_attribute]
 #[allow(non_snake_case)]
 pub fn catga_request(attr: TokenStream, input: TokenStream) -> TokenStream {
@@ -123,6 +362,22 @@ pub fn catga_request(attr: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Implements `catga_core::Message` and `catga_core::Command`.
+///
+/// # Generated code
+///
+/// The derive adds a `<Name>TypeId` unit struct with a `MessageTypeId` impl (`NAME` is the
+/// stringified type name), a marker `Message` impl, and a `Command` impl pointing at that
+/// `TypeId`. Every type parameter gains `Clone + Send + Sync + 'static` bounds so generic
+/// messages satisfy `Message` (existing bounds on a parameter are preserved).
+///
+/// ```ignore
+/// // Ignored: the expansion implements `::catga_core` traits, and this proc-macro crate
+/// // has no `catga-core` dependency to link a doctest against.
+/// use catga_core::catga_command;
+///
+/// #[derive(catga_command)]
+/// struct ChargeCard { order_id: u64, amount_cents: u64 }
+/// ```
 #[proc_macro_derive(catga_command)]
 pub fn derive_command(input: TokenStream) -> TokenStream {
     derive_command::expand_derive_command(input)
@@ -130,18 +385,84 @@ pub fn derive_command(input: TokenStream) -> TokenStream {
 
 /// Implements `catga_core::Message` and `catga_core::Event`.
 /// Events must be Clone, so this derive enforces that bound.
+///
+/// # Generated code
+///
+/// The derive adds a `<Name>TypeId` unit struct with a `MessageTypeId` impl (`NAME` is the
+/// stringified type name), a marker `Message` impl, and an `Event` impl pointing at that
+/// `TypeId`. Every type parameter gains `Clone + Send + Sync + 'static` bounds so events can be
+/// fanned out to every registered handler.
+///
+/// ```ignore
+/// // Ignored: the expansion implements `::catga_core` traits, and this proc-macro crate
+/// // has no `catga-core` dependency to link a doctest against.
+/// use catga_core::catga_event;
+///
+/// #[derive(Clone, catga_event)]
+/// struct OrderPlaced { order_id: u64 }
+/// ```
 #[proc_macro_derive(catga_event)]
 pub fn derive_event(input: TokenStream) -> TokenStream {
     derive_event::expand_derive_event(input)
 }
 
 /// Zero-boilerplate application entry point with auto-handler discovery.
+///
+/// # Generated code
+///
+/// The annotated `async fn` is renamed to a private `__catga_main_inner`; the macro re-emits the
+/// original signature as a wrapper that first builds an `AutoApp`, keeps the application alive,
+/// and then awaits the user's body. The wrapper `.await`s the inner function, so the annotated
+/// function must be `async`. A failed application build panics with the `#[catga_main]` message
+/// rather than returning an error.
+///
+/// Attribute arguments are compile-time errors raised during expansion: `AutoAppBuilder` has no
+/// transport hook, so transports are bound with explicit application code inside the body:
+///
+/// ```compile_fail
+/// // `#[catga_main]` does not accept a `transport` argument.
+/// use catga_core_macros::catga_main;
+///
+/// #[catga_main(transport = ())]
+/// async fn main() -> catga_core::CatgaResult<()> {
+///     Ok(())
+/// }
+/// ```
+///
+/// ```ignore
+/// // Ignored: the expansion builds an `AutoApp`, and this proc-macro crate has no
+/// // application-runtime dependency to link a doctest against.
+/// #[catga_core::catga_main]
+/// async fn main() -> catga_core::CatgaResult<()> {
+///     Ok(())
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn catga_main(attr: TokenStream, input: TokenStream) -> TokenStream {
     catga_main::expand_catga_main(attr, input)
 }
 
 /// Marks an impl block as a Catga handler for auto-registration.
+///
+/// # Generated code
+///
+/// The impl block is validated and then re-emitted unchanged; the attribute itself emits no
+/// registration code. Handler discovery for registration is performed by the `#[catga_auto]`
+/// module macro, which scans impl blocks directly.
+///
+/// The impl block must implement exactly one of `Handler<M>`, `CommandHandler<M>`, or
+/// `EventHandler<M>` with an explicit message type; other traits, non-trait impl blocks, and
+/// untyped impls are compile-time errors raised during expansion:
+///
+/// ```compile_fail
+/// // #[catga_handler] requires a supported trait impl with a message type.
+/// use catga_core_macros::catga_handler;
+///
+/// struct NotAHandler;
+///
+/// #[catga_handler]
+/// impl NotAHandler {}
+/// ```
 #[proc_macro_attribute]
 pub fn catga_handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let impl_item: syn::ItemImpl = match syn::parse2(item.into()) {

@@ -1,7 +1,17 @@
-//! Shared SQLx server-dialect durable schedule operations.
+//! Shared sqlx-dialect durable schedule operations.
+//!
+//! `define_server_scheduler!` is one arm of the crate's dialect-macro pattern (see the
+//! crate-level "Dialect architecture" section). The `mysql_scheduler`, `postgres_scheduler`, and
+//! `sqlite_scheduler` modules each instantiate it with their pool and row types, schema DDL, and
+//! index DDL. The `$postgres` flag rewrites `?` bind placeholders to `$1..$n` via
+//! `sql_backend::statement` and, together with the `$sqlite` flag, selects the insert
+//! idempotency clause (`ON CONFLICT(target_key) DO NOTHING` for PostgreSQL and SQLite versus
+//! MySQL's `ON DUPLICATE KEY UPDATE` no-op). Server claim scans use `FOR UPDATE SKIP LOCKED`
+//! inside one transaction so concurrent pollers lease disjoint due rows; the `$sqlite` flag
+//! instead selects SQLite's single `UPDATE ... RETURNING` claim under the write lock.
 
 macro_rules! define_server_scheduler {
-    ($pool:ty, $row:ty, $postgres:expr, $label:literal, $schema:expr, $index:expr $(, $migrator:path)?) => {
+    ($pool:ty, $row:ty, $postgres:expr, $sqlite:expr, $label:literal, $schema:expr, $index:expr $(, $migrator:path)?) => {
         use std::time::{Duration, SystemTime};
 
         use catga_core::{CatgaError, CatgaResult, ErrorCode};
@@ -31,7 +41,7 @@ macro_rules! define_server_scheduler {
             let target_key = schedule_target_key(flow_id, state_id);
             let (due_at_ms, due_at_subsec_ns) = schedule_times(due_at)?;
             let schedule_id = uuid::Uuid::new_v4().to_string();
-            let insert = if $postgres {
+            let insert = if $postgres || $sqlite {
                 "INSERT INTO catga_flow_schedules (schedule_id, target_key, flow_id, state_id, due_at_ms, due_at_subsec_ns) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(target_key) DO NOTHING"
             } else {
                 "INSERT INTO catga_flow_schedules (schedule_id, target_key, flow_id, state_id, due_at_ms, due_at_subsec_ns) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE schedule_id = schedule_id"
@@ -58,6 +68,20 @@ macro_rules! define_server_scheduler {
             let (now_ms, lease_until_ms) = claim_times(now, lease_for)?;
             let (_, now_subsec_ns) = schedule_times(now)?;
             let limit = i64::try_from(limit).map_err(|_| CatgaError::new(ErrorCode::Validation, concat!($label, " schedule claim limit exceeds i64")))?;
+            if $sqlite {
+                let rows = sqlx::query(statement(
+                    "UPDATE catga_flow_schedules SET lease_owner = ?, lease_until_ms = ? \
+                     WHERE schedule_id IN (\
+                       SELECT schedule_id FROM catga_flow_schedules \
+                       WHERE (due_at_ms < ? OR (due_at_ms = ? AND due_at_subsec_ns <= ?)) \
+                         AND (lease_owner IS NULL OR lease_until_ms IS NULL OR lease_until_ms <= ?) \
+                       ORDER BY due_at_ms ASC, due_at_subsec_ns ASC, schedule_id ASC LIMIT ?) \
+                       AND (lease_owner IS NULL OR lease_until_ms IS NULL OR lease_until_ms <= ?) \
+                     RETURNING schedule_id, flow_id, state_id, due_at_ms, due_at_subsec_ns", $postgres))
+                    .bind(owner).bind(lease_until_ms).bind(now_ms).bind(now_ms).bind(now_subsec_ns).bind(now_ms).bind(limit).bind(now_ms)
+                    .fetch_all(pool).await.map_err(|error| database_error(concat!("claim ", $label, " due flow resumes"), error))?;
+                return rows.into_iter().map(decode_resume).collect();
+            }
             let mut tx = pool.begin().await.map_err(|error| database_error(concat!("begin ", $label, " schedule claim"), error))?;
             let rows = sqlx::query(statement(
                 "SELECT schedule_id, flow_id, state_id, due_at_ms, due_at_subsec_ns FROM catga_flow_schedules \

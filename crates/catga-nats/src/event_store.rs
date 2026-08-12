@@ -16,6 +16,7 @@ use async_nats::{
 };
 use async_trait::async_trait;
 use catga_core::codec::memorypack::MemoryPackCodec;
+use catga_core::hash::sha256_digest;
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, EventPage, EventStore,
     EventStream, MAX_EVENT_STORE_PAGE_SIZE, PayloadDecoder, PayloadEncoder, StoredEvent,
@@ -23,7 +24,6 @@ use catga_core::{
 };
 use futures::{StreamExt, TryStream, TryStreamExt, stream as futures_stream};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 const VERSION: &str = "Catga-Version";
 const TIMESTAMP: &str = "Catga-Timestamp";
@@ -64,6 +64,18 @@ impl NatsEventStore {
     ///
     /// Returns [`CatgaError`] with [`ErrorCode::Validation`] for an invalid subject prefix or an
     /// incompatible existing stream, and maps NATS and JetStream failures to transient errors.
+    ///
+    /// Stream provisioning is idempotent; an incompatible existing stream fails validation.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsEventStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = NatsEventStore::connect("nats://127.0.0.1:4222", "app-events", "app.events.>").await?;
+    /// # drop(store);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: &str,
         stream_name: impl Into<Box<str>>,
@@ -72,7 +84,9 @@ impl NatsEventStore {
         let stream_name = stream_name.into();
         let subject_prefix = subject_prefix.into();
         validate_subject_prefix(&subject_prefix)?;
-        let client = async_nats::connect(server).await.map_err(map_error)?;
+        let client = async_nats::connect(server)
+            .await
+            .map_err(CatgaError::transient)?;
         let context = jetstream::new(client.clone());
         let mut stream = context
             .get_or_create_stream(stream::Config {
@@ -82,8 +96,13 @@ impl NatsEventStore {
                 ..Default::default()
             })
             .await
-            .map_err(map_error)?;
-        let mut stream_config = stream.info().await.map_err(map_error)?.config.clone();
+            .map_err(CatgaError::transient)?;
+        let mut stream_config = stream
+            .info()
+            .await
+            .map_err(CatgaError::transient)?
+            .config
+            .clone();
         if !stream_subjects_cover_prefix(&stream_config.subjects, &subject_prefix) {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
@@ -95,13 +114,16 @@ impl NatsEventStore {
             context
                 .update_stream(&stream_config)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
         }
-        let stream = context.get_stream(&stream_name).await.map_err(map_error)?;
+        let stream = context
+            .get_stream(&stream_name)
+            .await
+            .map_err(CatgaError::transient)?;
         let bucket = format!("{stream_name}_IDS");
         let ids = crate::kv::open_or_create(&context, &bucket)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             client,
             context,
@@ -132,7 +154,7 @@ impl NatsEventStore {
         match self.stream.direct_get_last_for_subject(subject).await {
             Ok(message) => Ok(Some((stream_message_version(&message)?, message.sequence))),
             Err(error) if error.kind() == DirectGetErrorKind::NotFound => Ok(None),
-            Err(error) => Err(map_error(error)),
+            Err(error) => Err(CatgaError::transient(error)),
         }
     }
 
@@ -201,8 +223,8 @@ impl NatsEventStore {
         subject: &str,
         sequence: Option<u64>,
     ) -> CatgaResult<Option<Message>> {
-        let payload =
-            serde_json::to_vec(&DirectGetNextRequest { subject, sequence }).map_err(map_error)?;
+        let payload = serde_json::to_vec(&DirectGetNextRequest { subject, sequence })
+            .map_err(CatgaError::transient)?;
         let message = self
             .client
             .request(
@@ -210,7 +232,7 @@ impl NatsEventStore {
                 payload.into(),
             )
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         match (message.status, message.description.as_deref()) {
             (Some(async_nats::StatusCode::NOT_FOUND), Some(_)) => Ok(None),
             (Some(async_nats::StatusCode::TIMEOUT), Some(_)) => {
@@ -356,7 +378,7 @@ impl EventStore for NatsEventStore {
                 self.ids
                     .put(stream_id, "".into())
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
 
                 let version_text = final_version.to_string();
                 let timestamp_text = timestamp.to_string();
@@ -537,11 +559,11 @@ impl EventStore for NatsEventStore {
             if stream_id_reconciliation_needed(after) {
                 self.reconcile_stream_ids().await?;
             }
-            let keys = self.ids.keys().await.map_err(map_error)?;
+            let keys = self.ids.keys().await.map_err(CatgaError::transient)?;
             futures::pin_mut!(keys);
             let mut ids = BinaryHeap::with_capacity(max_count);
             let mut has_more = false;
-            while let Some(key) = keys.try_next().await.map_err(map_error)? {
+            while let Some(key) = keys.try_next().await.map_err(CatgaError::transient)? {
                 if after.is_some_and(|cursor| key.as_str() <= cursor) {
                     continue;
                 }
@@ -572,8 +594,10 @@ impl NatsEventStore {
             .stream
             .info_with_subjects(filter)
             .await
-            .map_err(map_error)?;
-        while let Some((subject, count)) = subjects.try_next().await.map_err(map_error)? {
+            .map_err(CatgaError::transient)?;
+        while let Some((subject, count)) =
+            subjects.try_next().await.map_err(CatgaError::transient)?
+        {
             if count == 0 {
                 continue;
             }
@@ -583,7 +607,7 @@ impl NatsEventStore {
             self.ids
                 .put(stream_id, "".into())
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
         }
         Ok(())
     }
@@ -707,7 +731,7 @@ fn append_message_id(
     _final_version: i64,
     payload: &[u8],
 ) -> String {
-    let digest = Sha256::digest(payload);
+    let digest = sha256_digest(payload);
     format!("catga-event:{subject}:{}", hex::encode(digest))
 }
 fn unix_millis(time: SystemTime) -> u64 {
@@ -722,9 +746,6 @@ fn from_unix_millis(millis: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(millis)
 }
 
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
 fn map_append_error(error: impl std::fmt::Display) -> CatgaError {
     let message = error.to_string();
     if message.contains("expected last subject sequence") || message.contains("wrong last sequence")
@@ -734,4 +755,3 @@ fn map_append_error(error: impl std::fmt::Display) -> CatgaError {
         CatgaError::new(ErrorCode::Transient, message)
     }
 }
-

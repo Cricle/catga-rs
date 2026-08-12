@@ -446,10 +446,7 @@ impl AutoRecoveryOptions {
         if !self.exponential_backoff {
             return self.retry_delay;
         }
-        let multiplier = 1_u32 << retry.min(31);
-        self.retry_delay
-            .checked_mul(multiplier)
-            .unwrap_or(Duration::MAX)
+        crate::resilience::retry_delay(self.retry_delay, retry as usize)
     }
 }
 

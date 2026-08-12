@@ -12,13 +12,12 @@ use catga_core::codec::memorypack::{
     MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
 };
 use catga_core::flow::{FlowState, FlowStatus, FlowStore};
+use catga_core::hash::sha256_digest;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};
 
-const MAX_CAS_RETRIES: usize = 8;
 const MAX_INDEX_PAGE_ENTRIES: usize = 32;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, MemoryPackable, Serialize)]
@@ -53,8 +52,24 @@ pub struct NatsFlows {
 
 impl NatsFlows {
     /// Connects to `server`, provisioning a state bucket named `bucket` and its type index.
+    ///
+    /// Flow state and its type index are provisioned together so claims stay atomic.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsFlows;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let flows = NatsFlows::connect("nats://127.0.0.1:4222", "app-flows").await?;
+    /// # drop(flows);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let states = open_bucket(&context, bucket.as_ref()).await?;
         let index = open_bucket(&context, &format!("{bucket}_IDX")).await?;
@@ -62,7 +77,10 @@ impl NatsFlows {
     }
 
     async fn state_entry(&self, id: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.states.entry(&flow_key(id)).await.map_err(map_error)
+        self.states
+            .entry(&flow_key(id))
+            .await
+            .map_err(CatgaError::transient)
     }
 
     async fn get_state(&self, id: &str) -> CatgaResult<Option<(kv::Entry, FlowState)>> {
@@ -82,8 +100,12 @@ impl NatsFlows {
     async fn index_flow(&self, flow_type: &str, id: &str) -> CatgaResult<()> {
         let metadata_key = type_metadata_key(flow_type);
         let marker_key = type_marker_key(flow_type, id);
-        for _ in 0..MAX_CAS_RETRIES {
-            let entry = self.index.entry(&metadata_key).await.map_err(map_error)?;
+        for _ in 0..crate::kv::MAX_CAS_RETRIES {
+            let entry = self
+                .index
+                .entry(&metadata_key)
+                .await
+                .map_err(CatgaError::transient)?;
             let Some(entry) = entry else {
                 if create(&self.index, &metadata_key, &TypeIndex::default()).await? {
                     continue;
@@ -101,7 +123,11 @@ impl NatsFlows {
             }
             let metadata_record = decode_record(&entry.value)?;
             let metadata = decode::<TypeIndex>(metadata_record.payload())?;
-            let marker_entry = self.index.entry(&marker_key).await.map_err(map_error)?;
+            let marker_entry = self
+                .index
+                .entry(&marker_key)
+                .await
+                .map_err(CatgaError::transient)?;
             let Some(marker_entry) = marker_entry else {
                 if create(
                     &self.index,
@@ -136,7 +162,11 @@ impl NatsFlows {
             let marker_record = decode_record(&marker_entry.value)?;
             let marker = decode::<IndexMarker>(marker_record.payload())?;
             let page_key = type_page_key(flow_type, marker.page);
-            let page = self.index.entry(&page_key).await.map_err(map_error)?;
+            let page = self
+                .index
+                .entry(&page_key)
+                .await
+                .map_err(CatgaError::transient)?;
             let Some(page) = page else {
                 if create(&self.index, &page_key, &vec![Box::<str>::from(id)]).await? {
                     return Ok(());
@@ -206,13 +236,18 @@ impl NatsFlows {
                 continue;
             }
         }
-        Err(cas_error("index flow"))
+        Err(crate::kv::cas_error("flow", "index flow"))
     }
 
     async fn next_indexed_flow(&self, flow_type: &str) -> CatgaResult<IndexedFlow> {
         let metadata_key = type_metadata_key(flow_type);
-        for _ in 0..MAX_CAS_RETRIES {
-            let Some(entry) = self.index.entry(&metadata_key).await.map_err(map_error)? else {
+        for _ in 0..crate::kv::MAX_CAS_RETRIES {
+            let Some(entry) = self
+                .index
+                .entry(&metadata_key)
+                .await
+                .map_err(CatgaError::transient)?
+            else {
                 return Ok(IndexedFlow::Absent);
             };
             if matches!(
@@ -224,7 +259,11 @@ impl NatsFlows {
             let metadata_record = decode_record(&entry.value)?;
             let metadata = decode::<TypeIndex>(metadata_record.payload())?;
             let page_key = type_page_key(flow_type, metadata.scan_page);
-            let page = self.index.entry(&page_key).await.map_err(map_error)?;
+            let page = self
+                .index
+                .entry(&page_key)
+                .await
+                .map_err(CatgaError::transient)?;
             let candidate = match page {
                 Some(page) if matches!(page.operation, kv::Operation::Put) => {
                     let page_record = decode_record(&page.value)?;
@@ -252,13 +291,18 @@ impl NatsFlows {
                 });
             }
         }
-        Err(cas_error("advance flow index cursor"))
+        Err(crate::kv::cas_error("flow", "advance flow index cursor"))
     }
 
     async fn prune_index(&self, flow_type: &str, id: &str) -> CatgaResult<()> {
         let marker_key = type_marker_key(flow_type, id);
-        for _ in 0..MAX_CAS_RETRIES {
-            let Some(marker_entry) = self.index.entry(&marker_key).await.map_err(map_error)? else {
+        for _ in 0..crate::kv::MAX_CAS_RETRIES {
+            let Some(marker_entry) = self
+                .index
+                .entry(&marker_key)
+                .await
+                .map_err(CatgaError::transient)?
+            else {
                 return Ok(());
             };
             if matches!(
@@ -270,7 +314,11 @@ impl NatsFlows {
             let marker_record = decode_record(&marker_entry.value)?;
             let marker = decode::<IndexMarker>(marker_record.payload())?;
             let page_key = type_page_key(flow_type, marker.page);
-            let page = self.index.entry(&page_key).await.map_err(map_error)?;
+            let page = self
+                .index
+                .entry(&page_key)
+                .await
+                .map_err(CatgaError::transient)?;
             if let Some(page) = page.filter(|page| matches!(page.operation, kv::Operation::Put)) {
                 let page_record = decode_record(&page.value)?;
                 let mut ids = decode::<Vec<Box<str>>>(page_record.payload())?;
@@ -294,10 +342,10 @@ impl NatsFlows {
             self.index
                 .delete_expect_revision(&marker_key, Some(marker_entry.revision))
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             return Ok(());
         }
-        Err(cas_error("prune flow index"))
+        Err(crate::kv::cas_error("flow", "prune flow index"))
     }
 
     async fn replace(
@@ -428,7 +476,7 @@ pub(crate) async fn open_bucket(
 ) -> CatgaResult<kv::Store> {
     crate::kv::open_or_create(context, bucket)
         .await
-        .map_err(map_error)
+        .map_err(CatgaError::transient)
 }
 
 async fn create<T: MemoryPackSerialize>(
@@ -441,7 +489,7 @@ async fn create<T: MemoryPackSerialize>(
         Ok(_) => Ok(true),
         Err(error) if is_revision_conflict(&error) => Ok(false),
         Err(error) => {
-            let reported = map_error(error);
+            let reported = CatgaError::transient(error);
             let committed = match store.entry(key).await {
                 Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                     record.matches(&decode_record(&entry.value)?)
@@ -463,7 +511,7 @@ async fn compare_and_set(
         Ok(_) => Ok(true),
         Err(error) if is_revision_conflict(&error) => Ok(false),
         Err(error) => {
-            let reported = map_error(error);
+            let reported = CatgaError::transient(error);
             let committed = matches!(store.entry(key).await, Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) && entry.value.as_ref() == value.as_slice());
             if committed { Ok(true) } else { Err(reported) }
         }
@@ -471,22 +519,22 @@ async fn compare_and_set(
 }
 
 fn flow_key(id: &str) -> String {
-    format!("f{}", hex::encode(Sha256::digest(id.as_bytes())))
+    format!("f{}", hex::encode(sha256_digest(id.as_bytes())))
 }
 fn type_metadata_key(flow_type: &str) -> String {
-    format!("m{}", hex::encode(Sha256::digest(flow_type.as_bytes())))
+    format!("m{}", hex::encode(sha256_digest(flow_type.as_bytes())))
 }
 fn type_page_key(flow_type: &str, page: u64) -> String {
     format!(
         "p{}.{page}",
-        hex::encode(Sha256::digest(flow_type.as_bytes()))
+        hex::encode(sha256_digest(flow_type.as_bytes()))
     )
 }
 fn type_marker_key(flow_type: &str, id: &str) -> String {
     format!(
         "i{}.{}",
-        hex::encode(Sha256::digest(flow_type.as_bytes())),
-        hex::encode(Sha256::digest(id.as_bytes()))
+        hex::encode(sha256_digest(flow_type.as_bytes())),
+        hex::encode(sha256_digest(id.as_bytes()))
     )
 }
 fn next_index_cursor(metadata: &TypeIndex, consumed: bool) -> CatgaResult<TypeIndex> {
@@ -545,13 +593,3 @@ fn is_stale(heartbeat: SystemTime, now: SystemTime, stale_after: Duration) -> bo
     now.duration_since(heartbeat)
         .is_ok_and(|elapsed| elapsed >= stale_after)
 }
-fn cas_error(operation: &str) -> CatgaError {
-    CatgaError::new(
-        ErrorCode::Transient,
-        format!("NATS flow {operation} compare-and-set did not stabilize"),
-    )
-}
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-

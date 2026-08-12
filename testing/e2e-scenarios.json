@@ -12,7 +12,8 @@
     {
       "id": "nats-request",
       "package": "catga-tests",
-      "target": "nats_request",
+      "target": "nats",
+      "testFilter": "nats_request",
       "profile": "core",
       "critical": true,
       "testArguments": []
@@ -86,9 +87,7 @@
       "testFilter": "mailbox_request_server_replies_through_the_private_reply_mailbox",
       "profile": "core",
       "critical": true,
-      "testArguments": [
-        "--ignored"
-      ]
+      "testArguments": []
     },
     {
       "id": "robustmq-ignored-contracts",
@@ -168,6 +167,36 @@
       "id": "mssql-flow-store",
       "package": "catga-flow-store",
       "target": "mssql",
+      "profile": "full",
+      "critical": true,
+      "testArguments": [
+        "--ignored"
+      ]
+    },
+    {
+      "id": "mysql-flow-store-edges",
+      "package": "catga-flow-store",
+      "target": "mysql_edges",
+      "profile": "sql",
+      "critical": true,
+      "testArguments": [
+        "--ignored"
+      ]
+    },
+    {
+      "id": "postgres-flow-store-edges",
+      "package": "catga-flow-store",
+      "target": "postgres_edges",
+      "profile": "sql",
+      "critical": true,
+      "testArguments": [
+        "--ignored"
+      ]
+    },
+    {
+      "id": "mssql-flow-store-edges",
+      "package": "catga-flow-store",
+      "target": "mssql_edges",
       "profile": "full",
       "critical": true,
       "testArguments": [

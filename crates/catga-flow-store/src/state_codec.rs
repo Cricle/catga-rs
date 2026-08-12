@@ -42,4 +42,3 @@ pub(crate) fn decode_state(frame: &[u8]) -> CatgaResult<FlowState> {
             )
         })
 }
-

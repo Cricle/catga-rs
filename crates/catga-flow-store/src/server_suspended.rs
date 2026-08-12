@@ -1,7 +1,17 @@
-//! Shared server-SQL continuation operations.
-
+//! Shared sqlx-dialect continuation operations.
+//!
+//! `define_server_suspended!` is one arm of the crate's dialect-macro pattern (see the crate-level
+//! "Dialect architecture" section): the `mysql_suspended`, `postgres_suspended`, and
+//! `sqlite_suspended` modules each invoke it once with their pool type, producing the same audited
+//! continuation operations for all three sqlx drivers. The `$postgres` flag rewrites the canonical
+//! `?` bind placeholders into PostgreSQL's `$1..$n` form via `sql_backend::statement` and selects
+//! the `ON CONFLICT DO NOTHING` upsert, while MySQL keeps its duplicate-key-error admission path.
+//! The `$sqlite` flag selects SQLite's `ON CONFLICT(flow_key) DO NOTHING` admission and its
+//! narrower continuation schema: SQLite's table has no `flow_type_key` or `wait_correlation_key`
+//! hash columns, so inserts, replacements, wait-correlation lookups, and flow-type query filters
+//! bind and match the raw values directly. `$label` scopes every error message to the dialect.
 macro_rules! define_server_suspended {
-    ($pool:ty, $postgres:expr, $label:literal) => {
+    ($pool:ty, $postgres:expr, $sqlite:expr, $label:literal) => {
         use std::time::SystemTime;
         use catga_core::{CatgaError, CatgaResult, ErrorCode};
         use catga_core::flow::{FlowContinuation, FlowQuery, FlowSummary, decode_continuation, encode_continuation};
@@ -17,13 +27,20 @@ macro_rules! define_server_suspended {
             let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(continuation.updated_at())?;
             let insert = if $postgres {
                 "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT DO NOTHING"
+            } else if $sqlite {
+                "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(flow_key) DO NOTHING"
             } else {
                 "INSERT INTO catga_flow_continuations (flow_key, flow_id, flow_type, flow_type_key, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns, deadline_ms, wait_correlation, wait_correlation_key, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"
             };
-            let flow_type_key = flow_key(continuation.state().flow_type());
-            let result = sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(flow_type_key.as_slice()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(wait_correlation(&continuation)).bind(wait_correlation_key(&continuation).map(|key| key.to_vec())).bind(encode_continuation(&continuation)?)
-                .execute(pool).await;
-            let created = match result { Ok(result) => result.rows_affected() == 1, Err(error) if !$postgres && is_mysql_duplicate_key(&error) => false, Err(error) => return Err(database_error(concat!("create ", $label, " continuation"), error)), };
+            let result = if $sqlite {
+                sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(wait_correlation(&continuation)).bind(encode_continuation(&continuation)?)
+                .execute(pool).await
+            } else {
+                let flow_type_key = flow_key(continuation.state().flow_type());
+                sqlx::query(statement(insert, $postgres)).bind(key.as_slice()).bind(continuation.state().id()).bind(continuation.state().flow_type()).bind(flow_type_key.as_slice()).bind(status_code(continuation.state().status())).bind(continuation.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(&continuation)?).bind(wait_correlation(&continuation)).bind(wait_correlation_key(&continuation).map(|key| key.to_vec())).bind(encode_continuation(&continuation)?)
+                .execute(pool).await
+            };
+            let created = match result { Ok(result) => result.rows_affected() == 1, Err(error) if !$postgres && !$sqlite && is_mysql_duplicate_key(&error) => false, Err(error) => return Err(database_error(concat!("create ", $label, " continuation"), error)), };
             if created { return Ok(true); }
             let row = sqlx::query(statement("SELECT flow_id FROM catga_flow_continuations WHERE flow_key = ?", $postgres)).bind(key.as_slice()).fetch_optional(pool).await.map_err(|error| database_error(concat!("read conflicting ", $label, " continuation"), error))?;
             let Some(row) = row else { return Err(CatgaError::new(ErrorCode::Transient, concat!($label, " continuation disappeared after a conflicting create"))); };
@@ -36,7 +53,12 @@ macro_rules! define_server_suspended {
 
         /// Loads exactly one continuation by its indexed active wait correlation.
         pub(crate) async fn get_by_wait_correlation(pool: &$pool, correlation_id: &str) -> CatgaResult<Option<FlowContinuation>> {
-            let correlation_key = flow_key(correlation_id); let rows = sqlx::query(statement("SELECT payload FROM catga_flow_continuations WHERE wait_correlation_key = ? AND wait_correlation = ? ORDER BY flow_key ASC LIMIT 2", $postgres)).bind(correlation_key.as_slice()).bind(correlation_id).fetch_all(pool).await.map_err(|error| database_error(concat!("read ", $label, " wait correlation"), error))?;
+            let rows = if $sqlite {
+                sqlx::query(statement("SELECT payload FROM catga_flow_continuations WHERE wait_correlation = ? ORDER BY flow_key ASC LIMIT 2", $postgres)).bind(correlation_id).fetch_all(pool).await.map_err(|error| database_error(concat!("read ", $label, " wait correlation"), error))?
+            } else {
+                let correlation_key = flow_key(correlation_id);
+                sqlx::query(statement("SELECT payload FROM catga_flow_continuations WHERE wait_correlation_key = ? AND wait_correlation = ? ORDER BY flow_key ASC LIMIT 2", $postgres)).bind(correlation_key.as_slice()).bind(correlation_id).fetch_all(pool).await.map_err(|error| database_error(concat!("read ", $label, " wait correlation"), error))?
+            };
             if rows.len() > 1 { return Err(CatgaError::new(ErrorCode::Conflict, "flow wait correlation identifies multiple active flows")); }
             rows.into_iter().next().map(|row| {
                 let frame: Vec<u8> = row.try_get("payload").map_err(|error| database_error(concat!("decode ", $label, " wait correlation frame"), error))?;
@@ -53,13 +75,22 @@ macro_rules! define_server_suspended {
             }).transpose()?;
             let mut template = String::from("SELECT flow_id, flow_type, status, version, created_at_ms, created_at_subsec_ns, updated_at_ms, updated_at_subsec_ns FROM catga_flow_continuations WHERE 1 = 1");
             if query.status().is_some() { template.push_str(" AND status = ?"); }
-            if query.flow_type().is_some() { template.push_str(" AND flow_type_key = ? AND flow_type = ?"); }
+            if query.flow_type().is_some() {
+                if $sqlite { template.push_str(" AND flow_type = ?"); } else { template.push_str(" AND flow_type_key = ? AND flow_type = ?"); }
+            }
             if created_range.is_some() { template.push_str(" AND (created_at_ms > ? OR (created_at_ms = ? AND created_at_subsec_ns >= ?)) AND (created_at_ms < ? OR (created_at_ms = ? AND created_at_subsec_ns < ?))"); }
             template.push_str(" ORDER BY created_at_ms ASC, created_at_subsec_ns ASC, flow_key ASC LIMIT ?");
             let template = statement(&template, $postgres).0.into_owned();
             let mut statement = sqlx::query(sqlx::AssertSqlSafe(template));
             if let Some(status) = query.status() { statement = statement.bind(status_code(status)); }
-            if let Some(flow_type) = query.flow_type() { let flow_type_key = flow_key(flow_type); statement = statement.bind(flow_type_key.as_slice()).bind(flow_type); }
+            if let Some(flow_type) = query.flow_type() {
+                if $sqlite {
+                    statement = statement.bind(flow_type);
+                } else {
+                    let flow_type_key = flow_key(flow_type);
+                    statement = statement.bind(flow_type_key.as_slice()).bind(flow_type);
+                }
+            }
             if let Some(((start_ms, start_subsec_ns), (end_ms, end_subsec_ns))) = created_range { statement = statement.bind(start_ms).bind(start_ms).bind(start_subsec_ns).bind(end_ms).bind(end_ms).bind(end_subsec_ns); }
             let rows = statement.bind(limit).fetch_all(pool).await.map_err(|error| database_error(concat!("query ", $label, " continuations"), error))?;
             let mut summaries = Vec::with_capacity(query.max_results());
@@ -126,8 +157,15 @@ macro_rules! define_server_suspended {
         }
 
         async fn replace(pool: &$pool, current: &StoredContinuation, next: &FlowContinuation) -> CatgaResult<bool> {
-            let key = flow_key(next.state().id()); let flow_type_key = flow_key(next.state().flow_type()); let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?; let result = sqlx::query(statement("UPDATE catga_flow_continuations SET flow_type = ?, flow_type_key = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, wait_correlation = ?, wait_correlation_key = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL WHERE flow_key = ? AND flow_id = ? AND revision = ?", $postgres))
-                .bind(next.state().flow_type()).bind(flow_type_key.as_slice()).bind(status_code(next.state().status())).bind(next.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(next)?).bind(wait_correlation(next)).bind(wait_correlation_key(next).map(|key| key.to_vec())).bind(encode_continuation(next)?).bind(key.as_slice()).bind(next.state().id()).bind(current.revision).execute(pool).await.map_err(|error| database_error(concat!("replace ", $label, " continuation"), error))?;
+            let key = flow_key(next.state().id()); let (created_at_ms, created_at_subsec_ns) = unix_millis_and_subsec_nanos(next.created_at())?; let (updated_at_ms, updated_at_subsec_ns) = unix_millis_and_subsec_nanos(next.updated_at())?;
+            let result = if $sqlite {
+                sqlx::query(statement("UPDATE catga_flow_continuations SET flow_type = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, wait_correlation = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL WHERE flow_key = ? AND flow_id = ? AND revision = ?", $postgres))
+                    .bind(next.state().flow_type()).bind(status_code(next.state().status())).bind(next.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(next)?).bind(wait_correlation(next)).bind(encode_continuation(next)?).bind(key.as_slice()).bind(next.state().id()).bind(current.revision).execute(pool).await
+            } else {
+                let flow_type_key = flow_key(next.state().flow_type());
+                sqlx::query(statement("UPDATE catga_flow_continuations SET flow_type = ?, flow_type_key = ?, status = ?, version = ?, created_at_ms = ?, created_at_subsec_ns = ?, updated_at_ms = ?, updated_at_subsec_ns = ?, deadline_ms = ?, wait_correlation = ?, wait_correlation_key = ?, payload = ?, revision = revision + 1, due_token = NULL, lease_until_ms = NULL WHERE flow_key = ? AND flow_id = ? AND revision = ?", $postgres))
+                    .bind(next.state().flow_type()).bind(flow_type_key.as_slice()).bind(status_code(next.state().status())).bind(next.state().version()).bind(created_at_ms).bind(created_at_subsec_ns).bind(updated_at_ms).bind(updated_at_subsec_ns).bind(deadline_millis(next)?).bind(wait_correlation(next)).bind(wait_correlation_key(next).map(|key| key.to_vec())).bind(encode_continuation(next)?).bind(key.as_slice()).bind(next.state().id()).bind(current.revision).execute(pool).await
+            }.map_err(|error| database_error(concat!("replace ", $label, " continuation"), error))?;
             Ok(result.rows_affected() == 1)
         }
 

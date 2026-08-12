@@ -1,0 +1,126 @@
+# Kubernetes manifests for the distributed-kv three-node Raft cluster.
+#
+# No framework changes are required: the pods derive their Raft identity from
+# the StatefulSet ordinal (POD_NAME via the downward API) and discover peers
+# through the headless Service DNS records. The default consensus backend is
+# raft-rs over HTTP on the API port; with KV_BACKEND=sorock (see the commented
+# env var below) consensus runs over gRPC on port 10100 (API port + 1000) on
+# the same pod hostnames, while the API port keeps serving KV + probes.
+#
+# Layout:
+#   - headless Service  : pod DNS kv-<i>.kv-headless for Raft + API traffic
+#   - StatefulSet       : 3 replicas, one PVC per pod for the raft-engine log
+#   - PodDisruptionBudget: keep quorum (maxUnavailable: 1 of 3)
+#
+# Apply:  kubectl apply -f examples/distributed-kv/k8s/
+# Verify: kubectl port-forward svc/kv-headless 9100:9100
+#         curl -X POST localhost:9100/kv -H 'content-type: application/json' -d '{"key":"a","value":"1"}'
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv-headless
+  labels:
+    app: distributed-kv
+spec:
+  clusterIP: None
+  selector:
+    app: distributed-kv
+  ports:
+    - name: api
+      port: 9100
+    # Consensus transport when KV_BACKEND=sorock (unused on the raft backend).
+    - name: sorock-grpc
+      port: 10100
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kv
+  labels:
+    app: distributed-kv
+spec:
+  serviceName: kv-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distributed-kv
+  template:
+    metadata:
+      labels:
+        app: distributed-kv
+    spec:
+      # Spread Raft voters across nodes and zones so one node loss never kills quorum.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: distributed-kv
+      containers:
+        - name: kv
+          image: localhost/catga-distributed-kv:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KV_CLUSTER_NAME
+              value: kv
+            - name: KV_REPLICAS
+              value: "3"
+            # Set to run consensus on the sorock gRPC backend (port 10100):
+            # - name: KV_BACKEND
+            #   value: sorock
+          ports:
+            - name: api
+              containerPort: 9100
+            # Consensus transport when KV_BACKEND=sorock (unused on the raft backend).
+            - name: sorock-grpc
+              containerPort: 10100
+          readinessProbe:
+            # The node answers once the HTTP API and the Raft owner task are up.
+            httpGet:
+              path: /status
+              port: api
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            # /healthz returns 503 when the Raft owner task has stopped, so a
+            # zombie pod (alive process, dead consensus loop) gets restarted.
+            httpGet:
+              path: /healthz
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: raft-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: raft-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 128Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kv
+  labels:
+    app: distributed-kv
+spec:
+  # 3 voters tolerate exactly one loss; never evict two at once.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: distributed-kv

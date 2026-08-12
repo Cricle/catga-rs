@@ -22,12 +22,28 @@ pub struct NatsDeadLetters {
 }
 impl NatsDeadLetters {
     /// Connects and provisions an append-only dead-letter stream.
+    ///
+    /// Letters append to one JetStream stream so failed deliveries stay durable and ordered.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsDeadLetters;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let dead_letters = NatsDeadLetters::connect("nats://127.0.0.1:4222", "app-dead-letters", "app.dead.>").await?;
+    /// # drop(dead_letters);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: &str,
         stream_name: impl Into<Box<str>>,
         subject: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let stream_name = stream_name.into();
         let subject = subject.into();
         let stream = context
@@ -37,7 +53,7 @@ impl NatsDeadLetters {
                 ..Default::default()
             })
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             context,
             stream,
@@ -56,9 +72,9 @@ impl DeadLetterStore for NatsDeadLetters {
                 payload.into(),
             )
             .await
-            .map_err(map_error)?
+            .map_err(CatgaError::transient)?
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(())
     }
     async fn list(&self, limit: usize) -> CatgaResult<Vec<DeadLetter>> {
@@ -66,7 +82,12 @@ impl DeadLetterStore for NatsDeadLetters {
             return Ok(Vec::new());
         }
         let mut info = self.stream.clone();
-        let state = info.info().await.map_err(map_error)?.state.clone();
+        let state = info
+            .info()
+            .await
+            .map_err(CatgaError::transient)?
+            .state
+            .clone();
         let mut letters = Vec::with_capacity(limit);
         if state.messages == 0 {
             return Ok(letters);
@@ -76,7 +97,7 @@ impl DeadLetterStore for NatsDeadLetters {
                 .stream
                 .get_raw_message(sequence)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             if raw
                 .subject
                 .as_str()
@@ -246,7 +267,3 @@ fn decode(codec: &MemoryPackCodec, value: &[u8]) -> CatgaResult<DeadLetter> {
         diagnostics,
     )
 }
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-

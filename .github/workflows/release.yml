@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,10 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3 # catga-sorock's sorock build script needs protoc
+        with:
+          version: "v3.20.3" # raft-proto's protobuf-build rejects protoc >= 4/2x
       - uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
       - name: Create a draft release for performance assets
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
@@ -28,8 +33,7 @@ jobs:
         run: >-
           bash scripts/coverage.sh --profile full
           --e2e-jobs 1
-          --required-line-coverage 80
-          --required-region-coverage 80
+          --required-line-coverage 85
           --required-e2e-pass-percentage 95
       - name: Run Docker E2E performance suite
         id: performance
@@ -86,6 +90,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3 # catga-sorock's sorock build script needs protoc
+        with:
+          version: "v3.20.3" # raft-proto's protobuf-build rejects protoc >= 4/2x
       - uses: Swatinem/rust-cache@v2
       - run: test -n "$CARGO_REGISTRY_TOKEN"
       - run: cargo fmt --all -- --check
@@ -96,7 +103,7 @@ jobs:
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: |
           release_version="${GITHUB_REF_NAME#v}"
-          packages=(catga-macros catga-core catga-memorypack-derive catga-codec-memorypack catga-codec-bincode catga-flow catga-memory catga-redis catga-flow-store catga-scheduler-tokio-cron catga-nats catga-robustmq catga-cluster catga-axum catga-auto catga-testing)
+          packages=(catga-memorypack-derive catga-core-macros catga-core catga-sorock catga-redis catga-nats catga-robustmq catga-flow-store catga-cluster catga-axum)
           for package in "${packages[@]}"; do
             manifest_version="$(cargo pkgid -p "$package")"
             manifest_version="${manifest_version##*@}"

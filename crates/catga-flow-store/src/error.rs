@@ -16,10 +16,9 @@ pub(crate) fn database_error(operation: &str, error: impl std::fmt::Display) -> 
 /// [`sqlx::error::ErrorKind::UniqueViolation`] classification. Handling that error explicitly
 /// preserves idempotent-create semantics without `INSERT IGNORE`, which would also turn
 /// unrelated invalid-data failures into warnings.
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 pub(crate) fn is_mysql_duplicate_key(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
         .is_some_and(|database| database.kind() == sqlx::error::ErrorKind::UniqueViolation)
 }
-

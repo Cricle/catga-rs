@@ -8,8 +8,6 @@ use catga_core::{
 };
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
-use crate::transport::map_error;
-
 const ENQUEUE: &str = r#"local id=redis.call('INCR',KEYS[1]); local key=KEYS[2]..':'..id; redis.call('HSET',key,'payload',ARGV[1],'reason',ARGV[2],'attempts',ARGV[3],'failed_at_unix_ms',ARGV[4],'error_code',ARGV[5],'stage',ARGV[6]); redis.call('RPUSH',KEYS[3],id); return id"#;
 
 /// Redis list-backed FIFO dead-letter store.
@@ -21,15 +19,27 @@ pub struct RedisDeadLetters {
 
 impl RedisDeadLetters {
     /// Connects and namespaces dead letters beneath `prefix`.
+    ///
+    /// Dead letters are retained in insertion order inside one bounded Redis list per prefix.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisDeadLetters;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let dead_letters = RedisDeadLetters::connect("redis://127.0.0.1/", "app.dead-letters").await?;
+    /// # drop(dead_letters);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -65,7 +75,7 @@ impl DeadLetterStore for RedisDeadLetters {
             .invoke_async::<u64>(&mut c)
             .await
             .map(|_| ())
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
     async fn list(&self, limit: usize) -> CatgaResult<Vec<DeadLetter>> {
         if limit == 0 {
@@ -79,17 +89,32 @@ impl DeadLetterStore for RedisDeadLetters {
                 isize::try_from(limit.saturating_sub(1)).unwrap_or(isize::MAX),
             )
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let mut letters = Vec::with_capacity(ids.len());
         for id in ids {
             let key = format!("{}:{id}", self.details());
-            let payload: Option<Vec<u8>> = c.hget(&key, "payload").await.map_err(map_error)?;
-            let reason: Option<String> = c.hget(&key, "reason").await.map_err(map_error)?;
-            let attempts: Option<u32> = c.hget(&key, "attempts").await.map_err(map_error)?;
-            let failed_at_unix_ms: Option<u64> =
-                c.hget(&key, "failed_at_unix_ms").await.map_err(map_error)?;
-            let error_code: Option<String> = c.hget(&key, "error_code").await.map_err(map_error)?;
-            let stage: Option<String> = c.hget(&key, "stage").await.map_err(map_error)?;
+            let payload: Option<Vec<u8>> = c
+                .hget(&key, "payload")
+                .await
+                .map_err(CatgaError::transient)?;
+            let reason: Option<String> = c
+                .hget(&key, "reason")
+                .await
+                .map_err(CatgaError::transient)?;
+            let attempts: Option<u32> = c
+                .hget(&key, "attempts")
+                .await
+                .map_err(CatgaError::transient)?;
+            let failed_at_unix_ms: Option<u64> = c
+                .hget(&key, "failed_at_unix_ms")
+                .await
+                .map_err(CatgaError::transient)?;
+            let error_code: Option<String> = c
+                .hget(&key, "error_code")
+                .await
+                .map_err(CatgaError::transient)?;
+            let stage: Option<String> =
+                c.hget(&key, "stage").await.map_err(CatgaError::transient)?;
             if let (Some(payload), Some(reason), Some(attempts)) = (payload, reason, attempts) {
                 letters.push(decode_dead_letter(
                     &self.codec,

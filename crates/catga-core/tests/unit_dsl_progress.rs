@@ -11,8 +11,14 @@ fn dsl_progress_kind_default_is_application_state() {
 
 #[test]
 fn dsl_progress_kind_all_variants() {
-    assert_eq!(DslProgressKind::ApplicationState, DslProgressKind::ApplicationState);
-    assert_eq!(DslProgressKind::CheckpointFrame, DslProgressKind::CheckpointFrame);
+    assert_eq!(
+        DslProgressKind::ApplicationState,
+        DslProgressKind::ApplicationState
+    );
+    assert_eq!(
+        DslProgressKind::CheckpointFrame,
+        DslProgressKind::CheckpointFrame
+    );
     assert_eq!(DslProgressKind::Terminal, DslProgressKind::Terminal);
 }
 
@@ -44,7 +50,9 @@ fn dsl_step_progress_shared_payload_returns_arc() {
 #[test]
 fn dsl_step_progress_next_version() {
     let progress = DslStepProgress::new("flow", 0, [1_u8]);
-    let next = progress.next_version([2_u8]).expect("next version should succeed");
+    let next = progress
+        .next_version([2_u8])
+        .expect("next version should succeed");
 
     assert_eq!(next.flow_id(), "flow");
     assert_eq!(next.step_index(), 0);
@@ -85,8 +93,8 @@ fn dsl_step_progress_wire_round_trip_application_state() {
     let progress = DslStepProgress::new("flow-42", 5, [1_u8, 2, 3]);
 
     let bytes = MemoryPackSerializer::serialize(&progress).expect("serializes");
-    let deserialized = MemoryPackSerializer::deserialize::<DslStepProgress>(&bytes)
-        .expect("deserializes");
+    let deserialized =
+        MemoryPackSerializer::deserialize::<DslStepProgress>(&bytes).expect("deserializes");
 
     assert_eq!(deserialized.flow_id(), progress.flow_id());
     assert_eq!(deserialized.step_index(), progress.step_index());
@@ -101,8 +109,8 @@ fn dsl_step_progress_wire_round_trip_after_version_update() {
     let updated = original.next_version([2_u8, 3]).expect("version advances");
 
     let bytes = MemoryPackSerializer::serialize(&updated).expect("serializes");
-    let deserialized = MemoryPackSerializer::deserialize::<DslStepProgress>(&bytes)
-        .expect("deserializes");
+    let deserialized =
+        MemoryPackSerializer::deserialize::<DslStepProgress>(&bytes).expect("deserializes");
 
     assert_eq!(deserialized.flow_id(), "flow-42");
     assert_eq!(deserialized.step_index(), 0);

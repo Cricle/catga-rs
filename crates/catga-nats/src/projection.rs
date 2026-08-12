@@ -11,11 +11,11 @@ use catga_core::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
 };
+use catga_core::hash::sha256_digest;
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, ProjectionCheckpoint, ProjectionCheckpointStore,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};
 
@@ -35,17 +35,33 @@ impl NatsProjectionCheckpoints {
     ///
     /// The bucket keeps one history entry because the store performs bounded compare-and-set
     /// retries instead of retaining old checkpoint versions.
+    ///
+    /// Checkpoints use bounded compare-and-set retries instead of retained history.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsProjectionCheckpoints;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let checkpoints = NatsProjectionCheckpoints::connect("nats://127.0.0.1:4222", "app-projections").await?;
+    /// # drop(checkpoints);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self { store })
     }
 
     async fn entry(&self, key: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.store.entry(key).await.map_err(map_error)
+        self.store.entry(key).await.map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(&self, key: &str, value: Vec<u8>, revision: u64) -> CatgaResult<bool> {
@@ -53,7 +69,7 @@ impl NatsProjectionCheckpoints {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = matches!(
                     self.store.entry(key).await,
                     Ok(Some(entry))
@@ -80,7 +96,7 @@ impl NatsProjectionCheckpoints {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = match self.store.entry(key).await {
                     Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                         record.matches(&decode_record(&entry.value)?)
@@ -290,7 +306,7 @@ impl StoredCheckpoint {
 fn projection_key(projection_name: &str) -> String {
     format!(
         "p{}",
-        hex::encode(Sha256::digest(projection_name.as_bytes()))
+        hex::encode(sha256_digest(projection_name.as_bytes()))
     )
 }
 
@@ -327,8 +343,4 @@ fn unix_millis(time: SystemTime) -> u64 {
             .as_millis(),
     )
     .unwrap_or(u64::MAX)
-}
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }

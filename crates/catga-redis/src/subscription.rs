@@ -1,8 +1,9 @@
 //! Redis-backed persistent subscriptions and owner leases.
 
-use crate::transport::map_error;
 use async_trait::async_trait;
-use catga_core::{CatgaResult, PersistentSubscription, SubscriptionCheckpoint, SubscriptionStore};
+use catga_core::{
+    CatgaError, CatgaResult, PersistentSubscription, SubscriptionCheckpoint, SubscriptionStore,
+};
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
 const RELEASE: &str =
@@ -15,15 +16,28 @@ pub struct RedisSubscriptions {
 }
 impl RedisSubscriptions {
     /// Connects and namespaces subscription data beneath `prefix`.
+    ///
+    /// Definitions, stream checkpoints, and owner leases share the prefix, keeping one
+    /// subscription's durable state co-located.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisSubscriptions;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let subscriptions = RedisSubscriptions::connect("redis://127.0.0.1/", "app.subscriptions").await?;
+    /// # drop(subscriptions);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -55,12 +69,15 @@ impl SubscriptionStore for RedisSubscriptions {
         let _: usize = c
             .hset(self.definition(s.name()), "pattern", s.stream_pattern())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let _: usize = c
             .hset(self.definition(s.name()), "types", types)
             .await
-            .map_err(map_error)?;
-        let _: usize = c.sadd(self.index(), s.name()).await.map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
+        let _: usize = c
+            .sadd(self.index(), s.name())
+            .await
+            .map_err(CatgaError::transient)?;
         Ok(())
     }
     async fn load(&self, n: &str) -> CatgaResult<Option<PersistentSubscription>> {
@@ -68,14 +85,14 @@ impl SubscriptionStore for RedisSubscriptions {
         let pattern: Option<String> = c
             .hget(self.definition(n), "pattern")
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let Some(pattern) = pattern else {
             return Ok(None);
         };
         let types: Option<String> = c
             .hget(self.definition(n), "types")
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let sub = PersistentSubscription::new(n, pattern).with_event_types(
             types
                 .unwrap_or_default()
@@ -86,15 +103,27 @@ impl SubscriptionStore for RedisSubscriptions {
     }
     async fn delete(&self, n: &str) -> CatgaResult<()> {
         let mut c = self.connection.clone();
-        let _: usize = c.del(self.definition(n)).await.map_err(map_error)?;
-        let _: usize = c.del(self.checkpoints(n)).await.map_err(map_error)?;
-        let _: usize = c.del(self.lease(n)).await.map_err(map_error)?;
-        let _: usize = c.srem(self.index(), n).await.map_err(map_error)?;
+        let _: usize = c
+            .del(self.definition(n))
+            .await
+            .map_err(CatgaError::transient)?;
+        let _: usize = c
+            .del(self.checkpoints(n))
+            .await
+            .map_err(CatgaError::transient)?;
+        let _: usize = c.del(self.lease(n)).await.map_err(CatgaError::transient)?;
+        let _: usize = c
+            .srem(self.index(), n)
+            .await
+            .map_err(CatgaError::transient)?;
         Ok(())
     }
     async fn list(&self) -> CatgaResult<Vec<PersistentSubscription>> {
         let mut c = self.connection.clone();
-        let mut names: Vec<String> = c.smembers(self.index()).await.map_err(map_error)?;
+        let mut names: Vec<String> = c
+            .smembers(self.index())
+            .await
+            .map_err(CatgaError::transient)?;
         names.sort_unstable();
         let mut subs = Vec::with_capacity(names.len());
         for n in names {
@@ -113,7 +142,7 @@ impl SubscriptionStore for RedisSubscriptions {
                 cpt.version(),
             )
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(())
     }
     async fn load_checkpoint(
@@ -122,12 +151,17 @@ impl SubscriptionStore for RedisSubscriptions {
         s: &str,
     ) -> CatgaResult<Option<SubscriptionCheckpoint>> {
         let mut c = self.connection.clone();
-        let v: Option<i64> = c.hget(self.checkpoints(n), s).await.map_err(map_error)?;
+        let v: Option<i64> = c
+            .hget(self.checkpoints(n), s)
+            .await
+            .map_err(CatgaError::transient)?;
         Ok(v.map(|v| SubscriptionCheckpoint::new(n, s, v)))
     }
     async fn try_acquire(&self, n: &str, o: &str) -> CatgaResult<bool> {
         let mut c = self.connection.clone();
-        c.set_nx(self.lease(n), o).await.map_err(map_error)
+        c.set_nx(self.lease(n), o)
+            .await
+            .map_err(CatgaError::transient)
     }
     async fn release(&self, n: &str, o: &str) -> CatgaResult<()> {
         let mut c = self.connection.clone();
@@ -137,6 +171,6 @@ impl SubscriptionStore for RedisSubscriptions {
             .invoke_async::<i64>(&mut c)
             .await
             .map(|_| ())
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 }

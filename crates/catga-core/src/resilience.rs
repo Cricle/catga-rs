@@ -97,8 +97,19 @@ impl ResilienceOptions {
     }
 
     fn retry_delay(self, retry: u32) -> Duration {
-        self.retry_delay.saturating_mul(1_u32 << retry.min(31))
+        retry_delay(self.retry_delay, retry as usize)
     }
+}
+
+/// Computes an exponential backoff delay for retry operations.
+///
+/// Each retry doubles the `initial_delay` and saturates at `Duration::MAX`.
+pub(crate) fn retry_delay(initial_delay: Duration, retry: usize) -> Duration {
+    let multiplier = u32::try_from(retry)
+        .ok()
+        .and_then(|retry| 1_u32.checked_shl(retry))
+        .unwrap_or(u32::MAX);
+    initial_delay.saturating_mul(multiplier)
 }
 
 /// Executes caller-supplied work with bounded admission, timeout, retry, and
@@ -437,4 +448,3 @@ fn unavailable(message: &'static str) -> CatgaError {
 fn circuit_open() -> CatgaError {
     CatgaError::new(ErrorCode::Transient, "resilience circuit is open")
 }
-

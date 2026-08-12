@@ -115,6 +115,12 @@ impl Error for RaftInboundPolicyError {}
 /// This is the production default for clusters with static membership. It rejects unauthenticated
 /// frames, frames sent to another node, self-originated frames, unknown members, and identities
 /// that do not match the claimed `from` node ID.
+///
+/// The peer map is fixed at construction: after a dynamic membership change
+/// ([`crate::RaftStateMachineRuntime::add_voter`] /
+/// [`crate::RaftStateMachineRuntime::remove_voter`]), recreate the policy with the new peer
+/// set and swap it at the transport boundary, or new members' frames will be rejected and
+/// removed members' frames will still be accepted.
 #[derive(Clone, Debug)]
 pub struct StaticRaftInboundPolicy {
     local_id: u64,

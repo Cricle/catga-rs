@@ -13,10 +13,10 @@ fn deduplication_key_internal(
     digest.update(channel.len().to_be_bytes());
     digest.update(channel.as_bytes());
     digest.update(message_id.to_be_bytes());
-    if scope == b"receive" {
-        if let Some(rid) = receiver_id {
-            digest.update(rid.as_bytes());
-        }
+    if scope == b"receive"
+        && let Some(rid) = receiver_id
+    {
+        digest.update(rid.as_bytes());
     }
     format!("catga:pubsub:dedup:{}", hex::encode(digest.finalize()))
 }

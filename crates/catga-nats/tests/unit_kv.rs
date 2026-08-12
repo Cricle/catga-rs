@@ -1,4 +1,4 @@
-use super::*;
+//! Unit tests for public NATS KV bucket behavior.
 
 #[test]
 fn kv_bucket_name_format() {
@@ -11,7 +11,7 @@ fn kv_bucket_name_format() {
 
 #[test]
 fn kv_stream_subjects_template() {
-    let subjects = vec![format!("$KV.{}.>", "mybucket")];
+    let subjects = [format!("$KV.{}.>", "mybucket")];
     assert_eq!(subjects[0], "$KV.mybucket.>");
 }
 

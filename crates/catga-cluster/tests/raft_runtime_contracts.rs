@@ -110,12 +110,12 @@ fn raft_node_bounds_unapplied_commits_and_retains_the_queued_command() {
             .expect("single-node configuration must be valid");
 
     node.campaign().expect("single node must elect itself");
-    node.try_propose(b"first".to_vec())
+    node.propose(b"first".to_vec())
         .expect("first command must fit the bounded queue");
     assert_eq!(node.pending_commit_count(), 1);
 
     assert!(matches!(
-        node.try_propose(b"second".to_vec()),
+        node.propose(b"second".to_vec()),
         Err(RaftNodeError::PendingCommitCapacity { capacity: 1 })
     ));
     assert_eq!(node.pending_commit_count(), 1);
@@ -249,10 +249,22 @@ fn raft_runtime_surfaces_fatal_transport_errors_only_when_its_owner_stops() {
         )
         .expect("runtime must start");
 
-        assert!(matches!(
-            runtime.campaign().await,
-            Err(RaftRuntimeError::Transport(_))
-        ));
+        // Sends only queue frames for per-peer workers, so a fatal peer failure
+        // surfaces asynchronously: the next tick's send sees the recorded failure
+        // and the owner task stops with the Transport error.
+        let _ = runtime.campaign().await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while runtime.is_alive() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fatal transport failure must stop the owner task"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            runtime.stop_reason().map(|reason| reason.kind()),
+            Some(catga_cluster::RaftStopKind::Transport)
+        );
         assert!(matches!(
             runtime.join().await,
             Err(RaftRuntimeError::Transport(_))

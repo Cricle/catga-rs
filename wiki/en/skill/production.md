@@ -78,7 +78,7 @@ Availability, credentials, retry budgets, and graceful shutdown are all owned by
 - Correlation: `CorrelationBehavior` / `scope_correlation_id` / `current_correlation_id`; `TraceContext` (W3C `traceparent`/`tracestate`).
 - Use tracing/metrics for observability; the crate deliberately does not provide built-in HTTP health endpoints (health status is exposed via the `HealthCheckable` contract).
 
-## Testing Tools (`catga-testing`)
+## Testing Tools (`catga_core::testing`, built into catga-core)
 
 In-process typed testing utilities (new instance per test case, not shared across concurrent tests):
 

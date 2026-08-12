@@ -2,7 +2,7 @@
 
 use std::{
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime},
 };
 
 use async_nats::jetstream::{self, kv};
@@ -27,6 +27,18 @@ pub struct NatsIdempotency {
 
 impl NatsIdempotency {
     /// Connects and provisions a one-history KV bucket using the default completed-record policy.
+    ///
+    /// A one-history KV bucket keeps only the newest record per idempotency key.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsIdempotency;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let idempotency = NatsIdempotency::connect("nats://127.0.0.1:4222", "app-idempotency").await?;
+    /// # drop(idempotency);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
         Self::with_retention(server, bucket, DEFAULT_IDEMPOTENCY_RETENTION).await
     }
@@ -43,22 +55,29 @@ impl NatsIdempotency {
         retention: Duration,
     ) -> CatgaResult<Self> {
         validate_completed_retention(retention)?;
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
-        let status = store.status().await.map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
+        let status = store.status().await.map_err(CatgaError::transient)?;
         if !status.max_age().is_zero() {
             let mut config = status.info.config.clone();
             config.max_age = Duration::ZERO;
-            context.update_stream(config).await.map_err(map_error)?;
+            context
+                .update_stream(config)
+                .await
+                .map_err(CatgaError::transient)?;
         }
         Ok(Self { store, retention })
     }
 
     async fn entry(&self, key: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.store.entry(key).await.map_err(map_error)
+        self.store.entry(key).await.map_err(CatgaError::transient)
     }
 
     async fn transition(&self, key: &str, next: Vec<u8>) -> CatgaResult<()> {
@@ -99,7 +118,7 @@ impl NatsIdempotency {
         telemetry::record_persistence_optional_claim("nats", "idempotency", "try_claim", async {
             let key = kv_key(key);
             let value = claimed_with_expiry(expires_at);
-            let now = now_millis();
+            let now = catga_core::time::now_unix_millis();
             for _ in 0..RETRIES {
                 match self.entry(&key).await? {
                     None => {
@@ -209,11 +228,11 @@ impl NatsIdempotency {
             return Ok(0);
         }
         let now = SystemTime::now();
-        let mut keys = self.store.keys().await.map_err(map_error)?;
+        let mut keys = self.store.keys().await.map_err(CatgaError::transient)?;
         let mut inspected = 0;
         let mut removed = 0;
         while inspected < limit {
-            let Some(key) = keys.try_next().await.map_err(map_error)? else {
+            let Some(key) = keys.try_next().await.map_err(CatgaError::transient)? else {
                 break;
             };
             inspected += 1;
@@ -381,18 +400,6 @@ fn claim_expired(value: &[u8], now: u64) -> bool {
         .and_then(|bytes| bytes.try_into().ok())
         .map(u64::from_be_bytes)
         .is_none_or(|expires_at| expires_at <= now)
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }
 
 fn kv_key(key: &str) -> String {

@@ -4,7 +4,6 @@ use catga_core::ErrorCode;
 use std::time::Duration;
 
 const DEFAULT_REDIS_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
-const DEFAULT_REDIS_PENDING_RECLAIM_SCANS: usize = 64;
 const MAX_REDIS_PENDING_RECLAIM_SCANS: usize = 1024;
 
 fn redis_command_options_new(timeout: Duration) -> Result<Duration, catga_core::CatgaError> {
@@ -49,7 +48,10 @@ fn redis_pending_reclaim_options_new(
 fn redis_command_options_new_valid() {
     let result = redis_command_options_new(Duration::from_millis(250));
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), Duration::from_millis(250));
+    assert_eq!(
+        result.expect("test value must be present"),
+        Duration::from_millis(250)
+    );
 }
 
 #[test]
@@ -69,7 +71,7 @@ fn redis_command_options_default() {
 fn redis_pending_reclaim_options_new_valid() {
     let result = redis_pending_reclaim_options_new(Duration::from_secs(5), 4);
     assert!(result.is_ok());
-    let (idle, idle_millis, scans) = result.unwrap();
+    let (idle, idle_millis, scans) = result.expect("test value must be present");
     assert_eq!(idle, Duration::from_secs(5));
     assert_eq!(idle_millis, 5000);
     assert_eq!(scans, 4);
@@ -77,7 +79,8 @@ fn redis_pending_reclaim_options_new_valid() {
 
 #[test]
 fn redis_pending_reclaim_options_new_zero_duration_fails() {
-    let err = redis_pending_reclaim_options_new(Duration::ZERO, 1).expect_err("zero duration fails");
+    let err =
+        redis_pending_reclaim_options_new(Duration::ZERO, 1).expect_err("zero duration fails");
     assert_eq!(err.code(), ErrorCode::Validation);
     assert!(err.message().contains("at least one millisecond"));
 }
@@ -108,7 +111,7 @@ fn redis_pending_reclaim_options_new_at_max_scans() {
         MAX_REDIS_PENDING_RECLAIM_SCANS,
     );
     assert!(result.is_ok());
-    let (_, _, scans) = result.unwrap();
+    let (_, _, scans) = result.expect("test value must be present");
     assert_eq!(scans, MAX_REDIS_PENDING_RECLAIM_SCANS);
 }
 
@@ -116,7 +119,7 @@ fn redis_pending_reclaim_options_new_at_max_scans() {
 fn redis_pending_reclaim_options_new_minimum_idle_millis() {
     let result = redis_pending_reclaim_options_new(Duration::from_millis(42), 1);
     assert!(result.is_ok());
-    let (_, idle_millis, _) = result.unwrap();
+    let (_, idle_millis, _) = result.expect("test value must be present");
     assert_eq!(idle_millis, 42);
 }
 

@@ -34,11 +34,7 @@ impl DslStepProgressStore for ProgressStore {
         Ok(true)
     }
 
-    async fn update(
-        &self,
-        expected_version: i64,
-        next: DslStepProgress,
-    ) -> CatgaResult<bool> {
+    async fn update(&self, expected_version: i64, next: DslStepProgress) -> CatgaResult<bool> {
         let key = (next.flow_id().to_owned(), next.step_index());
         let mut records = self.records.lock().expect("progress store lock");
         let Some(current) = records.get(&key) else {
@@ -53,11 +49,7 @@ impl DslStepProgressStore for ProgressStore {
         Ok(true)
     }
 
-    async fn get(
-        &self,
-        flow_id: &str,
-        step_index: u32,
-    ) -> CatgaResult<Option<DslStepProgress>> {
+    async fn get(&self, flow_id: &str, step_index: u32) -> CatgaResult<Option<DslStepProgress>> {
         Ok(self
             .records
             .lock()
@@ -84,12 +76,11 @@ impl DslStateCodec<usize> for UsizeCodec {
     }
 
     fn decode(&self, bytes: &[u8]) -> CatgaResult<usize> {
-        let bytes: [u8; 8] = bytes.try_into().map_err(|_| {
-            CatgaError::new(ErrorCode::Validation, "invalid test state payload")
-        })?;
-        usize::try_from(u64::from_be_bytes(bytes)).map_err(|_| {
-            CatgaError::new(ErrorCode::Validation, "test state does not fit usize")
-        })
+        let bytes: [u8; 8] = bytes
+            .try_into()
+            .map_err(|_| CatgaError::new(ErrorCode::Validation, "invalid test state payload"))?;
+        usize::try_from(u64::from_be_bytes(bytes))
+            .map_err(|_| CatgaError::new(ErrorCode::Validation, "test state does not fit usize"))
     }
 }
 
@@ -178,9 +169,8 @@ fn dsl_flow_retry_adds_retry_steps() {
 
 #[test]
 fn dsl_flow_timeout_adds_timeout_steps() {
-    let _flow = DslFlow::<usize>::new().timeout(Duration::from_secs(5), |_s| {
-        Box::pin(async { Ok(()) })
-    });
+    let _flow =
+        DslFlow::<usize>::new().timeout(Duration::from_secs(5), |_s| Box::pin(async { Ok(()) }));
 }
 
 #[test]
@@ -196,10 +186,10 @@ fn dsl_flow_parallel_adds_parallel_steps() {
 
 #[test]
 fn dsl_flow_for_each_adds_loop_steps() {
-    let _flow = DslFlow::<usize>::new()
-        .for_each(|_state: &usize| Vec::new(), |_s: &mut usize, _item: usize| {
-            Box::pin(async { Ok(()) })
-        });
+    let _flow = DslFlow::<usize>::new().for_each(
+        |_state: &usize| Vec::new(),
+        |_s: &mut usize, _item: usize| Box::pin(async { Ok(()) }),
+    );
 }
 
 #[test]
@@ -211,10 +201,7 @@ fn dsl_flow_lifecycle_observer_trait() {
 
     impl DslFlowLifecycleObserver for TestObserver {
         fn observe(&self, event: &DslFlowLifecycleEvent) {
-            self.events
-                .lock()
-                .expect("lock")
-                .push(event.clone());
+            self.events.lock().expect("lock").push(event.clone());
         }
     }
 
@@ -247,7 +234,9 @@ fn dsl_step_progress_store_operations() {
 
     // Get
     let retrieved = futures::executor::block_on(store.get("flow-1", 0));
-    let retrieved = retrieved.expect("get should succeed").expect("should exist");
+    let retrieved = retrieved
+        .expect("get should succeed")
+        .expect("should exist");
     assert_eq!(retrieved.flow_id(), "flow-1");
     assert_eq!(retrieved.step_index(), 0);
     assert_eq!(retrieved.payload(), &[1, 2, 3]);
@@ -309,8 +298,8 @@ fn dsl_step_progress_next_version_rejects_non_successor() {
 fn dsl_step_progress_serialization_roundtrip() {
     let progress = DslStepProgress::new("flow-42", 5, [1_u8, 2, 3]);
     let bytes = MemoryPackSerializer::serialize(&progress).expect("serialize");
-    let deserialized = MemoryPackSerializer::deserialize::<DslStepProgress>(&bytes)
-        .expect("deserialize");
+    let deserialized =
+        MemoryPackSerializer::deserialize::<DslStepProgress>(&bytes).expect("deserialize");
 
     assert_eq!(deserialized.flow_id(), progress.flow_id());
     assert_eq!(deserialized.step_index(), progress.step_index());
@@ -333,13 +322,19 @@ fn terminal_record_slot_validation() {
 #[test]
 fn dsl_flow_parallel_branch_limit() {
     // Verify the constant exists and is positive
-    assert!(MAX_DSL_PARALLEL_BRANCHES > 0);
+    const { assert!(MAX_DSL_PARALLEL_BRANCHES > 0) };
 }
 
 #[test]
 fn dsl_progress_kind_all_variants() {
-    assert_eq!(DslProgressKind::ApplicationState, DslProgressKind::ApplicationState);
-    assert_eq!(DslProgressKind::CheckpointFrame, DslProgressKind::CheckpointFrame);
+    assert_eq!(
+        DslProgressKind::ApplicationState,
+        DslProgressKind::ApplicationState
+    );
+    assert_eq!(
+        DslProgressKind::CheckpointFrame,
+        DslProgressKind::CheckpointFrame
+    );
     assert_eq!(DslProgressKind::Terminal, DslProgressKind::Terminal);
 }
 
@@ -370,7 +365,10 @@ fn dsl_step_progress_is_next_version_rejects_invalid() {
     assert!(!DslStepProgress::is_next_version(1, 3));
     assert!(!DslStepProgress::is_next_version(i64::MAX, i64::MAX));
     // i64::MAX + 1 would overflow, so test that max version cannot advance
-    assert!(!DslStepProgress::is_next_version(i64::MAX - 1, i64::MAX - 1));
+    assert!(!DslStepProgress::is_next_version(
+        i64::MAX - 1,
+        i64::MAX - 1
+    ));
 }
 
 #[test]

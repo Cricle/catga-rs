@@ -39,25 +39,32 @@ Detailed performance analysis: [Performance](./advanced/performance.md)
 
 ```toml
 [dependencies]
-catga-auto = "0.1"
-catga-memory = "0.1"
+catga-core = "0.2"
+async-trait = "0.1"
 ```
 
 ```rust
-use catga_auto::AutoApp;
-use catga_core::{Message, Request, CatgaResult};
+use catga_core::auto::AutoApp;
+use catga_core::{CatgaResult, Handler, Message, Request};
 
 struct Add(i64);
 impl Message for Add {}
-impl Request for Add { type Response = i64; }
+impl Request for Add {
+    type Response = i64;
+    type TypeId = catga_core::DefaultMessageTypeId;
+}
 
-async fn add_handler(msg: Add) -> CatgaResult<i64> {
-    Ok(msg.0 * 2)
+struct AddHandler;
+#[async_trait::async_trait]
+impl Handler<Add> for AddHandler {
+    async fn handle(&self, msg: Add) -> CatgaResult<i64> {
+        Ok(msg.0 * 2)
+    }
 }
 
 # async fn run() -> CatgaResult<()> {
 let app = AutoApp::builder()
-    .handler(add_handler)?
+    .handler(AddHandler)?
     .build()?;
 # Ok(())
 # }
@@ -75,7 +82,7 @@ let app = AutoApp::builder()
 │  └── Behaviors (cross-cutting concerns)                    │
 ├─────────────────────────────────────────────────────────────┤
 │  Transport Layer (pluggable)                                │
-│  ├── catga-memory  (in-process)                            │
+│  ├── catga-core::memory (in-process)                       │
 │  ├── catga-nats    (NATS JetStream)                        │
 │  ├── catga-redis   (Redis Streams)                         │
 │  └── catga-robustmq (RocketMQ)                             │
@@ -93,6 +100,7 @@ let app = AutoApp::builder()
 - [Installation](./getting-started/installation.md)
 - [First Application](./getting-started/first-app.md)
 - [Core Concepts](./getting-started/concepts.md)
+- [Testing Guide](./getting-started/testing.md)
 
 ### Core Modules
 - [Message & Handler](./core/message-handler.md)
@@ -105,6 +113,7 @@ let app = AutoApp::builder()
 - [Redis Streams](./distributed/redis.md)
 - [RocketMQ](./distributed/robustmq.md)
 - [Cluster Mode](./distributed/cluster.md)
+- [sorock Multi-Raft Backend](./distributed/sorock.md)
 
 ### Workflow
 - [Flow Overview](./flow/overview.md)
@@ -115,6 +124,28 @@ let app = AutoApp::builder()
 - [Performance Optimization](./advanced/performance.md)
 - [Type System](./advanced/type-system.md)
 - [Lifecycle Management](./advanced/lifecycle.md)
+- [CI Tiers and Release](./advanced/ci-release.md)
+
+### Comparison
+- [Catga vs cqrs-es Deep Comparison](./comparison/cqrs-es.md)
+
+### Skill (Application Development Guide)
+- [Application Development Guide (SKILL)](./skill/SKILL.md)
+- [Mediator: Messages, Handlers, and Dispatch](./skill/mediator.md)
+- [Pipeline: Request Strategies and Built-in Behaviors](./skill/pipeline.md)
+- [Flow: Compensating Flow and Workflow](./skill/flow.md)
+- [StateMachine: Event-Driven Persistent State Machine](./skill/state-machine.md)
+- [Transport: Message Transport Contracts and Adapters](./skill/transport.md)
+- [Message Reliability Patterns: Outbox / Inbox / Idempotency / Dead Letter / Subscription / Consumer Loops](./skill/reliability.md)
+- [Event Sourcing, Projection, and Read Model](./skill/event-sourcing.md)
+- [Stores: Persistent Storage](./skill/stores.md)
+- [Distributed Components: Cluster / Raft / Distributed ID / Lease / Task Scheduling](./skill/distributed.md)
+- [HTTP Integration (catga-axum)](./skill/http.md)
+- [Codec, Compression, and Message Signing](./skill/codec.md)
+- [Error Handling, Idempotency, and Production Checklist](./skill/production.md)
+- [Catga Auto and Runtime Correctness Implementation Plan](./skill/auto-plan.md)
+- [catga-auto design](./skill/auto-design.md)
+- [Catga Auto Examples Implementation Plan](./skill/auto-examples-plan.md)
 
 ## Community & Support
 

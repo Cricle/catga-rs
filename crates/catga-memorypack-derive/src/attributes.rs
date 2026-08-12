@@ -11,7 +11,7 @@
 //! - `i32` - Marks an enum as a C-like enum with i32 discriminants
 //!
 //! ## `#[memorypack(...)]`
-//! - `flags` - Marks an enum as a flags enum with bitwise operations
+//! - `flags` - Marks a transparent `i32` newtype struct as a flags value with bitwise operations
 //! - `union` - Marks an enum as a tagged union
 //! - `version_tolerant` - Enables version-tolerant deserialization (not supported in Catga)
 //! - `circular` - Enables circular reference support (not supported in Catga)
@@ -22,7 +22,7 @@
 pub struct AttributeFlags {
     /// True if the struct is a transparent wrapper (single i32 field).
     pub is_transparent: bool,
-    /// True if the enum is a flags enum with bitwise operations.
+    /// True if the type is a transparent `i32` newtype flagged for bitwise operations.
     pub is_flags: bool,
     /// True if the enum is a tagged union.
     pub is_union: bool,
@@ -159,4 +159,3 @@ impl AttributeFlags {
         }
     }
 }
-

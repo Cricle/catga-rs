@@ -3,6 +3,8 @@
 //! These tests verify flow persistence, state recovery, and SQL integration
 //! using a real SQLite database file that survives process restarts.
 
+#![cfg(feature = "sqlite")]
+
 use std::time::Duration;
 
 use catga_core::MemoryPackable;
@@ -30,8 +32,7 @@ fn database_error(operation: &str, error: impl std::fmt::Display) -> CatgaError 
 /// Tests that a flow survives across a simulated "restart" by reconnecting to the same database.
 #[tokio::test]
 async fn e2e_flow_persists_across_sqlite_restarts() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("restart-persistence.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -55,8 +56,11 @@ async fn e2e_flow_persists_across_sqlite_restarts() -> CatgaResult<()> {
         store.migrate().await?;
 
         let recovered = store.get("persistent-flow").await?;
-        assert!(recovered.is_some(), "flow must survive database reconnection");
-        let state = recovered.unwrap();
+        assert!(
+            recovered.is_some(),
+            "flow must survive database reconnection"
+        );
+        let state = recovered.expect("test value must be present");
         assert_eq!(state.id(), "persistent-flow");
         assert_eq!(state.flow_type(), "payment");
         assert_eq!(state.version(), 0);
@@ -69,8 +73,7 @@ async fn e2e_flow_persists_across_sqlite_restarts() -> CatgaResult<()> {
 /// Tests that state machine snapshots persist across restarts.
 #[tokio::test]
 async fn e2e_state_machine_snapshots_persist_across_restarts() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("state-persistence.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -111,7 +114,7 @@ async fn e2e_state_machine_snapshots_persist_across_restarts() -> CatgaResult<()
 
         let recovered = store.get("order-1").await?;
         assert!(recovered.is_some(), "state machine must survive restart");
-        let snapshot = recovered.unwrap();
+        let snapshot = recovered.expect("test value must be present");
         assert_eq!(snapshot.state().items, 2);
         assert_eq!(snapshot.state().total, 99.99);
         assert!(snapshot.state().paid, "paid flag must persist");
@@ -124,8 +127,7 @@ async fn e2e_state_machine_snapshots_persist_across_restarts() -> CatgaResult<()
 /// Tests that DSL step progress persists and recovers.
 #[tokio::test]
 async fn e2e_dsl_progress_persists_across_restarts() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("dsl-progress-persistence.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -148,7 +150,7 @@ async fn e2e_dsl_progress_persists_across_restarts() -> CatgaResult<()> {
 
         let recovered = store.get("pipeline-1", 0).await?;
         assert!(recovered.is_some(), "DSL progress must survive restart");
-        assert_eq!(recovered.unwrap().version(), 1);
+        assert_eq!(recovered.expect("test value must be present").version(), 1);
     }
 
     Ok(())
@@ -157,8 +159,7 @@ async fn e2e_dsl_progress_persists_across_restarts() -> CatgaResult<()> {
 /// Tests flow scheduler with pause and resume simulation.
 #[tokio::test]
 async fn e2e_scheduler_survives_restart_with_pending_schedules() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("scheduler-restart.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -206,8 +207,7 @@ async fn e2e_scheduler_survives_restart_with_pending_schedules() -> CatgaResult<
 /// Tests suspended flows with wait conditions persist across restarts.
 #[tokio::test]
 async fn e2e_suspended_flows_with_waits_persist_across_restarts() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("suspended-wait-persistence.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -220,13 +220,7 @@ async fn e2e_suspended_flows_with_waits_persist_across_restarts() -> CatgaResult
         store.migrate().await?;
 
         let waiting = FlowContinuation::waiting(
-            FlowState::new(
-                flow_id,
-                "payment",
-                b"awaiting-callback".to_vec(),
-                "node-a",
-            )
-            .suspended(),
+            FlowState::new(flow_id, "payment", b"awaiting-callback".to_vec(), "node-a").suspended(),
             "complete",
             WaitCondition::new(
                 "payment-callback-123",
@@ -239,9 +233,11 @@ async fn e2e_suspended_flows_with_waits_persist_across_restarts() -> CatgaResult
         assert!(store.create(waiting.clone()).await?);
 
         // Record success for the wait condition
-        assert!(store
-            .record_wait_success(flow_id, 0, "callback-1", b"payment-confirmed".to_vec())
-            .await?);
+        assert!(
+            store
+                .record_wait_success(flow_id, 0, "callback-1", b"payment-confirmed".to_vec())
+                .await?
+        );
     }
 
     // Restart - verify suspended flow survived
@@ -252,7 +248,7 @@ async fn e2e_suspended_flows_with_waits_persist_across_restarts() -> CatgaResult
         let recovered = store.get(flow_id).await?;
         assert!(recovered.is_some(), "suspended flow must survive restart");
 
-        let continuation = recovered.unwrap();
+        let continuation = recovered.expect("test value must be present");
         assert_eq!(continuation.state().id(), flow_id);
         assert_eq!(continuation.state().status(), FlowStatus::Suspended);
 
@@ -268,8 +264,7 @@ async fn e2e_suspended_flows_with_waits_persist_across_restarts() -> CatgaResult
 /// Tests query capabilities after restart with multiple flow types.
 #[tokio::test]
 async fn e2e_flow_queries_work_after_restart() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("query-after-restart.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -293,9 +288,7 @@ async fn e2e_flow_queries_work_after_restart() -> CatgaResult<()> {
                 FlowStatus::Done => state.done(0),
                 _ => state,
             };
-            store
-                .create(FlowContinuation::new(state, "finish"))
-                .await?;
+            store.create(FlowContinuation::new(state, "finish")).await?;
         }
     }
 
@@ -306,14 +299,26 @@ async fn e2e_flow_queries_work_after_restart() -> CatgaResult<()> {
 
         // Query all suspended flows
         let suspended = store
-            .query(&FlowQuery::new(10, 10).unwrap().with_status(FlowStatus::Suspended))
+            .query(
+                &FlowQuery::new(10, 10)
+                    .expect("test value must be present")
+                    .with_status(FlowStatus::Suspended),
+            )
             .await?;
         assert_eq!(suspended.len(), 2);
-        assert!(suspended.iter().all(|s| s.status() == FlowStatus::Suspended));
+        assert!(
+            suspended
+                .iter()
+                .all(|s| s.status() == FlowStatus::Suspended)
+        );
 
         // Query by flow type
         let type_a = store
-            .query(&FlowQuery::new(10, 10).unwrap().with_flow_type("type-a"))
+            .query(
+                &FlowQuery::new(10, 10)
+                    .expect("test value must be present")
+                    .with_flow_type("type-a"),
+            )
             .await?;
         assert_eq!(type_a.len(), 2);
         assert!(type_a.iter().all(|s| s.flow_type() == "type-a"));
@@ -322,7 +327,7 @@ async fn e2e_flow_queries_work_after_restart() -> CatgaResult<()> {
         let type_b_suspended = store
             .query(
                 &FlowQuery::new(10, 10)
-                    .unwrap()
+                    .expect("test value must be present")
                     .with_flow_type("type-b")
                     .with_status(FlowStatus::Suspended),
             )
@@ -337,8 +342,7 @@ async fn e2e_flow_queries_work_after_restart() -> CatgaResult<()> {
 /// Tests timeout receipt workflow across restarts.
 #[tokio::test]
 async fn e2e_timeout_receipts_recover_across_restarts() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("timeout-receipt-restart.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -367,7 +371,10 @@ async fn e2e_timeout_receipts_recover_across_restarts() -> CatgaResult<()> {
         let poll = TimedOutFlowPoll::new(now, 1, 1)?;
         let receipts = store.poll_timed_out(&poll).await?;
         assert_eq!(receipts.len(), 1);
-        let receipt = receipts.into_iter().next().unwrap();
+        let receipt = receipts
+            .into_iter()
+            .next()
+            .expect("test value must be present");
         assert_eq!(receipt.flow_id(), flow_id);
 
         // Release the receipt back
@@ -384,7 +391,10 @@ async fn e2e_timeout_receipts_recover_across_restarts() -> CatgaResult<()> {
         assert_eq!(receipts.len(), 1);
 
         // Acknowledge the receipt
-        let receipt = receipts.into_iter().next().unwrap();
+        let receipt = receipts
+            .into_iter()
+            .next()
+            .expect("test value must be present");
         store.ack_timed_out(&receipt).await?;
 
         // Verify it's no longer pollable
@@ -398,8 +408,7 @@ async fn e2e_timeout_receipts_recover_across_restarts() -> CatgaResult<()> {
 /// Tests concurrent updates to the same flow across multiple connections.
 #[tokio::test]
 async fn e2e_concurrent_flow_updates_idempotent() -> CatgaResult<()> {
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("concurrent-updates.db");
     let url = format!("sqlite://{}", database.display());
 
@@ -411,32 +420,49 @@ async fn e2e_concurrent_flow_updates_idempotent() -> CatgaResult<()> {
         store.create(state).await?;
     }
 
-    // Simulate concurrent updates from two "workers"
+    // Both workers must read the same version before either writes, otherwise the
+    // current-thread runtime can complete one worker's read-modify-write before the
+    // other reads — a sequential, legitimate double success instead of a CAS race.
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
     let (result1, result2) = tokio::join!(
         async {
             let store = SqlFlowStore::connect_sqlite(&url).await?;
-            let current = store.get("concurrent-flow").await?.unwrap();
+            let current = store
+                .get("concurrent-flow")
+                .await?
+                .expect("test value must be present");
             let version = current.version();
             let next = current.next_version()?;
+            barrier.wait().await;
             store.update(version, next).await
         },
         async {
             let store = SqlFlowStore::connect_sqlite(&url).await?;
-            let current = store.get("concurrent-flow").await?.unwrap();
+            let current = store
+                .get("concurrent-flow")
+                .await?
+                .expect("test value must be present");
             let version = current.version();
             let next = current.next_version()?;
+            barrier.wait().await;
             store.update(version, next).await
         }
     );
 
-    // Exactly one should succeed
+    // Exactly one wins the compare-and-swap; the loser observes Ok(false).
     let success_count = usize::from(result1?) + usize::from(result2?);
-    assert_eq!(success_count, 1, "exactly one concurrent update must succeed");
+    assert_eq!(
+        success_count, 1,
+        "exactly one concurrent update must succeed"
+    );
 
     // Verify final state
     {
         let store = SqlFlowStore::connect_sqlite(&url).await?;
-        let final_state = store.get("concurrent-flow").await?.unwrap();
+        let final_state = store
+            .get("concurrent-flow")
+            .await?
+            .expect("test value must be present");
         assert_eq!(final_state.version(), 1);
     }
 
@@ -449,8 +475,7 @@ async fn e2e_application_owned_pool_preserves_data() -> CatgaResult<()> {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
-    let directory =
-        tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
+    let directory = tempfile::tempdir().map_err(|e| database_error("create temp directory", e))?;
     let database = directory.path().join("app-pool-persistence.db");
     let url = format!("sqlite://{}", database.display());
 

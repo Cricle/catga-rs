@@ -1,15 +1,13 @@
 //! Redis storage for the plain durable [`catga_flow::FlowStore`] contract.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::flow::{FlowState, FlowStatus, FlowStore};
+use catga_core::hash::sha256_concat_digest;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
-use sha2::{Digest, Sha256};
-
-use crate::transport::map_error;
 
 /// Maximum stale candidates inspected by one [`RedisFlows::try_claim`] call.
 pub const MAX_REDIS_FLOW_CLAIM_CANDIDATES: usize = 32;
@@ -74,15 +72,28 @@ pub struct RedisFlows {
 
 impl RedisFlows {
     /// Connects to Redis and namespaces plain flow state beneath `prefix`.
+    ///
+    /// Flow state transitions are versioned, so a stale worker resumes or completes a flow
+    /// only when it still holds the latest version.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisFlows;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let flows = RedisFlows::connect("redis://127.0.0.1/", "app.flows").await?;
+    /// # drop(flows);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -134,7 +145,7 @@ impl FlowStore for RedisFlows {
             .arg(if indexed { 1 } else { 0 })
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(created == 1)
     }
 
@@ -158,7 +169,7 @@ impl FlowStore for RedisFlows {
             .arg(if indexed { 1 } else { 0 })
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(updated == 1)
     }
 
@@ -167,7 +178,7 @@ impl FlowStore for RedisFlows {
         let value: Option<Vec<u8>> = connection
             .hget(self.record_key(id), "value")
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         value
             .map(|value| self.codec.decode_value(&value))
             .transpose()
@@ -191,9 +202,12 @@ impl FlowStore for RedisFlows {
             .arg(MAX_REDIS_FLOW_CLAIM_CANDIDATES)
             .query_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         for key in candidates {
-            let value: Option<Vec<u8>> = connection.hget(&key, "value").await.map_err(map_error)?;
+            let value: Option<Vec<u8>> = connection
+                .hget(&key, "value")
+                .await
+                .map_err(CatgaError::transient)?;
             let Some(value) = value else { continue };
             let current: FlowState = self.codec.decode_value(&value)?;
             if current.flow_type() != flow_type || current.status() != FlowStatus::Running {
@@ -214,7 +228,7 @@ impl FlowStore for RedisFlows {
                 .arg(next_owner)
                 .invoke_async(&mut connection)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             if claimed == 1 {
                 return Ok(Some(next));
             }
@@ -244,7 +258,7 @@ impl FlowStore for RedisFlows {
             .arg(heartbeat)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(updated == 1)
     }
 }
@@ -258,23 +272,25 @@ pub(crate) fn type_index_key(prefix: &str, flow_type: &str) -> String {
 }
 
 fn hashed_key(prefix: &str, kind: &str, value: &str) -> String {
-    let mut digest = Sha256::new();
-    digest.update(value.len().to_be_bytes());
-    digest.update(value.as_bytes());
-    format!("{prefix}:{kind}:{}", hex::encode(digest.finalize()))
+    let value_len = value.len().to_be_bytes();
+    format!(
+        "{prefix}:{kind}:{}",
+        hex::encode(sha256_concat_digest(&[&value_len, value.as_bytes()]))
+    )
 }
 
 fn unix_millis(time: SystemTime) -> CatgaResult<u64> {
-    let duration = time.duration_since(UNIX_EPOCH).map_err(|_| {
+    catga_core::time::checked_unix_millis(time).map_err(|error| {
         CatgaError::new(
             ErrorCode::Validation,
-            "Redis flow heartbeat precedes the Unix epoch",
-        )
-    })?;
-    u64::try_from(duration.as_millis()).map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Validation,
-            "Redis flow heartbeat exceeds the supported range",
+            match error {
+                catga_core::time::UnixMillisError::BeforeEpoch => {
+                    "Redis flow heartbeat precedes the Unix epoch"
+                }
+                catga_core::time::UnixMillisError::ExceedsRange => {
+                    "Redis flow heartbeat exceeds the supported range"
+                }
+            },
         )
     })
 }

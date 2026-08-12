@@ -37,19 +37,22 @@ fn map_error(error: impl std::fmt::Display) -> catga_core::CatgaError {
 }
 
 fn validate_config(config: &NatsConfig) -> Result<(), catga_core::CatgaError> {
-    if config.stream.trim().is_empty()
+    if config.server.trim().is_empty()
+        || config.stream.trim().is_empty()
         || config.subject.trim().is_empty()
         || config.consumer.trim().is_empty()
     {
         return Err(catga_core::CatgaError::new(
             ErrorCode::Validation,
-            "NATS stream, subject, and consumer must not be empty",
+            "NATS server, stream, subject, and consumer must not be empty",
         ));
     }
     Ok(())
 }
 
-fn validate_destination_config(config: &NatsDestinationConfig) -> Result<(), catga_core::CatgaError> {
+fn validate_destination_config(
+    config: &NatsDestinationConfig,
+) -> Result<(), catga_core::CatgaError> {
     if config.stream.trim().is_empty()
         || config.subject.trim().is_empty()
         || config.consumer.trim().is_empty()
@@ -92,7 +95,12 @@ fn validate_config_rejects_empty_stream() {
     };
     let result = validate_config(&config);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("empty"));
+    assert!(
+        result
+            .expect_err("expected an error")
+            .to_string()
+            .contains("empty")
+    );
 }
 
 #[test]
@@ -237,24 +245,36 @@ fn validate_destination_config_rejects_whitespace_consumer() {
 
 #[test]
 fn publish_mode_at_most_once() {
-    assert_eq!(publish_mode(QualityOfService::AtMostOnce), NatsPublishMode::Core);
+    assert_eq!(
+        publish_mode(QualityOfService::AtMostOnce),
+        NatsPublishMode::Core
+    );
 }
 
 #[test]
 fn publish_mode_at_least_once() {
-    assert_eq!(publish_mode(QualityOfService::AtLeastOnce), NatsPublishMode::JetStream);
+    assert_eq!(
+        publish_mode(QualityOfService::AtLeastOnce),
+        NatsPublishMode::JetStream
+    );
 }
 
 #[test]
 fn publish_mode_exactly_once() {
-    assert_eq!(publish_mode(QualityOfService::ExactlyOnce), NatsPublishMode::JetStreamDeduplicated);
+    assert_eq!(
+        publish_mode(QualityOfService::ExactlyOnce),
+        NatsPublishMode::JetStreamDeduplicated
+    );
 }
 
 #[test]
 fn nats_publish_mode_variants() {
     assert_eq!(format!("{:?}", NatsPublishMode::Core), "Core");
     assert_eq!(format!("{:?}", NatsPublishMode::JetStream), "JetStream");
-    assert_eq!(format!("{:?}", NatsPublishMode::JetStreamDeduplicated), "JetStreamDeduplicated");
+    assert_eq!(
+        format!("{:?}", NatsPublishMode::JetStreamDeduplicated),
+        "JetStreamDeduplicated"
+    );
 }
 
 #[test]

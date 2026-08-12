@@ -9,6 +9,54 @@ use crate::{
 };
 
 /// Retries retryable request failures with bounded exponential backoff.
+///
+/// Only errors whose [`CatgaError::is_retryable`] is true are retried; [`ErrorCode::Cancelled`]
+/// always short-circuits without another attempt. The first dispatch is the initial attempt, so
+/// `max_retries` adds up to that many *additional* attempts. Delay growth is exponential in the
+/// retry index and bounded by the configured [`RetryJitter`] policy.
+///
+/// ```
+/// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+/// use std::time::Duration;
+/// use catga_core::{
+///     CatgaError, CatgaResult, ErrorCode, Mediator, Message, MessageTypeId, Pipeline, Registry,
+///     Request, RetryBehavior, RetryJitter, request_handler,
+/// };
+///
+/// struct PingTypeId;
+/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+///
+/// #[derive(Clone)]
+/// struct Ping;
+/// impl Message for Ping {}
+/// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> CatgaResult<()> {
+/// let attempts = Arc::new(AtomicU64::new(0));
+/// let observed = Arc::clone(&attempts);
+/// let mut registry = Registry::new();
+/// registry.register_request::<Ping, _>(request_handler(move |_: Ping| {
+///     let observed = Arc::clone(&observed);
+///     async move {
+///         if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+///             Err(CatgaError::new(ErrorCode::Transient, "try again"))
+///         } else {
+///             Ok(42)
+///         }
+///     }
+/// }))?;
+/// let mediator = Mediator::new(registry);
+/// let pipeline = Pipeline::<Ping>::new().with(RetryBehavior::with_jitter(
+///     2,
+///     Duration::ZERO,
+///     RetryJitter::fixed(Duration::ZERO),
+/// ));
+/// assert_eq!(mediator.send_with(Ping, &pipeline).await?, 42);
+/// assert_eq!(attempts.load(Ordering::SeqCst), 2);
+/// # Ok(())
+/// # }
+/// ```
 pub struct RetryBehavior {
     max_retries: usize,
     initial_delay: Duration,

@@ -21,7 +21,8 @@ fn catga_request_impl(
 ) -> Result<proc_macro2::TokenStream> {
     let input = syn::parse2::<syn::DeriveInput>(input.clone())?;
     let name = &input.ident;
-    let generics = add_clone_bound(&input.generics);
+    let vis = &input.vis;
+    let generics = add_message_bounds(&input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Parse response type from attribute
@@ -33,7 +34,7 @@ fn catga_request_impl(
     Ok(quote! {
         #input
 
-        struct #type_id_name;
+        #vis struct #type_id_name;
         impl ::catga_core::MessageTypeId for #type_id_name {
             const NAME: &'static str = ::core::stringify!(#name);
         }
@@ -46,16 +47,25 @@ fn catga_request_impl(
     })
 }
 
-fn add_clone_bound(generics: &Generics) -> Generics {
+/// Adds the bounds required by `Message` and `Request` to every type parameter.
+///
+/// Only the parameter identifier is interpolated: interpolating a [`syn::TypeParam`] that
+/// already carries bounds would emit `T: Bound: Clone` and panic `parse_quote!`.
+fn add_message_bounds(generics: &Generics) -> Generics {
     let mut g = generics.clone();
-    let params: Vec<_> = g.params.iter().cloned().collect();
+    let idents: Vec<Ident> = g
+        .params
+        .iter()
+        .filter_map(|param| match param {
+            GenericParam::Type(type_param) => Some(type_param.ident.clone()),
+            _ => None,
+        })
+        .collect();
     let where_clause = g.make_where_clause();
-    for param in params {
-        if let GenericParam::Type(type_param) = param {
-            where_clause
-                .predicates
-                .push(parse_quote!(#type_param: Clone));
-        }
+    for ident in idents {
+        where_clause
+            .predicates
+            .push(parse_quote!(#ident: Clone + Send + Sync + 'static));
     }
     g
 }

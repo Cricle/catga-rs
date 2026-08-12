@@ -8,8 +8,6 @@ use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use redis::{Script, aio::ConnectionManager};
 use uuid::Uuid;
 
-use crate::transport::map_error;
-
 const SCHEDULE: &str = r#"
 local existing=redis.call('HGET', KEYS[3], ARGV[1])
 if existing then
@@ -107,15 +105,28 @@ pub struct RedisFlowScheduler {
 
 impl RedisFlowScheduler {
     /// Connects to Redis and namespaces scheduler keys beneath `prefix`.
+    ///
+    /// Due-flow claiming moves at most `limit` entries per bounded Redis script, so a
+    /// scheduler poll never retains an unbounded result set in process memory.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisFlowScheduler;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let scheduler = RedisFlowScheduler::connect("redis://127.0.0.1/", "app.flow-scheduler").await?;
+    /// # drop(scheduler);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -167,7 +178,7 @@ impl FlowScheduler for RedisFlowScheduler {
             .arg(self.record_prefix())
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(existing_or_new.into_boxed_str())
     }
 
@@ -184,7 +195,7 @@ impl FlowScheduler for RedisFlowScheduler {
             .arg(now)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(cancelled == 1)
     }
 }
@@ -225,7 +236,7 @@ impl DueFlowScheduler for RedisFlowScheduler {
             .arg(limit)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         values
             .chunks_exact(4)
             .map(|fields| {
@@ -244,7 +255,10 @@ impl DueFlowScheduler for RedisFlowScheduler {
         let target: Option<Vec<u8>> = {
             use redis::AsyncCommands;
             let mut connection = self.connection.clone();
-            connection.hget(&key, "target").await.map_err(map_error)?
+            connection
+                .hget(&key, "target")
+                .await
+                .map_err(CatgaError::transient)?
         };
         let Some(target) = target else {
             return Ok(false);
@@ -260,7 +274,7 @@ impl DueFlowScheduler for RedisFlowScheduler {
             .arg(target)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(acknowledged == 1)
     }
 
@@ -274,7 +288,7 @@ impl DueFlowScheduler for RedisFlowScheduler {
             .arg(schedule_id)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(released == 1)
     }
 
@@ -306,24 +320,15 @@ impl DueFlowScheduler for RedisFlowScheduler {
             .arg(lease_until)
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(renewed == 1)
     }
 }
 
 fn target_key(flow_id: &str, state_id: &str) -> CatgaResult<Vec<u8>> {
-    let flow_len = u64::try_from(flow_id.len()).map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Validation,
-            "flow identifier is too long for Redis",
-        )
-    })?;
-    let state_len = u64::try_from(state_id.len()).map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Validation,
-            "state identifier is too long for Redis",
-        )
-    })?;
+    // usize always fits in u64 on supported targets, so these never truncate.
+    let flow_len = flow_id.len() as u64;
+    let state_len = state_id.len() as u64;
     let mut key = Vec::with_capacity(16 + flow_id.len() + state_id.len());
     key.extend_from_slice(&flow_len.to_be_bytes());
     key.extend_from_slice(flow_id.as_bytes());

@@ -12,6 +12,27 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 
 /// A lock-free snapshot event store for development and deterministic tests.
+///
+/// The store keeps every stream in process memory, enforces the same optimistic-concurrency
+/// contract as durable backends ([`ErrorCode::Conflict`] on a stale `expected_version`), and
+/// shares the [`MAX_EVENT_STORE_PAGE_SIZE`](crate::MAX_EVENT_STORE_PAGE_SIZE) read bound.
+///
+/// ```
+/// use catga_core::{Envelope, EventStore, MessageMetadata, memory::MemoryEventStore};
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> catga_core::CatgaResult<()> {
+/// let store = MemoryEventStore::default();
+/// let envelope = Envelope::new(1, "Tick", vec![0x01], MessageMetadata::new(1, None));
+/// let version = store.append("stream-1", vec![envelope], None).await?;
+/// assert_eq!(version, 0);
+///
+/// let page = store.read_page("stream-1", 0, 10).await?;
+/// assert_eq!(page.stream().events().len(), 1);
+/// assert_eq!(page.stream().events()[0].envelope().payload(), &[0x01]);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Default)]
 pub struct MemoryEventStore {
     streams: DashMap<Box<str>, Arc<MemoryEventStream>>,

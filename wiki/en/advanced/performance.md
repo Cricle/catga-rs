@@ -215,6 +215,22 @@ where
 }
 ```
 
+## Cluster / Raft Tuning
+
+The numbers below are loopback measurements from the distributed-kv example (3 local nodes); treat them as indicative, not guarantees.
+
+- **Measured baselines (re-measured 2026-08-12)**: Windows dev machine, loopback, three nodes, debug build, 300 sequential single-connection writes through distributed-kv's HTTP API, median of 3 runs:
+  - **raft backend**: ~114 writes/s, mean ≈ 8.7ms, **p50 ≈ 8.6ms, p99 ≈ 22ms**; kill-leader failover (timed until a write succeeds again, retried through a surviving follower) median **~3.5s** (3.1 / 3.5 / 6.2s); read-back through a follower GET after the write completes, median ~170ms (40–296ms).
+  - **sorock backend** (balanced defaults `request_timeout=2s` + `propose_retry=10×200ms`): ~106 writes/s, mean ≈ 9.4ms, **p50 ≈ 9.0ms, p99 ≈ 13.9ms**; kill-leader failover median **~3.0s** (2.9 / 3.0 / 9.2s — 1 of 4 measurement runs hit a >4-minute sorock 0.12 election livelock under sustained write pressure; mechanism and operational guidance on the [sorock page](../distributed/sorock.md#failover-behavior-and-tuning)); the watchdog profile measures ~2.1s in the crate-level test (the example does not expose the flag); follower read-back median ~230ms (214–300ms, the floor of sorock's hardcoded 300ms heartbeat cadence).
+  - A replicated write's latency floor is roughly one tick plus RTTs, and both backends land in the same write-latency band; forwarding through a follower adds <1ms. Defaults are tick 10ms / election 150ms / heartbeat 50ms (`RaftClusterConfig` fields such as `tickIntervalMs`). Lowering `tickIntervalMs` trades CPU for latency; keep heartbeat around election/3.
+- **Bounded queues as backpressure**: the runtime inbox holds 256 frames and the HTTP edge returns 429 when full; the pending-commit queue is bounded (default 1024, see raft.rs, tunable via `new_with_pending_commit_capacity`) and propose fails fast with `PendingCommitCapacity` when full — callers should retry with jitter, not grow the queue unboundedly.
+- **Transport timeouts are mandatory**: the owner task awaits sends, so always chain `.with_request_timeout(...)` on `HttpRaftTransport`; a hung peer otherwise stalls the owner task.
+- **Checkpoint cadence**: a checkpoint compacts the Raft log; restart replays the snapshot plus the suffix, read in pages of 128 entries to bound recovery memory. Sparcer cadence means a larger log and slower recovery (the example checkpoints every 10s).
+- **Memory expectations**: ~18MB RSS per node at 1k keys; the raft-engine log is ~200KB per 1k small entries before compaction.
+- **Verified scale**: the scale contract tests (`crates/catga-cluster/tests/raft_scale.rs`, in-memory in-process clusters) cover election, full replication, leader-loss re-election, and wiped-node catch-up at 10 and 50 voters; at 50 voters the local-accept latency of sequential single-client writes is about 2.4ms (quorum 26/50). Measured failover (leader stop → re-election) is ≈ 1s — it was 52s before per-peer bounded dispatch, when a dead peer's hung send could stall the entire Raft logical clock.
+- **Exact-quorum livelock (ops guidance)**: with exactly quorum nodes alive, every election needs a unanimous vote and pre-vote grants are non-exclusive, so concurrent candidates split the vote fatally every term — the cluster can livelock. Recovery **must restore election margin**: rejoin ≥2 nodes, or `remove_voter` first to shrink the member table. Below quorum is safe instead (`check_quorum` step-down plus pre-vote blocking means zero commits). Prefer **odd voter counts** (3/5/7) in production.
+- **Explicitly not provided**: no sharding (single writer leader — size write capacity around one leader); no read-index (follower reads are stale).
+
 ## Comparison with cqrs-es
 
 | Dimension | Catga | cqrs-es |

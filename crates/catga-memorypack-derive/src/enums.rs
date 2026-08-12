@@ -1,14 +1,16 @@
-//! Code generation for MemoryPack derive on enums.
+//! Code generation for MemoryPack derive on enums and transparent newtypes.
 //!
-//! This module handles the different enum forms supported by the MemoryPack derive:
+//! This module handles:
 //!
-//! - **C-like enums**: `#[repr(i32)]` enums with integer discriminants
-//! - **Flags enums**: Enums with `#[memorypack(flags)]` for bitwise operations
-//! - **Transparent wrappers**: Single-field `#[repr(transparent)]` enums with i32 variants
+//! - **C-like enums**: `#[repr(i32)]` enums, or enums with an explicit discriminant on every
+//!   variant
+//! - **Flags newtypes**: `#[repr(transparent)]` single-`i32` structs with
+//!   `#[memorypack(flags)]` gain bitwise operations
+//! - **Transparent wrappers**: single-field `#[repr(transparent)]` structs around one `i32`
 
 use quote::quote;
 
-/// Generates serialize code for a C-like enum with `#[repr(i32)]`.
+/// Generates serialize code for a C-like enum (`#[repr(i32)]` or explicit discriminants).
 ///
 /// Each variant serializes as its discriminant value as an i32.
 ///
@@ -106,9 +108,9 @@ pub fn generate_transparent_deserialize() -> proc_macro2::TokenStream {
     }
 }
 
-/// Generates bitwise operation implementations for flags enums.
+/// Generates bitwise operation implementations for flags newtypes.
 ///
-/// When an enum has both `#[memorypack(flags)]` and `#[repr(transparent)]`,
+/// When a single-`i32` transparent struct has `#[memorypack(flags)]`,
 /// this generates implementations for:
 ///
 /// - `contains(other)` - checks if all bits of `other` are set
@@ -176,7 +178,7 @@ pub fn generate_flags_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
             }
         }
 
-        impl std::ops::Not for Self {
+        impl std::ops::Not for #name {
             type Output = Self;
             #[inline]
             fn not(self) -> Self {
@@ -185,4 +187,3 @@ pub fn generate_flags_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
         }
     }
 }
-

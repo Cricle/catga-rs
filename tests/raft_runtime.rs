@@ -20,12 +20,27 @@ use tokio::sync::{RwLock, mpsc};
 #[derive(Default)]
 struct BlockingTransport {
     entered_send: AtomicBool,
+    released_send: AtomicBool,
+}
+
+/// Marks the transport once the runtime drops the blocked send future.
+struct BlockingSend<'a> {
+    released_send: &'a AtomicBool,
+}
+
+impl Drop for BlockingSend<'_> {
+    fn drop(&mut self) {
+        self.released_send.store(true, Ordering::Release);
+    }
 }
 
 #[async_trait]
 impl RaftTransport for BlockingTransport {
     async fn send(&self, _message: RaftMessage) -> RaftTransportResult {
         self.entered_send.store(true, Ordering::Release);
+        let _in_flight = BlockingSend {
+            released_send: &self.released_send,
+        };
         std::future::pending().await
     }
 }
@@ -191,27 +206,27 @@ async fn raft_runtime_owns_ticks_transport_and_committed_entries_without_externa
 #[tokio::test]
 async fn raft_runtime_shutdown_cancels_a_blocked_transport_send() {
     let transport = Arc::new(BlockingTransport::default());
-    let runtime = Arc::new(
-        RaftRuntime::spawn(
-            RaftNode::new(
-                1,
-                "http://node-1",
-                vec![
-                    RaftMember::new(1, "http://node-1"),
-                    RaftMember::new(2, "http://node-2"),
-                ],
-            )
-            .unwrap(),
-            Arc::clone(&transport),
-            Duration::from_millis(1),
+    let runtime = RaftRuntime::spawn(
+        RaftNode::new(
+            1,
+            "http://node-1",
+            vec![
+                RaftMember::new(1, "http://node-1"),
+                RaftMember::new(2, "http://node-2"),
+            ],
         )
         .unwrap(),
-    );
-    let campaign = {
-        let runtime = Arc::clone(&runtime);
-        tokio::spawn(async move { runtime.campaign().await })
-    };
+        Arc::clone(&transport),
+        Duration::from_millis(1),
+    )
+    .unwrap();
 
+    // Delivery is queued for the per-peer worker, so the campaign completes
+    // even though the worker stays blocked inside the transport send.
+    runtime
+        .campaign()
+        .await
+        .expect("queued delivery must not block the campaign");
     tokio::time::timeout(Duration::from_secs(1), async {
         while !transport.entered_send.load(Ordering::Acquire) {
             tokio::task::yield_now().await;
@@ -221,18 +236,18 @@ async fn raft_runtime_shutdown_cancels_a_blocked_transport_send() {
     .expect("campaign must start transport delivery");
 
     runtime.shutdown();
-    assert!(matches!(
-        campaign.await.unwrap(),
-        Err(RaftRuntimeError::Stopped)
-    ));
-    let runtime = match Arc::try_unwrap(runtime) {
-        Ok(runtime) => runtime,
-        Err(_) => panic!("campaign task released the runtime"),
-    };
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !transport.released_send.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shutdown must cancel the blocked transport send");
+    assert!(runtime.stop_reason().is_none());
     tokio::time::timeout(Duration::from_secs(1), runtime.join())
         .await
-        .expect("shutdown must cancel a blocked transport send")
-        .unwrap();
+        .expect("shutdown must stop the runtime despite the blocked peer send")
+        .expect("a blocked peer send must not fail the runtime");
 }
 
 #[tokio::test]

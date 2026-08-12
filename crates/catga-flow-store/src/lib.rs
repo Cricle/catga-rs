@@ -20,17 +20,43 @@
 //! modules retain native parameter binding, skip-locked claims, and indexed time ordering without
 //! duplicating the public store contract. No adapter creates a worker or background task.
 //!
+//! # Dialect architecture
+//!
+//! Every public store type is a thin, feature-selected facade over one private `Backend`
+//! connection-pool enum chosen by its `connect_*` or `from_*_pool` constructor. Each trait method
+//! (`create`, `update`, `try_claim`, ...) delegates to a per-dialect module that owns the concrete
+//! statements:
+//!
+//! - `sqlite_*`, `mysql_*`, and `postgres_*` modules instantiate the shared `define_server_*!`
+//!   macro rules (`server_suspended`, `server_scheduler`, `server_state_machine`,
+//!   `server_dsl_progress`, and `server_timeout`). One macro expansion carries the dialect's
+//!   schema DDL, its pool type, and two flags: `$postgres` rewrites the canonical `?` bind
+//!   placeholders into PostgreSQL's `$1..$n` form at query construction, and `$sqlite` selects
+//!   SQLite's `UPDATE ... RETURNING` lease claims and its narrower, hash-key-free continuation
+//!   schema. All three sqlx dialects therefore share exactly one audited statement body per
+//!   operation.
+//! - `mssql_*` modules remain handwritten per store, because SQL Server's Tiberius driver has
+//!   no sqlx-compatible query surface for the macro seam to bind.
+//!
+//! All dialects persist the same layout: a fixed-width SHA-256 identity key for indexing, the
+//! original identity for collision detection, a versioned MemoryPack payload frame, a logical
+//! business version for compare-and-set transitions, and a physical row revision so heartbeats and
+//! continuation writes cannot clobber each other.
+//!
 //! # SQLite startup
 //!
 //! Construct and migrate stores at an application-owned startup boundary.
 //! The migration is idempotent, but flow processing should start only after it
 //! has completed successfully.
 //!
-//! ```ignore
+//! ```
 //! use catga_flow_store::SqlFlowStore;
 //!
-//! # async fn connect() -> Result<(), catga_core::CatgaError> {
-//! let store = SqlFlowStore::connect_sqlite("sqlite:catga.db").await?;
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let directory = tempfile::tempdir()?;
+//! let url = format!("sqlite://{}", directory.path().join("flows.db").display());
+//! let store = SqlFlowStore::connect_sqlite(&url).await?;
 //! store.migrate().await?;
 //! # Ok(())
 //! # }
@@ -44,14 +70,18 @@
 //! database connection budget under application control. When exposing driver pool types is not
 //! desirable, use [`SqlFlowStoreOptions`] with a `connect_*_with_options` constructor.
 //!
-//! ```ignore
+//! ```
+//! use std::str::FromStr;
 //! use catga_flow_store::SqlFlowStore;
-//! use sqlx::sqlite::SqlitePoolOptions;
+//! use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 //!
-//! # async fn connect() -> Result<(), Box<dyn std::error::Error>> {
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let directory = tempfile::tempdir()?;
+//! let url = format!("sqlite://{}", directory.path().join("flows.db").display());
 //! let pool = SqlitePoolOptions::new()
 //!     .max_connections(12)
-//!     .connect("sqlite:catga.db")
+//!     .connect_with(SqliteConnectOptions::from_str(&url)?.create_if_missing(true))
 //!     .await?;
 //! let store = SqlFlowStore::from_sqlite_pool(pool);
 //! store.migrate().await?;
@@ -129,17 +159,17 @@ mod postgres_timeout;
 ))]
 mod scheduler_common;
 mod scheduler_store;
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 mod server_dsl_progress;
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 mod server_scheduler;
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 mod server_state_machine;
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 mod server_suspended;
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 mod server_timeout;
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 mod sql_backend;
 #[cfg(any(
     feature = "sqlite",

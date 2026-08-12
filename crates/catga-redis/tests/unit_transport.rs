@@ -19,8 +19,8 @@ fn reclaim_poll_millis_value() {
 
 #[test]
 fn reclaim_poll_millis_reasonable() {
-    assert!(RECLAIM_POLL_MILLIS > 0);
-    assert!(RECLAIM_POLL_MILLIS < 60_000);
+    const { assert!(RECLAIM_POLL_MILLIS > 0) };
+    const { assert!(RECLAIM_POLL_MILLIS < 60_000) };
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn map_error_includes_original_message() {
 #[test]
 fn destination_stream_format() {
     use catga_core::Destination;
-    let dest = Destination::parse("test-queue").unwrap();
+    let dest = Destination::parse("test-queue").expect("test value must be present");
     let stream = destination_stream(&dest);
     assert_eq!(stream.as_ref(), "stream:test-queue");
 }
@@ -69,7 +69,7 @@ fn destination_stream_whitespace_destination() {
 #[test]
 fn destination_stream_with_slashes() {
     use catga_core::Destination;
-    let dest = Destination::parse("queue/sub/dest").unwrap();
+    let dest = Destination::parse("queue/sub/dest").expect("test value must be present");
     let stream = destination_stream(&dest);
     assert_eq!(stream.as_ref(), "stream:queue/sub/dest");
 }
@@ -77,7 +77,7 @@ fn destination_stream_with_slashes() {
 #[test]
 fn destination_stream_returns_boxed() {
     use catga_core::Destination;
-    let dest = Destination::parse("test").unwrap();
+    let dest = Destination::parse("test").expect("test value must be present");
     let stream = destination_stream(&dest);
     let s: String = stream.into();
     assert_eq!(s.as_str(), "stream:test");

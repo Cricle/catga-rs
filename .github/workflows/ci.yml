@@ -20,6 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3 # catga-sorock's sorock build script needs protoc
+        with:
+          version: "v3.20.3" # raft-proto's protobuf-build rejects protoc >= 4/2x
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p catga-core --all-targets --all-features -- -D warnings
@@ -28,13 +31,14 @@ jobs:
       - run: cargo clippy -p catga-axum --all-targets --all-features -- -D warnings
       - run: cargo clippy -p catga-redis --all-targets --all-features -- -D warnings
       - run: cargo clippy -p catga-nats --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p catga-sorock --all-targets --all-features -- -D warnings
       - run: cargo test --doc -p catga-core --all-features
       - run: cargo test --doc -p catga-core-macros --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc -p catga-core --all-features --no-deps
-      - run: cargo check --examples --workspace --all-features
+      - run: cargo check --workspace --all-targets --all-features
       - run: cargo check -p catga-examples --bins
 
-  coverage:
+  tests:
     runs-on: ubuntu-latest
     needs: quality
     if: always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
@@ -42,19 +46,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3 # catga-sorock's sorock build script needs protoc
         with:
-          components: llvm-tools-preview
+          version: "v3.20.3" # raft-proto's protobuf-build rejects protoc >= 4/2x
       - uses: Swatinem/rust-cache@v2
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Run tests with coverage
-        run: |
-          cargo llvm-cov test --workspace --all-features --no-clean --lcov --output-path lcov.info
-      - name: Generate coverage report
-        run: cargo llvm-cov report --html --fail-under-lines 80
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: target/llvm-cov/html/
+      # Docker/service-dependent E2E tests are #[ignore]d and skip by default;
+      # they run only in the release workflow (tag push or manual dispatch).
+      - run: cargo test --workspace --all-features
+      - run: cargo test --doc --workspace --all-features

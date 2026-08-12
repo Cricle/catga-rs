@@ -1,0 +1,5 @@
+error: unexpected end of input, expected an expression
+ --> tests/ui/fail_message_attr_grammar.rs:4:18
+  |
+4 | #[catga(version =)]
+  |                  ^

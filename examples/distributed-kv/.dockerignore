@@ -1,0 +1,11 @@
+# Build-context ignorefile for the distributed-kv image build.
+# Used via `podman build --ignorefile examples/distributed-kv/.dockerignore` so
+# the image build does not depend on the root .dockerignore. Mirrors the root
+# one and additionally skips agent worktrees (multi-GB, actively written).
+.git
+**/.git
+target
+**/target
+.qoder
+raft-state-node*
+sorock-state-node*

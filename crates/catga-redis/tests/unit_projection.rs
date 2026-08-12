@@ -2,19 +2,24 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-fn key(prefix: &str, projection_name: &str) -> String {
-    format!("{}:{projection_name}", prefix)
-}
-
 fn decode(
     projection_name: &str,
     stream_id: &str,
     value: &str,
 ) -> Result<(String, String, i64, u64), String> {
-    let (version, timestamp) = value.split_once('\t').ok_or_else(|| "malformed".to_string())?;
+    let (version, timestamp) = value
+        .split_once('\t')
+        .ok_or_else(|| "malformed".to_string())?;
     let version = version.parse().map_err(|_| "invalid version".to_string())?;
-    let timestamp = timestamp.parse().map_err(|_| "invalid timestamp".to_string())?;
-    Ok((projection_name.to_string(), stream_id.to_string(), version, timestamp))
+    let timestamp = timestamp
+        .parse()
+        .map_err(|_| "invalid timestamp".to_string())?;
+    Ok((
+        projection_name.to_string(),
+        stream_id.to_string(),
+        version,
+        timestamp,
+    ))
 }
 
 fn unix_millis(time: SystemTime) -> u64 {
@@ -62,7 +67,7 @@ fn key_format_with_empty_projection() {
 fn decode_valid_checkpoint() {
     let result = decode("order-totals", "order-42", "5\t1000000");
     assert!(result.is_ok());
-    let (proj, stream, version, ts) = result.unwrap();
+    let (proj, stream, version, ts) = result.expect("test value must be present");
     assert_eq!(proj, "order-totals");
     assert_eq!(stream, "order-42");
     assert_eq!(version, 5);
@@ -73,42 +78,42 @@ fn decode_valid_checkpoint() {
 fn decode_missing_tab_separator() {
     let result = decode("projection", "stream", "invalid");
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("malformed"));
+    assert!(result.expect_err("expected an error").contains("malformed"));
 }
 
 #[test]
 fn decode_invalid_version() {
     let result = decode("projection", "stream", "not-a-number\t1000");
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("version"));
+    assert!(result.expect_err("expected an error").contains("version"));
 }
 
 #[test]
 fn decode_invalid_timestamp() {
     let result = decode("projection", "stream", "5\tnot-a-timestamp");
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("timestamp"));
+    assert!(result.expect_err("expected an error").contains("timestamp"));
 }
 
 #[test]
 fn decode_empty_version() {
     let result = decode("projection", "stream", "\t1000");
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("version"));
+    assert!(result.expect_err("expected an error").contains("version"));
 }
 
 #[test]
 fn decode_empty_timestamp() {
     let result = decode("projection", "stream", "5\t");
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("timestamp"));
+    assert!(result.expect_err("expected an error").contains("timestamp"));
 }
 
 #[test]
 fn decode_negative_version() {
     let result = decode("projection", "stream", "-1\t1000");
     assert!(result.is_ok());
-    let (_, _, version, _) = result.unwrap();
+    let (_, _, version, _) = result.expect("test value must be present");
     assert_eq!(version, -1);
 }
 
@@ -116,7 +121,7 @@ fn decode_negative_version() {
 fn decode_large_timestamp() {
     let result = decode("projection", "stream", "1\t9999999999999");
     assert!(result.is_ok());
-    let (_, _, _, timestamp) = result.unwrap();
+    let (_, _, _, timestamp) = result.expect("test value must be present");
     assert_eq!(timestamp, 9999999999999);
 }
 
@@ -142,7 +147,9 @@ fn unix_millis_before_epoch_returns_zero() {
 
 #[test]
 fn unix_millis_large_value() {
-    let far_future = UNIX_EPOCH + Duration::from_secs(u64::MAX / 1000);
+    // 8e14 ms (~year 27,000) is the practical portable ceiling; u64::MAX/1000 seconds
+    // overflows the Windows SystemTime range and panics inside `+`.
+    let far_future = UNIX_EPOCH + Duration::from_millis(800_000_000_000_000);
     let millis = unix_millis(far_future);
     assert!(millis > 0);
 }

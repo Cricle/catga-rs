@@ -1,6 +1,6 @@
 ---
 name: catga
-description: A guide for developing CQRS, Event Sourcing, workflow, and distributed message applications using the Catga Rust library (catga-core, catga-flow, catga-flow-store, catga-memory, catga-nats, catga-redis, catga-axum, catga-cluster, catga-testing and other catga-* crates). Use when users write, debug, or refactor Rust code with Catga, or when they mention Catga concepts like Mediator, catga_handlers, catga_typed_mediator, catga_pipeline, Request/Command/Event, Handler, Flow, DslFlow, FlowDefinition, FlowRuntime, StateMachine, FlowStore, MessageTransport, TypedTransport, MemoryTransport, Envelope, Outbox, Inbox, idempotency, dead letter, Aggregate, EventStore, snapshot, Projection, ReadModel, Raft, cluster, snowflake ID, lease, cron scheduling, MemoryPack, Axum integration, compensating flow, etc.
+description: A guide for developing CQRS, Event Sourcing, workflow, and distributed message applications using the Catga Rust library (catga-core, catga-flow-store, catga-nats, catga-redis, catga-robustmq, catga-axum, catga-cluster, catga-sorock and other catga-* crates). Use when users write, debug, or refactor Rust code with Catga, or when they mention Catga concepts like Mediator, catga_handlers, catga_typed_mediator, catga_pipeline, Request/Command/Event, Handler, Flow, DslFlow, FlowDefinition, FlowRuntime, StateMachine, FlowStore, MessageTransport, TypedTransport, MemoryTransport, Envelope, Outbox, Inbox, idempotency, dead letter, Aggregate, EventStore, snapshot, Projection, ReadModel, Raft, cluster, snowflake ID, lease, cron scheduling, MemoryPack, Axum integration, compensating flow, etc.
 ---
 
 # Catga Application Development Guide
@@ -11,7 +11,7 @@ Catga is a pure-Rust CQRS, Event Sourcing, workflow, and distributed runtime wor
 
 1. **Explicit composition, no implicit mechanisms**: No reflection, no service locator, no hidden background threads, no unbounded queues. All dependencies are explicitly constructed at startup and passed in.
 2. **Caller owns lifecycle**: Constructing any `Registry`, `Mediator`, `FlowRuntime`, store, or transport does not start background tasks. Polling, scheduling, recovery, and shutdown are all driven explicitly by the application's supervisor task.
-3. **Boundaries are swappable**: Write application code with in-memory adapters (`catga-memory`) first; when you need persistence/distribution, only replace the corresponding boundary (e.g., replace `MemoryTransport` with NATS), and the application model remains unchanged.
+3. **Boundaries are swappable**: Write application code with in-memory adapters (`catga_core::memory`, built into catga-core) first; when you need persistence/distribution, only replace the corresponding boundary (e.g., replace `MemoryTransport` with NATS), and the application model remains unchanged.
 4. **At-least-once semantics**: Flow retries, transport redelivery, and timeout recovery are all at-least-once. External side effects (payments, emails, etc.) must be backed by idempotency keys in the application; Catga does not automatically make retries safe.
 5. **Prefer bounded**: Batches, pagination, and buffers all have explicit upper bounds (`MAX_*` constants); timeouts and retry counts must be finite.
 
@@ -21,15 +21,15 @@ Start with the smallest crate that has the required contracts, and add more as n
 
 | Requirement | Dependency |
 | --- | --- |
-| In-process typed request/command/event (required core) | `catga-core = "0.0.2"` |
-| Compensating / persistent workflows | `catga-flow = "0.0.2"` |
-| Bounded memory adapter, deterministic tests | `catga-memory = "0.0.2"` |
-| SQL/Redis persistent Flow state | `catga-flow-store = { version = "0.0.2", features = ["sqlite"] }` |
-| NATS transport and JetStream storage | `catga-nats = "0.0.2"` |
-| Redis transport and storage | `catga-redis = "0.0.2"` |
-| RobustMQ transport (mq9 mailbox) | `catga-robustmq = "0.0.2"` |
-| Axum HTTP integration | `catga-axum = "0.0.2"` |
-| Cluster/Raft, singleton tasks, leader-only execution | `catga-cluster = "0.0.2"` |
+| In-process typed request/command/event (required core) | `catga-core = "0.2"` |
+| Compensating / persistent workflows (`DslFlow`/`FlowRuntime`, `catga_core::flow`) | `catga-core = "0.2"` |
+| Bounded memory adapter, deterministic tests (`catga_core::memory`) | `catga-core = "0.2"` |
+| SQL/Redis persistent Flow state | `catga-flow-store = { version = "0.2", features = ["sqlite"] }` |
+| NATS transport and JetStream storage | `catga-nats = "0.2"` |
+| Redis transport and storage | `catga-redis = "0.2"` |
+| RobustMQ transport (mq9 mailbox) | `catga-robustmq = "0.2"` |
+| Axum HTTP integration | `catga-axum = "0.2"` |
+| Cluster/Raft, singleton tasks, leader-only execution | `catga-cluster = "0.2"` |
 
 Runtime requires `tokio = { version = "1", features = ["macros", "rt-multi-thread"] }`; struct handlers require `async-trait = "0.1"`.
 
@@ -37,7 +37,7 @@ Runtime requires `tokio = { version = "1", features = ["macros", "rt-multi-threa
 
 ```toml
 [dependencies]
-catga-core = "0.0.2"
+catga-core = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -105,7 +105,7 @@ async fn main() -> CatgaResult<()> {
 | Distributed unique ID / lease / cron scheduling | [distributed.md](distributed.md) |
 | Axum HTTP service | `MediatorState` + `CatgaHttpResult` (see [http.md](http.md)) |
 | Codec/compression/message signing | [codec.md](codec.md) |
-| Testing (spy/harness/assertions) | `catga-testing` (see [production.md](production.md)) |
+| Testing (spy/harness/assertions) | `catga_core::testing` (built into catga-core, see [production.md](production.md)) |
 | Error classification, retry decisions, production checklist | [production.md](production.md) |
 
 ## Reference Files
@@ -125,14 +125,16 @@ async fn main() -> CatgaResult<()> {
 
 ## Runnable Examples in Repository
 
-This repository includes examples that run without Docker; see
-[`docs/examples.md`](../docs/examples.md) for scenario grouping and complete run instructions. Reference before writing code:
+This repository includes examples that run without Docker; sources live in the [`examples/`](../../../examples/) directory. The `catga-examples` package provides three in-process binaries to reference before writing code:
 
 ```bash
-cargo run -p catga-examples --bin mediator          # Minimal mediator
-cargo run -p catga-examples --bin typed_mediator    # Zero-allocation typed mediator
-cargo run -p catga-examples --bin flow              # Local compensating Flow
-cargo run -p catga-examples --bin memory_transport  # Memory transport publish/receive/ack
-cargo run -p catga-examples --bin checkout          # CQRS + Flow compensation + event acknowledgment
-cargo run -p catga-examples --bin order_service     # Full HTTP order service (axum + cluster)
+cargo run -p catga-examples --bin quickstart   # Minimal mediator (#[catga_request] + #[catga_service] macros)
+cargo run -p catga-examples --bin order        # Order service: CQRS + Event Sourcing + compensating Flow best practices
+cargo run -p catga-examples --bin doc_demo     # Handler documentation auto-generated by #[catga_service]
+```
+
+The distributed cluster example is [`examples/distributed-kv/`](../../../examples/distributed-kv/): a three-node Raft-replicated KV store whose consensus backend switches via `--backend raft|sorock` (raft = catga-cluster + catga-axum HTTP; sorock = catga-sorock gRPC multi-Raft):
+
+```bash
+cargo run -p distributed-kv -- --node 0 --nodes 3 --base-port 9100
 ```

@@ -1,6 +1,6 @@
 //! Unit tests for error types, error codes, and result aliases.
 
-use catga_core::{bounded_details, CatgaError, ErrorCode, MAX_ERROR_DETAILS_BYTES};
+use catga_core::{CatgaError, ErrorCode, MAX_ERROR_DETAILS_BYTES, bounded_details};
 
 #[test]
 fn error_code_all_variants_have_stable_strings() {
@@ -108,8 +108,8 @@ fn catga_error_new() {
 
 #[test]
 fn catga_error_with_details() {
-    let error = CatgaError::new(ErrorCode::Validation, "validation failed")
-        .with_details("input: userId");
+    let error =
+        CatgaError::new(ErrorCode::Validation, "validation failed").with_details("input: userId");
     assert_eq!(error.code(), ErrorCode::Validation);
     assert_eq!(error.message(), "validation failed");
     assert_eq!(error.details(), Some("input: userId"));

@@ -88,4 +88,4 @@ pub(crate) async fn migrate(pool: &PgPool) -> catga_core::CatgaResult<()> {
     })
 }
 
-define_server_suspended!(PgPool, true, "PostgreSQL");
+define_server_suspended!(PgPool, true, false, "PostgreSQL");

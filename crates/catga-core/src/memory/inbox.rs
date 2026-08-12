@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{sync::Arc, time::Duration};
 
 #[cfg(feature = "test-hooks")]
 use std::sync::{Barrier, Mutex};
@@ -122,7 +119,7 @@ impl InboxStore for MemoryInbox {
     ) -> CatgaResult<Option<InboxClaim>> {
         let mut operation = telemetry::persistence_operation("memory", "inbox", "try_claim");
         let expires_at = inbox_claim_expires_at(lease)?;
-        let now = now_millis();
+        let now = crate::time::now_unix_millis();
         let result = if let Some(record) = self.records.get(&message_id) {
             Ok(record
                 .try_claim_generation_until(expires_at, now)
@@ -197,7 +194,7 @@ impl InboxStore for MemoryInbox {
             self.completed.insert(
                 message_id,
                 CompletedRecord {
-                    completed_at: now_millis(),
+                    completed_at: crate::time::now_unix_millis(),
                     record_identity,
                 },
             );
@@ -254,7 +251,7 @@ impl InboxStore for MemoryInbox {
                     "inbox retention exceeds the supported millisecond range",
                 )
             })?;
-            let now = now_millis();
+            let now = crate::time::now_unix_millis();
             let candidates: Vec<(u64, CompletedRecord)> = self
                 .completed
                 .iter()
@@ -285,12 +282,4 @@ impl InboxStore for MemoryInbox {
         operation.complete(&outcome);
         outcome
     }
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-        })
 }

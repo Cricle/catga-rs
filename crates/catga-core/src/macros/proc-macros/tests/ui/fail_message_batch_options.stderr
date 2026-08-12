@@ -1,0 +1,41 @@
+error: duplicate Catga batch configuration
+ --> tests/ui/fail_message_batch_options.rs:4:36
+  |
+4 | #[catga(batch(max_batch_size = 2), batch(max_batch_size = 3))]
+  |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Catga batch options must be `name = positive_integer`
+ --> tests/ui/fail_message_batch_options.rs:8:15
+  |
+8 | #[catga(batch(max_batch_size))]
+  |               ^^^^^^^^^^^^^^
+
+error: Catga batch option names must be identifiers
+  --> tests/ui/fail_message_batch_options.rs:12:15
+   |
+12 | #[catga(batch(a::b = 3))]
+   |               ^^^^
+
+error: Catga batch options must be positive integers
+  --> tests/ui/fail_message_batch_options.rs:16:15
+   |
+16 | #[catga(batch(max_batch_size = "x"))]
+   |               ^^^^^^^^^^^^^^^^^^^^
+
+error: Catga batch options must be greater than zero
+  --> tests/ui/fail_message_batch_options.rs:20:32
+   |
+20 | #[catga(batch(max_batch_size = 0))]
+   |                                ^
+
+error: Catga batch option is too large
+  --> tests/ui/fail_message_batch_options.rs:24:32
+   |
+24 | #[catga(batch(max_batch_size = 99999999999999999999))]
+   |                                ^^^^^^^^^^^^^^^^^^^^
+
+error: expected `max_batch_size`, `timeout_ms`, `max_queue_length`, `max_shards`, or `flush_concurrency`
+  --> tests/ui/fail_message_batch_options.rs:28:15
+   |
+28 | #[catga(batch(bogus = 1))]
+   |               ^^^^^

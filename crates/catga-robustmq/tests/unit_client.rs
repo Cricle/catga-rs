@@ -3,13 +3,19 @@
 use catga_core::codec::memorypack::MemoryPackCodec;
 use catga_core::{Envelope, MessageMetadata, MessagePriority};
 
-use catga_robustmq::{MailboxConfig, MailboxClient};
+use catga_robustmq::MailboxConfig;
 
-fn encode_envelope<C: catga_core::EnvelopeCodec>(codec: &C, envelope: &Envelope) -> catga_core::CatgaResult<Vec<u8>> {
+fn encode_envelope<C: catga_core::EnvelopeCodec>(
+    codec: &C,
+    envelope: &Envelope,
+) -> catga_core::CatgaResult<Vec<u8>> {
     codec.encode(envelope)
 }
 
-fn decode_envelope<C: catga_core::EnvelopeCodec>(codec: &C, bytes: &[u8]) -> catga_core::CatgaResult<Envelope> {
+fn decode_envelope<C: catga_core::EnvelopeCodec>(
+    codec: &C,
+    bytes: &[u8],
+) -> catga_core::CatgaResult<Envelope> {
     codec.decode(bytes)
 }
 

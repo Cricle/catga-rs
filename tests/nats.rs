@@ -26,9 +26,9 @@ use catga_core::{
 use catga_nats::{
     NatsConfig, NatsDeadLetters, NatsDestinationConfig, NatsDslStepProgress, NatsEnhancedSnapshots,
     NatsEventStore, NatsFlowScheduler, NatsFlows, NatsIdempotency, NatsInbox, NatsLeases,
-    NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport,
-    NatsRequestClient, NatsRequestServer, NatsSnapshotStore, NatsStateMachines,
-    NatsSubscriptions, NatsSuspendedFlows, NatsTransport, NatsPublisher, NatsPublisherConfig,
+    NatsOutbox, NatsProjectionCheckpoints, NatsPubSubConfig, NatsPubSubTransport, NatsPublisher,
+    NatsPublisherConfig, NatsRequestClient, NatsRequestServer, NatsSnapshotStore,
+    NatsStateMachines, NatsSubscriptions, NatsSuspendedFlows, NatsTransport,
 };
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -100,6 +100,7 @@ async fn nats_e2e_starts_a_jetstream_container_when_no_url_is_configured() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_subscriptions_persist_hashed_definitions_checkpoints_and_owner_leases() {
     let server = nats_e2e::server_url().await;
     let store = NatsSubscriptions::with_lease_ttl(
@@ -166,6 +167,7 @@ async fn nats_subscriptions_persist_hashed_definitions_checkpoints_and_owner_lea
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_projection_checkpoints_are_isolated_by_projection_and_stream() {
     let server = nats_e2e::server_url().await;
     let checkpoints = NatsProjectionCheckpoints::connect(
@@ -223,6 +225,7 @@ async fn nats_projection_checkpoints_are_isolated_by_projection_and_stream() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_enhanced_snapshots_query_history_and_cleanup_versions() {
     let server = nats_e2e::server_url().await;
     let snapshots = NatsEnhancedSnapshots::<u64>::connect(
@@ -278,6 +281,7 @@ async fn nats_enhanced_snapshots_query_history_and_cleanup_versions() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_flows_use_hashed_states_and_type_indexes_for_stale_claims() {
     let server = nats_e2e::server_url().await;
     let flows = NatsFlows::connect(&server, format!("CATGA_FLOWS_{}", std::process::id()))
@@ -307,6 +311,7 @@ async fn nats_flows_use_hashed_states_and_type_indexes_for_stale_claims() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_flow_scheduler_claims_recovers_and_releases_target_indexes() {
     let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
@@ -374,6 +379,7 @@ async fn nats_flow_scheduler_claims_recovers_and_releases_target_indexes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_flow_scheduler_concurrent_target_schedules_have_one_winner() {
     let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
@@ -404,6 +410,7 @@ async fn nats_flow_scheduler_concurrent_target_schedules_have_one_winner() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_flow_scheduler_fences_owners_and_requires_a_live_lease_to_renew() {
     let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
@@ -484,6 +491,7 @@ async fn nats_flow_scheduler_fences_owners_and_requires_a_live_lease_to_renew() 
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_flow_scheduler_keeps_zero_limit_and_cancellation_non_destructive() {
     let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
@@ -532,6 +540,7 @@ async fn nats_flow_scheduler_keeps_zero_limit_and_cancellation_non_destructive()
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
     const INDEX_PAGE_CAPACITY: usize = 32;
 
@@ -652,6 +661,7 @@ async fn nats_flows_bound_type_index_pages_and_repair_interrupted_creates() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_dsl_step_progress_uses_hashed_keys_and_revision_updates() {
     let server = nats_e2e::server_url().await;
     let store = NatsDslStepProgress::connect(
@@ -679,6 +689,7 @@ async fn nats_dsl_step_progress_uses_hashed_keys_and_revision_updates() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_dsl_progress_runs_durable_recovery_contract() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
@@ -694,6 +705,7 @@ async fn nats_dsl_progress_runs_durable_recovery_contract() -> CatgaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_suspended_flows_preserve_wait_results_and_claims() {
     let server = nats_e2e::server_url().await;
     let store = NatsSuspendedFlows::connect(&server, format!("CATGA_FLOWS_{}", std::process::id()))
@@ -752,6 +764,7 @@ async fn nats_suspended_flows_preserve_wait_results_and_claims() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_suspended_flows_lookup_wait_correlations_without_selecting_ambiguity() {
     let server = nats_e2e::server_url().await;
     let suffix = SystemTime::now()
@@ -835,6 +848,7 @@ async fn nats_suspended_flows_lookup_wait_correlations_without_selecting_ambigui
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_suspended_flows_retry_only_real_revision_conflicts() {
     let server = nats_e2e::server_url().await;
     let store = Arc::new(
@@ -869,6 +883,7 @@ async fn nats_suspended_flows_retry_only_real_revision_conflicts() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_suspended_flows_page_bounded_timeout_queries() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let store = NatsSuspendedFlows::connect(
@@ -895,6 +910,7 @@ fn waiting_continuation(id: &str) -> FlowContinuation {
 
 /// Core NATS broadcasts are ephemeral and do not carry acknowledgement tokens.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn core_nats_pubsub_transport_broadcasts_at_most_once() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let transport = NatsPubSubTransport::connect(NatsPubSubConfig {
@@ -935,6 +951,7 @@ async fn core_nats_pubsub_transport_broadcasts_at_most_once() -> CatgaResult<()>
 
 /// Core NATS must not claim durable guarantees that only JetStream can provide.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn core_nats_pubsub_transport_rejects_durable_qos() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let transport = NatsPubSubTransport::connect(NatsPubSubConfig {
@@ -961,6 +978,7 @@ async fn core_nats_pubsub_transport_rejects_durable_qos() -> CatgaResult<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_leases_compare_owner_with_kv_revisions() {
     let server = nats_e2e::server_url().await;
     let leases = NatsLeases::connect(&server, format!("CATGA_LEASE_{}", std::process::id()))
@@ -989,6 +1007,7 @@ async fn nats_leases_compare_owner_with_kv_revisions() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn jetstream_round_trip_and_ack() {
     let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
@@ -1003,7 +1022,10 @@ async fn jetstream_round_trip_and_ack() {
 
     transport.initialize().await.unwrap();
     assert!(transport.is_healthy());
-    assert_eq!(transport.health_status(), Some("NATS transport is connected"));
+    assert_eq!(
+        transport.health_status(),
+        Some("NATS transport is connected")
+    );
 
     transport
         .publish(Envelope::new(
@@ -1050,6 +1072,7 @@ async fn jetstream_round_trip_and_ack() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn durable_nats_transport_rejects_at_most_once_publications() {
     let server = nats_e2e::server_url().await;
     let suffix = format!("at-most-once-{}", std::process::id());
@@ -1080,6 +1103,7 @@ async fn durable_nats_transport_rejects_at_most_once_publications() {
 /// This uses the real JetStream service supplied by `nats_e2e`, so it catches accidental fallback
 /// to the default codec in either publish/receive path as well as in destination routing.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn jetstream_transport_round_trips_with_an_injected_envelope_codec() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!(
@@ -1152,6 +1176,7 @@ async fn jetstream_transport_round_trips_with_an_injected_envelope_codec() -> Ca
 /// greater attempt count. This is the value the competing consumer uses to decide when an
 /// unrecoverable message belongs in the dead-letter store.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn jetstream_delivery_reports_native_redelivery_attempts() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("{}_attempts", std::process::id());
@@ -1185,6 +1210,7 @@ async fn jetstream_delivery_reports_native_redelivery_attempts() -> CatgaResult<
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn jetstream_destination_requires_explicit_resource_provisioning() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
@@ -1243,6 +1269,7 @@ async fn jetstream_destination_requires_explicit_resource_provisioning() -> Catg
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn jetstream_exactly_once_deduplicates_repeated_envelope_ids() {
     let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
@@ -1278,6 +1305,7 @@ async fn jetstream_exactly_once_deduplicates_repeated_envelope_ids() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_event_store_persists_versioned_history_with_subject_cas() {
     let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
@@ -1398,6 +1426,7 @@ async fn nats_event_store_persists_versioned_history_with_subject_cas() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_event_store_rejects_version_exhaustion_before_publishing() {
     let server = nats_e2e::server_url().await;
     let suffix = format!("{}-exhausted", std::process::id());
@@ -1449,6 +1478,7 @@ async fn nats_event_store_rejects_version_exhaustion_before_publishing() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_snapshots_round_trip_and_reject_stale_writers_with_kv_revisions() {
     let server = nats_e2e::server_url().await;
     let suffix = format!("{}", std::process::id());
@@ -1504,6 +1534,7 @@ async fn nats_snapshots_round_trip_and_reject_stale_writers_with_kv_revisions() 
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_idempotency_claims_exclusively_retries_failures_and_caches_results() {
     let server = nats_e2e::server_url().await;
     let store = NatsIdempotency::connect(&server, format!("CATGA_IDEMP_{}", std::process::id()))
@@ -1529,6 +1560,7 @@ async fn nats_idempotency_claims_exclusively_retries_failures_and_caches_results
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_idempotency_concurrent_claims_have_exactly_one_owner() {
     let server = nats_e2e::server_url().await;
     let store = Arc::new(
@@ -1549,6 +1581,7 @@ async fn nats_idempotency_concurrent_claims_have_exactly_one_owner() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_idempotency_retains_claimed_and_failed_records_until_explicit_cleanup()
 -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
@@ -1627,28 +1660,45 @@ async fn create_kv_bucket(
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_idempotency_clears_max_age_from_an_existing_bucket() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let bucket = format!("CATGA_IDEMP_LEGACY_MAX_AGE_{}", std::process::id());
-    let context = jetstream::new(async_nats::connect(server.url()).await.map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?);
+    let context = jetstream::new(
+        async_nats::connect(server.url())
+            .await
+            .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?,
+    );
     let legacy_store = create_kv_bucket(&context, &bucket, Duration::from_millis(100)).await?;
     assert_eq!(
-        legacy_store.status().await.map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?.max_age(),
+        legacy_store
+            .status()
+            .await
+            .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?
+            .max_age(),
         Duration::from_millis(100)
     );
 
     let _store =
         NatsIdempotency::with_retention(&server, bucket.clone(), Duration::from_secs(1)).await?;
 
-    let updated_store = context.get_key_value(&bucket).await.map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
+    let updated_store = context
+        .get_key_value(&bucket)
+        .await
+        .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?;
     assert_eq!(
-        updated_store.status().await.map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?.max_age(),
+        updated_store
+            .status()
+            .await
+            .map_err(|e| CatgaError::new(ErrorCode::Transient, e.to_string()))?
+            .max_age(),
         Duration::ZERO
     );
     Ok(())
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_inbox_claims_exclusively_retries_failures_and_caches_results() {
     let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(&server, format!("CATGA_INBOX_{}", std::process::id()))
@@ -1678,6 +1728,7 @@ async fn nats_inbox_claims_exclusively_retries_failures_and_caches_results() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_inbox_reclaims_an_expired_processing_lease() {
     let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(&server, format!("CATGA_INBOX_LEASE_{}", std::process::id()))
@@ -1702,6 +1753,7 @@ async fn nats_inbox_reclaims_an_expired_processing_lease() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_inbox_fences_a_reclaimed_claim_owner() {
     let server = nats_e2e::server_url().await;
     let bucket = format!(
@@ -1742,6 +1794,7 @@ async fn nats_inbox_fences_a_reclaimed_claim_owner() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_inbox_fences_a_failed_claim_owner_after_reclaim() {
     let server = nats_e2e::server_url().await;
     let bucket = format!(
@@ -1795,6 +1848,7 @@ async fn nats_inbox_fences_a_failed_claim_owner_after_reclaim() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_inbox_removes_completed_records_with_a_bounded_scan() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let inbox = NatsInbox::connect(
@@ -1825,6 +1879,7 @@ async fn nats_inbox_removes_completed_records_with_a_bounded_scan() -> CatgaResu
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_dead_letters_preserve_queue_order_and_envelopes() {
     let server = nats_e2e::server_url().await;
     let letters = NatsDeadLetters::connect(
@@ -1855,6 +1910,7 @@ async fn nats_dead_letters_preserve_queue_order_and_envelopes() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_claims_and_acknowledges_only_the_current_owner() {
     let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(&server, format!("CATGA_OUTBOX_{}", std::process::id()))
@@ -1897,6 +1953,7 @@ async fn nats_outbox_claims_and_acknowledges_only_the_current_owner() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_reclaims_an_expired_claim_without_accepting_a_stale_ack() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
@@ -1943,6 +2000,7 @@ async fn nats_outbox_reclaims_an_expired_claim_without_accepting_a_stale_ack() -
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_updates_legacy_keys_and_releases_for_immediate_reclaim() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let bucket = format!("CATGA_OUTBOX_LEGACY_{}", std::process::id());
@@ -2008,6 +2066,7 @@ async fn nats_outbox_updates_legacy_keys_and_releases_for_immediate_reclaim() ->
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_retains_published_records_until_bounded_cleanup() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
@@ -2062,6 +2121,7 @@ async fn nats_outbox_retains_published_records_until_bounded_cleanup() -> CatgaR
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_cleanup_caps_key_inspections_at_limit() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
@@ -2097,6 +2157,7 @@ async fn nats_outbox_cleanup_caps_key_inspections_at_limit() -> CatgaResult<()> 
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_stops_reclaiming_after_its_failure_limit() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
@@ -2127,6 +2188,7 @@ async fn nats_outbox_stops_reclaiming_after_its_failure_limit() -> CatgaResult<(
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_rejects_claims_above_the_shared_memory_budget() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
@@ -2143,6 +2205,7 @@ async fn nats_outbox_rejects_claims_above_the_shared_memory_budget() -> CatgaRes
 }
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_outbox_does_not_claim_a_message_before_its_delivery_time() {
     let server = nats_e2e::server_url().await;
     let outbox = NatsOutbox::connect(
@@ -2170,14 +2233,14 @@ async fn nats_outbox_does_not_claim_a_message_before_its_delivery_time() {
 /// Verifies that NatsRequestServer and NatsRequestClient exchange envelopes
 /// end-to-end with correct correlation and timeout behavior.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_request_server_and_client_round_trip() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("rpc_{}", std::process::id());
 
     // Start the request server
     let mut request_server =
-        NatsRequestServer::connect(server.url(), &format!("catga.test.{suffix}"))
-            .await?;
+        NatsRequestServer::connect(server.url(), &format!("catga.test.{suffix}")).await?;
 
     // Create a client and spawn the request in background
     let client = NatsRequestClient::connect(server.url(), &format!("catga.test.{suffix}")).await?;
@@ -2202,9 +2265,7 @@ async fn nats_request_server_and_client_round_trip() -> CatgaResult<()> {
         nats_request.respond(response).await
     });
 
-    let response = client
-        .request(request, Duration::from_secs(5))
-        .await?;
+    let response = client.request(request, Duration::from_secs(5)).await?;
 
     server_handle.await.unwrap()?;
     assert_eq!(response.message_type(), "order.status.response");
@@ -2219,6 +2280,7 @@ async fn nats_request_server_and_client_round_trip() -> CatgaResult<()> {
 
 /// Verifies that a request fails when no reply is received (timeout or no-responders).
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_request_client_times_out_without_server() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("timeout_{}", std::process::id());
@@ -2251,6 +2313,7 @@ async fn nats_request_client_times_out_without_server() -> CatgaResult<()> {
 
 /// Verifies that request server handles errors by responding with a typed failure.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_request_server_responds_with_error() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("error_{}", std::process::id());
@@ -2272,9 +2335,7 @@ async fn nats_request_server_responds_with_error() -> CatgaResult<()> {
         nats_request.respond_error(error).await
     });
 
-    let response = client
-        .request(request, Duration::from_secs(5))
-        .await?;
+    let response = client.request(request, Duration::from_secs(5)).await?;
 
     server_handle.await.unwrap()?;
 
@@ -2291,6 +2352,7 @@ async fn nats_request_server_responds_with_error() -> CatgaResult<()> {
 
 /// Verifies that multiple concurrent requests are handled correctly.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_request_server_handles_concurrent_requests() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("concurrent_{}", std::process::id());
@@ -2357,6 +2419,7 @@ async fn nats_request_server_handles_concurrent_requests() -> CatgaResult<()> {
 
 /// Verifies that NatsPublisher publishes envelopes without requiring a consumer.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_publisher_publishes_durable_messages() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("pub_{}", std::process::id());
@@ -2413,6 +2476,7 @@ async fn nats_publisher_publishes_durable_messages() -> CatgaResult<()> {
 
 /// Verifies that NatsPublisher rejects AtMostOnce quality of service.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_publisher_rejects_at_most_once() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("pub_qos_{}", std::process::id());
@@ -2429,8 +2493,7 @@ async fn nats_publisher_rejects_at_most_once() -> CatgaResult<()> {
             3010,
             "order.ephemeral",
             vec![],
-            MessageMetadata::new(3010, None)
-                .with_quality_of_service(QualityOfService::AtMostOnce),
+            MessageMetadata::new(3010, None).with_quality_of_service(QualityOfService::AtMostOnce),
         ))
         .await;
 
@@ -2445,6 +2508,7 @@ async fn nats_publisher_rejects_at_most_once() -> CatgaResult<()> {
 
 /// Verifies that NatsPublisher supports ExactlyOnce with deduplication.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_publisher_supports_exactly_once() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("pub_exact_{}", std::process::id());
@@ -2460,8 +2524,7 @@ async fn nats_publisher_supports_exactly_once() -> CatgaResult<()> {
         3020,
         "order.exactly.once",
         vec![1],
-        MessageMetadata::new(3020, None)
-            .with_quality_of_service(QualityOfService::ExactlyOnce),
+        MessageMetadata::new(3020, None).with_quality_of_service(QualityOfService::ExactlyOnce),
     );
 
     // Publish same envelope twice - second should be deduplicated by broker
@@ -2480,6 +2543,7 @@ async fn nats_publisher_supports_exactly_once() -> CatgaResult<()> {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_state_machines_create_and_get() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("sm_{}", std::process::id());
@@ -2512,11 +2576,13 @@ async fn nats_state_machines_create_and_get() -> CatgaResult<()> {
 
 /// Verifies that NatsStateMachines update uses compare-and-swap semantics.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_state_machines_cas_update() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("sm_cas_{}", std::process::id());
 
-    let store = NatsStateMachines::<String>::connect(&server, format!("CATGA_SM_CAS_{suffix}")).await?;
+    let store =
+        NatsStateMachines::<String>::connect(&server, format!("CATGA_SM_CAS_{suffix}")).await?;
 
     // Create initial state
     let initial = catga_core::flow::StateMachineSnapshot::new("order-456", "pending".to_string());
@@ -2528,7 +2594,8 @@ async fn nats_state_machines_cas_update() -> CatgaResult<()> {
     assert!(updated_ok, "update with correct version should succeed");
 
     // Try update with wrong version - should fail
-    let wrong_version = catga_core::flow::StateMachineSnapshot::new("order-456", "completed".to_string());
+    let wrong_version =
+        catga_core::flow::StateMachineSnapshot::new("order-456", "completed".to_string());
     let wrong_ok = store.update(0, wrong_version).await?;
     assert!(!wrong_ok, "update with wrong version should fail");
 
@@ -2546,13 +2613,16 @@ async fn nats_state_machines_cas_update() -> CatgaResult<()> {
 
 /// Verifies that NatsStateMachines CAS update fails for non-existent instances.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_state_machines_update_nonexistent_fails() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("sm_missing_{}", std::process::id());
 
-    let store = NatsStateMachines::<String>::connect(&server, format!("CATGA_SM_MISS_{suffix}")).await?;
+    let store =
+        NatsStateMachines::<String>::connect(&server, format!("CATGA_SM_MISS_{suffix}")).await?;
 
-    let non_existent = catga_core::flow::StateMachineSnapshot::new("does-not-exist", "pending".to_string());
+    let non_existent =
+        catga_core::flow::StateMachineSnapshot::new("does-not-exist", "pending".to_string());
 
     let result = store.update(0, non_existent).await?;
     assert!(!result, "update on non-existent instance should fail");
@@ -2570,6 +2640,7 @@ async fn nats_state_machines_update_nonexistent_fails() -> CatgaResult<()> {
 
 /// Verifies that NatsTransport batch publishing works correctly.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_transport_batch_publish() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("batch_{}", std::process::id());
@@ -2585,7 +2656,14 @@ async fn nats_transport_batch_publish() -> CatgaResult<()> {
     transport.initialize().await?;
 
     let batch: Vec<_> = (0..5)
-        .map(|i| Envelope::new(5000 + i, "order.item", vec![i as u8], MessageMetadata::new(5000 + i, None)))
+        .map(|i| {
+            Envelope::new(
+                5000 + i,
+                "order.item",
+                vec![i as u8],
+                MessageMetadata::new(5000 + i, None),
+            )
+        })
         .collect();
 
     transport.publish_batch(batch.clone()).await?;
@@ -2614,6 +2692,7 @@ async fn nats_transport_batch_publish() -> CatgaResult<()> {
 
 /// Verifies that batch publishing respects concurrency limits.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_transport_batch_publish_with_concurrency() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("batch_concurrent_{}", std::process::id());
@@ -2666,6 +2745,7 @@ async fn nats_transport_batch_publish_with_concurrency() -> CatgaResult<()> {
 
 /// Verifies that batch publishing with zero concurrency limit is rejected.
 #[tokio::test]
+#[ignore = "requires Docker testcontainer"]
 async fn nats_transport_batch_publish_zero_concurrency_rejected() -> CatgaResult<()> {
     let server = nats_e2e::server_url().await;
     let suffix = format!("batch_zero_{}", std::process::id());

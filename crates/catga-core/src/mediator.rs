@@ -58,6 +58,33 @@ use crate::{
 pub const MAX_MEDIATOR_BATCH_SIZE: usize = 1024;
 
 /// Dispatches typed requests, commands, and events through an immutable handler registry.
+///
+/// A `Mediator` is created once from a startup-built [`Registry`] and is cheap to share: it is
+/// `Send + Sync` and dispatch performs an O(1) average-case lookup per message. Requests and
+/// commands have exactly one handler each; events fan out to every registered handler. A handler
+/// panic is converted into [`ErrorCode::Internal`] under the default unwinding panic strategy, so
+/// one faulty handler cannot take down the dispatcher. Every dispatch is instrumented with the
+/// crate's [`TRACING_TARGET`](crate::TRACING_TARGET) spans and metrics.
+///
+/// ```
+/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+///
+/// struct PingTypeId;
+/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+///
+/// struct Ping;
+/// impl Message for Ping {}
+/// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> CatgaResult<()> {
+/// let mut registry = Registry::new();
+/// registry.register_request::<Ping, _>(request_handler(|_: Ping| async { Ok(7) }))?;
+/// let mediator = Mediator::new(registry);
+/// assert_eq!(mediator.send(Ping).await?, 7);
+/// # Ok(())
+/// # }
+/// ```
 pub struct Mediator {
     registry: Arc<Registry>,
 }
@@ -90,6 +117,22 @@ impl MediatorHandle {
     /// Binds this handle to the application's immutable mediator exactly once.
     ///
     /// A second call returns [`ErrorCode::Conflict`] and leaves the initial binding unchanged.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use catga_core::{CatgaResult, Mediator, MediatorHandle, Registry};
+    ///
+    /// # fn run() -> CatgaResult<()> {
+    /// let handle = MediatorHandle::new();
+    /// let mediator = Arc::new(Mediator::new(Registry::new()));
+    /// handle.bind(Arc::clone(&mediator))?;
+    /// assert!(handle.is_bound());
+    /// // Rebinding is rejected and keeps the original mediator.
+    /// assert!(handle.bind(mediator).is_err());
+    /// # Ok(())
+    /// # }
+    /// # run().expect("bind example");
+    /// ```
     pub fn bind(&self, mediator: Arc<Mediator>) -> CatgaResult<()> {
         self.mediator.set(mediator).map_err(|_| {
             CatgaError::new(
@@ -183,6 +226,28 @@ impl Mediator {
     /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust strategy is
     /// unwinding. Builds configured with `panic = "abort"` terminate instead and cannot be
     /// recovered by this method.
+    ///
+    /// Dispatching a request with no registered handler fails with [`ErrorCode::NotFound`]
+    /// before any handler machinery runs:
+    ///
+    /// ```
+    /// use catga_core::{CatgaResult, ErrorCode, Mediator, Message, MessageTypeId, Registry, Request};
+    ///
+    /// struct PingTypeId;
+    /// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+    ///
+    /// struct Ping;
+    /// impl Message for Ping {}
+    /// impl Request for Ping { type Response = (); type TypeId = PingTypeId; }
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> CatgaResult<()> {
+    /// let mediator = Mediator::new(Registry::new());
+    /// let error = mediator.send(Ping).await.expect_err("no handler is registered");
+    /// assert_eq!(error.code(), ErrorCode::NotFound);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send<M: Request>(&self, message: M) -> CatgaResult<M::Response> {
         let span = observability::request_span(std::any::type_name::<M>());
         let started = Instant::now();
@@ -229,6 +294,36 @@ impl Mediator {
     /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust strategy is
     /// unwinding. Builds configured with `panic = "abort"` terminate instead and cannot be
     /// recovered by this method.
+    ///
+    /// ```
+    /// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+    /// use catga_core::{CatgaResult, Command, Mediator, Message, MessageTypeId, Registry, command_handler};
+    ///
+    /// struct FlushTypeId;
+    /// impl MessageTypeId for FlushTypeId { const NAME: &'static str = "Flush"; }
+    ///
+    /// struct Flush;
+    /// impl Message for Flush {}
+    /// impl Command for Flush { type TypeId = FlushTypeId; }
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> CatgaResult<()> {
+    /// let handled = Arc::new(AtomicU64::new(0));
+    /// let observed = Arc::clone(&handled);
+    /// let mut registry = Registry::new();
+    /// registry.register_command::<Flush, _>(command_handler(move |_: Flush| {
+    ///     let observed = Arc::clone(&observed);
+    ///     async move {
+    ///         observed.fetch_add(1, Ordering::SeqCst);
+    ///         Ok(())
+    ///     }
+    /// }))?;
+    /// let mediator = Mediator::new(registry);
+    /// mediator.send_command(Flush).await?;
+    /// assert_eq!(handled.load(Ordering::SeqCst), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send_command<C: Command>(&self, command: C) -> CatgaResult<()> {
         let span = observability::command_span(std::any::type_name::<C>());
         let started = Instant::now();
@@ -342,6 +437,40 @@ impl Mediator {
     /// A panic in either a behavior or the terminal handler is returned as
     /// [`ErrorCode::Internal`] when the Rust panic strategy is unwinding. Builds configured with
     /// `panic = "abort"` terminate instead and cannot be recovered by this method.
+    ///
+    /// ```
+    /// use async_trait::async_trait;
+    /// use catga_core::{
+    ///     Behavior, CatgaResult, Mediator, Message, MessageTypeId, Next, Pipeline, Registry,
+    ///     Request, request_handler,
+    /// };
+    ///
+    /// struct PingTypeId;
+    /// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+    ///
+    /// struct Ping;
+    /// impl Message for Ping {}
+    /// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+    ///
+    /// /// Adds one to whatever the downstream stage returns.
+    /// struct AddOne;
+    /// #[async_trait]
+    /// impl Behavior<Ping> for AddOne {
+    ///     async fn handle(&self, message: Ping, next: Next<Ping>) -> CatgaResult<u64> {
+    ///         Ok(next.run(message).await? + 1)
+    ///     }
+    /// }
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> CatgaResult<()> {
+    /// let mut registry = Registry::new();
+    /// registry.register_request::<Ping, _>(request_handler(|_: Ping| async { Ok(41) }))?;
+    /// let mediator = Mediator::new(registry);
+    /// let pipeline = Pipeline::<Ping>::new().with(AddOne);
+    /// assert_eq!(mediator.send_with(Ping, &pipeline).await?, 42);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send_with<M: Request>(
         &self,
         message: M,
@@ -448,6 +577,31 @@ impl Mediator {
     ///
     /// Batch dispatch bypasses per-message observability spans for throughput; a single
     /// batch-level span covers the entire operation when a subscriber is active.
+    ///
+    /// ```
+    /// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+    ///
+    /// struct PingTypeId;
+    /// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
+    ///
+    /// struct Ping(u64);
+    /// impl Message for Ping {}
+    /// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> CatgaResult<()> {
+    /// let mut registry = Registry::new();
+    /// registry.register_request::<Ping, _>(request_handler(|ping: Ping| async move {
+    ///     Ok(ping.0 * 2)
+    /// }))?;
+    /// let mediator = Mediator::new(registry);
+    /// // Input order is preserved even though dispatch is concurrent.
+    /// let responses = mediator.send_batch(vec![Ping(1), Ping(2), Ping(3)], 2).await?;
+    /// let values: Vec<u64> = responses.into_iter().collect::<CatgaResult<_>>()?;
+    /// assert_eq!(values, vec![2, 4, 6]);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send_batch<M>(
         &self,
         messages: impl IntoIterator<Item = M>,
@@ -502,6 +656,37 @@ impl Mediator {
     /// Unlike collecting one future per input, this keeps at most `concurrency_limit` publish
     /// futures alive at once. Every input event is attempted even when another event fails; the
     /// first observed failure is returned after all work has completed.
+    ///
+    /// ```
+    /// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+    /// use catga_core::{CatgaResult, Event, Mediator, Message, MessageTypeId, Registry, event_handler};
+    ///
+    /// struct TickTypeId;
+    /// impl MessageTypeId for TickTypeId { const NAME: &'static str = "Tick"; }
+    ///
+    /// #[derive(Clone)]
+    /// struct Tick;
+    /// impl Message for Tick {}
+    /// impl Event for Tick { type TypeId = TickTypeId; }
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> CatgaResult<()> {
+    /// let delivered = Arc::new(AtomicU64::new(0));
+    /// let observed = Arc::clone(&delivered);
+    /// let mut registry = Registry::new();
+    /// registry.register_event::<Tick, _>(event_handler(move |_: Tick| {
+    ///     let observed = Arc::clone(&observed);
+    ///     async move {
+    ///         observed.fetch_add(1, Ordering::SeqCst);
+    ///         Ok(())
+    ///     }
+    /// }));
+    /// let mediator = Mediator::new(registry);
+    /// mediator.publish_batch(vec![Tick, Tick, Tick], 2).await?;
+    /// assert_eq!(delivered.load(Ordering::SeqCst), 3);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn publish_batch<E>(
         &self,
         events: impl IntoIterator<Item = E>,
@@ -604,6 +789,39 @@ impl Mediator {
     /// Every handler receives the event even when an earlier handler fails. The first observed
     /// failure is returned after fan-out completes. This sequential path moves the final event
     /// instance into its handler, avoiding an unnecessary clone for the common small fan-out.
+    ///
+    /// ```
+    /// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+    /// use catga_core::{CatgaResult, Event, Mediator, Message, MessageTypeId, Registry, event_handler};
+    ///
+    /// struct TickTypeId;
+    /// impl MessageTypeId for TickTypeId { const NAME: &'static str = "Tick"; }
+    ///
+    /// #[derive(Clone)]
+    /// struct Tick;
+    /// impl Message for Tick {}
+    /// impl Event for Tick { type TypeId = TickTypeId; }
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> CatgaResult<()> {
+    /// let delivered = Arc::new(AtomicU64::new(0));
+    /// let mut registry = Registry::new();
+    /// for _ in 0..2 {
+    ///     let delivered = Arc::clone(&delivered);
+    ///     registry.register_event::<Tick, _>(event_handler(move |_: Tick| {
+    ///         let delivered = Arc::clone(&delivered);
+    ///         async move {
+    ///             delivered.fetch_add(1, Ordering::SeqCst);
+    ///             Ok(())
+    ///         }
+    ///     }));
+    /// }
+    /// let mediator = Mediator::new(registry);
+    /// mediator.publish(Tick).await?;
+    /// assert_eq!(delivered.load(Ordering::SeqCst), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn publish<E: Event + Clone>(&self, event: E) -> CatgaResult<()> {
         let event_type = std::any::type_name::<E>();
         let event_type_id = TypeId::of::<E>();
@@ -683,4 +901,3 @@ async fn isolate_mediator_panic<T>(
         )),
     }
 }
-

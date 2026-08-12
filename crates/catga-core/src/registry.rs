@@ -213,6 +213,28 @@ impl Registry {
     ///
     /// Registering another handler for the same command returns
     /// [`ErrorCode::Conflict`] and preserves the original handler.
+    ///
+    /// ```
+    /// use catga_core::{CatgaResult, Command, ErrorCode, Message, MessageTypeId, Registry, command_handler};
+    ///
+    /// struct FlushTypeId;
+    /// impl MessageTypeId for FlushTypeId { const NAME: &'static str = "Flush"; }
+    ///
+    /// struct Flush;
+    /// impl Message for Flush {}
+    /// impl Command for Flush { type TypeId = FlushTypeId; }
+    ///
+    /// # fn run() -> CatgaResult<()> {
+    /// let mut registry = Registry::new();
+    /// registry.register_command::<Flush, _>(command_handler(|_: Flush| async { Ok(()) }))?;
+    /// let duplicate = registry
+    ///     .register_command::<Flush, _>(command_handler(|_: Flush| async { Ok(()) }))
+    ///     .expect_err("second handler conflicts");
+    /// assert_eq!(duplicate.code(), ErrorCode::Conflict);
+    /// # Ok(())
+    /// # }
+    /// # run().expect("registry example");
+    /// ```
     pub fn register_command<C, H>(&mut self, handler: H) -> CatgaResult<()>
     where
         C: Command,
@@ -244,6 +266,27 @@ impl Registry {
     }
 
     /// Registers an additional handler for an event type.
+    ///
+    /// Unlike request and command registration, this never conflicts: every call appends one
+    /// handler, and [`Mediator::publish`](crate::Mediator::publish) delivers each event to all
+    /// registered handlers in registration order.
+    ///
+    /// ```
+    /// use catga_core::{Event, Message, MessageTypeId, Registry, event_handler};
+    ///
+    /// struct TickTypeId;
+    /// impl MessageTypeId for TickTypeId { const NAME: &'static str = "Tick"; }
+    ///
+    /// #[derive(Clone)]
+    /// struct Tick;
+    /// impl Message for Tick {}
+    /// impl Event for Tick { type TypeId = TickTypeId; }
+    ///
+    /// let mut registry = Registry::new();
+    /// // Two handlers for one event coexist; both observe every published Tick.
+    /// registry.register_event::<Tick, _>(event_handler(|_: Tick| async { Ok(()) }));
+    /// registry.register_event::<Tick, _>(event_handler(|_: Tick| async { Ok(()) }));
+    /// ```
     pub fn register_event<E, H>(&mut self, handler: H)
     where
         E: Event,

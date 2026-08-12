@@ -15,8 +15,6 @@ use catga_core::{
 use redis::{Script, aio::ConnectionManager};
 use uuid::Uuid;
 
-use crate::transport::map_error;
-
 const ENQUEUE: &str = r#"if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end redis.call('HSET',KEYS[1],'payload',ARGV[1],'owner','','claim_token','','claimed_until','','retry_count','0','max_retries',ARGV[4],'last_error','','state','pending','published_at',''); redis.call('ZADD',KEYS[2],ARGV[2],ARGV[3]); return 1"#;
 const CLAIM: &str = r#"local out={} local candidates=redis.call('ZRANGEBYSCORE',KEYS[1],'-inf',ARGV[2],'LIMIT',ARGV[8],ARGV[5]) for _,id in ipairs(candidates) do local k=ARGV[1]..':'..id local state=redis.call('HGET',k,'state') local owner=redis.call('HGET',k,'owner') local claimed_until=tonumber(redis.call('HGET',k,'claimed_until')) or 0 local retries=tonumber(redis.call('HGET',k,'retry_count')) or 0 local maximum=tonumber(redis.call('HGET',k,'max_retries')) or 3 if ((not state) or (owner == '' and state == 'pending') or (state == 'claimed' and claimed_until <= tonumber(ARGV[2]))) and retries < maximum then redis.call('HSET',k,'owner',ARGV[4],'claim_token',ARGV[7]..':'..id,'state','claimed','claimed_until',ARGV[6]); table.insert(out,id) if #out >= tonumber(ARGV[3]) then break end end end table.insert(out,'scan:'..#candidates) return out"#;
 const CLAIM_SCAN_FACTOR: usize = 4;
@@ -49,15 +47,28 @@ pub struct RedisOutbox {
 
 impl RedisOutbox {
     /// Connects and namespaces durable outbox records beneath `prefix`.
+    ///
+    /// Owner transitions and retries execute inside Redis scripts, so concurrent publishers
+    /// and claimers observe atomic state changes without a distributed lock.
+    ///
+    /// ```no_run
+    /// use catga_redis::RedisOutbox;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let outbox = RedisOutbox::connect("redis://127.0.0.1/", "app.outbox").await?;
+    /// # drop(outbox);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(
         server: impl AsRef<str>,
         prefix: impl Into<Box<str>>,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -95,7 +106,7 @@ impl OutboxStore for RedisOutbox {
                 .arg(message.max_retries())
                 .invoke_async::<i64>(&mut c)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             if inserted == 1 {
                 Ok(())
             } else {
@@ -142,7 +153,7 @@ impl OutboxStore for RedisOutbox {
                 .arg(scan_offset)
                 .invoke_async::<Vec<String>>(&mut c)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let scanned = results
                 .pop()
                 .and_then(|marker| {
@@ -180,7 +191,7 @@ impl OutboxStore for RedisOutbox {
                     .hget(&key, "last_error")
                     .query_async(&mut c)
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
                 if let Some(payload) = payload {
                     let max_retries = max_retries.unwrap_or(DEFAULT_OUTBOX_MAX_RETRIES);
                     let mut message = OutboxMessage::new(self.codec.decode(&payload)?)
@@ -215,7 +226,7 @@ impl OutboxStore for RedisOutbox {
                 .invoke_async::<i64>(&mut c)
                 .await
                 .map(|_| ())
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         })
         .await
     }
@@ -229,7 +240,7 @@ impl OutboxStore for RedisOutbox {
                 .invoke_async::<i64>(&mut c)
                 .await
                 .map(|_| ())
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         })
         .await
     }
@@ -254,7 +265,7 @@ impl OutboxStore for RedisOutbox {
                 .invoke_async::<i64>(&mut c)
                 .await
                 .map(|_| ())
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         })
         .await
     }
@@ -268,7 +279,7 @@ impl OutboxStore for RedisOutbox {
                 .arg(id)
                 .invoke_async::<i64>(&mut c)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             Ok(cancelled == 1)
         })
         .await
@@ -287,7 +298,7 @@ impl OutboxStore for RedisOutbox {
                 .arg(limit - 1)
                 .query_async(&mut connection)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let mut published = Vec::with_capacity(ids.len());
             for id in ids {
                 let key = self.key(id);
@@ -307,7 +318,7 @@ impl OutboxStore for RedisOutbox {
                     .hget(&key, "published_at")
                     .query_async(&mut connection)
                     .await
-                    .map_err(map_error)?;
+                    .map_err(CatgaError::transient)?;
                 if state.as_deref() != Some("published") {
                     continue;
                 }
@@ -354,7 +365,7 @@ impl OutboxStore for RedisOutbox {
                 .arg(&*self.prefix)
                 .invoke_async::<usize>(&mut connection)
                 .await
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         })
         .await
     }

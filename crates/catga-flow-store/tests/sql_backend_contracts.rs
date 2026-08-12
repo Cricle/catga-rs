@@ -76,7 +76,10 @@ where
     assert_eq!(usize::from(first?) + usize::from(second?), 1);
     assert_eq!(store.get(plain_id.as_str()).await?, Some(claimed));
 
-    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+    // Use the earliest valid timeout instant. Other E2E cases use later fixed or real-time
+    // deadlines, so this row always ranks first in the bounded global due-index poll even when
+    // expired residue from other suites shares the service database.
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
     let waiting_id = format!("{prefix}/waiting");
     let waiting = FlowContinuation::waiting(
         FlowState::new(waiting_id.as_str(), "sql-boundary", [], "node-a").suspended(),
@@ -85,7 +88,7 @@ where
             format!("{prefix}/correlation"),
             WaitPolicy::All,
             1,
-            now - Duration::from_secs(2),
+            SystemTime::UNIX_EPOCH,
             Duration::from_secs(1),
         ),
     );
@@ -105,7 +108,13 @@ where
         "a continuation without a wait must retain a SQL NULL deadline and never be discovered"
     );
     for receipt in receipts {
-        store.release_timed_out(&receipt).await?;
+        if receipt.flow_id() == waiting_id {
+            // Acknowledging clears this row's deadline, so the contract leaves no claimable
+            // residue at the earliest-instant domain shared with the sibling timeout contracts.
+            store.ack_timed_out(&receipt).await?;
+        } else {
+            store.release_timed_out(&receipt).await?;
+        }
     }
     Ok(())
 }

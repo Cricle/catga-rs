@@ -1,0 +1,11 @@
+error: expected identifier
+ --> tests/ui/fail_catga_service.rs:5:36
+  |
+5 | #[catga_core_macros::catga_service(1)]
+  |                                    ^
+
+error: expected `impl`
+ --> tests/ui/fail_catga_service.rs:9:1
+  |
+9 | pub struct NotAnImplBlock;
+  | ^^^

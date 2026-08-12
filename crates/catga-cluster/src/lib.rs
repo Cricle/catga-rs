@@ -38,11 +38,11 @@ use parking_lot::Mutex;
 use tokio::sync::{Notify, broadcast};
 
 mod config;
+mod consensus_bridge;
+mod dispatch;
 mod execution;
 mod forward;
-mod health;
 mod inbound;
-mod leader_only;
 mod metrics;
 mod raft;
 mod runtime;
@@ -51,22 +51,22 @@ mod state_machine;
 mod state_machine_runtime;
 mod storage;
 
+pub use catga_core::{ClusterHealth, LeaderOnlyBehavior, LeaderOnlyCommand, cluster_health};
 pub use config::{RaftClusterConfig, RaftClusterConfigError, RaftClusterMemberConfig, RaftTiming};
+pub use consensus_bridge::CoreStateMachine;
 pub use execution::ClusterCoordinatorExt;
 pub use forward::{ClusterForwarder, ForwardToLeaderBehavior};
-pub use health::{ClusterHealth, cluster_health};
 pub use inbound::{
     RaftInboundPolicy, RaftInboundPolicyError, RaftInboundRejection, RaftPeerIdentity,
     StaticRaftInboundPolicy,
 };
-pub use leader_only::{LeaderOnlyBehavior, LeaderOnlyCommand};
 pub use raft::{
     RaftApplicationSnapshot, RaftClusterNode, RaftCommittedEntry, RaftMember, RaftMessage,
     RaftNode, RaftNodeError,
 };
 pub use runtime::{
-    RaftRuntime, RaftRuntimeError, RaftTransport, RaftTransportError, RaftTransportResult,
-    TaskError,
+    RaftRuntime, RaftRuntimeError, RaftStopKind, RaftStopReason, RaftTransport, RaftTransportError,
+    RaftTransportResult, TaskError,
 };
 pub use singleton_task::SingletonTaskRunner;
 pub use state_machine::{RaftStateMachine, RaftStateMachineDriver, RaftStateMachineError};
@@ -328,6 +328,23 @@ impl MemoryCluster {
     }
 
     /// Publishes an atomic leadership change for an existing member.
+    ///
+    /// Returns `None` when `leader` is not a topology member. Re-electing the current leader
+    /// succeeds without bumping the epoch or notifying subscribers; a real transition bumps the
+    /// [`LeadershipSnapshot`] epoch, updates every node view, and wakes leadership waiters.
+    ///
+    /// ```
+    /// use catga_cluster::{ClusterCoordinator, MemoryCluster};
+    ///
+    /// let cluster = MemoryCluster::new("one", ["http://cluster/one", "http://cluster/two"]);
+    /// assert!(cluster.elect("ghost").is_none());
+    ///
+    /// cluster.elect("two").expect("two is a member");
+    /// let one = cluster.node("one").expect("configured member");
+    /// assert!(!one.is_leader());
+    /// assert_eq!(one.leader_endpoint().as_deref(), Some("http://cluster/two"));
+    /// assert_eq!(one.leadership_snapshot().epoch, 1);
+    /// ```
     pub fn elect(&self, leader: &str) -> Option<()> {
         let _publication = self.inner.publication.publication.lock();
         let current = self.inner.state.load_full();

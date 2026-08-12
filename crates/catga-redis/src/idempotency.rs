@@ -3,14 +3,12 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use catga_core::hash::sha256_digest;
 use catga_core::{
     CatgaError, CatgaResult, DEFAULT_IDEMPOTENCY_RETENTION, ErrorCode, IdempotencyStore,
     ProcessingState, telemetry, validate_completed_retention, validate_retention_cleanup_limit,
 };
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
-use sha2::{Digest, Sha256};
-
-use crate::transport::map_error;
 
 const CLAIMED: u8 = 1;
 const COMPLETED_EMPTY: u8 = 2;
@@ -77,11 +75,11 @@ impl RedisIdempotency {
         retention: Duration,
     ) -> CatgaResult<Self> {
         let completed_retention_millis = retention_millis(retention)?;
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -90,9 +88,11 @@ impl RedisIdempotency {
     }
 
     fn key(&self, key: &str) -> String {
-        let mut digest = Sha256::new();
-        digest.update(key.as_bytes());
-        format!("{}:{}", self.prefix, hex::encode(digest.finalize()))
+        format!(
+            "{}:{}",
+            self.prefix,
+            hex::encode(sha256_digest(key.as_bytes()))
+        )
     }
 
     async fn transition(
@@ -120,7 +120,7 @@ impl RedisIdempotency {
                     .await
             }
         }
-        .map_err(map_error)?;
+        .map_err(CatgaError::transient)?;
         match transition {
             1 => Ok(()),
             -1 => Err(CatgaError::new(
@@ -145,7 +145,7 @@ impl IdempotencyStore for RedisIdempotency {
                 .invoke_async::<i64>(&mut connection)
                 .await
                 .map(|claimed| claimed == 1)
-                .map_err(map_error)
+                .map_err(CatgaError::transient)
         })
         .await
     }
@@ -190,7 +190,10 @@ impl IdempotencyStore for RedisIdempotency {
     async fn state(&self, key: &str) -> CatgaResult<Option<ProcessingState>> {
         telemetry::record_persistence("redis", "idempotency", "state", async {
             let mut connection = self.connection.clone();
-            let value: Option<Vec<u8>> = connection.get(self.key(key)).await.map_err(map_error)?;
+            let value: Option<Vec<u8>> = connection
+                .get(self.key(key))
+                .await
+                .map_err(CatgaError::transient)?;
             value.map(|value| state(&value)).transpose()
         })
         .await
@@ -199,7 +202,10 @@ impl IdempotencyStore for RedisIdempotency {
     async fn result(&self, key: &str) -> CatgaResult<Option<Arc<[u8]>>> {
         telemetry::record_persistence("redis", "idempotency", "result", async {
             let mut connection = self.connection.clone();
-            let value: Option<Vec<u8>> = connection.get(self.key(key)).await.map_err(map_error)?;
+            let value: Option<Vec<u8>> = connection
+                .get(self.key(key))
+                .await
+                .map_err(CatgaError::transient)?;
             Ok(value.and_then(|value| {
                 (value.first() == Some(&COMPLETED_RESULT)).then(|| Arc::from(&value[1..]))
             }))
@@ -256,4 +262,3 @@ fn state(value: &[u8]) -> CatgaResult<ProcessingState> {
         )),
     }
 }
-

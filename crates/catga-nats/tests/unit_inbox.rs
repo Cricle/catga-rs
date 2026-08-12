@@ -1,10 +1,11 @@
+//! Unit tests for public NATS inbox claim semantics.
 use catga_core::InboxClaim;
 
 #[test]
 fn inbox_claim_new_valid_message_id() {
     let claim = InboxClaim::new(42, 1);
     assert!(claim.is_some());
-    let claim = claim.unwrap();
+    let claim = claim.expect("test value must be present");
     assert_eq!(claim.message_id(), 42);
     assert_eq!(claim.generation(), 1);
 }
@@ -23,15 +24,15 @@ fn inbox_claim_new_zero_generation() {
 
 #[test]
 fn inbox_claim_clone() {
-    let claim = InboxClaim::new(42, 1).unwrap();
-    let _cloned = claim.clone();
+    let claim = InboxClaim::new(42, 1).expect("test value must be present");
+    let _cloned = claim;
     assert_eq!(claim.message_id(), 42);
     assert_eq!(claim.generation(), 1);
 }
 
 #[test]
 fn inbox_claim_debug() {
-    let claim = InboxClaim::new(42, 1).unwrap();
+    let claim = InboxClaim::new(42, 1).expect("test value must be present");
     let debug_str = format!("{:?}", claim);
     assert!(debug_str.contains("42"));
     assert!(debug_str.contains("1"));
@@ -39,10 +40,10 @@ fn inbox_claim_debug() {
 
 #[test]
 fn inbox_claim_equality() {
-    let claim1 = InboxClaim::new(1, 1).unwrap();
-    let claim2 = InboxClaim::new(1, 1).unwrap();
-    let claim3 = InboxClaim::new(1, 2).unwrap();
-    let claim4 = InboxClaim::new(2, 1).unwrap();
+    let claim1 = InboxClaim::new(1, 1).expect("test value must be present");
+    let claim2 = InboxClaim::new(1, 1).expect("test value must be present");
+    let claim3 = InboxClaim::new(1, 2).expect("test value must be present");
+    let claim4 = InboxClaim::new(2, 1).expect("test value must be present");
     assert_eq!(claim1, claim2);
     assert_ne!(claim1, claim3);
     assert_ne!(claim1, claim4);
@@ -52,7 +53,7 @@ fn inbox_claim_equality() {
 fn inbox_claim_with_large_values() {
     let claim = InboxClaim::new(u64::MAX, u64::MAX - 1);
     assert!(claim.is_some());
-    let claim = claim.unwrap();
+    let claim = claim.expect("test value must be present");
     assert_eq!(claim.message_id(), u64::MAX);
     assert_eq!(claim.generation(), u64::MAX - 1);
 }
@@ -72,7 +73,7 @@ fn inbox_claim_with_one_generation() {
 #[test]
 fn inbox_claim_serialization_roundtrip() {
     use catga_core::InboxClaim;
-    let claim = InboxClaim::new(42, 5).unwrap();
+    let claim = InboxClaim::new(42, 5).expect("test value must be present");
     let debug_str = format!("{:?}", claim);
     assert!(debug_str.contains("42"));
     assert!(debug_str.contains("5"));

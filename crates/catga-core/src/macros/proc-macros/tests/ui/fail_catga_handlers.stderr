@@ -1,0 +1,33 @@
+error: expected `request`, `command`, or `event`
+ --> tests/ui/fail_catga_handlers.rs:4:5
+  |
+4 |     bogus Msg => handler;
+  |     ^^^^^
+
+error: duplicate request handler registration
+ --> tests/ui/fail_catga_handlers.rs:9:13
+  |
+9 |     request Dup => handler_b;
+  |             ^^^
+
+error: duplicate command handler registration
+  --> tests/ui/fail_catga_handlers.rs:14:13
+   |
+14 |     command DupCmd => handler_b;
+   |             ^^^^^^
+
+error: event registration requires at least one handler
+  --> tests/ui/fail_catga_handlers.rs:17:1
+   |
+17 | / catga_core_macros::catga_handlers! {
+18 | |     event Empty => [];
+19 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `catga_core_macros::catga_handlers` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: expected `=>`
+  --> tests/ui/fail_catga_handlers.rs:22:20
+   |
+22 |     request Broken Grammar
+   |                    ^^^^^^^

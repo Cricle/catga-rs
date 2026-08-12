@@ -9,9 +9,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use arc_swap::ArcSwap;
+use protobuf::Message as ProtobufMessage;
 use raft::{
     Config, RawNode, Storage,
-    eraftpb::{ConfState, Entry, EntryType, Message},
+    eraftpb::{
+        ConfChange, ConfChangeSingle, ConfChangeType, ConfChangeV2, ConfState, Entry, EntryType,
+        Message,
+    },
 };
 use slog::Logger;
 use tokio::sync::Notify;
@@ -28,6 +33,14 @@ const DEFAULT_PENDING_COMMIT_CAPACITY: usize = 1_024;
 pub type RaftMessage = Message;
 
 /// A stable Raft member identifier and its externally reachable endpoint.
+///
+/// ```
+/// use catga_cluster::RaftMember;
+///
+/// let member = RaftMember::new(1, "http://node-1");
+/// assert_eq!(member.id(), 1);
+/// assert_eq!(member.endpoint(), "http://node-1");
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RaftMember {
     id: u64,
@@ -104,8 +117,6 @@ pub enum RaftNodeError {
     Raft(raft::Error),
     /// `raft-engine` could not open or durably write the Raft log.
     RaftEngine(raft_engine::Error),
-    /// The persisted voter configuration differs from the supplied members.
-    PersistedConfStateMismatch,
     /// The configured number of retained, unapplied application commands was zero.
     ZeroPendingCommitCapacity,
     /// Accepting another application proposal would exceed the bounded pending-commit queue.
@@ -136,9 +147,6 @@ impl fmt::Display for RaftNodeError {
             ),
             Self::Raft(error) => error.fmt(formatter),
             Self::RaftEngine(error) => error.fmt(formatter),
-            Self::PersistedConfStateMismatch => {
-                formatter.write_str("persisted Raft voters differ from the configured members")
-            }
             Self::ZeroPendingCommitCapacity => {
                 formatter.write_str("Raft pending application commit capacity must be non-zero")
             }
@@ -167,7 +175,6 @@ impl Error for RaftNodeError {
             | Self::DuplicateMemberId(_)
             | Self::LocalMemberMissing(_)
             | Self::LocalEndpointMismatch { .. }
-            | Self::PersistedConfStateMismatch
             | Self::ZeroPendingCommitCapacity
             | Self::PendingCommitCapacity { .. }
             | Self::NoEntriesAvailable { .. } => None,
@@ -204,13 +211,42 @@ struct RaftCoordinatorInner {
     changed: Notify,
 }
 
+/// An immutable snapshot of the known members and their endpoints.
+///
+/// The Raft owner task replaces this atomically when a committed conf change
+/// (or an installed snapshot) alters the voter set, so coordinator readers
+/// always observe a consistent pair of members and endpoints.
+struct MembershipView {
+    members: Arc<[RaftMember]>,
+    endpoints: Arc<[Arc<str>]>,
+}
+
+impl MembershipView {
+    fn new(members: Vec<RaftMember>) -> Self {
+        let endpoints = members
+            .iter()
+            .map(|member| Arc::clone(&member.endpoint))
+            .collect();
+        Self {
+            members: members.into(),
+            endpoints,
+        }
+    }
+
+    fn endpoint_of(&self, id: u64) -> Option<Arc<str>> {
+        self.members
+            .iter()
+            .find(|member| member.id == id)
+            .map(|member| Arc::clone(&member.endpoint))
+    }
+}
+
 /// Lock-free read model of a [`RaftNode`] for the existing cluster APIs.
 pub struct RaftClusterNode {
     inner: Arc<RaftCoordinatorInner>,
     member_id: u64,
     node_id: Box<str>,
-    members: Arc<[RaftMember]>,
-    endpoints: Arc<[Arc<str>]>,
+    membership: ArcSwap<MembershipView>,
 }
 
 impl ClusterCoordinator for RaftClusterNode {
@@ -224,10 +260,7 @@ impl ClusterCoordinator for RaftClusterNode {
 
     fn leader_endpoint(&self) -> Option<Arc<str>> {
         let leader_id = self.inner.state.load().leader_id?;
-        self.members
-            .iter()
-            .find(|member| member.id == leader_id)
-            .map(|member| Arc::clone(&member.endpoint))
+        self.membership.load().endpoint_of(leader_id)
     }
 
     fn leadership_snapshot(&self) -> Arc<LeadershipSnapshot> {
@@ -239,7 +272,7 @@ impl ClusterCoordinator for RaftClusterNode {
     }
 
     fn member_endpoints(&self) -> Arc<[Arc<str>]> {
-        Arc::clone(&self.endpoints)
+        Arc::clone(&self.membership.load().endpoints)
     }
 
     async fn wait_for_leadership(&self, timeout: Duration) -> bool {
@@ -271,10 +304,27 @@ impl ClusterCoordinator for RaftClusterNode {
 /// This explicit ownership is the serialization boundary for Raft mutations. The
 /// [`RaftClusterNode`] returned by [`Self::coordinator`] is independently
 /// shareable and reads its leadership state without taking a mutex.
+///
+/// A single-node in-memory cluster elects itself immediately after [`Self::campaign`],
+/// which makes the constructor convenient for deterministic tests:
+///
+/// ```
+/// use catga_cluster::{ClusterCoordinator, RaftMember, RaftNode};
+///
+/// let members = vec![RaftMember::new(1, "http://node-1")];
+/// let mut node = RaftNode::new(1, "http://node-1", members).expect("valid single-node cluster");
+/// let coordinator = node.coordinator();
+/// assert!(!coordinator.is_leader());
+///
+/// node.campaign().expect("single node wins its election");
+/// assert!(coordinator.is_leader());
+/// assert_eq!(coordinator.leader_endpoint().as_deref(), Some("http://node-1"));
+/// ```
 pub struct RaftNode {
     raw: RawNode<RaftStorage>,
     storage: RaftStorage,
     coordinator: Arc<RaftClusterNode>,
+    members: Vec<RaftMember>,
     outbox: Vec<RaftMessage>,
     committed: VecDeque<RaftCommittedEntry>,
     pending_commit_capacity: usize,
@@ -365,6 +415,16 @@ impl RaftNode {
     /// log, hard state, membership state, and received snapshots through
     /// `raft-engine`; application state must be snapshotted atomically by the
     /// caller before the corresponding Raft log is compacted.
+    ///
+    /// # Membership precedence
+    ///
+    /// `members` only bootstraps a fresh directory. Once a directory holds a
+    /// persisted voter set — written atomically with every applied conf change
+    /// — the persisted membership wins over `members`, so a stale static
+    /// configuration cannot roll a restarted node back to an obsolete cluster.
+    /// Membership changes after bootstrap go through
+    /// [`crate::RaftStateMachineRuntime::add_voter`] and
+    /// [`crate::RaftStateMachineRuntime::remove_voter`].
     pub fn open_persistent(
         id: u64,
         endpoint: impl Into<Arc<str>>,
@@ -381,6 +441,9 @@ impl RaftNode {
     }
 
     /// Opens a persistent Raft node using validated logical timing.
+    ///
+    /// Inherits the persisted-membership precedence documented on
+    /// [`Self::open_persistent`].
     pub fn open_persistent_with_timing(
         id: u64,
         endpoint: impl Into<Arc<str>>,
@@ -390,7 +453,12 @@ impl RaftNode {
     ) -> Result<Self, RaftNodeError> {
         let endpoint = endpoint.into();
         validate_members(id, &endpoint, &members)?;
-        let storage = RaftStorage::open_persistent(directory.as_ref(), conf_state(&members))?;
+        let storage =
+            RaftStorage::open_persistent(directory.as_ref(), conf_state(&members), &members)?;
+        let members = match storage.persisted_members()? {
+            Some(persisted) if !persisted.is_empty() => persisted,
+            _ => members,
+        };
         Self::from_storage(
             id,
             endpoint,
@@ -412,7 +480,6 @@ impl RaftNode {
         if pending_commit_capacity == 0 {
             return Err(RaftNodeError::ZeroPendingCommitCapacity);
         }
-        let members: Arc<[RaftMember]> = members.into();
         let config = Config {
             id,
             election_tick: timing.election_ticks(),
@@ -444,16 +511,13 @@ impl RaftNode {
             }),
             member_id: id,
             node_id: id.to_string().into_boxed_str(),
-            endpoints: members
-                .iter()
-                .map(|member| Arc::clone(&member.endpoint))
-                .collect(),
-            members,
+            membership: ArcSwap::from_pointee(MembershipView::new(members.clone())),
         });
         let mut node = Self {
             raw,
             storage,
             coordinator,
+            members,
             outbox: Vec::new(),
             committed: VecDeque::new(),
             pending_commit_capacity,
@@ -491,8 +555,28 @@ impl RaftNode {
     }
 
     /// Accepts one message received from the configured Raft transport.
+    ///
+    /// Messages from a peer that is not part of the current configuration are
+    /// discarded: after a voter is removed, its in-flight responses still
+    /// arrive while `raft-rs` no longer tracks it, and that routine situation
+    /// must not surface as a fatal error.
+    ///
+    /// A proposal `raft-rs` declines is likewise routine for an inbound frame:
+    /// followers forward client proposals to their last known leader, so a
+    /// node that is momentarily leaderless (mid-election, or stepped down
+    /// after losing quorum) answers a forwarded proposal with
+    /// [`raft::Error::ProposalDropped`]. The forwarding peer has already
+    /// completed its own propose call, so the drop must not stop this node.
     pub fn step(&mut self, message: RaftMessage) -> raft::Result<()> {
-        self.raw.step(message)?;
+        match self.raw.step(message) {
+            Err(raft::Error::StepPeerNotFound) => {
+                self.metrics.record_failure("unknown_peer");
+            }
+            Err(raft::Error::ProposalDropped) => {
+                self.metrics.record_failure("proposal_dropped");
+            }
+            result => result?,
+        }
         self.drive_ready()
     }
 
@@ -506,17 +590,22 @@ impl RaftNode {
         self.drive_ready()
     }
 
-    /// Proposes an application command on the current leader.
-    pub fn propose(&mut self, data: impl Into<Vec<u8>>) -> raft::Result<()> {
-        self.try_propose(data)
-            .map_err(|_| raft::Error::Store(raft::StorageError::Unavailable))
-    }
-
-    /// Proposes one application command unless the bounded pending-commit queue is full.
+    /// Proposes one application command on the current leader.
     ///
-    /// Callers that need to distinguish Raft protocol failures from application backpressure
-    /// should use this method instead of [`Self::propose`].
-    pub fn try_propose(&mut self, data: impl Into<Vec<u8>>) -> Result<(), RaftNodeError> {
+    /// The error distinguishes Raft protocol rejections (for example proposing
+    /// without leadership) from application backpressure
+    /// ([`RaftNodeError::PendingCommitCapacity`]) when the bounded pending-commit
+    /// queue is full.
+    ///
+    /// ```
+    /// use catga_cluster::{RaftMember, RaftNode};
+    ///
+    /// let members = vec![RaftMember::new(1, "http://node-1")];
+    /// let mut node = RaftNode::new(1, "http://node-1", members).expect("valid cluster");
+    /// // Without a successful campaign the proposal is dropped as a routine error.
+    /// assert!(node.propose(b"set a=1".to_vec()).is_err());
+    /// ```
+    pub fn propose(&mut self, data: impl Into<Vec<u8>>) -> Result<(), RaftNodeError> {
         if let Err(error) = self.refill_committed() {
             self.metrics.record_failure("proposal");
             return Err(error);
@@ -535,6 +624,71 @@ impl RaftNode {
             self.metrics.record_failure("proposal");
             return Err(error.into());
         }
+        Ok(())
+    }
+
+    /// Proposes adding one voter with its reachable endpoint.
+    ///
+    /// The endpoint travels inside the committed conf-change entry so every
+    /// member updates its coordinator member map when the change applies. The
+    /// change is validated against the currently applied configuration before
+    /// it is proposed, so adding an existing voter fails as a routine caller
+    /// error instead of surfacing as a fatal apply failure.
+    pub(crate) fn propose_add_voter(
+        &mut self,
+        id: u64,
+        endpoint: Arc<str>,
+    ) -> Result<(), RaftNodeError> {
+        if id == 0 {
+            return Err(RaftNodeError::ZeroMemberId);
+        }
+        if endpoint.is_empty() {
+            return Err(conf_change_error(
+                "a new Raft voter needs a non-empty endpoint",
+            ));
+        }
+        if self.raw.raft.prs().conf().voters().contains(id) {
+            return Err(conf_change_error(format!(
+                "Raft member {id} is already a voter"
+            )));
+        }
+        self.propose_membership_change(ConfChangeType::AddNode, id, endpoint.as_bytes())
+    }
+
+    /// Proposes removing one voter (or learner) from the cluster.
+    ///
+    /// Removing a member that is not part of the applied configuration fails
+    /// as a routine caller error for the same reason as
+    /// [`Self::propose_add_voter`].
+    pub(crate) fn propose_remove_voter(&mut self, id: u64) -> Result<(), RaftNodeError> {
+        if id == 0 {
+            return Err(RaftNodeError::ZeroMemberId);
+        }
+        let conf = self.raw.raft.prs().conf();
+        if !conf.voters().contains(id) && !conf.learners().contains(&id) {
+            return Err(conf_change_error(format!(
+                "Raft member {id} is not part of the cluster"
+            )));
+        }
+        self.propose_membership_change(ConfChangeType::RemoveNode, id, &[])
+    }
+
+    fn propose_membership_change(
+        &mut self,
+        change_type: ConfChangeType,
+        id: u64,
+        context: &[u8],
+    ) -> Result<(), RaftNodeError> {
+        let change = ConfChangeSingle {
+            change_type,
+            node_id: id,
+            ..ConfChangeSingle::default()
+        };
+        let mut cc = ConfChangeV2::default();
+        cc.mut_changes().push(change);
+        cc.context = context.to_vec().into();
+        self.raw.propose_conf_change(Vec::new(), cc)?;
+        self.drive_ready()?;
         Ok(())
     }
 
@@ -577,6 +731,15 @@ impl RaftNode {
     /// Returns the number of bounded, unapplied application commands retained locally.
     pub fn pending_commit_count(&self) -> usize {
         self.committed.len()
+    }
+
+    /// Returns the greatest log index present in the local Raft log.
+    ///
+    /// Immediately after a successful [`Self::propose`] on the leader this is
+    /// the index the new entry was assigned, which lets the owner runtime
+    /// resolve a propose-and-wait call once that index is applied.
+    pub(crate) fn last_log_index(&self) -> u64 {
+        self.raw.raft.raft_log.last_index()
     }
 
     /// Takes application snapshots installed from incoming Raft messages.
@@ -660,6 +823,7 @@ impl RaftNode {
         self.raw.advance_apply_to(index);
         self.last_acknowledged_index = self.last_acknowledged_index.max(index);
         self.last_committed_index = self.last_committed_index.max(index);
+        self.next_unqueued_commit_index = self.next_unqueued_commit_index.max(index + 1);
         self.drive_ready()
     }
 
@@ -704,18 +868,23 @@ impl RaftNode {
             if let Some(snapshot) = snapshot {
                 self.last_committed_index =
                     self.last_committed_index.max(snapshot.get_metadata().index);
+                self.reconcile_membership(snapshot.get_metadata().get_conf_state())?;
                 self.installed_snapshots
                     .push(application_snapshot(snapshot));
             }
             self.outbox.extend(ready.take_persisted_messages());
-            self.record_committed(ready.take_committed_entries());
+            let committed = ready.take_committed_entries();
+            self.apply_committed_conf_changes(&committed)?;
+            self.record_committed(committed);
 
             let mut light_ready = self.raw.advance_append(ready);
             if let Some(commit) = light_ready.commit_index() {
                 self.storage.persist_commit(commit)?;
             }
             self.outbox.extend(light_ready.take_messages());
-            self.record_committed(light_ready.take_committed_entries());
+            let committed = light_ready.take_committed_entries();
+            self.apply_committed_conf_changes(&committed)?;
+            self.record_committed(committed);
             self.refill_committed()
                 .map_err(|_| raft::Error::Store(raft::StorageError::Unavailable))?;
             if self.auto_acknowledge_apply {
@@ -725,6 +894,148 @@ impl RaftNode {
         self.publish_coordinator_state();
         self.publish_metrics();
         Ok(())
+    }
+
+    /// Applies every committed conf-change entry to the native Raft tracker,
+    /// then mirrors the result into the member map and durable storage.
+    ///
+    /// Conf-change entries carry no application data and are never delivered
+    /// to the state machine. Re-delivery after a restart is idempotent: a
+    /// change whose effect is already visible in the tracker configuration is
+    /// not re-applied to `raft-rs`, but the membership record is still
+    /// rewritten so a crash between apply and persist cannot lose it.
+    fn apply_committed_conf_changes(&mut self, entries: &[Entry]) -> raft::Result<()> {
+        for entry in entries {
+            let cc = match entry.get_entry_type() {
+                EntryType::EntryConfChange => {
+                    let legacy = ConfChange::parse_from_bytes(entry.data.as_ref())?;
+                    let mut normalized = ConfChangeV2::default();
+                    normalized.mut_changes().push(ConfChangeSingle {
+                        change_type: legacy.change_type,
+                        node_id: legacy.node_id,
+                        ..ConfChangeSingle::default()
+                    });
+                    normalized.context = legacy.context;
+                    normalized
+                }
+                EntryType::EntryConfChangeV2 => {
+                    ConfChangeV2::parse_from_bytes(entry.data.as_ref())?
+                }
+                EntryType::EntryNormal => continue,
+            };
+            if cc.changes.is_empty() {
+                // A leave-joint marker applies only while the cluster is
+                // actually in a joint configuration; single-change
+                // proposals never enter one, so replays skip it.
+                if self.in_joint_configuration() {
+                    let conf_state = self.raw.apply_conf_change(&cc)?;
+                    self.storage
+                        .persist_membership(&conf_state, &self.members)?;
+                }
+            } else {
+                let reflected = cc
+                    .changes
+                    .iter()
+                    .all(|change| self.conf_change_reflected(change.change_type, change.node_id));
+                let conf_state = if reflected {
+                    self.raw.raft.prs().conf().to_conf_state()
+                } else {
+                    self.raw.apply_conf_change(&cc)?
+                };
+                for change in cc.changes.iter() {
+                    self.update_membership(change.change_type, change.node_id, cc.context.as_ref());
+                }
+                self.storage
+                    .persist_membership(&conf_state, &self.members)?;
+            }
+            // Conf changes are applied to the tracker here and carry no
+            // application data, so the applied watermark must cover them even
+            // when application acknowledgement is deferred; otherwise raft-rs
+            // keeps the change pending and blanks the next conf proposal.
+            // Replayed entries after a restart can sit below the recovered
+            // watermark, so the advance must never rewind it.
+            if self.raw.raft.raft_log.applied < entry.index {
+                self.raw.advance_apply_to(entry.index);
+            }
+            self.last_acknowledged_index = self.last_acknowledged_index.max(entry.index);
+        }
+        Ok(())
+    }
+
+    /// Returns whether a single change is already visible in the applied
+    /// configuration, which makes a replayed conf-change entry a no-op.
+    fn conf_change_reflected(&self, change_type: ConfChangeType, node_id: u64) -> bool {
+        let conf = self.raw.raft.prs().conf();
+        match change_type {
+            ConfChangeType::AddNode => conf.voters().contains(node_id),
+            ConfChangeType::AddLearnerNode => conf.learners().contains(&node_id),
+            ConfChangeType::RemoveNode => {
+                !conf.voters().contains(node_id) && !conf.learners().contains(&node_id)
+            }
+        }
+    }
+
+    fn in_joint_configuration(&self) -> bool {
+        !self
+            .raw
+            .raft
+            .prs()
+            .conf()
+            .to_conf_state()
+            .voters_outgoing
+            .is_empty()
+    }
+
+    /// Mirrors one applied change into the member endpoint map and republishes
+    /// the coordinator view. The endpoint of an added member comes from the
+    /// conf-change context recorded by the proposing leader.
+    fn update_membership(&mut self, change_type: ConfChangeType, node_id: u64, context: &[u8]) {
+        match change_type {
+            ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                let endpoint = std::str::from_utf8(context)
+                    .ok()
+                    .filter(|endpoint| !endpoint.is_empty())
+                    .map(Arc::<str>::from);
+                match self.members.iter_mut().find(|member| member.id == node_id) {
+                    Some(existing) => {
+                        if let Some(endpoint) = endpoint {
+                            existing.endpoint = endpoint;
+                        }
+                    }
+                    None => {
+                        if let Some(endpoint) = endpoint {
+                            self.members.push(RaftMember::new(node_id, endpoint));
+                        }
+                    }
+                }
+            }
+            ConfChangeType::RemoveNode => {
+                self.members.retain(|member| member.id != node_id);
+            }
+        }
+        self.publish_membership();
+    }
+
+    /// Drops endpoints for members that an installed snapshot's conf state no
+    /// longer contains. Members added while this node was behind keep no
+    /// endpoint here because the snapshot does not carry one; the operator or
+    /// a later conf change must supply it.
+    fn reconcile_membership(&mut self, conf_state: &ConfState) -> raft::Result<()> {
+        let known = self.members.len();
+        self.members.retain(|member| {
+            conf_state.voters.contains(&member.id) || conf_state.learners.contains(&member.id)
+        });
+        if self.members.len() != known {
+            self.publish_membership();
+            self.storage.persist_membership(conf_state, &self.members)?;
+        }
+        Ok(())
+    }
+
+    fn publish_membership(&self) {
+        self.coordinator
+            .membership
+            .store(Arc::new(MembershipView::new(self.members.clone())));
     }
 
     fn record_committed(&mut self, entries: Vec<Entry>) {
@@ -752,7 +1063,6 @@ impl RaftNode {
     }
 
     fn refill_committed(&mut self) -> Result<(), RaftNodeError> {
-        let start_index = self.next_unqueued_commit_index;
         while self.committed.len() < self.pending_commit_capacity
             && self.next_unqueued_commit_index <= self.last_committed_index
         {
@@ -761,8 +1071,15 @@ impl RaftNode {
                 .storage
                 .committed_entries_page(self.next_unqueued_commit_index, available)?;
             if entries.is_empty() {
+                if next_index.is_none() {
+                    // The durable snapshot already covers everything up to the commit
+                    // index (for example a restart right after a tip checkpoint), so
+                    // the queue is caught up rather than missing entries.
+                    self.next_unqueued_commit_index = self.last_committed_index.saturating_add(1);
+                    return Ok(());
+                }
                 return Err(RaftNodeError::NoEntriesAvailable {
-                    start_index,
+                    start_index: self.next_unqueued_commit_index,
                     last_committed_index: self.last_committed_index,
                 });
             }
@@ -790,13 +1107,8 @@ impl RaftNode {
         let current = self.coordinator.inner.state.load_full();
         if current.leader_id != leader_id {
             let leader_node_id = leader_id.map(|id| Arc::<str>::from(id.to_string()));
-            let leader_endpoint = leader_id.and_then(|id| {
-                self.coordinator
-                    .members
-                    .iter()
-                    .find(|member| member.id == id)
-                    .map(|member| Arc::clone(&member.endpoint))
-            });
+            let leader_endpoint =
+                leader_id.and_then(|id| self.coordinator.membership.load().endpoint_of(id));
             let snapshot = Arc::new(LeadershipSnapshot {
                 epoch: current.snapshot.epoch.saturating_add(1),
                 leader_node_id,
@@ -846,6 +1158,10 @@ fn committed_entries(entries: impl IntoIterator<Item = Entry>) -> Vec<RaftCommit
             )
         })
         .collect()
+}
+
+fn conf_change_error(message: impl Into<String>) -> RaftNodeError {
+    RaftNodeError::Raft(raft::Error::ConfChangeError(message.into()))
 }
 
 fn conf_state(members: &[RaftMember]) -> ConfState {

@@ -17,9 +17,6 @@ use catga_core::{
     SnapshotInfo, SnapshotStore,
 };
 use redis::{Script, aio::ConnectionManager};
-use serde::{Deserialize, Serialize};
-
-use crate::transport::map_error;
 
 const SAVE: &str = r#"
 local current = redis.call('ZREVRANGE', KEYS[1], 0, 0)
@@ -75,7 +72,7 @@ return #versions
 "#;
 const MUTATION_BATCH: i64 = 128;
 
-#[derive(Deserialize, MemoryPackable, Serialize)]
+#[derive(MemoryPackable)]
 struct StoredSnapshot {
     timestamp_millis: i64,
     state: Vec<u8>,
@@ -122,11 +119,11 @@ where
         prefix: impl Into<Box<str>>,
         codec: C,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -419,6 +416,6 @@ fn map_snapshot_error(error: redis::RedisError) -> CatgaError {
     if error.to_string().contains("CATGA_SNAPSHOT_CORRUPT") {
         malformed_snapshot()
     } else {
-        map_error(error)
+        CatgaError::transient(error)
     }
 }

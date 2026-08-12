@@ -1,40 +1,65 @@
+# distributed-kv demo: three-node Raft KV cluster + NATS (CDC sink).
+#
+# Networking: `RaftClusterConfig::local` pins member endpoints to
+# `http://localhost:9100+i`, so the three nodes can only reach each other when
+# they share one network namespace. This file therefore uses
+# `network_mode: host` for the KV services, which requires Docker on Linux.
+# NATS joins the same host namespace; the KV nodes resolve the `nats` host
+# name to 127.0.0.1 through `extra_hosts`.
+#
+# On macOS/Windows (no usable host networking), run the demo natively instead:
+# one local `nats-server -js` plus three local processes:
+#
+#   cargo run -p distributed-kv -- --node 0 --nodes 3 --base-port 9100 --nats-url nats://127.0.0.1:4222
+#   cargo run -p distributed-kv -- --node 1 --nodes 3 --base-port 9100 --nats-url nats://127.0.0.1:4222
+#   cargo run -p distributed-kv -- --node 2 --nodes 3 --base-port 9100 --nats-url nats://127.0.0.1:4222
+#
+# Host ports used: 4222/8222 (NATS client/monitoring), 9100-9102 (KV HTTP API
+# and Raft frames). Node N serves its API on 127.0.0.1:910{N}.
+
 services:
   nats:
-    image: nats:2.10-alpine
-    command: ["-js", "-m", "8222", "-sd", "/data"]
-    volumes:
-      - nats-data:/data
+    image: nats:2-alpine
+    network_mode: host
+    command: ["-js", "-m", "8222"]
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8222/healthz"]
       interval: 2s
       timeout: 2s
       retries: 30
 
-  api:
-    image: catga-distributed-todo:local
+  kv0:
+    image: catga-distributed-kv:local
     build:
       context: ../..
       dockerfile: examples/distributed-todo/Dockerfile
-    command: ["/usr/local/bin/distributed_todo_api"]
+    network_mode: host
+    extra_hosts: ["nats:127.0.0.1"]
+    command: ["--node", "0", "--nodes", "3", "--base-port", "9100", "--nats-url", "nats://nats:4222"]
     depends_on:
       nats:
         condition: service_healthy
-    environment:
-      CATGA_NATS_URL: nats://nats:4222
-      CATGA_TODO_API_ADDR: 0.0.0.0:3000
-    ports:
-      - "3000:3000"
-    restart: on-failure
 
-  worker:
-    image: catga-distributed-todo:local
-    command: ["/usr/local/bin/distributed_todo_worker"]
+  kv1:
+    image: catga-distributed-kv:local
+    build:
+      context: ../..
+      dockerfile: examples/distributed-todo/Dockerfile
+    network_mode: host
+    extra_hosts: ["nats:127.0.0.1"]
+    command: ["--node", "1", "--nodes", "3", "--base-port", "9100", "--nats-url", "nats://nats:4222"]
     depends_on:
       nats:
         condition: service_healthy
-    environment:
-      CATGA_NATS_URL: nats://nats:4222
-    restart: on-failure
 
-volumes:
-  nats-data:
+  kv2:
+    image: catga-distributed-kv:local
+    build:
+      context: ../..
+      dockerfile: examples/distributed-todo/Dockerfile
+    network_mode: host
+    extra_hosts: ["nats:127.0.0.1"]
+    command: ["--node", "2", "--nodes", "3", "--base-port", "9100", "--nats-url", "nats://nats:4222"]
+    depends_on:
+      nats:
+        condition: service_healthy

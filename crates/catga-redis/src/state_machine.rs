@@ -11,8 +11,6 @@ use catga_core::flow::{
 use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
-use crate::transport::map_error;
-
 const MAX_CAS_RETRIES: usize = 8;
 const COMPARE_AND_SET: &str = r#"
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -55,11 +53,11 @@ where
         prefix: impl Into<Box<str>>,
         codec: C,
     ) -> CatgaResult<Self> {
-        let client = redis::Client::open(server.as_ref()).map_err(map_error)?;
+        let client = redis::Client::open(server.as_ref()).map_err(CatgaError::transient)?;
         let connection = client
             .get_connection_manager_with_config(crate::config::command_connection_manager_config())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             connection,
             prefix: prefix.into(),
@@ -74,7 +72,7 @@ where
 
     async fn load_raw(&self, key: &str) -> CatgaResult<Option<Vec<u8>>> {
         let mut connection = self.connection.clone();
-        connection.get(key).await.map_err(map_error)
+        connection.get(key).await.map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(
@@ -90,7 +88,7 @@ where
             .arg(next)
             .invoke_async::<i64>(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(updated == 1)
     }
 }
@@ -107,7 +105,7 @@ where
         connection
             .set_nx(key, encode_state_machine_snapshot(&snapshot, &self.codec)?)
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     async fn get(&self, instance_id: &str) -> CatgaResult<Option<StateMachineSnapshot<S>>> {

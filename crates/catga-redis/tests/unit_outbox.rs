@@ -155,7 +155,7 @@ fn outbox_message_state_values() {
 
 #[test]
 fn outbox_message_state_count() {
-    let states = vec!["pending", "claimed", "published", "failed"];
+    let states = ["pending", "claimed", "published", "failed"];
     assert_eq!(states.len(), 4);
 }
 
@@ -220,15 +220,15 @@ fn claim_limit_above_max() {
 fn claim_scan_factor_is_positive() {
     // CLAIM_SCAN_FACTOR = 4, meaning we scan 4x the requested limit
     const CLAIM_SCAN_FACTOR: usize = 4;
-    assert!(CLAIM_SCAN_FACTOR > 0);
+    const { assert!(CLAIM_SCAN_FACTOR > 0) };
 }
 
 #[test]
 fn claim_scan_factor_is_reasonable() {
     const CLAIM_SCAN_FACTOR: usize = 4;
     // Scanning 4x limit is a reasonable balance between efficiency and accuracy
-    assert!(CLAIM_SCAN_FACTOR >= 2);
-    assert!(CLAIM_SCAN_FACTOR <= 10);
+    const { assert!(CLAIM_SCAN_FACTOR >= 2) };
+    const { assert!(CLAIM_SCAN_FACTOR <= 10) };
 }
 
 // =============================================================================
@@ -237,7 +237,9 @@ fn claim_scan_factor_is_reasonable() {
 
 #[test]
 fn outbox_message_new() {
-    use catga_core::{Envelope, OutboxMessage, MessageMetadata, codec::memorypack::MemoryPackCodec};
+    use catga_core::{
+        Envelope, MessageMetadata, OutboxMessage, codec::memorypack::MemoryPackCodec,
+    };
 
     let _codec = MemoryPackCodec::default();
     let metadata = MessageMetadata::new(1, None);
@@ -251,7 +253,7 @@ fn outbox_message_new() {
 #[test]
 fn outbox_message_default_retries() {
     use catga_core::DEFAULT_OUTBOX_MAX_RETRIES;
-    assert!(DEFAULT_OUTBOX_MAX_RETRIES > 0);
+    const { assert!(DEFAULT_OUTBOX_MAX_RETRIES > 0) };
 }
 
 // =============================================================================
@@ -270,7 +272,7 @@ fn outbox_claim_expires_at_positive() {
 
     let result = outbox_claim_expires_at(DEFAULT_OUTBOX_CLAIM_LEASE);
     assert!(result.is_ok());
-    let expires_at = result.unwrap();
+    let expires_at = result.expect("test value must be present");
     assert!(expires_at > 0);
 }
 
@@ -281,7 +283,7 @@ fn outbox_claim_expires_at_custom_lease() {
 
     let result = outbox_claim_expires_at(Duration::from_secs(300));
     assert!(result.is_ok());
-    let expires_at = result.unwrap();
+    let expires_at = result.expect("test value must be present");
     assert!(expires_at > 0);
 }
 
@@ -291,7 +293,9 @@ fn outbox_claim_expires_at_custom_lease() {
 
 #[test]
 fn memory_pack_codec_encode_decode() {
-    use catga_core::{Envelope, MessageMetadata, EnvelopeCodec, codec::memorypack::MemoryPackCodec};
+    use catga_core::{
+        Envelope, EnvelopeCodec, MessageMetadata, codec::memorypack::MemoryPackCodec,
+    };
 
     let codec = MemoryPackCodec::default();
     let metadata = MessageMetadata::new(1, None);
@@ -307,7 +311,9 @@ fn memory_pack_codec_encode_decode() {
 
 #[test]
 fn memory_pack_codec_empty_payload() {
-    use catga_core::{Envelope, MessageMetadata, EnvelopeCodec, codec::memorypack::MemoryPackCodec};
+    use catga_core::{
+        Envelope, EnvelopeCodec, MessageMetadata, codec::memorypack::MemoryPackCodec,
+    };
 
     let codec = MemoryPackCodec::default();
     let metadata = MessageMetadata::new(1, None);

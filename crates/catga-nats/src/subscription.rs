@@ -1,9 +1,6 @@
 //! JetStream KV durable event subscriptions with revision-safe ownership leases.
 
-use std::{
-    error::Error as _,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{error::Error as _, time::Duration};
 
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
@@ -11,13 +8,13 @@ use catga_core::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
 };
+use catga_core::hash::sha256_digest;
 use catga_core::{
     CatgaError, CatgaResult, ErrorCode, PersistentSubscription, SubscriptionCheckpoint,
     SubscriptionStore,
 };
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};
 
@@ -39,6 +36,18 @@ impl NatsSubscriptions {
     /// Connects to `server`, opening or creating the named JetStream KV `bucket`.
     ///
     /// Competing-consumer leases expire after 30 seconds unless [`Self::with_lease_ttl`] is used.
+    ///
+    /// Subscription definitions, checkpoints, and competing-consumer leases share one bucket.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsSubscriptions;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let subscriptions = NatsSubscriptions::connect("nats://127.0.0.1:4222", "app-subscriptions").await?;
+    /// # drop(subscriptions);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
         Self::with_lease_ttl(server, bucket, DEFAULT_LEASE_TTL).await
     }
@@ -58,16 +67,20 @@ impl NatsSubscriptions {
                 "NATS subscription lease TTL must be greater than zero",
             ));
         }
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self { store, lease_ttl })
     }
 
     async fn entry(&self, key: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.store.entry(key).await.map_err(map_error)
+        self.store.entry(key).await.map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(&self, key: &str, value: Vec<u8>, revision: u64) -> CatgaResult<bool> {
@@ -75,7 +88,7 @@ impl NatsSubscriptions {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = matches!(
                     self.store.entry(key).await,
                     Ok(Some(entry))
@@ -101,7 +114,7 @@ impl NatsSubscriptions {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = match self.store.entry(key).await {
                     Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                         record.matches(&decode_record(&entry.value)?)
@@ -127,7 +140,7 @@ impl NatsSubscriptions {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = match self.store.entry(key).await {
                     Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                         lease.matches(&decode_record(&entry.value)?)
@@ -153,7 +166,7 @@ impl NatsSubscriptions {
         self.store
             .delete_expect_revision(&key, Some(entry.revision))
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 }
 
@@ -227,7 +240,7 @@ impl SubscriptionStore for NatsSubscriptions {
             {
                 Ok(()) => return self.delete_lease(name).await,
                 Err(error) => {
-                    let reported = map_error(error);
+                    let reported = CatgaError::transient(error);
                     if self.entry(&key).await?.is_some_and(|latest| {
                         matches!(latest.operation, kv::Operation::Put)
                             && latest.revision != entry.revision
@@ -246,10 +259,10 @@ impl SubscriptionStore for NatsSubscriptions {
             .store
             .keys()
             .await
-            .map_err(map_error)?
+            .map_err(CatgaError::transient)?
             .try_collect::<Vec<_>>()
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let mut subscriptions: Vec<PersistentSubscription> = Vec::new();
         for key in keys.into_iter().filter(|key| key.starts_with('d')) {
             let Some(entry) = self.entry(&key).await? else {
@@ -340,7 +353,7 @@ impl SubscriptionStore for NatsSubscriptions {
                 Ok(_) => return Ok(true),
                 Err(error) if is_revision_conflict(&error) => {}
                 Err(error) => {
-                    let reported = map_error(error);
+                    let reported = CatgaError::transient(error);
                     let committed = match self.store.entry(&key).await {
                         Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                             created.matches(&decode_record(&entry.value)?)
@@ -468,27 +481,27 @@ impl LeaseRecord {
     fn new(owner: impl Into<Box<str>>, ttl: Duration) -> Self {
         Self {
             owner: owner.into(),
-            expires_at_unix_ms: now_millis()
+            expires_at_unix_ms: catga_core::time::now_unix_millis()
                 .saturating_add(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX).max(1)),
         }
     }
 
     fn is_expired(&self) -> bool {
-        self.expires_at_unix_ms <= now_millis()
+        self.expires_at_unix_ms <= catga_core::time::now_unix_millis()
     }
 }
 
 fn definition_key(subscription_name: &str) -> String {
     format!(
         "d{}",
-        hex::encode(Sha256::digest(subscription_name.as_bytes()))
+        hex::encode(sha256_digest(subscription_name.as_bytes()))
     )
 }
 
 fn lease_key(subscription_name: &str) -> String {
     format!(
         "l{}",
-        hex::encode(Sha256::digest(subscription_name.as_bytes()))
+        hex::encode(sha256_digest(subscription_name.as_bytes()))
     )
 }
 
@@ -516,16 +529,4 @@ fn cas_error(operation: &str) -> CatgaError {
         ErrorCode::Transient,
         format!("NATS subscription {operation} compare-and-set did not stabilize"),
     )
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }

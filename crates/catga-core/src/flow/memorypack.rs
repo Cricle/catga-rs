@@ -186,4 +186,3 @@ pub(crate) fn decode_error_code(value: u8) -> Result<ErrorCode, MemoryPackError>
         ))),
     }
 }
-

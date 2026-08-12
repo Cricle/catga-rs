@@ -83,6 +83,19 @@ impl Drop for ReplySubscription {
 
 impl MailboxClient<MemoryPackCodec> {
     /// Connects to a RobustMQ NATS-compatible endpoint.
+    ///
+    /// Connecting opens one client connection and starts no background worker; every send,
+    /// subscribe, and request is driven explicitly by the caller.
+    ///
+    /// ```no_run
+    /// use catga_robustmq::MailboxClient;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let client = MailboxClient::connect("nats://127.0.0.1:4222").await?;
+    /// # drop(client);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str) -> CatgaResult<Self> {
         Self::connect_with_codec(server, MemoryPackCodec::default()).await
     }
@@ -104,7 +117,7 @@ where
                 client: Arc::new(client),
                 codec: Arc::new(codec),
             })
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     /// Creates a mailbox using the configured retention and visibility.
@@ -117,7 +130,7 @@ where
                 &config.description,
             )
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     /// Sends an envelope payload to a mailbox with explicit priority.
@@ -130,7 +143,7 @@ where
         self.client
             .send(mailbox_id, envelope.payload(), priority.as_sdk())
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     /// Sends a complete Catga envelope with the client's configured [`EnvelopeCodec`].
@@ -149,7 +162,7 @@ where
         self.client
             .send(mailbox_id, &payload, priority.as_sdk())
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     /// Subscribes to push delivery for a mailbox.
@@ -172,7 +185,7 @@ where
                 queue_group,
             )
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     /// Subscribes to complete Catga envelopes with the client's configured codec.
@@ -227,7 +240,7 @@ where
                 .client
                 .create(60, false, "", "")
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let (sender, mut receiver) = mpsc::channel(1);
             let codec = Arc::clone(&self.codec);
             let _subscription = ReplySubscription::new(
@@ -245,7 +258,7 @@ where
                         "",
                     )
                     .await
-                    .map_err(map_error)?,
+                    .map_err(CatgaError::transient)?,
             );
             let priority = MailboxPriority::from_envelope(&request).as_sdk();
             let payload =
@@ -253,7 +266,7 @@ where
             self.client
                 .send(mailbox_id, &payload, priority)
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             receiver.recv().await.ok_or_else(|| {
                 CatgaError::new(ErrorCode::Transient, "RobustMQ reply subscription closed")
             })?
@@ -281,6 +294,17 @@ where
     /// Requests are decoded with the codec configured on `client`. Each returned
     /// [`MailboxRequest`] retains that codec so its envelope response uses the matching wire
     /// format.
+    ///
+    /// ```no_run
+    /// use catga_robustmq::{MailboxClient, MailboxRequestServer};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let client = MailboxClient::connect("nats://127.0.0.1:4222").await?;
+    /// let server = MailboxRequestServer::subscribe(client, "orders.requests", 64).await?;
+    /// # drop(server);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn subscribe(
         client: MailboxClient<C>,
         mailbox_id: &str,
@@ -325,7 +349,7 @@ where
                 "",
             )
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             subscription: Some(subscription),
             requests,
@@ -408,7 +432,7 @@ where
         self.client
             .send(reply_to, &payload, priority)
             .await
-            .map_err(map_error)
+            .map_err(CatgaError::transient)
     }
 
     /// Serializes and sends a typed response with propagated correlation and priority metadata.
@@ -424,10 +448,6 @@ where
     }
 }
 
-fn map_error(error: robustmq::MQ9Error) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-
 /// Encodes an envelope at the RobustMQ boundary without making a transport choice in Core.
 fn encode_envelope<C: EnvelopeCodec + ?Sized>(
     codec: &C,
@@ -440,4 +460,3 @@ fn encode_envelope<C: EnvelopeCodec + ?Sized>(
 fn decode_envelope<C: EnvelopeCodec + ?Sized>(codec: &C, bytes: &[u8]) -> CatgaResult<Envelope> {
     codec.decode(bytes)
 }
-

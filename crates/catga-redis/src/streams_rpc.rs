@@ -19,8 +19,6 @@ use catga_core::{
 use futures::StreamExt;
 use redis::AsyncCommands;
 
-use crate::transport::map_error;
-
 /// A request client that durably sends ingress through a [`DestinationTransport`].
 ///
 /// Each request uses a distinct, temporary Redis Pub/Sub reply inbox. The client retains no
@@ -46,7 +44,7 @@ where
     pub fn new(transport: Arc<T>, server: &str) -> CatgaResult<Self> {
         Ok(Self {
             transport,
-            client: redis::Client::open(server).map_err(map_error)?,
+            client: redis::Client::open(server).map_err(CatgaError::transient)?,
             codec: MemoryPackCodec::default(),
         })
     }
@@ -73,33 +71,40 @@ where
         }
 
         let reply_to: Box<str> = format!("catga.reply.{}", uuid::Uuid::new_v4()).into_boxed_str();
-        let mut subscription = self.client.get_async_pubsub().await.map_err(|e| {
-            CatgaError::new(
-                ErrorCode::Connection,
-                format!("Redis connection failed: {e}"),
-            )
-        })?;
-        subscription
-            .subscribe(reply_to.as_ref())
-            .await
-            .map_err(|e| {
+        run_request_with_timeout(timeout, async {
+            let mut subscription = self.client.get_async_pubsub().await.map_err(|e| {
                 CatgaError::new(
-                    ErrorCode::Connection,
-                    format!("Redis subscription failed: {e}"),
+                    ErrorCode::Unavailable,
+                    format!("Redis connection failed: {e}"),
                 )
             })?;
-        self.transport
-            .send_to(&destination, request.with_reply_to(reply_to))
-            .await?;
+            subscription
+                .subscribe(reply_to.as_ref())
+                .await
+                .map_err(|e| {
+                    CatgaError::new(
+                        ErrorCode::Unavailable,
+                        format!("Redis subscription failed: {e}"),
+                    )
+                })?;
+            self.transport
+                .send_to(&destination, request.with_reply_to(reply_to.clone()))
+                .await?;
 
-        run_request_with_timeout(timeout, reply_to, &mut subscription, async {
-            let reply = subscription.on_message().next().await.ok_or_else(|| {
-                CatgaError::new(
-                    ErrorCode::Transient,
-                    "Redis Streams reply subscription closed",
-                )
-            })?;
-            self.codec.decode(reply.get_payload_bytes())
+            let result = async {
+                let reply = subscription.on_message().next().await.ok_or_else(|| {
+                    CatgaError::new(
+                        ErrorCode::Transient,
+                        "Redis Streams reply subscription closed",
+                    )
+                })?;
+                self.codec.decode(reply.get_payload_bytes())
+            }
+            .await;
+            // Dropping the PubSub connection without unsubscribing would leave the
+            // subscription active on the Redis server until the connection closes.
+            let _ = subscription.unsubscribe(reply_to.as_ref()).await;
+            result
         })
         .await
     }
@@ -144,7 +149,7 @@ where
         Ok(Self {
             transport,
             destination,
-            client: redis::Client::open(server).map_err(map_error)?,
+            client: redis::Client::open(server).map_err(CatgaError::transient)?,
             codec: MemoryPackCodec::default(),
         })
     }
@@ -245,11 +250,11 @@ impl RedisStreamsRequest {
             .client
             .get_multiplexed_async_connection()
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let _: usize = commands
             .publish(reply_to.as_ref(), payload)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         self.delivery.acknowledge().await
     }
 
@@ -278,22 +283,15 @@ impl RedisStreamsRequest {
 /// Keeping the timer outside the supplied future prevents connection, subscription, durable-send,
 /// and reply-wait phases from each receiving a fresh full timeout.
 ///
-/// On timeout, the reply inbox subscription is unsubscribed before returning to prevent leaking
-/// the subscription until the connection is dropped. The subscription channel is dropped as part of
-/// the unsubscription, which allows Redis to discard any late replies.
+/// Unsubscribing the reply inbox is the caller's responsibility once the returned
+/// future resolves, because the wait operation borrows the subscription.
 async fn run_request_with_timeout<T>(
     timeout: Duration,
-    reply_to: Box<str>,
-    subscription: &mut redis::aio::PubSub,
     operation: impl Future<Output = CatgaResult<T>>,
 ) -> CatgaResult<T> {
     tokio::time::timeout(timeout, operation)
         .await
         .map_err(|_| {
-            // Explicitly unsubscribe before returning to release the subscription.
-            // Dropping the PubSub connection without unsubscribing would leave the subscription
-            // active on the Redis server until the connection closes, leaking resources.
-            let _ = subscription.unsubscribe(reply_to.as_ref());
             CatgaError::new(
                 ErrorCode::Timeout,
                 "Redis Streams request timed out waiting for reply",

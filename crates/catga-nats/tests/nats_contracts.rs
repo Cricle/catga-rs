@@ -10,27 +10,27 @@ use std::{
 
 use async_nats::jetstream::{self, consumer::pull, stream};
 use catga_core::codec::memorypack::MemoryPackCodec;
-use futures::StreamExt;
 use catga_core::flow::{
-    DueFlowScheduler, DslStepProgress, DslStepProgressStore, FlowContinuation, FlowQuery,
+    DslStepProgress, DslStepProgressStore, DueFlowScheduler, FlowContinuation, FlowQuery,
     FlowScheduler, FlowState, FlowStatus, FlowStore, StateMachineSnapshot, StateMachineStore,
     SuspendedFlowStore, TimedOutFlowPoll, TimedOutFlowReceipt, TimedOutFlowStore, WaitCondition,
     WaitPolicy,
 };
 use catga_core::{
-    CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore, Envelope,
-    EnvelopeCodec, EnhancedSnapshotStore, ErrorCode, EventStore, HealthCheckable, IdempotencyStore,
-    InboxStore, LeaseStore, MessageMetadata, MessageTransport, OutboxMessage, OutboxState,
-    OutboxStore, ProcessingState, Projection, ProjectionCheckpoint, ProjectionCheckpointStore,
-    QualityOfService, Snapshot, SnapshotStore, Stoppable, StoredEvent, SubscriptionStore,
+    CatgaError, CatgaResult, DeadLetter, DeadLetterDiagnostics, DeadLetterStore,
+    EnhancedSnapshotStore, Envelope, EnvelopeCodec, ErrorCode, EventStore, HealthCheckable,
+    IdempotencyStore, InboxStore, LeaseStore, MessageMetadata, MessageTransport, OutboxMessage,
+    OutboxState, OutboxStore, ProcessingState, Projection, ProjectionCheckpoint,
+    ProjectionCheckpointStore, QualityOfService, Snapshot, SnapshotStore, Stoppable, StoredEvent,
+    SubscriptionStore,
 };
 use catga_nats::{
     NatsConfig, NatsConsumerOptions, NatsDeadLetters, NatsDslStepProgress, NatsEnhancedSnapshots,
-    NatsEventStore, NatsFlowScheduler, NatsFlows, NatsIdempotency, NatsInbox, NatsLeases, NatsOutbox,
-    NatsProjectionCheckpoints, NatsProjectionConfig, NatsProjectionRunner, NatsPubSubConfig,
-    NatsPubSubTransport, NatsPublisher, NatsPublisherConfig, NatsReceiveOptions,
-    NatsRequestClient, NatsRequestServer, NatsSnapshotStore, NatsStateMachines,
-    NatsSubscriptions, NatsSuspendedFlows, NatsTransport, NatsTransportOptions,
+    NatsEventStore, NatsFlowScheduler, NatsFlows, NatsIdempotency, NatsInbox, NatsLeases,
+    NatsOutbox, NatsProjectionCheckpoints, NatsProjectionConfig, NatsProjectionRunner,
+    NatsPubSubConfig, NatsPubSubTransport, NatsPublisher, NatsPublisherConfig, NatsReceiveOptions,
+    NatsRequestClient, NatsRequestServer, NatsSnapshotStore, NatsStateMachines, NatsSubscriptions,
+    NatsSuspendedFlows, NatsTransport, NatsTransportOptions,
 };
 use tempfile::TempDir;
 
@@ -82,7 +82,10 @@ jetstream {{
 }}
 "#,
             port,
-            data_directory.path().to_str().unwrap()
+            data_directory
+                .path()
+                .to_str()
+                .expect("test value must be present")
         );
         std::fs::write(&config_file, config_content)
             .map_err(|error| test_error("write NATS config file", error))?;
@@ -683,7 +686,10 @@ async fn pubsub_rejects_at_least_once() -> CatgaResult<()> {
     let msg = envelope(1, QualityOfService::AtLeastOnce);
     let result = transport.publish(msg).await;
     assert!(result.is_err(), "PubSub should reject AtLeastOnce QoS");
-    assert_eq!(result.unwrap_err().code(), ErrorCode::Unsupported);
+    assert_eq!(
+        result.expect_err("expected an error").code(),
+        ErrorCode::Unsupported
+    );
 
     Ok(())
 }
@@ -738,7 +744,8 @@ async fn pubsub_large_message() -> CatgaResult<()> {
 
     // Create a large payload (1KB)
     let large_payload = vec![0x42u8; 1024];
-    let metadata = MessageMetadata::new(1, None);
+    let metadata =
+        MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtMostOnce);
     let msg = Envelope::new(1, "test.large", large_payload, metadata);
 
     transport.publish(msg.clone()).await?;
@@ -760,7 +767,12 @@ async fn pubsub_unicode_message() -> CatgaResult<()> {
 
     // Create a message with unicode content
     let unicode_payload = "Hello, 世界! 🌍".as_bytes().to_vec();
-    let msg = Envelope::new(1, "test.unicode", unicode_payload, MessageMetadata::new(1, None));
+    let msg = Envelope::new(
+        1,
+        "test.unicode",
+        unicode_payload,
+        MessageMetadata::new(1, None).with_quality_of_service(QualityOfService::AtMostOnce),
+    );
 
     transport.publish(msg.clone()).await?;
     let delivery = transport.receive().await?;
@@ -797,16 +809,16 @@ async fn pubsub_concurrent_publish_and_receive() -> CatgaResult<()> {
     let received = tokio::spawn(async move {
         let mut received = 0;
         for _ in 0..publish_count {
-            if let Ok(delivery) = transport_clone.receive().await {
-                if delivery.acknowledge().await.is_ok() {
-                    received += 1;
-                }
+            if let Ok(delivery) = transport_clone.receive().await
+                && delivery.acknowledge().await.is_ok()
+            {
+                received += 1;
             }
         }
         received
     })
     .await
-    .unwrap();
+    .expect("test value must be present");
 
     assert_eq!(received, publish_count);
 
@@ -2151,15 +2163,14 @@ async fn dead_letters_reject_malformed_jetstream_records() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn dsl_step_progress_creates_and_retrieves_progress() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS"))
-        .await?;
+    let store = NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS")).await?;
 
     let progress = DslStepProgress::new("flow-1", 0, b"state".to_vec());
     assert!(store.create(progress).await?);
 
     let retrieved = store.get("flow-1", 0).await?;
     assert!(retrieved.is_some());
-    let retrieved = retrieved.unwrap();
+    let retrieved = retrieved.expect("test value must be present");
     assert_eq!(retrieved.flow_id(), "flow-1");
     assert_eq!(retrieved.step_index(), 0);
     assert_eq!(retrieved.version(), 0);
@@ -2171,8 +2182,8 @@ async fn dsl_step_progress_creates_and_retrieves_progress() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn dsl_step_progress_rejects_duplicate_create() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_DUP"))
-        .await?;
+    let store =
+        NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_DUP")).await?;
 
     let progress = DslStepProgress::new("flow-2", 0, vec![]);
     assert!(store.create(progress.clone()).await?);
@@ -2184,8 +2195,8 @@ async fn dsl_step_progress_rejects_duplicate_create() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn dsl_step_progress_updates_with_version_check() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_UPDATE"))
-        .await?;
+    let store =
+        NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_UPDATE")).await?;
 
     let progress = DslStepProgress::new("flow-3", 0, b"v1".to_vec());
     assert!(store.create(progress.clone()).await?);
@@ -2199,7 +2210,7 @@ async fn dsl_step_progress_updates_with_version_check() -> CatgaResult<()> {
     assert!(store.update(0, next).await?);
 
     let retrieved = store.get("flow-3", 0).await?;
-    assert_eq!(retrieved.unwrap().version(), 1);
+    assert_eq!(retrieved.expect("test value must be present").version(), 1);
     Ok(())
 }
 
@@ -2207,8 +2218,8 @@ async fn dsl_step_progress_updates_with_version_check() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn dsl_step_progress_deletes_and_returns_none() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_DELETE"))
-        .await?;
+    let store =
+        NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_DELETE")).await?;
 
     let progress = DslStepProgress::new("flow-4", 0, vec![]);
     assert!(store.create(progress).await?);
@@ -2221,8 +2232,8 @@ async fn dsl_step_progress_deletes_and_returns_none() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn dsl_step_progress_missing_returns_none() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_MISSING"))
-        .await?;
+    let store =
+        NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_MISSING")).await?;
 
     assert!(store.get("non-existent", 0).await?.is_none());
     Ok(())
@@ -2240,15 +2251,20 @@ async fn inbox_claims_and_completes_messages() -> CatgaResult<()> {
 
     // try_claim creates a new claim for unknown messages
     let claim = inbox.try_claim(1001).await?;
-    assert!(claim.is_some(), "try_claim should create a new claim for unknown message");
+    assert!(
+        claim.is_some(),
+        "try_claim should create a new claim for unknown message"
+    );
 
     // State reflects the claimed message
     let state = inbox.state(1001).await?;
     assert_eq!(state, Some(ProcessingState::Claimed));
 
     // Complete the claim
-    let claim = claim.unwrap();
-    inbox.complete(claim, Some(b"result".to_vec().into())).await?;
+    let claim = claim.expect("test value must be present");
+    inbox
+        .complete(claim, Some(b"result".to_vec().into()))
+        .await?;
 
     // State is now completed
     let state = inbox.state(1001).await?;
@@ -2268,12 +2284,20 @@ async fn inbox_completes_with_result() -> CatgaResult<()> {
 
     // Claim and complete a message
     let claim = inbox.try_claim(2001).await?.expect("should claim");
-    inbox.complete(claim, Some(b"test result".to_vec().into())).await?;
+    inbox
+        .complete(claim, Some(b"test result".to_vec().into()))
+        .await?;
 
     // Result is available
     let result = inbox.result(2001).await?;
-    assert!(result.is_some(), "result should be available after completion");
-    assert_eq!(result.unwrap().as_ref(), b"test result");
+    assert!(
+        result.is_some(),
+        "result should be available after completion"
+    );
+    assert_eq!(
+        result.expect("test value must be present").as_ref(),
+        b"test result"
+    );
     Ok(())
 }
 
@@ -2283,7 +2307,9 @@ async fn inbox_cleanup_is_idempotent() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let inbox = NatsInbox::connect(server.url(), unique("CATGA_INBOX_CLEANUP")).await?;
 
-    let cleaned = inbox.cleanup_completed(Duration::from_secs(60), 100).await?;
+    let cleaned = inbox
+        .cleanup_completed(Duration::from_secs(60), 100)
+        .await?;
     assert_eq!(cleaned, 0);
     Ok(())
 }
@@ -2296,15 +2322,15 @@ async fn inbox_cleanup_is_idempotent() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn snapshot_store_saves_and_loads_latest() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsSnapshotStore::<String>::connect(server.url(), unique("CATGA_SNAPSHOTS"))
-        .await?;
+    let store =
+        NatsSnapshotStore::<String>::connect(server.url(), unique("CATGA_SNAPSHOTS")).await?;
 
     let snapshot = Snapshot::new("account-1", "balance:100".to_string(), 1);
     store.save(snapshot).await?;
 
     let loaded = store.load::<String>("account-1").await?;
     assert!(loaded.is_some());
-    let loaded = loaded.unwrap();
+    let loaded = loaded.expect("test value must be present");
     assert_eq!(*loaded.state(), "balance:100");
     assert_eq!(loaded.version(), 1);
     Ok(())
@@ -2314,8 +2340,8 @@ async fn snapshot_store_saves_and_loads_latest() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn snapshot_store_rejects_older_versions() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsSnapshotStore::<u64>::connect(server.url(), unique("CATGA_SNAPSHOTS_VERSION"))
-        .await?;
+    let store =
+        NatsSnapshotStore::<u64>::connect(server.url(), unique("CATGA_SNAPSHOTS_VERSION")).await?;
 
     store.save(Snapshot::new("counter-1", 100_u64, 2)).await?;
 
@@ -2329,8 +2355,9 @@ async fn snapshot_store_rejects_older_versions() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn snapshot_store_load_returns_none_for_missing() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsSnapshotStore::<String>::connect(server.url(), unique("CATGA_SNAPSHOTS_MISSING"))
-        .await?;
+    let store =
+        NatsSnapshotStore::<String>::connect(server.url(), unique("CATGA_SNAPSHOTS_MISSING"))
+            .await?;
 
     assert!(store.load::<String>("non-existent").await?.is_none());
     Ok(())
@@ -2340,10 +2367,13 @@ async fn snapshot_store_load_returns_none_for_missing() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn snapshot_store_deletes() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsSnapshotStore::<String>::connect(server.url(), unique("CATGA_SNAPSHOTS_DELETE"))
-        .await?;
+    let store =
+        NatsSnapshotStore::<String>::connect(server.url(), unique("CATGA_SNAPSHOTS_DELETE"))
+            .await?;
 
-    store.save(Snapshot::new("account-2", "state".to_string(), 1)).await?;
+    store
+        .save(Snapshot::new("account-2", "state".to_string(), 1))
+        .await?;
     store.delete("account-2").await?;
     assert!(store.load::<String>("account-2").await?.is_none());
     Ok(())
@@ -2353,8 +2383,8 @@ async fn snapshot_store_deletes() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn snapshot_store_rejects_mismatched_state_type() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsSnapshotStore::<u64>::connect(server.url(), unique("CATGA_SNAPSHOTS_TYPE"))
-        .await?;
+    let store =
+        NatsSnapshotStore::<u64>::connect(server.url(), unique("CATGA_SNAPSHOTS_TYPE")).await?;
 
     store.save(Snapshot::new("counter-2", 42_u64, 1)).await?;
 
@@ -2373,15 +2403,15 @@ async fn snapshot_store_rejects_mismatched_state_type() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn state_machine_creates_and_retrieves() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsStateMachines::<u64>::connect(server.url(), unique("CATGA_STATE_MACHINES"))
-        .await?;
+    let store =
+        NatsStateMachines::<u64>::connect(server.url(), unique("CATGA_STATE_MACHINES")).await?;
 
     let snapshot = StateMachineSnapshot::new("sm-1", 100_u64);
     assert!(store.create(snapshot).await?);
 
     let retrieved = store.get("sm-1").await?;
     assert!(retrieved.is_some());
-    let retrieved = retrieved.unwrap();
+    let retrieved = retrieved.expect("test value must be present");
     assert_eq!(retrieved.instance_id(), "sm-1");
     assert_eq!(retrieved.version(), 0);
     assert_eq!(*retrieved.state(), 100);
@@ -2418,12 +2448,15 @@ async fn state_machine_updates_with_version_check() -> CatgaResult<()> {
     assert!(!store.update(0, stale).await?);
 
     // Valid next version should succeed (version 0 -> 1)
-    let stale_snap = store.get("sm-3").await?.unwrap();
+    let stale_snap = store
+        .get("sm-3")
+        .await?
+        .expect("test value must be present");
     let next = stale_snap.next_version(20_u64)?;
     assert!(store.update(0, next).await?);
 
     let retrieved = store.get("sm-3").await?;
-    assert_eq!(retrieved.unwrap().version(), 1);
+    assert_eq!(retrieved.expect("test value must be present").version(), 1);
     Ok(())
 }
 
@@ -2521,13 +2554,8 @@ async fn request_server_receives_and_responds() -> CatgaResult<()> {
 
         // Echo back the request with modified payload
         let response = request_clone.clone();
-        let metadata = response.metadata().clone();
-        let echoed = Envelope::new(
-            6002,
-            "echo",
-            vec![100],
-            metadata,
-        );
+        let metadata = response.metadata();
+        let echoed = Envelope::new(6002, "echo", vec![100], metadata);
         request.respond(echoed).await
     });
 
@@ -2746,29 +2774,41 @@ async fn transport_delivery_acknowledgement() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn dsl_step_progress_concurrent_update_conflicts() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_CONFLICT"))
-        .await?;
+    let store =
+        NatsDslStepProgress::connect(server.url(), unique("CATGA_DSL_PROGRESS_CONFLICT")).await?;
 
     let progress = DslStepProgress::new("flow-concurrent", 0, b"initial".to_vec());
     assert!(store.create(progress).await?);
 
     // Get the current version
-    let current = store.get("flow-concurrent", 0).await?.unwrap();
+    let current = store
+        .get("flow-concurrent", 0)
+        .await?
+        .expect("test value must be present");
 
     // Two concurrent updates - only one should succeed
     let (first, second) = tokio::join!(
-        store.update(current.version(), current.clone().next_version(b"first".to_vec())?),
-        store.update(current.version(), current.clone().next_version(b"second".to_vec())?),
+        store.update(
+            current.version(),
+            current.clone().next_version(b"first".to_vec())?
+        ),
+        store.update(
+            current.version(),
+            current.clone().next_version(b"second".to_vec())?
+        ),
     );
 
     // At least one should succeed, at least one should fail (or both succeed if CAS retries)
     let successes = usize::from(first?) + usize::from(second?);
-    assert!(successes >= 1, "at least one concurrent update should succeed");
+    assert!(
+        successes >= 1,
+        "at least one concurrent update should succeed"
+    );
 
     // Verify final state is consistent
     let final_state = store.get("flow-concurrent", 0).await?;
     assert!(final_state.is_some());
-    let final_state = final_state.unwrap();
+    let final_state = final_state.expect("test value must be present");
     assert!(final_state.version() >= 1);
     assert!(
         final_state.payload() == b"first" || final_state.payload() == b"second",
@@ -2799,10 +2839,13 @@ async fn inbox_claims_with_custom_lease() -> CatgaResult<()> {
     let claim = inbox.try_claim_for(3001, Duration::from_millis(50)).await?;
     assert!(claim.is_some(), "try_claim_for should create a new claim");
 
-    let claim = claim.unwrap();
+    let claim = claim.expect("test value must be present");
     inbox.complete(claim, Some(b"done".to_vec().into())).await?;
 
-    assert_eq!(inbox.result(3001).await?.as_deref(), Some(b"done".as_slice()));
+    assert_eq!(
+        inbox.result(3001).await?.as_deref(),
+        Some(b"done".as_slice())
+    );
     Ok(())
 }
 
@@ -2829,7 +2872,10 @@ async fn inbox_unknown_message_returns_none() -> CatgaResult<()> {
 
     // try_claim for unknown message creates a new claim
     let claim = inbox.try_claim(99999).await?;
-    assert!(claim.is_some(), "try_claim should create claim for unknown message");
+    assert!(
+        claim.is_some(),
+        "try_claim should create claim for unknown message"
+    );
 
     // State should be Claimed for the newly claimed message
     let state = inbox.state(99999).await?;
@@ -2855,7 +2901,7 @@ async fn snapshot_store_save_with_higher_version_succeeds() -> CatgaResult<()> {
 
     // Verify current state (version 2, state 30)
     let loaded = store.load::<u64>("multi-1").await?;
-    assert_eq!(loaded.unwrap().version(), 2);
+    assert_eq!(loaded.expect("test value must be present").version(), 2);
     Ok(())
 }
 
@@ -2863,16 +2909,17 @@ async fn snapshot_store_save_with_higher_version_succeeds() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn state_machine_concurrent_update_conflicts() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsStateMachines::<u64>::connect(
-        server.url(),
-        unique("CATGA_STATE_MACHINES_CONFLICT"),
-    )
-    .await?;
+    let store =
+        NatsStateMachines::<u64>::connect(server.url(), unique("CATGA_STATE_MACHINES_CONFLICT"))
+            .await?;
 
     let snapshot = StateMachineSnapshot::new("sm-concurrent", 100_u64);
     assert!(store.create(snapshot).await?);
 
-    let current = store.get("sm-concurrent").await?.unwrap();
+    let current = store
+        .get("sm-concurrent")
+        .await?
+        .expect("test value must be present");
 
     // Two concurrent updates
     let (first, second) = tokio::join!(
@@ -2881,10 +2928,16 @@ async fn state_machine_concurrent_update_conflicts() -> CatgaResult<()> {
     );
 
     let successes = usize::from(first?) + usize::from(second?);
-    assert!(successes >= 1, "at least one concurrent update should succeed");
+    assert!(
+        successes >= 1,
+        "at least one concurrent update should succeed"
+    );
 
     // Final state should be consistent
-    let final_state = store.get("sm-concurrent").await?.unwrap();
+    let final_state = store
+        .get("sm-concurrent")
+        .await?
+        .expect("test value must be present");
     assert!(final_state.version() >= 1);
     assert!(*final_state.state() >= 100);
     Ok(())
@@ -2908,12 +2961,7 @@ async fn request_client_request_to_different_subject() -> CatgaResult<()> {
         let request = server.next().await?;
         assert_eq!(request.envelope().id(), request_clone.id());
 
-        let response = Envelope::new(
-            10002,
-            "response",
-            vec![200],
-            request_clone.metadata().clone(),
-        );
+        let response = Envelope::new(10002, "response", vec![200], request_clone.metadata());
         request.respond(response).await
     });
 
@@ -2939,11 +2987,13 @@ async fn request_client_request_to_different_subject() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn request_client_zero_timeout_rejected() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let client = NatsRequestClient::connect(server.url(), &unique("catga.request.timeout"))
-        .await?;
+    let client = NatsRequestClient::connect(server.url(), &unique("catga.request.timeout")).await?;
 
     let result = client
-        .request(envelope(11001, QualityOfService::AtLeastOnce), Duration::ZERO)
+        .request(
+            envelope(11001, QualityOfService::AtLeastOnce),
+            Duration::ZERO,
+        )
         .await;
     assert!(matches!(result, Err(error) if error.code() == ErrorCode::Validation));
     Ok(())
@@ -2998,25 +3048,19 @@ async fn request_server_handle_next_typed_handler() -> CatgaResult<()> {
     let client = NatsRequestClient::connect(server.url(), &subject).await?;
     let mut server_sub = NatsRequestServer::connect(server.url(), &subject).await?;
 
-    let handle = tokio::spawn(async move {
-        server_sub
-            .handle_next::<TestRequest, _>(&TestHandler)
-            .await
-    });
+    let handle =
+        tokio::spawn(async move { server_sub.handle_next::<TestRequest, _>(&TestHandler).await });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Create a typed request envelope
     let codec = MemoryPackCodec::default();
     let request = TestRequest(21);
-    let payload = codec.encode_value(&request).unwrap();
-    let envelope = Envelope::versioned(
-        1,
-        "test.request",
-        payload,
-        MessageMetadata::new(1, None),
-        0,
-    );
+    let payload = codec
+        .encode_value(&request)
+        .expect("test value must be present");
+    let envelope =
+        Envelope::versioned(1, "test.request", payload, MessageMetadata::new(1, None), 0);
 
     let response = tokio::time::timeout(
         Duration::from_secs(5),
@@ -3031,7 +3075,10 @@ async fn request_server_handle_next_typed_handler() -> CatgaResult<()> {
 
     // Response payload format: [0] + response_bytes (0 is success tag)
     let response_payload = response.payload();
-    assert!(!response_payload.is_empty(), "response payload should not be empty");
+    assert!(
+        !response_payload.is_empty(),
+        "response payload should not be empty"
+    );
     assert_eq!(response_payload[0], 0, "first byte should be success tag");
     let response_value: u64 = codec.decode_value(&response_payload[1..])?;
     assert_eq!(response_value, 42);
@@ -3078,8 +3125,8 @@ async fn publisher_multiple_exactly_once_messages() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn subscription_store_list_and_try_acquire() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsSubscriptions::connect(server.url(), unique("CATGA_SUBSCRIPTIONS_LIST"))
-        .await?;
+    let store =
+        NatsSubscriptions::connect(server.url(), unique("CATGA_SUBSCRIPTIONS_LIST")).await?;
 
     // Initially empty
     let initial = store.list().await?;
@@ -3114,8 +3161,7 @@ async fn subscription_store_list_and_try_acquire() -> CatgaResult<()> {
 async fn subscription_store_checkpoint_roundtrip() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let store =
-        NatsSubscriptions::connect(server.url(), unique("CATGA_SUBSCRIPTIONS_CHECKPOINT"))
-            .await?;
+        NatsSubscriptions::connect(server.url(), unique("CATGA_SUBSCRIPTIONS_CHECKPOINT")).await?;
 
     // Create subscription
     let subscription = catga_core::PersistentSubscription::new("checkpoint-sub", "events.*")
@@ -3129,14 +3175,14 @@ async fn subscription_store_checkpoint_roundtrip() -> CatgaResult<()> {
     // Load checkpoint
     let loaded = store.load_checkpoint("checkpoint-sub", "stream-1").await?;
     assert!(loaded.is_some());
-    assert_eq!(loaded.unwrap().version(), 5);
+    assert_eq!(loaded.expect("test value must be present").version(), 5);
 
     // Update checkpoint
     let updated = catga_core::SubscriptionCheckpoint::new("checkpoint-sub", "stream-1", 10);
     store.save_checkpoint(updated).await?;
 
     let loaded = store.load_checkpoint("checkpoint-sub", "stream-1").await?;
-    assert_eq!(loaded.unwrap().version(), 10);
+    assert_eq!(loaded.expect("test value must be present").version(), 10);
 
     // Non-existent checkpoint
     let missing = store.load_checkpoint("checkpoint-sub", "stream-99").await?;
@@ -3153,8 +3199,8 @@ async fn subscription_store_delete_with_lease() -> CatgaResult<()> {
         NatsSubscriptions::connect(server.url(), unique("CATGA_SUBSCRIPTIONS_DELETE")).await?;
 
     // Create subscription and acquire lease
-    let subscription =
-        catga_core::PersistentSubscription::new("delete-sub", "events.*").with_event_types(Vec::<String>::new());
+    let subscription = catga_core::PersistentSubscription::new("delete-sub", "events.*")
+        .with_event_types(Vec::<String>::new());
     store.save(subscription).await?;
     assert!(store.try_acquire("delete-sub", "holder").await?);
 
@@ -3228,7 +3274,9 @@ async fn transport_publish_multiple_and_receive_in_order() -> CatgaResult<()> {
 
     // Publish multiple messages
     for id in 30001..=30005 {
-        transport.publish(envelope(id, QualityOfService::AtLeastOnce)).await?;
+        transport
+            .publish(envelope(id, QualityOfService::AtLeastOnce))
+            .await?;
     }
 
     // Receive all messages
@@ -3256,7 +3304,10 @@ async fn transport_health_check() -> CatgaResult<()> {
     .await?;
 
     assert!(transport.is_healthy());
-    assert_eq!(transport.health_status(), Some("NATS transport is connected"));
+    assert_eq!(
+        transport.health_status(),
+        Some("NATS transport is connected")
+    );
     Ok(())
 }
 
@@ -3276,7 +3327,10 @@ async fn inbox_multiple_messages_lifecycle() -> CatgaResult<()> {
     for id in 50001..=50010 {
         let result = inbox.result(id).await?;
         assert!(result.is_some());
-        assert_eq!(result.unwrap().as_ref(), &[id as u8]);
+        assert_eq!(
+            result.expect("test value must be present").as_ref(),
+            &[id as u8]
+        );
     }
 
     // Verify all states are completed
@@ -3292,11 +3346,9 @@ async fn inbox_multiple_messages_lifecycle() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn state_machine_multiple_instances() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsStateMachines::<String>::connect(
-        server.url(),
-        unique("CATGA_STATE_MACHINES_MULTI"),
-    )
-    .await?;
+    let store =
+        NatsStateMachines::<String>::connect(server.url(), unique("CATGA_STATE_MACHINES_MULTI"))
+            .await?;
 
     // Create multiple instances
     for i in 0..5 {
@@ -3308,7 +3360,10 @@ async fn state_machine_multiple_instances() -> CatgaResult<()> {
     for i in 0..5 {
         let retrieved = store.get(&format!("sm-{i}")).await?;
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().instance_id(), format!("sm-{i}"));
+        assert_eq!(
+            retrieved.expect("test value must be present").instance_id(),
+            format!("sm-{i}")
+        );
     }
 
     Ok(())
@@ -3402,7 +3457,8 @@ async fn transport_stop_accepting_prevents_new_messages() -> CatgaResult<()> {
 async fn snapshot_store_cas_retry_on_conflict() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
     let store =
-        NatsSnapshotStore::<u64>::connect(server.url(), unique("CATGA_SNAPSHOTS_CAS_RETRY")).await?;
+        NatsSnapshotStore::<u64>::connect(server.url(), unique("CATGA_SNAPSHOTS_CAS_RETRY"))
+            .await?;
 
     // Create initial snapshot
     store.save(Snapshot::new("cas-snap", 1_u64, 0)).await?;
@@ -3417,16 +3473,16 @@ async fn snapshot_store_cas_retry_on_conflict() -> CatgaResult<()> {
             let snap = store1
                 .load::<u64>("cas-snap")
                 .await?
-                .unwrap();
-            let new_snap = Snapshot::new("cas-snap", snap.state().clone() + 10, snap.version() + 1);
+                .expect("test value must be present");
+            let new_snap = Snapshot::new("cas-snap", *snap.state() + 10, snap.version() + 1);
             store1.save(new_snap).await
         }),
         tokio::spawn(async move {
             let snap = store2
                 .load::<u64>("cas-snap")
                 .await?
-                .unwrap();
-            let new_snap = Snapshot::new("cas-snap", snap.state().clone() + 20, snap.version() + 1);
+                .expect("test value must be present");
+            let new_snap = Snapshot::new("cas-snap", *snap.state() + 20, snap.version() + 1);
             store2.save(new_snap).await
         }),
     );
@@ -3435,7 +3491,10 @@ async fn snapshot_store_cas_retry_on_conflict() -> CatgaResult<()> {
     assert!(r1.is_ok() || r2.is_ok());
 
     // Verify final state
-    let final_state = store.load::<u64>("cas-snap").await?.unwrap();
+    let final_state = store
+        .load::<u64>("cas-snap")
+        .await?
+        .expect("test value must be present");
     assert!(final_state.version() >= 1);
     Ok(())
 }
@@ -3465,7 +3524,8 @@ async fn idempotency_store_claim_first() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn idempotency_store_complete() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let store = NatsIdempotency::connect(server.url(), unique("CATGA_IDEMPOTENCY_COMPLETE")).await?;
+    let store =
+        NatsIdempotency::connect(server.url(), unique("CATGA_IDEMPOTENCY_COMPLETE")).await?;
 
     // Claim the key
     let claimed = store.try_claim("key-complete").await?;
@@ -3473,7 +3533,9 @@ async fn idempotency_store_complete() -> CatgaResult<()> {
 
     // Complete with result
     let result_data: Arc<[u8]> = Arc::from(b"test result".as_slice());
-    store.complete("key-complete", Some(result_data.clone())).await?;
+    store
+        .complete("key-complete", Some(result_data.clone()))
+        .await?;
 
     // State should be completed
     let state = store.state("key-complete").await?;
@@ -3482,7 +3544,10 @@ async fn idempotency_store_complete() -> CatgaResult<()> {
     // Result should be retrievable
     let result = store.result("key-complete").await?;
     assert!(result.is_some());
-    assert_eq!(&result.unwrap()[..], b"test result");
+    assert_eq!(
+        &result.expect("test value must be present")[..],
+        b"test result"
+    );
 
     // Claiming completed key should fail
     let claimed_after = store.try_claim("key-complete").await?;
@@ -3569,13 +3634,29 @@ async fn idempotency_store_multiple_keys() -> CatgaResult<()> {
     assert!(k1 && k2 && k3, "all claims should succeed");
 
     // Complete them
-    store.complete("key-A", Some(Arc::from(&b"result-A"[..]))).await?;
-    store.complete("key-B", Some(Arc::from(&b"result-B"[..]))).await?;
+    store
+        .complete("key-A", Some(Arc::from(&b"result-A"[..])))
+        .await?;
+    store
+        .complete("key-B", Some(Arc::from(&b"result-B"[..])))
+        .await?;
     store.complete("key-C", None).await?;
 
     // Verify results
-    assert_eq!(&store.result("key-A").await?.unwrap()[..], b"result-A");
-    assert_eq!(&store.result("key-B").await?.unwrap()[..], b"result-B");
+    assert_eq!(
+        &store
+            .result("key-A")
+            .await?
+            .expect("test value must be present")[..],
+        b"result-A"
+    );
+    assert_eq!(
+        &store
+            .result("key-B")
+            .await?
+            .expect("test value must be present")[..],
+        b"result-B"
+    );
     assert!(store.result("key-C").await?.is_none());
 
     Ok(())
@@ -3671,15 +3752,21 @@ async fn lease_store_acquire_first_owner() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_ACQUIRE")).await?;
 
     // First owner should acquire successfully
-    let acquired = leases.try_acquire("resource-1", "owner-a", Duration::from_secs(30)).await?;
+    let acquired = leases
+        .try_acquire("resource-1", "owner-a", Duration::from_secs(30))
+        .await?;
     assert!(acquired, "first owner should acquire the lease");
 
     // Same owner can re-acquire (idempotent)
-    let reacquired = leases.try_acquire("resource-1", "owner-a", Duration::from_secs(30)).await?;
+    let reacquired = leases
+        .try_acquire("resource-1", "owner-a", Duration::from_secs(30))
+        .await?;
     assert!(reacquired, "same owner should be able to reacquire");
 
     // Different owner should fail
-    let denied = leases.try_acquire("resource-1", "owner-b", Duration::from_secs(30)).await?;
+    let denied = leases
+        .try_acquire("resource-1", "owner-b", Duration::from_secs(30))
+        .await?;
     assert!(!denied, "different owner should be denied");
 
     Ok(())
@@ -3692,14 +3779,18 @@ async fn lease_store_acquire_after_expiry() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_EXPIRY")).await?;
 
     // Acquire with short TTL
-    let acquired = leases.try_acquire("resource-expiry", "owner-a", Duration::from_millis(100)).await?;
+    let acquired = leases
+        .try_acquire("resource-expiry", "owner-a", Duration::from_millis(100))
+        .await?;
     assert!(acquired, "first acquire should succeed");
 
     // Wait for expiry
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Different owner should now succeed after expiry
-    let new_owner = leases.try_acquire("resource-expiry", "owner-b", Duration::from_secs(30)).await?;
+    let new_owner = leases
+        .try_acquire("resource-expiry", "owner-b", Duration::from_secs(30))
+        .await?;
     assert!(new_owner, "different owner should acquire after expiry");
 
     Ok(())
@@ -3712,19 +3803,27 @@ async fn lease_store_renew() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_RENEW")).await?;
 
     // Acquire initial lease
-    let acquired = leases.try_acquire("resource-renew", "owner-a", Duration::from_secs(1)).await?;
+    let acquired = leases
+        .try_acquire("resource-renew", "owner-a", Duration::from_secs(1))
+        .await?;
     assert!(acquired, "initial acquire should succeed");
 
     // Renew succeeds for same owner
-    let renewed = leases.renew("resource-renew", "owner-a", Duration::from_secs(30)).await?;
+    let renewed = leases
+        .renew("resource-renew", "owner-a", Duration::from_secs(30))
+        .await?;
     assert!(renewed, "renew should succeed for same owner");
 
     // Renew fails for different owner
-    let denied = leases.renew("resource-renew", "owner-b", Duration::from_secs(30)).await?;
+    let denied = leases
+        .renew("resource-renew", "owner-b", Duration::from_secs(30))
+        .await?;
     assert!(!denied, "renew should fail for different owner");
 
     // Renew fails for non-existent resource
-    let missing = leases.renew("non-existent", "owner-a", Duration::from_secs(30)).await?;
+    let missing = leases
+        .renew("non-existent", "owner-a", Duration::from_secs(30))
+        .await?;
     assert!(!missing, "renew should fail for non-existent resource");
 
     Ok(())
@@ -3737,18 +3836,28 @@ async fn lease_store_renew_after_expiry() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_RENEW_EXPIRY")).await?;
 
     // Acquire with very short TTL
-    let acquired = leases.try_acquire("resource-renew-expiry", "owner-a", Duration::from_millis(50)).await?;
+    let acquired = leases
+        .try_acquire(
+            "resource-renew-expiry",
+            "owner-a",
+            Duration::from_millis(50),
+        )
+        .await?;
     assert!(acquired, "initial acquire should succeed");
 
     // Wait for expiry
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Renew fails after expiry
-    let renewed = leases.renew("resource-renew-expiry", "owner-a", Duration::from_secs(30)).await?;
+    let renewed = leases
+        .renew("resource-renew-expiry", "owner-a", Duration::from_secs(30))
+        .await?;
     assert!(!renewed, "renew should fail after expiry");
 
     // But new owner can acquire
-    let new_acquired = leases.try_acquire("resource-renew-expiry", "owner-b", Duration::from_secs(30)).await?;
+    let new_acquired = leases
+        .try_acquire("resource-renew-expiry", "owner-b", Duration::from_secs(30))
+        .await?;
     assert!(new_acquired, "new owner should acquire after expiry");
 
     Ok(())
@@ -3761,7 +3870,9 @@ async fn lease_store_release() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_RELEASE")).await?;
 
     // Acquire a lease
-    let acquired = leases.try_acquire("resource-release", "owner-a", Duration::from_secs(30)).await?;
+    let acquired = leases
+        .try_acquire("resource-release", "owner-a", Duration::from_secs(30))
+        .await?;
     assert!(acquired, "initial acquire should succeed");
 
     // Release succeeds for same owner
@@ -3770,14 +3881,22 @@ async fn lease_store_release() -> CatgaResult<()> {
 
     // Release fails on second attempt (resource no longer exists)
     let released_again = leases.release("resource-release", "owner-a").await?;
-    assert!(!released_again, "second release should return false (resource gone)");
+    assert!(
+        !released_again,
+        "second release should return false (resource gone)"
+    );
 
     // Different owner cannot release non-existent resource
     let try_release = leases.release("resource-release", "owner-b").await?;
-    assert!(!try_release, "different owner cannot release non-existent resource");
+    assert!(
+        !try_release,
+        "different owner cannot release non-existent resource"
+    );
 
     // New owner can acquire the now-released resource
-    let new_acquired = leases.try_acquire("resource-release", "owner-b", Duration::from_secs(30)).await?;
+    let new_acquired = leases
+        .try_acquire("resource-release", "owner-b", Duration::from_secs(30))
+        .await?;
     assert!(new_acquired, "new owner should acquire released lease");
 
     Ok(())
@@ -3803,23 +3922,53 @@ async fn lease_store_multiple_resources() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_MULTI")).await?;
 
     // Acquire multiple different resources
-    let r1 = leases.try_acquire("resource-A", "owner-1", Duration::from_secs(30)).await?;
-    let r2 = leases.try_acquire("resource-B", "owner-1", Duration::from_secs(30)).await?;
-    let r3 = leases.try_acquire("resource-C", "owner-2", Duration::from_secs(30)).await?;
+    let r1 = leases
+        .try_acquire("resource-A", "owner-1", Duration::from_secs(30))
+        .await?;
+    let r2 = leases
+        .try_acquire("resource-B", "owner-1", Duration::from_secs(30))
+        .await?;
+    let r3 = leases
+        .try_acquire("resource-C", "owner-2", Duration::from_secs(30))
+        .await?;
 
     assert!(r1, "resource-A should be acquired");
     assert!(r2, "resource-B should be acquired");
     assert!(r3, "resource-C should be acquired");
 
     // Release each resource
-    assert!(leases.release("resource-A", "owner-1").await?, "resource-A released");
-    assert!(leases.release("resource-B", "owner-1").await?, "resource-B released");
-    assert!(leases.release("resource-C", "owner-2").await?, "resource-C released");
+    assert!(
+        leases.release("resource-A", "owner-1").await?,
+        "resource-A released"
+    );
+    assert!(
+        leases.release("resource-B", "owner-1").await?,
+        "resource-B released"
+    );
+    assert!(
+        leases.release("resource-C", "owner-2").await?,
+        "resource-C released"
+    );
 
     // Resources can be acquired again
-    assert!(leases.try_acquire("resource-A", "owner-3", Duration::from_secs(30)).await?, "resource-A reacquired");
-    assert!(leases.try_acquire("resource-B", "owner-3", Duration::from_secs(30)).await?, "resource-B reacquired");
-    assert!(leases.try_acquire("resource-C", "owner-3", Duration::from_secs(30)).await?, "resource-C reacquired");
+    assert!(
+        leases
+            .try_acquire("resource-A", "owner-3", Duration::from_secs(30))
+            .await?,
+        "resource-A reacquired"
+    );
+    assert!(
+        leases
+            .try_acquire("resource-B", "owner-3", Duration::from_secs(30))
+            .await?,
+        "resource-B reacquired"
+    );
+    assert!(
+        leases
+            .try_acquire("resource-C", "owner-3", Duration::from_secs(30))
+            .await?,
+        "resource-C reacquired"
+    );
 
     Ok(())
 }
@@ -3831,7 +3980,13 @@ async fn lease_store_concurrent_acquire() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_CONCURRENT")).await?;
 
     // First owner acquires
-    let first = leases.try_acquire("concurrent-resource", "owner-first", Duration::from_secs(10)).await?;
+    let first = leases
+        .try_acquire(
+            "concurrent-resource",
+            "owner-first",
+            Duration::from_secs(10),
+        )
+        .await?;
     assert!(first, "first owner should acquire");
 
     // Multiple other owners try concurrently
@@ -3842,12 +3997,19 @@ async fn lease_store_concurrent_acquire() -> CatgaResult<()> {
         let lease_clone = Arc::clone(&leases);
         let owner = format!("owner-{}", i);
         let handle = tokio::spawn(async move {
-            lease_clone.try_acquire("concurrent-resource", owner.as_str(), Duration::from_secs(30)).await
+            lease_clone
+                .try_acquire(
+                    "concurrent-resource",
+                    owner.as_str(),
+                    Duration::from_secs(30),
+                )
+                .await
         });
         handles.push(handle);
     }
 
-    let results: Vec<CatgaResult<bool>> = futures::future::join_all(handles).await
+    let results: Vec<CatgaResult<bool>> = futures::future::join_all(handles)
+        .await
         .into_iter()
         .map(|r| r.expect("task should not panic"))
         .collect();
@@ -3864,10 +4026,17 @@ async fn lease_store_concurrent_acquire() -> CatgaResult<()> {
 #[ignore = "requires a real JetStream server; run in the E2E job"]
 async fn lease_store_concurrent_acquire_after_expiry() -> CatgaResult<()> {
     let server = NatsServer::start().await?;
-    let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_CONCURRENT_EXPIRY")).await?;
+    let leases =
+        NatsLeases::connect(server.url(), unique("CATGA_LEASES_CONCURRENT_EXPIRY")).await?;
 
     // First owner acquires with very short TTL
-    let first = leases.try_acquire("concurrent-expiry", "owner-first", Duration::from_millis(50)).await?;
+    let first = leases
+        .try_acquire(
+            "concurrent-expiry",
+            "owner-first",
+            Duration::from_millis(50),
+        )
+        .await?;
     assert!(first, "first owner should acquire");
 
     // Wait for expiry
@@ -3881,19 +4050,28 @@ async fn lease_store_concurrent_acquire_after_expiry() -> CatgaResult<()> {
         let lease_clone = Arc::clone(&leases);
         let owner = format!("owner-new-{}", i);
         let handle = tokio::spawn(async move {
-            lease_clone.try_acquire("concurrent-expiry", owner.as_str(), Duration::from_secs(30)).await
+            lease_clone
+                .try_acquire("concurrent-expiry", owner.as_str(), Duration::from_secs(30))
+                .await
         });
         handles.push(handle);
     }
 
-    let results: Vec<CatgaResult<bool>> = futures::future::join_all(handles).await
+    let results: Vec<CatgaResult<bool>> = futures::future::join_all(handles)
+        .await
         .into_iter()
         .map(|r| r.expect("task should not panic"))
         .collect();
 
     // Exactly one should succeed due to CAS
-    let success_count = results.iter().filter(|r| r.as_ref().map_or(false, |v| *v)).count();
-    assert_eq!(success_count, 1, "exactly one owner should acquire after expiry");
+    let success_count = results
+        .iter()
+        .filter(|r| r.as_ref().is_ok_and(|v| *v))
+        .count();
+    assert_eq!(
+        success_count, 1,
+        "exactly one owner should acquire after expiry"
+    );
 
     Ok(())
 }
@@ -3905,19 +4083,25 @@ async fn lease_store_renew_extends_ttl() -> CatgaResult<()> {
     let leases = NatsLeases::connect(server.url(), unique("CATGA_LEASES_RENEW_TTL")).await?;
 
     // Acquire with short TTL
-    let acquired = leases.try_acquire("resource-ttl", "owner-a", Duration::from_millis(50)).await?;
+    let acquired = leases
+        .try_acquire("resource-ttl", "owner-a", Duration::from_millis(50))
+        .await?;
     assert!(acquired, "initial acquire should succeed");
 
     // Renew with longer TTL before expiry
     tokio::time::sleep(Duration::from_millis(20)).await;
-    let renewed = leases.renew("resource-ttl", "owner-a", Duration::from_secs(10)).await?;
+    let renewed = leases
+        .renew("resource-ttl", "owner-a", Duration::from_secs(10))
+        .await?;
     assert!(renewed, "renew should succeed");
 
     // Wait past original TTL but not past renewed TTL
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Different owner should still be denied (lease was renewed)
-    let denied = leases.try_acquire("resource-ttl", "owner-b", Duration::from_secs(30)).await?;
+    let denied = leases
+        .try_acquire("resource-ttl", "owner-b", Duration::from_secs(30))
+        .await?;
     assert!(!denied, "different owner should be denied due to renewal");
 
     Ok(())

@@ -3,15 +3,30 @@
 use std::time::{Duration, SystemTime};
 
 use catga_core::flow::FlowStatus;
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "mssql"))]
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
 use catga_core::flow::{FlowContinuation, flow_timeout_deadline_unix_ms};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "mssql"))]
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
 /// Maximum read/compare/write attempts for a contested mutable row.
 pub(crate) const MAX_CAS_RETRIES: usize = 8;
 
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "mssql"))]
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
 /// Maps a public lifecycle status to its compact indexed representation.
 pub(crate) const fn status_code(status: FlowStatus) -> i64 {
     match status {
@@ -53,14 +68,7 @@ pub(crate) fn system_time_from_unix_millis(value: i64) -> CatgaResult<SystemTime
 
 /// Converts a system time to a signed millisecond database value.
 pub(crate) fn unix_millis(value: SystemTime) -> CatgaResult<i64> {
-    match value.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(duration) => i64::try_from(duration.as_millis()).map_err(|_| timestamp_error()),
-        Err(error) => {
-            let milliseconds =
-                i64::try_from(error.duration().as_millis()).map_err(|_| timestamp_error())?;
-            milliseconds.checked_neg().ok_or_else(timestamp_error)
-        }
-    }
+    catga_core::time::signed_unix_millis(value).ok_or_else(timestamp_error)
 }
 
 /// Converts a system time to an exact, order-preserving millisecond and nanosecond remainder.
@@ -115,7 +123,12 @@ pub(crate) fn stale_before_unix_millis(now: SystemTime, stale_after: Duration) -
         .map_or(Ok(i64::MIN), Ok)
 }
 
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "mssql"))]
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
 /// Returns the indexed wait deadline for a continuation.
 pub(crate) fn deadline_millis(continuation: &FlowContinuation) -> CatgaResult<Option<i64>> {
     flow_timeout_deadline_unix_ms(continuation)?
@@ -130,7 +143,12 @@ pub(crate) fn deadline_millis(continuation: &FlowContinuation) -> CatgaResult<Op
         .transpose()
 }
 
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "mssql"))]
+#[cfg(any(
+    feature = "sqlite",
+    feature = "mysql",
+    feature = "postgres",
+    feature = "mssql"
+))]
 /// Reports exhaustion of a bounded physical revision compare-and-set loop.
 pub(crate) fn cas_error(operation: &str) -> CatgaError {
     CatgaError::new(
@@ -156,4 +174,3 @@ fn timestamp_error() -> CatgaError {
         "flow timestamp exceeds signed milliseconds",
     )
 }
-

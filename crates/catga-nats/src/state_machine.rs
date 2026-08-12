@@ -9,8 +9,8 @@ use catga_core::flow::{
     StateMachineSnapshot, StateMachineStore, decode_state_machine_snapshot,
     encode_state_machine_snapshot,
 };
+use catga_core::hash::sha256_digest;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, SnapshotCodec};
-use sha2::{Digest, Sha256};
 
 use crate::record::{create_record, decode_record};
 
@@ -29,6 +29,18 @@ where
     MemoryPackSnapshotCodec<S>: SnapshotCodec<S>,
 {
     /// Connects with compact MemoryPack state encoding.
+    ///
+    /// State-machine records use compact MemoryPack encoding inside one KV bucket.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsStateMachines;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let machines = NatsStateMachines::<u64>::connect("nats://127.0.0.1:4222", "app-state-machines").await?;
+    /// # drop(machines);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
         Self::with_codec(server, bucket, MemoryPackSnapshotCodec::default()).await
     }
@@ -45,11 +57,15 @@ where
         bucket: impl Into<Box<str>>,
         codec: C,
     ) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let store = crate::kv::open_or_create(&context, bucket.as_ref())
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             store,
             codec,
@@ -58,7 +74,7 @@ where
     }
 
     async fn entry(&self, key: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.store.entry(key).await.map_err(map_error)
+        self.store.entry(key).await.map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(&self, key: &str, next: Vec<u8>, revision: u64) -> CatgaResult<bool> {
@@ -66,7 +82,7 @@ where
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = matches!(
                     self.store.entry(key).await,
                     Ok(Some(entry))
@@ -96,7 +112,7 @@ where
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = match self.store.entry(&key).await {
                     Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                         record.matches(&decode_record(&entry.value)?)
@@ -167,7 +183,7 @@ where
 }
 
 fn kv_key(instance_id: &str) -> String {
-    format!("s{}", hex::encode(Sha256::digest(instance_id.as_bytes())))
+    format!("s{}", hex::encode(sha256_digest(instance_id.as_bytes())))
 }
 
 fn is_revision_conflict(error: &kv::UpdateError) -> bool {
@@ -178,8 +194,3 @@ fn is_revision_conflict(error: &kv::UpdateError) -> bool {
             source.kind() == jetstream::context::PublishErrorKind::WrongLastSequence
         })
 }
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
-}
-

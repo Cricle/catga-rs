@@ -48,6 +48,19 @@ const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 /// and PostgreSQL; bb8 for SQL Server). Set a field only to override that library default; unset
 /// fields are left to the library rather than re-managed here. The one exception is the acquire
 /// timeout, which Catga pins to a fail-fast five seconds unless overridden.
+///
+/// ```
+/// use std::time::Duration;
+/// use catga_flow_store::SqlFlowStoreOptions;
+///
+/// let options = SqlFlowStoreOptions::new()
+///     .max_connections(16)
+///     .min_connections(2)
+///     .acquire_timeout(Duration::from_secs(2))
+///     .max_lifetime(Duration::from_secs(30 * 60))
+///     .idle_timeout(Duration::from_secs(10 * 60));
+/// assert_eq!(options, options.clone());
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SqlFlowStoreOptions {
     connection_limit: Option<u32>,
@@ -175,6 +188,37 @@ impl SqlFlowStoreOptions {
 /// Construct the store with the constructor for its enabled backend, then migrate it
 /// once before serving flow traffic. Each instance owns one bounded pool and has no background
 /// tasks.
+///
+/// # Storage semantics
+///
+/// - `create` is an idempotent insert: it returns `false` when the flow identity already exists
+///   and reports an internal error if a different identity collides on the fixed-width key.
+/// - `update` is a business-version compare-and-set: the write applies only when the stored
+///   version equals `expected_version`, and the next state must advance the version by exactly
+///   one.
+/// - `try_claim` scans a bounded, index-ordered set of stale running candidates and claims the
+///   first one whose compare-and-set succeeds, so concurrent owners never claim the same flow.
+/// - `heartbeat` refreshes owner liveness under a stricter physical-revision fence; bounded
+///   compare-and-set retries end in a transient error rather than an unbounded loop.
+///
+/// ```
+/// use catga_core::flow::{FlowState, FlowStore};
+/// use catga_flow_store::SqlFlowStore;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let directory = tempfile::tempdir()?;
+/// let url = format!("sqlite://{}", directory.path().join("flows.db").display());
+/// let store = SqlFlowStore::connect_sqlite(&url).await?;
+/// store.migrate().await?;
+///
+/// let state = FlowState::new("order-42", "checkout", [], "node-a");
+/// assert!(store.create(state).await?);
+/// let stored = store.get("order-42").await?.expect("the flow was just created");
+/// assert_eq!(stored.flow_type(), "checkout");
+/// # Ok(())
+/// # }
+/// ```
 pub struct SqlFlowStore {
     #[cfg_attr(
         not(any(
@@ -190,12 +234,40 @@ pub struct SqlFlowStore {
 
 impl SqlFlowStore {
     /// Opens a SQL Server store with a bounded bb8/Tiberius pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlFlowStore::connect_mssql("server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql(url: &str) -> CatgaResult<Self> {
         Self::connect_mssql_with_options(url, SqlFlowStoreOptions::default()).await
     }
 
     /// Opens a SQL Server store with an explicit pool capacity.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use catga_flow_store::{SqlFlowStore, SqlFlowStoreOptions};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let options = SqlFlowStoreOptions::new()
+    ///     .max_connections(16)
+    ///     .acquire_timeout(Duration::from_secs(2));
+    /// let store = SqlFlowStore::connect_mssql_with_options(
+    ///     "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true",
+    ///     options,
+    /// )
+    /// .await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub async fn connect_mssql_with_options(
         url: &str,
@@ -224,6 +296,20 @@ impl SqlFlowStore {
     }
 
     /// Adopts an application-owned SQL Server pool without creating another pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let manager = bb8_tiberius::ConnectionManager::build(
+    ///     "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true",
+    /// )?;
+    /// let pool = bb8::Pool::builder().max_size(8).build(manager).await?;
+    /// let store = SqlFlowStore::from_mssql_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mssql")]
     pub fn from_mssql_pool(pool: crate::MssqlPool) -> Self {
         Self {
@@ -232,12 +318,38 @@ impl SqlFlowStore {
     }
 
     /// Opens a MySQL 8 store with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlFlowStore::connect_mysql("mysql://catga:catga@localhost/catga").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql(url: &str) -> CatgaResult<Self> {
         Self::connect_mysql_with_options(url, SqlFlowStoreOptions::default()).await
     }
 
     /// Opens a MySQL 8 store with an explicit pool capacity.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use catga_flow_store::{SqlFlowStore, SqlFlowStoreOptions};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let options = SqlFlowStoreOptions::new()
+    ///     .max_connections(16)
+    ///     .acquire_timeout(Duration::from_secs(2));
+    /// let store =
+    ///     SqlFlowStore::connect_mysql_with_options("mysql://catga:catga@localhost/catga", options)
+    ///         .await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub async fn connect_mysql_with_options(
         url: &str,
@@ -266,6 +378,20 @@ impl SqlFlowStore {
     }
 
     /// Adopts an application-owned MySQL pool without creating another connection pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::mysql::MySqlPoolOptions::new()
+    ///     .max_connections(12)
+    ///     .connect("mysql://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let store = SqlFlowStore::from_mysql_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "mysql")]
     pub fn from_mysql_pool(pool: sqlx::MySqlPool) -> Self {
         Self {
@@ -274,12 +400,40 @@ impl SqlFlowStore {
     }
 
     /// Opens a PostgreSQL store with a bounded SQLx pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowStore;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let store = SqlFlowStore::connect_postgres("postgres://catga:catga@localhost/catga").await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres(url: &str) -> CatgaResult<Self> {
         Self::connect_postgres_with_options(url, SqlFlowStoreOptions::default()).await
     }
 
     /// Opens a PostgreSQL store with an explicit pool capacity.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use catga_flow_store::{SqlFlowStore, SqlFlowStoreOptions};
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let options = SqlFlowStoreOptions::new()
+    ///     .max_connections(16)
+    ///     .acquire_timeout(Duration::from_secs(2));
+    /// let store = SqlFlowStore::connect_postgres_with_options(
+    ///     "postgres://catga:catga@localhost/catga",
+    ///     options,
+    /// )
+    /// .await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub async fn connect_postgres_with_options(
         url: &str,
@@ -308,6 +462,20 @@ impl SqlFlowStore {
     }
 
     /// Adopts an application-owned PostgreSQL pool without creating another connection pool.
+    ///
+    /// ```no_run
+    /// use catga_flow_store::SqlFlowStore;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pool = sqlx::postgres::PgPoolOptions::new()
+    ///     .max_connections(12)
+    ///     .connect("postgres://catga:catga@localhost/catga")
+    ///     .await?;
+    /// let store = SqlFlowStore::from_postgres_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "postgres")]
     pub fn from_postgres_pool(pool: sqlx::PgPool) -> Self {
         Self {
@@ -321,12 +489,42 @@ impl SqlFlowStore {
     /// lock-contention tail latency under concurrent flow transitions. Applications with a known
     /// read-heavy workload can configure the capacity with [`Self::connect_sqlite_with_options`]
     /// or provide a pool through [`Self::from_sqlite_pool`].
+    ///
+    /// ```
+    /// use catga_flow_store::SqlFlowStore;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let url = format!("sqlite://{}", directory.path().join("flows.db").display());
+    /// let store = SqlFlowStore::connect_sqlite(&url).await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite(url: &str) -> CatgaResult<Self> {
         Self::connect_sqlite_with_options(url, SqlFlowStoreOptions::default()).await
     }
 
     /// Opens a SQLite store with an explicit pool capacity.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use catga_flow_store::{SqlFlowStore, SqlFlowStoreOptions};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let url = format!("sqlite://{}", directory.path().join("flows.db").display());
+    /// let options = SqlFlowStoreOptions::new()
+    ///     .max_connections(4)
+    ///     .acquire_timeout(Duration::from_secs(2));
+    /// let store = SqlFlowStore::connect_sqlite_with_options(&url, options).await?;
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "sqlite")]
     pub async fn connect_sqlite_with_options(
         url: &str,
@@ -370,6 +568,25 @@ impl SqlFlowStore {
     /// This is the explicit escape hatch for applications that have measured a read-heavy
     /// workload and need a different pool capacity than [`Self::connect_sqlite`] uses for its
     /// single-writer default.
+    ///
+    /// ```
+    /// use std::str::FromStr;
+    /// use catga_flow_store::SqlFlowStore;
+    /// use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let url = format!("sqlite://{}", directory.path().join("flows.db").display());
+    /// let pool = SqlitePoolOptions::new()
+    ///     .max_connections(4)
+    ///     .connect_with(SqliteConnectOptions::from_str(&url)?.create_if_missing(true))
+    ///     .await?;
+    /// let store = SqlFlowStore::from_sqlite_pool(pool);
+    /// store.migrate().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[cfg(feature = "sqlite")]
     pub fn from_sqlite_pool(pool: sqlx::SqlitePool) -> Self {
         Self {
@@ -378,6 +595,16 @@ impl SqlFlowStore {
     }
 
     /// Applies this backend's idempotent FlowStore schema migration.
+    ///
+    /// The migration creates the flow-state table and its stale-claim index inside one
+    /// transaction; rerunning it after a restart or deploy is a no-op. Run it once at an
+    /// application-owned startup boundary before dispatching flow work — the store performs no
+    /// implicit migration on first use.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ErrorCode::Unavailable`] error when the database rejects the schema
+    /// statements; the failure is retryable after the underlying database fault is resolved.
     #[cfg(any(
         feature = "sqlite",
         feature = "mysql",

@@ -1,7 +1,7 @@
 //! Unit tests for scheduler helper functions.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha256};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn target_record_key(target: &[u8]) -> String {
     format!("r{}", hex::encode(Sha256::digest(target)))
@@ -33,8 +33,10 @@ fn marker_key(key: &str) -> String {
 }
 
 fn target_bytes(flow_id: &str, state_id: &str) -> Result<Vec<u8>, String> {
-    let flow_len = u64::try_from(flow_id.len()).map_err(|_| "flow identifier is too long".to_string())?;
-    let state_len = u64::try_from(state_id.len()).map_err(|_| "state identifier is too long".to_string())?;
+    let flow_len =
+        u64::try_from(flow_id.len()).map_err(|_| "flow identifier is too long".to_string())?;
+    let state_len =
+        u64::try_from(state_id.len()).map_err(|_| "state identifier is too long".to_string())?;
     let capacity = 16_usize
         .checked_add(flow_id.len())
         .and_then(|value| value.checked_add(state_id.len()))
@@ -51,13 +53,11 @@ fn to_millis(value: SystemTime) -> Result<u64, String> {
     let elapsed = value
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "due time precedes the Unix epoch".to_string())?;
-    u64::try_from(elapsed.as_millis())
-        .map_err(|_| "due time exceeds NATS range".to_string())
+    u64::try_from(elapsed.as_millis()).map_err(|_| "due time exceeds NATS range".to_string())
 }
 
 fn duration_millis(value: Duration) -> Result<u64, String> {
-    u64::try_from(value.as_millis())
-        .map_err(|_| "lease duration exceeds NATS range".to_string())
+    u64::try_from(value.as_millis()).map_err(|_| "lease duration exceeds NATS range".to_string())
 }
 
 fn from_millis(value: u64) -> Result<SystemTime, String> {
@@ -177,7 +177,10 @@ fn schedule_key_invalid_short() {
 
 #[test]
 fn schedule_key_invalid_short_prefix() {
-    assert_eq!(schedule_key("r0123:550e8400-e29b-41d4-a716-446655440000"), None);
+    assert_eq!(
+        schedule_key("r0123:550e8400-e29b-41d4-a716-446655440000"),
+        None
+    );
 }
 
 #[test]
@@ -204,7 +207,7 @@ fn schedule_key_invalid_hex() {
 fn to_millis_at_epoch() {
     let result = to_millis(UNIX_EPOCH);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 0);
+    assert_eq!(result.expect("test value must be present"), 0);
 }
 
 #[test]
@@ -219,29 +222,38 @@ fn to_millis_one_second() {
     let time = UNIX_EPOCH + Duration::from_secs(1);
     let result = to_millis(time);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 1000);
+    assert_eq!(result.expect("test value must be present"), 1000);
 }
 
 #[test]
 fn to_millis_large_value() {
     let time = UNIX_EPOCH + Duration::from_millis(99);
     let result = to_millis(time);
-    assert_eq!(result.unwrap(), 99);
+    assert_eq!(result.expect("test value must be present"), 99);
 }
 
 #[test]
 fn duration_millis_zero() {
-    assert_eq!(duration_millis(Duration::ZERO).unwrap(), 0);
+    assert_eq!(
+        duration_millis(Duration::ZERO).expect("test value must be present"),
+        0
+    );
 }
 
 #[test]
 fn duration_millis_one_second() {
-    assert_eq!(duration_millis(Duration::from_secs(1)).unwrap(), 1000);
+    assert_eq!(
+        duration_millis(Duration::from_secs(1)).expect("test value must be present"),
+        1000
+    );
 }
 
 #[test]
 fn duration_millis_large() {
-    assert_eq!(duration_millis(Duration::from_millis(99)).unwrap(), 99);
+    assert_eq!(
+        duration_millis(Duration::from_millis(99)).expect("test value must be present"),
+        99
+    );
 }
 
 #[test]

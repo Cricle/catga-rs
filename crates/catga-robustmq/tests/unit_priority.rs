@@ -176,7 +176,6 @@ fn test_mailbox_priority_default_conversion() {
         let sdk = mp.as_sdk();
         match sdk {
             Priority::High | Priority::Normal | Priority::Low => {}
-            _ => panic!("Invalid SDK priority"),
         }
     }
 }

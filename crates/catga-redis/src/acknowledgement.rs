@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use catga_core::{Acknowledger, CatgaError, CatgaResult, ErrorCode, OperationGuard};
 use redis::{Script, aio::ConnectionManager};
 
-use crate::transport::{InFlight, map_error};
+use crate::transport::InFlight;
 
 const ACK_IF_OWNER: &str = r#"
 local pending = redis.call('XPENDING', KEYS[1], ARGV[1], ARGV[3], ARGV[3], 1)
@@ -50,7 +50,7 @@ impl Acknowledger for RedisAcknowledger {
             .arg(self.entry_id.as_ref())
             .invoke_async(&mut connection)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         self.in_flight
             .release(self.stream.as_ref(), self.entry_id.as_ref());
         if acknowledged != 1 {

@@ -8,7 +8,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn wait_condition_new_creates_empty_results() {
-    let wait = WaitCondition::new("corr-1", WaitPolicy::All, 3, UNIX_EPOCH, Duration::from_secs(30));
+    let wait = WaitCondition::new(
+        "corr-1",
+        WaitPolicy::All,
+        3,
+        UNIX_EPOCH,
+        Duration::from_secs(30),
+    );
     assert_eq!(wait.correlation_id(), "corr-1");
     assert_eq!(wait.policy(), WaitPolicy::All);
     assert_eq!(wait.expected_count(), 3);
@@ -18,7 +24,13 @@ fn wait_condition_new_creates_empty_results() {
 
 #[test]
 fn wait_condition_record_success_adds_result() {
-    let wait = WaitCondition::new("corr", WaitPolicy::All, 2, UNIX_EPOCH, Duration::from_secs(60));
+    let wait = WaitCondition::new(
+        "corr",
+        WaitPolicy::All,
+        2,
+        UNIX_EPOCH,
+        Duration::from_secs(60),
+    );
     let wait = wait.record_success("child-1", [1_u8, 2]);
 
     assert_eq!(wait.completed_count(), 1);
@@ -32,7 +44,13 @@ fn wait_condition_record_success_adds_result() {
 #[test]
 fn wait_condition_record_failure_adds_result() {
     let error = CatgaError::new(ErrorCode::Unavailable, "timeout");
-    let wait = WaitCondition::new("corr", WaitPolicy::Any, 2, UNIX_EPOCH, Duration::from_secs(60));
+    let wait = WaitCondition::new(
+        "corr",
+        WaitPolicy::Any,
+        2,
+        UNIX_EPOCH,
+        Duration::from_secs(60),
+    );
     let wait = wait.record_failure("child-2", error);
 
     assert_eq!(wait.completed_count(), 1);
@@ -100,7 +118,13 @@ fn wait_condition_for_children_requires_at_least_one_child() {
 
 #[test]
 fn wait_condition_accepts_child_for_generic_wait() {
-    let wait = WaitCondition::new("corr", WaitPolicy::All, 2, UNIX_EPOCH, Duration::from_secs(60));
+    let wait = WaitCondition::new(
+        "corr",
+        WaitPolicy::All,
+        2,
+        UNIX_EPOCH,
+        Duration::from_secs(60),
+    );
     assert!(wait.accepts_child("any-id"));
 }
 
@@ -112,7 +136,8 @@ fn wait_condition_accepts_child_for_durable_wait() {
         ["child-a", "child-b"],
         UNIX_EPOCH,
         Duration::from_secs(30),
-    ).expect("valid");
+    )
+    .expect("valid");
 
     assert!(wait.accepts_child("child-a"));
     assert!(wait.accepts_child("child-b"));
@@ -121,7 +146,13 @@ fn wait_condition_accepts_child_for_durable_wait() {
 
 #[test]
 fn wait_condition_accepts_payload_len() {
-    let wait = WaitCondition::new("corr", WaitPolicy::All, 1, UNIX_EPOCH, Duration::from_secs(60));
+    let wait = WaitCondition::new(
+        "corr",
+        WaitPolicy::All,
+        1,
+        UNIX_EPOCH,
+        Duration::from_secs(60),
+    );
 
     assert!(wait.accepts_payload_len(1024));
     assert!(wait.accepts_payload_len(64 * 1024));
@@ -136,13 +167,25 @@ fn wait_condition_validate_rejects_invalid_correlation() {
 
 #[test]
 fn wait_condition_validate_rejects_zero_expected_count() {
-    let wait = WaitCondition::new("corr", WaitPolicy::All, 0, UNIX_EPOCH, Duration::from_secs(60));
+    let wait = WaitCondition::new(
+        "corr",
+        WaitPolicy::All,
+        0,
+        UNIX_EPOCH,
+        Duration::from_secs(60),
+    );
     assert!(wait.validate().is_err());
 }
 
 #[test]
 fn wait_condition_clone_preserves_results() {
-    let wait = WaitCondition::new("corr", WaitPolicy::All, 2, UNIX_EPOCH, Duration::from_secs(60));
+    let wait = WaitCondition::new(
+        "corr",
+        WaitPolicy::All,
+        2,
+        UNIX_EPOCH,
+        Duration::from_secs(60),
+    );
     let wait = wait.record_success("child", [1_u8]);
     let cloned = wait.clone();
 
@@ -152,11 +195,20 @@ fn wait_condition_clone_preserves_results() {
 
 #[test]
 fn wait_condition_shared_payload_returns_arc_clone() {
-    let wait = WaitCondition::new("corr", WaitPolicy::All, 1, UNIX_EPOCH, Duration::from_secs(60));
+    let wait = WaitCondition::new(
+        "corr",
+        WaitPolicy::All,
+        1,
+        UNIX_EPOCH,
+        Duration::from_secs(60),
+    );
     let wait = wait.record_success("child", [1_u8, 2]);
 
     let shared1 = wait.results()[0].shared_payload();
     let shared2 = wait.results()[0].shared_payload();
 
-    assert!(Arc::ptr_eq(shared1.as_ref().unwrap(), shared2.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(
+        shared1.as_ref().expect("test value must be present"),
+        shared2.as_ref().expect("test value must be present")
+    ));
 }

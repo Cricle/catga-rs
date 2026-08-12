@@ -12,9 +12,9 @@ use catga_core::codec::memorypack::{
     MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
 };
 use catga_core::flow::{DueFlowScheduler, FlowScheduler, ScheduledResume};
+use catga_core::hash::sha256_digest;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::record::{create_record, decode_record};
@@ -74,8 +74,24 @@ pub struct NatsFlowScheduler {
 
 impl NatsFlowScheduler {
     /// Connects to `server`, provisioning the schedule bucket named `bucket` and its index bucket.
+    ///
+    /// The schedule bucket and its due-time index bucket are provisioned together.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsFlowScheduler;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let scheduler = NatsFlowScheduler::connect("nats://127.0.0.1:4222", "app-flow-scheduler").await?;
+    /// # drop(scheduler);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        let context = jetstream::new(async_nats::connect(server).await.map_err(map_error)?);
+        let context = jetstream::new(
+            async_nats::connect(server)
+                .await
+                .map_err(CatgaError::transient)?,
+        );
         let bucket = bucket.into();
         let schedules = open_bucket(&context, bucket.as_ref()).await?;
         let index = open_bucket(&context, &format!("{bucket}_IDX")).await?;
@@ -86,7 +102,12 @@ impl NatsFlowScheduler {
         &self,
         key: &str,
     ) -> CatgaResult<Option<(kv::Entry, StoredSchedule)>> {
-        let Some(entry) = self.schedules.entry(key).await.map_err(map_error)? else {
+        let Some(entry) = self
+            .schedules
+            .entry(key)
+            .await
+            .map_err(CatgaError::transient)?
+        else {
             return Ok(None);
         };
         if !matches!(entry.operation, kv::Operation::Put) {
@@ -105,7 +126,11 @@ impl NatsFlowScheduler {
     async fn index_schedule(&self, key: &str) -> CatgaResult<()> {
         let marker_key = marker_key(key);
         for _ in 0..MAX_CAS_RETRIES {
-            let Some(metadata_entry) = self.index.entry(metadata_key()).await.map_err(map_error)?
+            let Some(metadata_entry) = self
+                .index
+                .entry(metadata_key())
+                .await
+                .map_err(CatgaError::transient)?
             else {
                 if create(&self.index, metadata_key(), &ScheduleIndex::default()).await? {
                     continue;
@@ -120,7 +145,11 @@ impl NatsFlowScheduler {
             }
             let metadata_record = decode_record(&metadata_entry.value)?;
             let metadata = decode::<ScheduleIndex>(metadata_record.payload())?;
-            let marker = self.index.entry(&marker_key).await.map_err(map_error)?;
+            let marker = self
+                .index
+                .entry(&marker_key)
+                .await
+                .map_err(CatgaError::transient)?;
             let Some(marker) =
                 marker.filter(|marker| matches!(marker.operation, kv::Operation::Put))
             else {
@@ -140,7 +169,11 @@ impl NatsFlowScheduler {
             let marker_record = decode_record(&marker.value)?;
             let marker_value = decode::<IndexMarker>(marker_record.payload())?;
             let page_key = page_key(marker_value.page);
-            let page = self.index.entry(&page_key).await.map_err(map_error)?;
+            let page = self
+                .index
+                .entry(&page_key)
+                .await
+                .map_err(CatgaError::transient)?;
             let Some(page) = page.filter(|page| matches!(page.operation, kv::Operation::Put))
             else {
                 if create(&self.index, &page_key, &vec![Box::<str>::from(key)]).await? {
@@ -210,7 +243,11 @@ impl NatsFlowScheduler {
 
     async fn next_indexed_schedule(&self) -> CatgaResult<IndexCursorStep> {
         for _ in 0..MAX_CAS_RETRIES {
-            let Some(metadata_entry) = self.index.entry(metadata_key()).await.map_err(map_error)?
+            let Some(metadata_entry) = self
+                .index
+                .entry(metadata_key())
+                .await
+                .map_err(CatgaError::transient)?
             else {
                 return Ok(IndexCursorStep::Exhausted);
             };
@@ -223,7 +260,7 @@ impl NatsFlowScheduler {
                 .index
                 .entry(page_key(metadata.scan_page))
                 .await
-                .map_err(map_error)?;
+                .map_err(CatgaError::transient)?;
             let candidate = match page.filter(|page| matches!(page.operation, kv::Operation::Put)) {
                 Some(page) => {
                     let page_record = decode_record(&page.value)?;
@@ -340,6 +377,16 @@ impl FlowScheduler for NatsFlowScheduler {
 
 #[async_trait]
 impl DueFlowScheduler for NatsFlowScheduler {
+    /// Claims at most `limit` due schedules, committing each claim individually.
+    ///
+    /// Every committed claim is returned to the caller exactly once, even when the scan is
+    /// interrupted: JetStream KV cannot update the scan cursor and a schedule record
+    /// atomically, so a mid-scan failure (for example cursor compare-and-set retries
+    /// exhausting under contention) breaks the scan and yields the partial batch committed
+    /// so far, mirroring the partial batches SQL stores return under `SKIP LOCKED`
+    /// contention. An error is reported only when no claim was committed yet, so a caller
+    /// can treat `Err` as "nothing was claimed on my behalf" and never loses track of
+    /// leased work.
     async fn claim_due(
         &self,
         owner: &str,
@@ -369,19 +416,22 @@ impl DueFlowScheduler for NatsFlowScheduler {
             if inspected >= scan_limit || claimed.len() >= scan_limit {
                 break;
             }
-            let key = match self.next_indexed_schedule().await? {
-                IndexCursorStep::Candidate(key) => key,
-                IndexCursorStep::Advanced => continue,
-                IndexCursorStep::Exhausted => break,
+            let key = match self.next_indexed_schedule().await {
+                Ok(IndexCursorStep::Candidate(key)) => key,
+                Ok(IndexCursorStep::Advanced) => continue,
+                Ok(IndexCursorStep::Exhausted) => break,
+                Err(error) if claimed.is_empty() => return Err(error),
+                Err(_) => break,
             };
             inspected = inspected.saturating_add(1);
             match self
                 .claim_schedule(&key, owner, now_millis, lease_until_millis)
-                .await?
+                .await
             {
-                ClaimAttempt::Claimed(schedule) => claimed.push(schedule),
-                ClaimAttempt::Examined => {}
-                ClaimAttempt::Missing => {}
+                Ok(ClaimAttempt::Claimed(schedule)) => claimed.push(schedule),
+                Ok(ClaimAttempt::Examined | ClaimAttempt::Missing) => {}
+                Err(error) if claimed.is_empty() => return Err(error),
+                Err(_) => break,
             }
         }
         Ok(claimed)
@@ -465,7 +515,7 @@ impl DueFlowScheduler for NatsFlowScheduler {
 async fn open_bucket(context: &jetstream::Context, bucket: &str) -> CatgaResult<kv::Store> {
     crate::kv::open_or_create(context, bucket)
         .await
-        .map_err(map_error)
+        .map_err(CatgaError::transient)
 }
 
 async fn create<T: MemoryPackSerialize>(
@@ -478,7 +528,7 @@ async fn create<T: MemoryPackSerialize>(
         Ok(_) => Ok(true),
         Err(error) if is_revision_conflict(&error) => Ok(false),
         Err(error) => {
-            let reported = map_error(error);
+            let reported = CatgaError::transient(error);
             let committed = match store.entry(key).await {
                 Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                     record.matches(&decode_record(&entry.value)?)
@@ -495,7 +545,7 @@ async fn create_or_restore<T: MemoryPackSerialize>(
     key: &str,
     value: &T,
 ) -> CatgaResult<bool> {
-    let Some(entry) = store.entry(key).await.map_err(map_error)? else {
+    let Some(entry) = store.entry(key).await.map_err(CatgaError::transient)? else {
         return create(store, key, value).await;
     };
     if matches!(entry.operation, kv::Operation::Put) {
@@ -515,7 +565,7 @@ async fn compare_and_set(
         Ok(_) => Ok(true),
         Err(error) if is_revision_conflict(&error) => Ok(false),
         Err(error) => {
-            let reported = map_error(error);
+            let reported = CatgaError::transient(error);
             let committed = matches!(store.entry(key).await, Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) && entry.value.as_ref() == value.as_slice());
             if committed { Ok(true) } else { Err(reported) }
         }
@@ -527,7 +577,7 @@ async fn delete_if_revision(store: &kv::Store, key: &str, revision: u64) -> Catg
         Ok(()) => Ok(true),
         Err(error) if is_revision_conflict(&error) => Ok(false),
         Err(error) => {
-            let reported = map_error(error);
+            let reported = CatgaError::transient(error);
             let deleted = !matches!(store.entry(key).await, Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put));
             if deleted { Ok(true) } else { Err(reported) }
         }
@@ -535,7 +585,7 @@ async fn delete_if_revision(store: &kv::Store, key: &str, revision: u64) -> Catg
 }
 
 fn target_record_key(target: &[u8]) -> String {
-    format!("r{}", hex::encode(Sha256::digest(target)))
+    format!("r{}", hex::encode(sha256_digest(target)))
 }
 
 fn schedule_key(schedule_id: &str) -> Option<&str> {
@@ -559,7 +609,7 @@ fn page_key(page: u64) -> String {
 }
 
 fn marker_key(key: &str) -> String {
-    format!("i{}", hex::encode(Sha256::digest(key.as_bytes())))
+    format!("i{}", hex::encode(sha256_digest(key.as_bytes())))
 }
 
 fn target_bytes(flow_id: &str, state_id: &str) -> CatgaResult<Vec<u8>> {
@@ -671,8 +721,4 @@ fn cas_error(operation: &str) -> CatgaError {
         ErrorCode::Transient,
         format!("NATS scheduler {operation} compare-and-set did not stabilize"),
     )
-}
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }

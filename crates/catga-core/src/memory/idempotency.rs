@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{sync::Arc, time::Duration};
 
 #[cfg(feature = "test-hooks")]
 use std::sync::{Barrier, Mutex};
@@ -190,7 +187,7 @@ impl IdempotencyStore for MemoryIdempotency {
             self.completed.insert(
                 key.into(),
                 CompletedRecord {
-                    completed_at: now_millis(),
+                    completed_at: crate::time::now_unix_millis(),
                     record_identity,
                 },
             );
@@ -237,7 +234,7 @@ impl IdempotencyStore for MemoryIdempotency {
         let mut operation = telemetry::persistence_operation("memory", "idempotency", "cleanup");
         let outcome = (|| {
             validate_retention_cleanup_limit(limit)?;
-            let now = now_millis();
+            let now = crate::time::now_unix_millis();
             let retention = u64::try_from(self.retention.as_millis()).map_err(|_| {
                 CatgaError::new(
                     ErrorCode::Validation,
@@ -274,12 +271,4 @@ impl IdempotencyStore for MemoryIdempotency {
         operation.complete(&outcome);
         outcome
     }
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-        })
 }

@@ -12,10 +12,10 @@ use catga_core::flow::{
     FlowContinuation, FlowQuery, FlowState, FlowSummary, SuspendedFlowStore, TimedOutFlowPoll,
     TimedOutFlowReceipt, TimedOutFlowStore, decode_continuation, encode_continuation,
 };
+use catga_core::hash::sha256_digest;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::{
     flow::open_bucket,
@@ -42,8 +42,22 @@ pub struct NatsSuspendedFlows {
 
 impl NatsSuspendedFlows {
     /// Connects and idempotently provisions a one-history KV bucket for suspended flows.
+    ///
+    /// A one-history KV bucket keeps the newest suspension record per flow instance.
+    ///
+    /// ```no_run
+    /// use catga_nats::NatsSuspendedFlows;
+    ///
+    /// # async fn run() -> catga_core::CatgaResult<()> {
+    /// let suspended = NatsSuspendedFlows::connect("nats://127.0.0.1:4222", "app-suspended-flows").await?;
+    /// # drop(suspended);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn connect(server: &str, bucket: impl Into<Box<str>>) -> CatgaResult<Self> {
-        let client = async_nats::connect(server).await.map_err(map_error)?;
+        let client = async_nats::connect(server)
+            .await
+            .map_err(CatgaError::transient)?;
         let context = jetstream::new(client.clone());
         let bucket = bucket.into();
         let store = open_bucket(&context, bucket.as_ref()).await?;
@@ -51,7 +65,7 @@ impl NatsSuspendedFlows {
         let stream = context
             .get_stream(&store.stream_name)
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         let timeout_consumer = stream
             .get_or_create_consumer(
                 "catga_flow_timeouts",
@@ -64,7 +78,7 @@ impl NatsSuspendedFlows {
                 },
             )
             .await
-            .map_err(map_error)?;
+            .map_err(CatgaError::transient)?;
         Ok(Self {
             client,
             store,
@@ -74,7 +88,7 @@ impl NatsSuspendedFlows {
     }
 
     async fn entry(&self, key: &str) -> CatgaResult<Option<kv::Entry>> {
-        self.store.entry(key).await.map_err(map_error)
+        self.store.entry(key).await.map_err(CatgaError::transient)
     }
 
     async fn compare_and_set(
@@ -88,7 +102,7 @@ impl NatsSuspendedFlows {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = matches!(
                     store.entry(key).await,
                     Ok(Some(entry))
@@ -107,7 +121,11 @@ impl NatsSuspendedFlows {
         let correlation_id = wait.correlation_id();
         let key = correlation_key(correlation_id);
         for _ in 0..MAX_CAS_RETRIES {
-            let entry = self.index.entry(&key).await.map_err(map_error)?;
+            let entry = self
+                .index
+                .entry(&key)
+                .await
+                .map_err(CatgaError::transient)?;
             let Some(entry) = entry.filter(|entry| matches!(entry.operation, kv::Operation::Put))
             else {
                 let index = WaitCorrelationIndex {
@@ -161,7 +179,12 @@ impl NatsSuspendedFlows {
     ) -> CatgaResult<()> {
         let key = correlation_key(correlation_id);
         for _ in 0..MAX_CAS_RETRIES {
-            let Some(entry) = self.index.entry(&key).await.map_err(map_error)? else {
+            let Some(entry) = self
+                .index
+                .entry(&key)
+                .await
+                .map_err(CatgaError::transient)?
+            else {
                 return Ok(());
             };
             if !matches!(entry.operation, kv::Operation::Put) {
@@ -185,7 +208,7 @@ impl NatsSuspendedFlows {
                 {
                     Ok(()) => return Ok(()),
                     Err(error) if is_delete_revision_conflict(&error) => continue,
-                    Err(error) => return Err(map_error(error)),
+                    Err(error) => return Err(CatgaError::transient(error)),
                 }
             } else {
                 index.flow_ids.remove(position);
@@ -282,7 +305,7 @@ impl SuspendedFlowStore for NatsSuspendedFlows {
             Ok(_) => Ok(true),
             Err(error) if is_revision_conflict(&error) => Ok(false),
             Err(error) => {
-                let reported = map_error(error);
+                let reported = CatgaError::transient(error);
                 let committed = match self.store.entry(&key).await {
                     Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                         record.matches(&decode_record(&entry.value)?)
@@ -312,7 +335,12 @@ impl SuspendedFlowStore for NatsSuspendedFlows {
         correlation_id: &str,
     ) -> CatgaResult<Option<FlowContinuation>> {
         let key = correlation_key(correlation_id);
-        let Some(entry) = self.index.entry(&key).await.map_err(map_error)? else {
+        let Some(entry) = self
+            .index
+            .entry(&key)
+            .await
+            .map_err(CatgaError::transient)?
+        else {
             return Ok(None);
         };
         if !matches!(entry.operation, kv::Operation::Put) {
@@ -341,11 +369,11 @@ impl SuspendedFlowStore for NatsSuspendedFlows {
     }
 
     async fn query(&self, query: &FlowQuery) -> CatgaResult<Vec<FlowSummary>> {
-        let mut keys = self.store.keys().await.map_err(map_error)?;
+        let mut keys = self.store.keys().await.map_err(CatgaError::transient)?;
         let mut summaries = Vec::with_capacity(query.max_results());
         let mut scanned = 0;
         while scanned < query.max_scan() && summaries.len() < query.max_results() {
-            let Some(key) = keys.try_next().await.map_err(map_error)? else {
+            let Some(key) = keys.try_next().await.map_err(CatgaError::transient)? else {
                 break;
             };
             scanned = scanned.saturating_add(1);
@@ -399,7 +427,7 @@ impl SuspendedFlowStore for NatsSuspendedFlows {
                     return Ok(true);
                 }
                 Err(error) if is_delete_revision_conflict(&error) => continue,
-                Err(error) => return Err(map_error(error)),
+                Err(error) => return Err(CatgaError::transient(error)),
             }
         }
         Err(CatgaError::new(
@@ -539,14 +567,11 @@ impl TimedOutFlowStore for NatsSuspendedFlows {
 }
 
 fn kv_key(flow_id: &str) -> String {
-    format!("f{}", hex::encode(Sha256::digest(flow_id.as_bytes())))
+    format!("f{}", hex::encode(sha256_digest(flow_id.as_bytes())))
 }
 
 fn correlation_key(correlation_id: &str) -> String {
-    format!(
-        "c{}",
-        hex::encode(Sha256::digest(correlation_id.as_bytes()))
-    )
+    format!("c{}", hex::encode(sha256_digest(correlation_id.as_bytes())))
 }
 
 async fn create_index(
@@ -559,7 +584,7 @@ async fn create_index(
         Ok(_) => Ok(true),
         Err(error) if is_revision_conflict(&error) => Ok(false),
         Err(error) => {
-            let reported = map_error(error);
+            let reported = CatgaError::transient(error);
             let committed = match store.entry(key).await {
                 Ok(Some(entry)) if matches!(entry.operation, kv::Operation::Put) => {
                     record.matches(&decode_record(&entry.value)?)
@@ -625,8 +650,4 @@ fn is_delete_revision_conflict(error: &kv::DeleteError) -> bool {
         .is_some_and(|source| {
             source.kind() == jetstream::context::PublishErrorKind::WrongLastSequence
         })
-}
-
-fn map_error(error: impl std::fmt::Display) -> CatgaError {
-    CatgaError::new(ErrorCode::Transient, error.to_string())
 }

@@ -22,7 +22,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_DIR="$PROJECT_ROOT/testing/docker"
 COMPOSE_FILE="$COMPOSE_DIR/podman-compose.yaml"
 
@@ -99,12 +99,12 @@ wait_for_healthy() {
         local all_healthy=true
 
         # Check NATS
-        if ! podman inspect --format='{{.State.Health.Status}}' catga-e2e-nats-1 2>/dev/null | grep -q "healthy"; then
+        if ! podman inspect --format='{{.State.Health.Status}}' catga-e2e_nats_1 2>/dev/null | grep -q "healthy"; then
             all_healthy=false
         fi
 
         # Check Redis
-        if ! podman inspect --format='{{.State.Health.Status}}' catga-e2e-redis-1 2>/dev/null | grep -q "healthy"; then
+        if ! podman inspect --format='{{.State.Health.Status}}' catga-e2e_redis_1 2>/dev/null | grep -q "healthy"; then
             all_healthy=false
         fi
 
@@ -144,11 +144,21 @@ run_tests() {
 
     cd "$PROJECT_ROOT"
 
-    # Set environment variables for tests
+    # The compose file publishes on dynamic host ports; discover and export them.
+    local nats_port redis_port
+    nats_port=$(podman port catga-e2e_nats_1 4222 | awk -F: '{print $NF}')
+    redis_port=$(podman port catga-e2e_redis_1 6379 | awk -F: '{print $NF}')
+    if [[ -z "$nats_port" || -z "$redis_port" ]]; then
+        log_error "Could not discover published NATS/Redis ports"
+        return 1
+    fi
     export CATGA_E2E_CONTAINER_HOST="localhost"
+    export CATGA_NATS_URL="nats://127.0.0.1:${nats_port}"
+    export CATGA_REDIS_URL="redis://127.0.0.1:${redis_port}/"
+    log_info "CATGA_NATS_URL=${CATGA_NATS_URL} CATGA_REDIS_URL=${CATGA_REDIS_URL}"
 
-    # Run tests with cargo
-    cargo test --test '*' --features e2e 2>&1 || {
+    # Service-backed tests are #[ignore]d in the default suite; the E2E job runs them.
+    cargo test -p catga-tests -- --include-ignored 2>&1 || {
         log_error "E2E tests failed"
         return 1
     }

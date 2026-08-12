@@ -1,0 +1,34 @@
+error: expected `request`, `command`, or `event`
+ --> tests/ui/fail_catga_typed_mediator.rs:5:5
+  |
+5 |     bogus Msg => handler;
+  |     ^^^^^
+
+error: duplicate request handler registration
+  --> tests/ui/fail_catga_typed_mediator.rs:11:13
+   |
+11 |     request Dup => handler_b;
+   |             ^^^
+
+error: duplicate command handler registration
+  --> tests/ui/fail_catga_typed_mediator.rs:17:13
+   |
+17 |     command DupCmd => handler_b;
+   |             ^^^^^^
+
+error: event registration requires at least one handler
+  --> tests/ui/fail_catga_typed_mediator.rs:20:1
+   |
+20 | / catga_core_macros::catga_typed_mediator! {
+21 | |     pub struct EmptyEvent;
+22 | |     event Empty => [];
+23 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `catga_core_macros::catga_typed_mediator` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: expected `;`
+  --> tests/ui/fail_catga_typed_mediator.rs:27:5
+   |
+27 |     request Msg => handler;
+   |     ^^^^^^^

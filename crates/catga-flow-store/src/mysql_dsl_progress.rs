@@ -18,4 +18,4 @@ pub(crate) async fn migrate(pool: &MySqlPool) -> catga_core::CatgaResult<()> {
     .map_err(|error| crate::error::database_error("create MySQL DSL step-progress table", error))
 }
 
-define_server_dsl_progress!(MySqlPool, false, "MySQL");
+define_server_dsl_progress!(MySqlPool, false, false, "MySQL");
