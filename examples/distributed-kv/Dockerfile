@@ -1,9 +1,9 @@
 # Builds the distributed-kv example binary from the workspace root.
 # Build context must be the workspace root:
-#   podman build -f examples/distributed-kv/Dockerfile -t localhost/catga-distributed-kv:local .
+#   docker build -f examples/distributed-kv/Dockerfile -t catga-distributed-kv:local .
 #
 # Networks without direct crates.io access can redirect the registry:
-#   podman build --build-arg CARGO_REGISTRY_SPARSE_MIRROR=sparse+https://rsproxy.cn/index/ ...
+#   docker build --build-arg CARGO_REGISTRY_SPARSE_MIRROR=sparse+https://rsproxy.cn/index/ ...
 FROM rust:1.96-bookworm AS build
 
 ARG CARGO_REGISTRY_SPARSE_MIRROR=""
@@ -13,32 +13,25 @@ RUN if [ -n "$CARGO_REGISTRY_SPARSE_MIRROR" ]; then \
          "$CARGO_REGISTRY_SPARSE_MIRROR" > "$CARGO_HOME/config.toml"; \
     fi
 
-# Add MUSL target for static linking
-RUN rustup target add x86_64-unknown-linux-musl
-
-# catga-sorock builds protobuf at compile time: sorock's gRPC build script
-# needs protoc on PATH, and raft-proto's protobuf-build rejects protoc >= 4
-# (and the 2x line). bookworm ships protoc 3.21.x, which satisfies both.
-# libprotobuf-dev carries the well-known type imports (google/protobuf/*.proto)
-# that sorock.proto references; protobuf-compiler alone ships only the binary.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev upx \
+# Install MUSL target and cross-compiler
+RUN rustup target add x86_64-unknown-linux-musl \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       musl-tools \
+       protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 COPY . .
 
-# Static build with MUSL (fully static, no libc dependencies)
+# Static build with MUSL
 RUN cargo build --locked --release \
     --target x86_64-unknown-linux-musl \
     -p distributed-kv --bin distributed-kv
 
-# UPX compression for even smaller image
-RUN upx --best --ultra-brute /workspace/target/x86_64-unknown-linux-musl/release/distributed-kv
-
 FROM scratch
 
-# Copy the compressed static binary (no SSL certs needed - using rustls)
+# Copy the static binary (no SSL certs needed - using rustls)
 COPY --from=build /workspace/target/x86_64-unknown-linux-musl/release/distributed-kv /distributed-kv
 
 ENTRYPOINT ["/distributed-kv"]
