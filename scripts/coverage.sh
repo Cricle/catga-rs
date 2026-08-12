@@ -111,7 +111,7 @@ run_coverage tarpaulin \
     --exclude-files '*/src/macros/proc-macros/*' \
     --fail-under "$required_line_coverage" \
     --out Lcov \
-    --output-path "$output_directory/lcov.info"
+    --output-dir "$output_directory"
 
 # Subsequent runs with --skip-clean to reuse compiled artifacts.
 # Json output.
@@ -121,7 +121,7 @@ run_coverage tarpaulin \
     --engine llvm \
     --exclude-files '*/src/macros/proc-macros/*' \
     --out Json \
-    --output-path "$output_directory/coverage.json" \
+    --output-dir "$output_directory" \
     --skip-clean
 
 # Html output.
@@ -131,7 +131,7 @@ run_coverage tarpaulin \
     --engine llvm \
     --exclude-files '*/src/macros/proc-macros/*' \
     --out Html \
-    --output-dir "$output_directory/html" \
+    --output-dir "$output_directory" \
     --skip-clean
 
 printf 'Strict coverage gate passed; artifacts: %s\n' "$output_directory"
