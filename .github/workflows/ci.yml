@@ -20,9 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: step-security/setup-protoc@v1
-        with:
-          version: 3.20.3
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p catga-core --all-targets --all-features -- -D warnings
@@ -46,9 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: step-security/setup-protoc@v1
-        with:
-          version: 3.20.3
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
       # Docker/service-dependent E2E tests are #[ignore]d and skip by default;
       # they run only in the release workflow (tag push or manual dispatch).

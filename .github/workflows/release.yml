@@ -16,9 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: step-security/setup-protoc@v1
-        with:
-          version: 3.20.3
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
@@ -90,9 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: step-security/setup-protoc@v1
-        with:
-          version: 3.20.3
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
       - run: test -n "$CARGO_REGISTRY_TOKEN"
       - run: cargo fmt --all -- --check
