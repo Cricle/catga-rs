@@ -1,5 +1,5 @@
 //! Sorock branch: sorock multi-Raft over gRPC. The gRPC server (bound by
-//! [`SorockRuntimeBuilder`](catga_sorock::SorockRuntimeBuilder)) carries all
+//! [`SorockRuntimeBuilder`]) carries all
 //! consensus traffic; the axum server on the API port serves only the KV
 //! routes and probes — sorock speaks gRPC, so there is no inbound consensus
 //! HTTP route, and proposals reach the leader inside sorock's transport.

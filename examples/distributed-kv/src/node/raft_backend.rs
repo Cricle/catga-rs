@@ -1,6 +1,6 @@
 //! Raft branch: raft-rs over HTTP. The API port also carries the inbound Raft
 //! route, the leader-forward route, and the probes (all from the
-//! [`RaftHttpCluster`](catga_axum::RaftHttpCluster) router).
+//! [`RaftHttpCluster`] router).
 
 use std::{sync::Arc, time::Duration};
 
