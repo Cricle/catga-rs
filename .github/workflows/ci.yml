@@ -24,7 +24,8 @@ jobs:
         run: |
           PROTOBUF_VERSION=3.20.3
           curl -sLO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
-          unzip -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" -d /usr/local
+          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" bin/protoc -d /usr/local/bin
+          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" 'include/*' -d /usr/local
           rm "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
@@ -53,7 +54,8 @@ jobs:
         run: |
           PROTOBUF_VERSION=3.20.3
           curl -sLO "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
-          unzip -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" -d /usr/local
+          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" bin/protoc -d /usr/local/bin
+          unzip -j -o "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip" 'include/*' -d /usr/local
           rm "protoc-${PROTOBUF_VERSION}-linux-x86_64.zip"
       - uses: Swatinem/rust-cache@v2
       # Docker/service-dependent E2E tests are #[ignore]d and skip by default;
