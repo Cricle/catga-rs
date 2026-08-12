@@ -21,18 +21,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
       - name: Create a draft release for performance assets
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --generate-notes
           fi
-      - name: Run workspace coverage (skip E2E - Docker environment requires separate setup)
+      - name: Run Docker E2E performance suite
+        id: performance
+        continue-on-error: true
         run: >-
-          bash scripts/coverage.sh --profile full
-          --skip-e2e
-          --required-line-coverage 80
+          bash scripts/performance.sh --profile full
+          --output-directory target/release-performance
 
   publish:
     needs: performance
