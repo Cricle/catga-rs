@@ -104,7 +104,7 @@ fi
 # - line coverage (--fail-under) is the sole coverage gate
 
 # Primary run: Lcov output + line coverage gate.
-run_coverage tarpaulin run \
+run_coverage tarpaulin \
     --workspace \
     --all-features \
     --engine llvm \
@@ -115,7 +115,7 @@ run_coverage tarpaulin run \
 
 # Subsequent runs with --skip-clean to reuse compiled artifacts.
 # Json output.
-run_coverage tarpaulin run \
+run_coverage tarpaulin \
     --workspace \
     --all-features \
     --engine llvm \
@@ -125,7 +125,7 @@ run_coverage tarpaulin run \
     --skip-clean
 
 # Html output.
-run_coverage tarpaulin run \
+run_coverage tarpaulin \
     --workspace \
     --all-features \
     --engine llvm \
