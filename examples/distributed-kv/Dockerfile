@@ -19,6 +19,7 @@ RUN rustup target add x86_64-unknown-linux-musl \
     && apt-get install -y --no-install-recommends \
        musl-tools \
        protobuf-compiler libprotobuf-dev \
+       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
@@ -31,7 +32,10 @@ RUN cargo build --locked --release \
 
 FROM scratch
 
-# Copy the static binary (no SSL certs needed - using rustls)
+# Copy CA certificates for TLS (reqwest with rustls needs them)
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy the static binary
 COPY --from=build /workspace/target/x86_64-unknown-linux-musl/release/distributed-kv /distributed-kv
 
 ENTRYPOINT ["/distributed-kv"]
