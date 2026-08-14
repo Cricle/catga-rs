@@ -65,7 +65,7 @@ async fn execute_creates_completes_and_replays_terminal_result() {
             })
             .await,
     );
-    assert!(result.is_success());
+    assert!(result.is_ok());
     assert_eq!(result.completed_steps(), 3);
     assert_eq!(runs.load(Ordering::SeqCst), 1);
 
@@ -83,7 +83,7 @@ async fn execute_creates_completes_and_replays_terminal_result() {
             })
             .await,
     );
-    assert!(replay.is_success());
+    assert!(replay.is_ok());
     assert_eq!(replay.completed_steps(), 3);
     assert_eq!(runs.load(Ordering::SeqCst), 1);
 }
@@ -100,7 +100,7 @@ async fn execute_failure_persists_and_replays_the_error() {
             })
             .await,
     );
-    assert!(!failed.is_success());
+    assert!(!failed.is_ok());
     let error = failed.error().expect("failure retains its error");
     assert_eq!(error.code(), ErrorCode::Internal);
 
@@ -217,7 +217,7 @@ async fn execute_with_heartbeat_renews_ownership_and_completes() {
             )
             .await,
     );
-    assert!(result.is_success());
+    assert!(result.is_ok());
     let stored = assert_success(store.get("flow-6").await).expect("flow persisted");
     assert_eq!(stored.status(), FlowStatus::Done);
     // Periodic heartbeats renewed the lease while the work was pending.

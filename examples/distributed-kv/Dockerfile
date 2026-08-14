@@ -32,10 +32,8 @@ RUN cargo build --locked --release \
 
 FROM scratch
 
-# Copy CA certificates for TLS (reqwest with rustls needs them)
+# Copy CA certificates and the binary
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
-# Copy the static binary
 COPY --from=build /workspace/target/x86_64-unknown-linux-musl/release/distributed-kv /distributed-kv
 
 ENTRYPOINT ["/distributed-kv"]

@@ -199,19 +199,19 @@ async fn main() -> CatgaResult<()> {
 ### 带补偿的工作流 (Saga)
 
 ```rust
-use catga_core::flow::Flow;
+use catga_core::flow::DslFlow;
 
-let result = Flow::new("order_checkout")
-    .step(
-        || async { Ok(()) },  // 预留库存
-        || async { Ok(()) },  // 补偿: 释放库存
+let result = DslFlow::<()>::new()
+    .compensate(
+        |_| async { Ok(()) },  // 预留库存
+        |_| async { Ok(()) },  // 补偿: 释放库存
     )
-    .step(
-        || async { Ok(()) },  // 扣款
-        || async { Ok(()) },  // 补偿: 退款
+    .compensate(
+        |_| async { Ok(()) },  // 扣款
+        |_| async { Ok(()) },  // 补偿: 退款
     )
-    .run()
-    .await?;
+    .run_compensatable(&mut ())
+    .await;
 ```
 
 ## 示例

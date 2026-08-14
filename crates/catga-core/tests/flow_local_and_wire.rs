@@ -1,24 +1,17 @@
-//! Contract coverage for local compensating flows, continuation wire frames,
+//! Contract coverage for flow state, continuation wire frames,
 //! flow serde helpers, completion identities, and the batch-size guard.
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
-    time::Duration,
-};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use catga_core::flow::suspension::FlowContinuation;
 use catga_core::flow::{
-    Flow, FlowCompletion, FlowResult, FlowState, FlowStore, MAX_FLOW_DATA_BYTES,
+    FlowCompletion, FlowResult, FlowState, FlowStore, MAX_FLOW_DATA_BYTES,
     MAX_FLOW_STORE_BATCH, decode_continuation, encode_continuation, validate_flow_batch_size,
 };
 use catga_core::memory::MemoryFlows;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, assert_error_code, assert_success};
 use serde::{Deserialize, Serialize};
-use tokio_util::sync::CancellationToken;
 
 fn state(id: &str, flow_type: &str, owner: &str) -> FlowState {
     FlowState::new(id, flow_type, b"flow-input".to_vec(), owner)
@@ -140,245 +133,21 @@ async fn default_create_batch_creates_each_state_sequentially() {
 }
 
 // ---------------------------------------------------------------------------
-// Local compensating flows
+// FlowResult tests (moved from local.rs)
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn local_flow_success_runs_every_step_without_compensation() {
-    let runs = Arc::new(AtomicU32::new(0));
-    let compensations = Arc::new(AtomicU32::new(0));
-
-    let mut flow = Flow::new("success");
-    for _ in 0..2 {
-        let run_flag = runs.clone();
-        let compensate_flag = compensations.clone();
-        flow = flow.step(
-            move || {
-                let run_flag = run_flag.clone();
-                async move {
-                    run_flag.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            move || {
-                let compensate_flag = compensate_flag.clone();
-                async move {
-                    compensate_flag.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-        );
-    }
-    let result = flow.run().await;
-
-    assert!(result.is_success());
-    assert_eq!(result.completed_steps(), 2);
-    assert!(result.error().is_none());
-    assert_eq!(runs.load(Ordering::SeqCst), 2);
-    assert_eq!(compensations.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn local_flow_failure_compensates_completed_steps_in_reverse() {
-    let order = Arc::new(std::sync::Mutex::new(Vec::<u32>::new()));
-
-    let mut flow = Flow::new("rollback");
-    for index in 0..2_u32 {
-        let run_order = order.clone();
-        let compensate_order = order.clone();
-        flow = flow.step(
-            move || {
-                let run_order = run_order.clone();
-                async move {
-                    run_order.lock().expect("mutex").push(index + 1);
-                    Ok(())
-                }
-            },
-            move || {
-                let compensate_order = compensate_order.clone();
-                async move {
-                    compensate_order.lock().expect("mutex").push(index + 101);
-                    Ok(())
-                }
-            },
-        );
-    }
-    let result = flow
-        .step(
-            || async {
-                Err(CatgaError::new(
-                    ErrorCode::HandlerFailed,
-                    "step three fails",
-                ))
-            },
-            || async { Ok(()) },
-        )
-        .run()
-        .await;
-
-    assert!(!result.is_success());
-    assert_eq!(result.completed_steps(), 2);
-    assert_eq!(
-        result.error().expect("error").code(),
-        ErrorCode::HandlerFailed
-    );
-    // Forward order 1,2; reverse compensation 102,101.
-    assert_eq!(*order.lock().expect("mutex"), vec![1, 2, 102, 101]);
-}
-
-#[tokio::test]
-async fn local_flow_restart_bounds_and_compensation_limits() {
-    // An out-of-range restart fails validation without running anything.
-    let ran = Arc::new(AtomicU32::new(0));
-    let ran_flag = ran.clone();
-    let result = Flow::new("restart")
-        .step(
-            move || {
-                let ran_flag = ran_flag.clone();
-                async move {
-                    ran_flag.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            || async { Ok(()) },
-        )
-        .run_from(5, usize::MAX)
-        .await;
-    assert_eq!(
-        result.error().expect("validation failure").code(),
-        ErrorCode::Validation
-    );
-    assert_eq!(ran.load(Ordering::SeqCst), 0);
-
-    // run_from resumes mid-flow and skips earlier steps.
-    let executed = Arc::new(AtomicU32::new(0));
-    let first_flag = executed.clone();
-    let second_flag = executed.clone();
-    let resumed = Flow::new("resume")
-        .step(
-            move || {
-                let first_flag = first_flag.clone();
-                async move {
-                    first_flag.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            || async { Ok(()) },
-        )
-        .step(
-            move || {
-                let second_flag = second_flag.clone();
-                async move {
-                    second_flag.fetch_add(10, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            || async { Ok(()) },
-        )
-        .run_from(1, usize::MAX)
-        .await;
-    assert!(resumed.is_success());
-    assert_eq!(executed.load(Ordering::SeqCst), 10);
-
-    // max_compensations bounds the undone steps; failed compensations are swallowed.
-    let compensated = Arc::new(AtomicU32::new(0));
-    let mut bounded = Flow::new("bounded");
-    for _ in 0..2 {
-        let compensated_flag = compensated.clone();
-        bounded = bounded.step(
-            || async { Ok(()) },
-            move || {
-                let compensated_flag = compensated_flag.clone();
-                async move {
-                    compensated_flag.fetch_add(1, Ordering::SeqCst);
-                    Err(CatgaError::new(ErrorCode::Internal, "compensation failed"))
-                }
-            },
-        );
-    }
-    let result = bounded
-        .step(
-            || async { Err(CatgaError::new(ErrorCode::HandlerFailed, "boom")) },
-            || async { Ok(()) },
-        )
-        .run_from(0, 1)
-        .await;
-    assert!(!result.is_success());
-    assert_eq!(compensated.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn local_flow_cancellation_compensates_only_completed_steps() {
-    let token = CancellationToken::new();
-    let compensated = Arc::new(AtomicU32::new(0));
-    let compensated_flag = compensated.clone();
-    let trip = token.clone();
-
-    let result = Flow::new("cancellable")
-        .step(
-            move || {
-                let trip = trip.clone();
-                async move {
-                    trip.cancel();
-                    Ok(())
-                }
-            },
-            move || {
-                let compensated_flag = compensated_flag.clone();
-                async move {
-                    compensated_flag.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-        )
-        .step(
-            || async {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                Ok(())
-            },
-            || async { Ok(()) },
-        )
-        .run_until_cancelled(token)
-        .await;
-
-    assert!(!result.is_success());
-    assert_eq!(result.error().expect("error").code(), ErrorCode::Cancelled);
-    assert_eq!(compensated.load(Ordering::SeqCst), 1);
-
-    // A pre-cancelled token stops before the first action runs.
-    let pre = CancellationToken::new();
-    pre.cancel();
-    let ran = Arc::new(AtomicU32::new(0));
-    let ran_flag = ran.clone();
-    let early = Flow::new("early")
-        .step(
-            move || {
-                let ran_flag = ran_flag.clone();
-                async move {
-                    ran_flag.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            || async { Ok(()) },
-        )
-        .run_until_cancelled(pre)
-        .await;
-    assert_eq!(early.error().expect("error").code(), ErrorCode::Cancelled);
-    assert_eq!(ran.load(Ordering::SeqCst), 0);
-}
 
 #[test]
 fn flow_result_accessors_report_elapsed_and_errors() {
     let success = FlowResult::success(4);
-    assert!(success.is_success());
+    assert!(success.is_ok());
     assert_eq!(success.completed_steps(), 4);
     assert_eq!(success.elapsed(), Duration::ZERO);
 
     let failure = FlowResult::failure(2, CatgaError::new(ErrorCode::Timeout, "too slow"));
-    assert!(!failure.is_success());
+    assert!(!failure.is_ok());
     assert_eq!(failure.completed_steps(), 2);
     assert_eq!(failure.error().expect("error").code(), ErrorCode::Timeout);
-    assert!(format!("{failure:?}").contains("FlowResult"));
+    assert!(format!("{failure:?}").contains("Err"));
     let cloned = failure.clone();
     assert_eq!(cloned.completed_steps(), 2);
 }
@@ -415,6 +184,8 @@ struct ArcSliceHolder {
     )]
     maybe: Option<Arc<[u64]>>,
 }
+
+use std::sync::Arc;
 
 #[test]
 fn serde_helpers_round_trip_arc_slices() {

@@ -1,154 +1,138 @@
 # Flow: Compensating Flow and Workflow
 
-The `flow` module of `catga-core` provides three execution models, **select based on persistence and waiting needs**:
+The `flow` module of `catga-core` provides two execution models, **select based on persistence and waiting needs**:
 
 | Model | Use Case | Persistence | Wait External/Timed |
 | --- | --- | --- | --- |
-| `Flow` (local compensating) | In-process short flows, reverse compensation on step failure | No | No |
-| `DslFlow<S>` | In-process branching/parallel/loop flows with shared mutable state `S` | Optional checkpoint | No |
+| `DslFlow<S>` | In-process branching/parallel/loop flows with shared mutable state `S`, supports compensation | Optional checkpoint | No |
 | `FlowDefinition` + `FlowRuntime` | Durable flows needing restart recovery, waiting for child results, timed recovery | Yes (caller provides store) | Yes |
 
-## 1. Local Compensating `Flow`
+## 1. `DslFlow<S>`: In-process Compensating Flow
+
+A flow owns a caller-provided mutable state `S`, and steps read/write it. **Runs only while the caller keeps the future alive**.
+
+### Basic Usage
+
+Every step is a plain closure `Fn(&mut S) -> BoxFuture<CatgaResult<()>>`:
+
+```rust,ignore
+use catga_core::flow::DslFlow;
+
+let mut flow = DslFlow::<State>::new()
+    .action(|state| {
+        Box::pin(async move {
+            state.balance -= 100;
+            Ok(())
+        })
+    });
+```
+
+### Compensating Steps
 
 Steps are compensated in reverse order: when a later step fails, compensation closures of completed steps execute in opposite order.
 
 ```rust,ignore
-use catga_core::flow::Flow;
-
-let result = Flow::new("checkout")
-    // First closure executes step; second closure compensates this step when later steps fail
-    .step(|| async move { reserve().await }, || async move { release().await })
-    .step(|| async move { charge().await }, || async move { refund().await })
-    .run()
-    .await;
-
-assert!(result.is_success());
-assert_eq!(result.completed_steps(), 2);
-```
-
-- Shared context: `.step_with(context.clone(), |ctx| async move { .. }, |ctx| async move { .. })`.
-- Other entry points: `run_until_cancelled(token)`, `run_from(start_step, max_compensations)`.
-- The `compensating_flow!` macro (exported at the `catga_core` crate root) makes "action -> compensation" more readable:
-
-```rust,ignore
-use catga_core::compensating_flow;
-
-let flow = compensating_flow! {
-    "reserve-order";
-    context = Reservation(Arc::clone(&log));
-    steps {
-        reserve => release;   // Calls async method on context
-    }
-};
-// Also accepts explicit function form: action_fn => compensate_fn;
-```
-
-## 2. `DslFlow<S>`: In-process Stateful Flow
-
-A flow owns a caller-provided mutable state `S`, and steps read/write it. **Runs only while the caller keeps the future alive**; does not model durable timers or external waits.
-
-Every step is a plain closure `Fn(&mut S) -> BoxFuture<CatgaResult<()>>` — write `Box::pin(async move { .. })` inline; no helper macros are required:
-
-```rust,ignore
-use std::time::Duration;
 use catga_core::flow::DslFlow;
 
-struct State { total: u32 }
+let result = DslFlow::<()>::new()
+    .compensate(
+        |_| async { Ok(()) },  // Execute step
+        |_| async { Ok(()) },  // Compensate on failure
+    )
+    .compensate(
+        |_| async { Ok(()) },
+        |_| async { Ok(()) },
+    )
+    .run_compensatable(&mut ())
+    .await;
 
-let flow = DslFlow::new()
-    .action(|state: &mut State| {
-        Box::pin(async move {
-            state.total += 1;
+match result {
+    Ok(data) => println!("Completed {} steps", data.completed_steps),
+    Err(e) => println!("Failed after {} steps: {}", e.completed_steps, e.error),
+}
+```
+
+### More DSL Features
+
+`DslFlow` provides rich DSL features:
+
+```rust,ignore
+use catga_core::flow::DslFlow;
+use std::time::Duration;
+
+DslFlow::<State>::new()
+    .action(|s| Box::pin(async move {
+        s.value += 1;
+        Ok(())
+    }))
+    .retry(3, Duration::from_secs(1), |s| Box::pin(async move {
+        external_call().await
+    }))
+    .timeout(Duration::from_secs(5), |s| Box::pin(async move {
+        slow_operation().await
+    }))
+    .if_else(
+        |s: &State| s.is_valid,
+        DslFlow::new().action(|s| Box::pin(async move {
+            s.approve();
             Ok(())
-        })
-    })
-    // Retry / timeout wrap a single action
-    .retry(3, Duration::from_millis(10), |s: &mut State| Box::pin(async move { .. }))
-    .timeout(Duration::from_secs(1), |s: &mut State| Box::pin(async move { .. }))
-    // Conditional branch / match branch / parallel / race
-    .if_else(condition, then_branch, else_branch)
-    .match_on(selector, cases, default_branch)
-    .parallel(branches, merge)
-    .when_any(branches, merge_winner)
-    // Collection iteration (including continue_on_error / replayable / stream variants)
-    .for_each(
-        |s: &State| vec![1_u32, 2, 3],
-        |s: &mut State, item: u32| Box::pin(async move { .. }),
+        })),
+        DslFlow::new().action(|s| Box::pin(async move {
+            s.reject();
+            Ok(())
+        })),
+    )
+```
+
+### Lifecycle Hooks
+
+```rust,ignore
+use catga_core::flow::{DslFlow, DslFlowLifecycleHooks};
+
+let flow = DslFlow::<State>::new()
+    .with_lifecycle_hooks(
+        DslFlowLifecycleHooks::new()
+            .on_step_succeeded(|state, step_index| {
+                Box::pin(async move {
+                    tracing::info!("step {} succeeded", step_index);
+                    Ok(())
+                })
+            })
+            .on_flow_failed(|state, error| {
+                Box::pin(async move {
+                    tracing::error!("flow failed: {}", error);
+                    Ok(())
+                })
+            }),
     );
-
-let mut state = State { total: 0 };
-flow.run(&mut state).await?;
 ```
 
-- CQRS integration: `.send(mediator, |state| request)` / `.send_into(..)` / `.publish(mediator, |state| event)` / `.remote_send(client, ..)`.
-- Shared concurrency budget: `FlowThrottle::new(limit)?` (`catga_core::flow::flow_throttle::FlowThrottle`) + `.throttle(throttle, action)`; branch limit `MAX_DSL_PARALLEL_BRANCHES`.
-- Lifecycle observation: `with_lifecycle_observer` / `with_lifecycle_hooks`.
-- `run_checkpointed(..)` can persist checkpoints for nested branches, replayable for_each, and parallel branches, but still **does not include** durable timer/external waiting — use `FlowDefinition` when needed.
+## 2. `FlowDefinition` + `FlowRuntime`: Durable Flow
 
-## 3. Durable Flow: `FlowDefinition` + `FlowRuntime`
-
-### Definition
-
-Steps have **stable names**, handlers receive the current `FlowState` and return `FlowStepOutcome`:
+When flows need persistence, recovery, and timed waiting, use the durable model:
 
 ```rust,ignore
-use catga_core::{FlowDefinition, FlowStepOutcome};
-
-let definition = FlowDefinition::new("checkout")
-    .step("reserve", |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::Advance) })
-    .step("charge", |_| async { Ok::<_, catga_core::CatgaError>(FlowStepOutcome::complete()) });
-// Rollback-capable steps: .step_with_compensation("charge", handler, compensation)
-```
-
-`FlowStepOutcome`:
-
-- `Advance` — Proceed to next step; `complete()` — Flow complete.
-- `delay(duration)?` — Timed recovery (`Duration::ZERO` advances immediately, no timer allocation).
-- `wait(WaitCondition)` — Suspend waiting for child flow/external result: `WaitCondition::for_children(flow_id, WaitPolicy::All, child_ids, now, timeout)?`.
-
-### Runtime
-
-```rust,ignore
+use catga_core::flow::{FlowDefinition, FlowRuntime};
+use catga_core::flow::{FlowScheduler, FlowStore};
 use std::sync::Arc;
-use catga_core::flow::FlowRuntime;
 
-// store: SuspendedFlowStore (e.g., SqlSuspendedFlowStore); scheduler: FlowScheduler (e.g., SqlFlowScheduler / MemoryFlowScheduler)
-let runtime = FlowRuntime::new(store, scheduler, definition, "worker-1")
-    .with_stale_after(Duration::from_secs(30));   // Owner heartbeat/lease duration
+let definition = FlowDefinition::new("payment")
+    .step("reserve", |state| async move {
+        state.reserve()?;
+        Ok(FlowStepOutcome::Advance)
+    })
+    .step("charge", |state| async move {
+        state.charge()?;
+        Ok(FlowStepOutcome::Complete)
+    });
 
-// Start new flow and execute to suspended or terminal state; data is serialized input (<= MAX_FLOW_DATA_BYTES)
-let result = runtime.start("order-42", payload_bytes).await?;
-// Resume from persisted named step (called by your worker when schedule is due or child result arrives)
-runtime.resume("order-42").await?;
-runtime.resume_scheduled("order-42", &state_id).await?;   // Prevent expired schedule from resuming incorrectly
-runtime.cancel("order-42").await?;                        // Barrier subsequent writes; does not revoke already-issued external actions
+let runtime = FlowRuntime::new(store, scheduler, owner);
+let result = runtime.start("payment-123", &definition, input).await?;
 ```
 
-`FlowRuntimeResult`: `is_success()` / `is_failure()` / `is_suspended()` / `is_running()` / `is_compensating()` / `is_cancelled()` / `state()`. Note: `CatgaResult::Ok` does not mean business success — check `is_failure()` for business failures.
+## Compensation Pattern Comparison
 
-### Due Scheduling (Application-owned Worker)
-
-Adapters never create background tasks; your supervisor task drives them:
-
-```rust,ignore
-use catga_core::flow::FlowDueService;
-
-// Run in application-spawned task; schedule is acknowledged only after resume completes; failed claim releases for retry
-due_service.run(cancellation_token).await?;
-```
-
-Child flow completion results are routed back to parent flow via `FlowCompletionAdapter` or `FlowRuntime::record_wait_*`.
-
-### Hard Rules for Durable Flow
-
-1. **Steps are at-least-once**: Crash recovery may replay started steps. External side effects (payments, emails, etc.) must use **idempotency keys** derived from stable `flow_id + step name`.
-2. Leases only prevent expired executors from continuing to write state, **cannot revoke** actions already accepted by external systems.
-3. Bounded: `MAX_FLOW_DATA_BYTES` (input), `MAX_WAIT_CHILDREN`, `MAX_WAIT_RESULT_BYTES`.
-4. When waiting for child flows, first record stable child identity and use it as the idempotency key for the child launcher (parent recovery may re-launch).
-5. Version barrier: store implementations maintain optimistic concurrency semantics of `SuspendedFlowStore`; version mismatch is not an overwrite.
-
-### Other Optional Components
-
-- `FlowExecutor` (`FlowHeartbeatOptions` / `FlowRecoveryOptions`): Execution and crash recovery helpers.
-- `FlowTimeoutService` (`FlowTimeoutOptions` + `TimedOutFlowStore`): Flow-level timeout scanning, batched and bounded.
-- `StateMachine` / `StateMachineBuilder`: Event-driven state machine (`StateMachineStore` for persistence).
+| Pattern | Persistence | Compensation Timing | Use Case |
+| --- | --- | --- | --- |
+| `DslFlow.compensate()` | No | In-memory reverse order | In-process transactions |
+| `FlowDefinition` + `FlowRuntime` | Yes | After persistence as needed | Distributed transactions |

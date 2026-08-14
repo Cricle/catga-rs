@@ -5,6 +5,7 @@
 
 use std::{
     collections::{HashMap, hash_map::Entry},
+    future::Future,
     hash::Hash,
     sync::Arc,
     time::Duration,
@@ -40,6 +41,7 @@ use crate::flow::metrics::{
 use crate::{
     CatgaError, CatgaResult, ErrorCode, Event, Mediator, RemoteRequest, Request, RequestClient,
 };
+use crate::resilience::retry_delay;
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use tracing::Instrument;
 
@@ -49,10 +51,94 @@ const DEFAULT_BRANCH: u32 = u32::MAX;
 const DSL_TERMINAL_STEP_INDEX: u32 = u32::MAX;
 const MAX_DSL_TERMINAL_BYTES: usize = 1024 * 1024;
 
+/// The outcome of flow execution with compensation support.
+///
+/// Similar to standard library `Result`, but preserves data in both cases.
+#[derive(Clone, Debug)]
+pub enum FlowResult {
+    /// Successful execution.
+    Ok {
+        /// Number of steps completed successfully.
+        completed_steps: u32,
+        /// Execution duration.
+        elapsed: Duration,
+    },
+    /// Failed execution with completed steps before failure.
+    Err {
+        /// Number of steps completed before failure.
+        completed_steps: u32,
+        /// The error that caused the failure.
+        error: CatgaError,
+        /// Execution duration.
+        elapsed: Duration,
+    },
+}
+
+impl FlowResult {
+    /// Returns whether the flow completed successfully.
+    pub const fn is_ok(&self) -> bool {
+        matches!(self, FlowResult::Ok { .. })
+    }
+
+    /// Returns whether the flow failed.
+    pub const fn is_err(&self) -> bool {
+        matches!(self, FlowResult::Err { .. })
+    }
+
+    /// Returns the number of completed steps.
+    pub const fn completed_steps(&self) -> u32 {
+        match self {
+            FlowResult::Ok { completed_steps, .. } => *completed_steps,
+            FlowResult::Err { completed_steps, .. } => *completed_steps,
+        }
+    }
+
+    /// Returns the error if the flow failed.
+    pub fn error(&self) -> Option<&CatgaError> {
+        match self {
+            FlowResult::Ok { .. } => None,
+            FlowResult::Err { error, .. } => Some(error),
+        }
+    }
+
+    /// Returns the elapsed duration.
+    pub const fn elapsed(&self) -> Duration {
+        match self {
+            FlowResult::Ok { elapsed, .. } => *elapsed,
+            FlowResult::Err { elapsed, .. } => *elapsed,
+        }
+    }
+
+    /// Converts to standard library Result.
+    pub fn as_result(&self) -> Result<(), &CatgaError> {
+        match self {
+            FlowResult::Ok { .. } => Ok(()),
+            FlowResult::Err { error, .. } => Err(error),
+        }
+    }
+
+    /// Creates a successful result.
+    pub fn success(completed_steps: u32) -> Self {
+        FlowResult::Ok { completed_steps, elapsed: Duration::ZERO }
+    }
+
+    /// Creates a failed result.
+    pub fn failure(completed_steps: u32, error: CatgaError) -> Self {
+        FlowResult::Err { completed_steps, error, elapsed: Duration::ZERO }
+    }
+}
+
+
 #[derive(Debug, MemoryPackable)]
 struct CheckpointTerminal(Vec<u8>);
 
 enum Step<S> {
+    /// Action with compensation support (run + compensate pair).
+    ActionWithCompensation {
+        run: Action<S>,
+        compensate: Action<S>,
+    },
+    /// Plain action without compensation.
     Action(Action<S>),
     ForEach {
         run_all: Action<S>,
@@ -165,6 +251,48 @@ impl<S: Send> DslFlow<S> {
         F: for<'a> Fn(&'a mut S) -> BoxFuture<'a, CatgaResult<()>> + Send + Sync + 'static,
     {
         self.steps.push(Step::Action(Box::new(action)));
+        self
+    }
+
+    /// Appends a forward action and its compensation that undoes it on failure.
+    ///
+    /// This is the basic saga pattern: if any step fails, all previously completed steps
+    /// with compensation will have their compensation functions called in reverse order.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use catga_core::flow::DslFlow;
+    ///
+    /// let flow = DslFlow::<()>::new()
+    ///     .compensate(
+    ///         |_| async move {
+    ///             // Reserve resources
+    ///             Ok(())
+    ///         },
+    ///         |_| async move {
+    ///             // Release resources
+    ///             Ok(())
+    ///         },
+    ///     );
+    /// ```
+    pub fn compensate<Run, Compensate, RunFut, CompFut>(
+        mut self,
+        run: Run,
+        compensate: Compensate,
+    ) -> Self
+    where
+        Run: Fn(&mut S) -> RunFut + Send + Sync + 'static,
+        RunFut: Future<Output = CatgaResult<()>> + Send + 'static,
+        Compensate: Fn(&mut S) -> CompFut + Send + Sync + 'static,
+        CompFut: Future<Output = CatgaResult<()>> + Send + 'static,
+    {
+        let run_action: Action<S> = Box::new(move |state| Box::pin(run(state)));
+        let compensate_action: Action<S> = Box::new(move |state| Box::pin(compensate(state)));
+        self.steps.push(Step::ActionWithCompensation {
+            run: run_action,
+            compensate: compensate_action,
+        });
         self
     }
 
@@ -815,6 +943,99 @@ impl<S: Send> DslFlow<S> {
             execution.complete("success");
             Ok(())
         })
+    }
+
+    /// Runs all selected steps with compensation support.
+    ///
+    /// When using `.compensate()` to add steps with compensation, failed steps trigger
+    /// reverse-order compensation of all previously completed steps that have compensation.
+    ///
+    /// Returns a [`FlowResult`] that includes the number of completed steps and any error.
+    pub async fn run_compensatable(&mut self, state: &mut S) -> FlowResult {
+        self.metrics.record_started();
+        let mut execution = self.metrics.begin_execution("", "dsl");
+
+        // Track completed steps that have compensation
+        let mut completed_with_compensation: Vec<usize> = Vec::new();
+
+        for (step_index, step) in self.steps.iter().enumerate() {
+            let mut step_execution = execution.begin_step("dsl");
+            let result = self
+                .run_step(state, step)
+                .instrument(step_execution.span())
+                .await;
+            step_execution.complete(if result.is_ok() { "success" } else { "failure" });
+            match result {
+                Ok(()) => {
+                    // Track steps with compensation for potential rollback
+                    if matches!(step, Step::ActionWithCompensation { .. }) {
+                        completed_with_compensation.push(step_index);
+                    }
+                    if let Err(error) = self.notify_step_succeeded(state, step_index).await {
+                        self.complete_dsl_execution(&mut execution, &error);
+                        return FlowResult::failure(
+                            u32::try_from(step_index).unwrap_or(u32::MAX),
+                            error,
+                        );
+                    }
+                }
+                Err(error) => {
+                    if let Err(hook_error) =
+                        self.notify_step_failed(state, step_index, &error).await
+                    {
+                        self.complete_dsl_execution(&mut execution, &hook_error);
+                    } else if let Err(hook_error) = self.notify_flow_failed(state, &error).await {
+                        self.complete_dsl_execution(&mut execution, &hook_error);
+                    } else {
+                        self.complete_dsl_execution(&mut execution, &error);
+                    }
+
+                    // Run compensations in reverse order
+                    Self::compensate_steps(state, &self.steps, &completed_with_compensation)
+                        .await;
+
+                    metrics::counter!(FLOWS_FAILED).increment(1);
+                    return FlowResult::failure(
+                        u32::try_from(step_index).unwrap_or(u32::MAX),
+                        error,
+                    );
+                }
+            }
+        }
+        if let Err(error) = self.notify_flow_succeeded(state).await {
+            self.complete_dsl_execution(&mut execution, &error);
+            return FlowResult::failure(
+                u32::try_from(self.steps.len()).unwrap_or(u32::MAX),
+                error,
+            );
+        }
+        metrics::counter!(FLOWS_COMPLETED).increment(1);
+        execution.complete("success");
+        FlowResult::success(u32::try_from(self.steps.len()).unwrap_or(u32::MAX))
+    }
+
+    /// Compensates completed steps in reverse order.
+    async fn compensate_steps(state: &mut S, steps: &[Step<S>], completed: &[usize]) {
+        for &index in completed.iter().rev() {
+            if let Step::ActionWithCompensation { compensate, .. } = &steps[index] {
+                if let Err(comp_error) = compensate(state).await {
+                    tracing::warn!(
+                        step_index = index,
+                        error = ?comp_error,
+                        "step compensation failed"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Internal method to run a sub-flow, returning CatgaResult for use in run_step.
+    /// Sub-flows don't get their own compensation tracking - they inherit from parent.
+    pub(super) async fn run_sub_flow(&self, state: &mut S) -> CatgaResult<()> {
+        for step in self.steps.iter() {
+            self.run_step(state, step).await?;
+        }
+        Ok(())
     }
 
     fn complete_dsl_execution(&self, execution: &mut FlowExecution, error: &CatgaError) {
@@ -1472,6 +1693,7 @@ impl<S: Send> DslFlow<S> {
     ) -> BoxFuture<'a, CatgaResult<()>> {
         Box::pin(async move {
             match step {
+                Step::ActionWithCompensation { run, .. } => run(state).await,
                 Step::Action(action) => action(state).await,
                 Step::ForEach { run_all, .. } => run_all(state).await,
                 Step::ReplayableForEach(operation) => {
@@ -1695,4 +1917,3 @@ impl<S: Send> Default for DslFlow<S> {
     }
 }
 
-pub use crate::flow::dsl_helpers::retry_delay;

@@ -8,7 +8,7 @@ use crate::{CatgaError, CatgaResult, ErrorCode};
 use tokio_util::sync::CancellationToken;
 
 use crate::flow::{
-    local::FlowResult,
+    dsl::FlowResult,
     state::{FlowState, FlowStatus},
     store::FlowStore,
 };

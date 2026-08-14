@@ -62,7 +62,7 @@ where
         for (index, branch) in branches.iter().enumerate() {
             let mut branch_state = clone_state(state);
             pending.push(async move {
-                let result = branch.run(&mut branch_state).await;
+                let result = branch.run_sub_flow(&mut branch_state).await;
                 (index, branch_state, result)
             });
         }

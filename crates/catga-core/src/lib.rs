@@ -247,7 +247,7 @@ pub use event_store::{
 pub use event_version::{EventUpgrader, EventVersionRegistry};
 pub use fault::Fault;
 pub use flow::{
-    DslFlow, DslFlowLifecycleHooks, DslQueryStep, Flow, FlowRuntime, FlowRuntimeResult,
+    DslFlow, DslFlowLifecycleHooks, DslQueryStep, FlowRuntime, FlowRuntimeResult,
     FlowScheduler, FlowTagPolicy, MemoryFlowScheduler, ScheduledResume,
     definition::{FlowDefinition, FlowStepOutcome},
     suspension,
@@ -298,7 +298,7 @@ pub use reliability::{
     validate_retention_cleanup_limit,
 };
 pub use request_client::{EnvelopeRequestClient, RemoteRequest, RequestClient, RequestTransport};
-pub use resilience::{ResilienceExecutor, ResilienceOptions};
+pub use resilience::{ResilienceExecutor, ResilienceOptions, retry_delay};
 pub use resilient_transport::ResilientTransport;
 pub use retry_jitter::RetryJitter;
 pub use routing::{MessageDestinationRouter, MessageRouter};
@@ -448,12 +448,12 @@ macro_rules! catga_command_pipeline {
 
 /// Creates a compensating flow with named steps and their compensation actions.
 ///
-/// The macro generates a [`Flow`] where each step has a corresponding compensation action
+/// The macro generates a [`DslFlow`] where each step has a corresponding compensation action
 /// that runs in reverse order if a subsequent step fails. The context must implement
 /// the step methods as async closures or functions.
 ///
 /// ```
-/// use catga_core::flow::Flow;
+/// use catga_core::flow::DslFlow;
 ///
 /// #[derive(Clone)]
 /// struct Checkout;
@@ -483,11 +483,16 @@ macro_rules! compensating_flow {
         }
     ) => {{
         let __catga_flow_context = $context;
-        let __catga_flow = $crate::flow::Flow::new($name);
-        $(let __catga_flow = __catga_flow.step_with(
-            __catga_flow_context.clone(),
-            |context| context.$run(),
-            |context| context.$compensate(),
+        let mut __catga_flow = $crate::flow::DslFlow::new();
+        $(__catga_flow = __catga_flow.compensate(
+            move |ctx| {
+                let ctx = __catga_flow_context.clone();
+                async move { ctx.$run().await }
+            },
+            move |ctx| {
+                let ctx = __catga_flow_context.clone();
+                async move { ctx.$compensate().await }
+            },
         );)+
         __catga_flow
     }};
@@ -497,11 +502,10 @@ macro_rules! compensating_flow {
         $($run:expr => $compensate:expr);+ $(;)?
     ) => {{
         let __catga_flow_context = $context;
-        let __catga_flow = $crate::flow::Flow::new($name);
-        $(let __catga_flow = __catga_flow.step_with(
-            __catga_flow_context.clone(),
-            $run,
-            $compensate,
+        let mut __catga_flow = $crate::flow::DslFlow::new();
+        $(__catga_flow = __catga_flow.compensate(
+            move |_ctx| { $run },
+            move |_ctx| { $compensate },
         );)+
         __catga_flow
     }};

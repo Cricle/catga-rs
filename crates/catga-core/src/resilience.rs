@@ -104,7 +104,7 @@ impl ResilienceOptions {
 /// Computes an exponential backoff delay for retry operations.
 ///
 /// Each retry doubles the `initial_delay` and saturates at `Duration::MAX`.
-pub(crate) fn retry_delay(initial_delay: Duration, retry: usize) -> Duration {
+pub fn retry_delay(initial_delay: Duration, retry: usize) -> Duration {
     let multiplier = u32::try_from(retry)
         .ok()
         .and_then(|retry| 1_u32.checked_shl(retry))

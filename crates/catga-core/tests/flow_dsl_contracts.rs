@@ -11,7 +11,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use catga_core::flow::dsl::retry_delay;
+use catga_core::retry_delay;
 use catga_core::flow::dsl_lifecycle::{
     DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver,
 };

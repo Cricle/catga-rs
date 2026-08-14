@@ -13,8 +13,6 @@ pub mod definition;
 pub mod dsl;
 /// Checkpoint frame and work types for durable flows.
 pub mod dsl_checkpoint;
-/// Helper functions for DSL flow execution.
-pub mod dsl_helpers;
 /// Lifecycle management for DSL flows.
 pub mod dsl_lifecycle;
 /// Recovery support for parallel branch flows.
@@ -33,8 +31,6 @@ pub mod due_service;
 pub mod executor;
 /// Concurrency throttle for flow actions.
 pub mod flow_throttle;
-/// Local in-memory flow execution.
-pub mod local;
 /// MemoryPack codec support for flow state.
 pub mod memorypack;
 /// Metrics collection for flow execution.
@@ -68,7 +64,8 @@ pub mod timeout;
 
 pub use child_launch::FlowChildLauncher;
 pub use completion::{FlowCompletion, FlowCompletionAdapter};
-pub use dsl::DslFlow;
+pub use definition::FlowStepOutcome;
+pub use dsl::{DslFlow, FlowResult};
 pub use dsl_lifecycle::{
     DslFlowFailedHook, DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver,
     DslFlowStepFailedHook, DslFlowStepSucceededHook, DslFlowSucceededHook,
@@ -77,7 +74,6 @@ pub use dsl_progress::{DslProgressKind, DslStateCodec, DslStepProgress, DslStepP
 pub use dsl_step::{DslQueryStep, DslStep, MAX_DSL_PARALLEL_BRANCHES};
 pub use due_service::{DueFlowOptions, FlowDueService};
 pub use executor::{FlowExecutor, FlowHeartbeatOptions, FlowRecoveryOptions};
-pub use local::{Flow, FlowResult};
 pub use persistence::{decode_continuation, encode_continuation};
 pub use runtime::{FlowRuntime, FlowRuntimeResult};
 pub use scheduler::{DueFlowScheduler, FlowScheduler, MemoryFlowScheduler, ScheduledResume};
