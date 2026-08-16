@@ -1,7 +1,7 @@
 //! Comprehensive tests for #[catga_service] macro
 
 use catga_core::{
-    CatgaResult, auto::AutoApp, catga_command, catga_event, catga_request, catga_service,
+    CatgaResult, Mediator, catga_command, catga_event, catga_request, catga_service,
 };
 
 #[catga_request(response = u64)]
@@ -41,24 +41,24 @@ impl TestService {
 #[tokio::test]
 async fn catga_service_generates_working_registry() -> CatgaResult<()> {
     let registry = TestService.registry()?;
-    let app = AutoApp::from_registry(registry)?;
+    let mediator = Mediator::new(registry);
 
-    let result = app.mediator().send(Double(21)).await?;
+    let result = mediator.send(Double(21)).await?;
     assert_eq!(result, 42);
 
-    app.mediator().send_command(Log("test".to_string())).await?;
+    mediator.send_command(Log("test".to_string())).await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn catga_service_detects_request_vs_command() -> CatgaResult<()> {
     let registry = TestService.registry()?;
-    let app = AutoApp::from_registry(registry)?;
+    let mediator = Mediator::new(registry);
 
-    let response: u64 = app.mediator().send(Double(5)).await?;
+    let response: u64 = mediator.send(Double(5)).await?;
     assert_eq!(response, 10);
 
-    app.mediator()
+    mediator
         .send_command(Log("hello".to_string()))
         .await?;
     Ok(())

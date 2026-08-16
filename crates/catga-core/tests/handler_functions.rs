@@ -17,24 +17,19 @@ impl Message for Double {}
 
 impl Request for Double {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
 struct Increment;
 
 impl Message for Increment {}
-impl Command for Increment {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Command for Increment {}
 
 #[derive(Clone)]
 struct Counted;
 
 impl Message for Counted {}
-impl Event for Counted {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Event for Counted {}
 
 #[tokio::test]
 async fn closure_handlers_register_through_the_typed_registry() -> CatgaResult<()> {

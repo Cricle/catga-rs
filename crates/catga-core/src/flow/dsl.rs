@@ -38,10 +38,10 @@ use crate::flow::flow_throttle::FlowThrottle;
 use crate::flow::metrics::{
     FLOWS_COMPLETED, FLOWS_FAILED, FlowExecution, FlowMetrics, ForEachMetrics,
 };
+use crate::resilience::retry_delay;
 use crate::{
     CatgaError, CatgaResult, ErrorCode, Event, Mediator, RemoteRequest, Request, RequestClient,
 };
-use crate::resilience::retry_delay;
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use tracing::Instrument;
 
@@ -88,8 +88,12 @@ impl FlowResult {
     /// Returns the number of completed steps.
     pub const fn completed_steps(&self) -> u32 {
         match self {
-            FlowResult::Ok { completed_steps, .. } => *completed_steps,
-            FlowResult::Err { completed_steps, .. } => *completed_steps,
+            FlowResult::Ok {
+                completed_steps, ..
+            } => *completed_steps,
+            FlowResult::Err {
+                completed_steps, ..
+            } => *completed_steps,
         }
     }
 
@@ -119,15 +123,21 @@ impl FlowResult {
 
     /// Creates a successful result.
     pub fn success(completed_steps: u32) -> Self {
-        FlowResult::Ok { completed_steps, elapsed: Duration::ZERO }
+        FlowResult::Ok {
+            completed_steps,
+            elapsed: Duration::ZERO,
+        }
     }
 
     /// Creates a failed result.
     pub fn failure(completed_steps: u32, error: CatgaError) -> Self {
-        FlowResult::Err { completed_steps, error, elapsed: Duration::ZERO }
+        FlowResult::Err {
+            completed_steps,
+            error,
+            elapsed: Duration::ZERO,
+        }
     }
 }
-
 
 #[derive(Debug, MemoryPackable)]
 struct CheckpointTerminal(Vec<u8>);
@@ -991,8 +1001,7 @@ impl<S: Send> DslFlow<S> {
                     }
 
                     // Run compensations in reverse order
-                    Self::compensate_steps(state, &self.steps, &completed_with_compensation)
-                        .await;
+                    Self::compensate_steps(state, &self.steps, &completed_with_compensation).await;
 
                     metrics::counter!(FLOWS_FAILED).increment(1);
                     return FlowResult::failure(
@@ -1004,10 +1013,7 @@ impl<S: Send> DslFlow<S> {
         }
         if let Err(error) = self.notify_flow_succeeded(state).await {
             self.complete_dsl_execution(&mut execution, &error);
-            return FlowResult::failure(
-                u32::try_from(self.steps.len()).unwrap_or(u32::MAX),
-                error,
-            );
+            return FlowResult::failure(u32::try_from(self.steps.len()).unwrap_or(u32::MAX), error);
         }
         metrics::counter!(FLOWS_COMPLETED).increment(1);
         execution.complete("success");
@@ -1916,4 +1922,3 @@ impl<S: Send> Default for DslFlow<S> {
         Self::new()
     }
 }
-

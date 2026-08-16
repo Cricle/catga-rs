@@ -35,7 +35,6 @@ struct AddRequest {
 impl Message for AddRequest {}
 impl Request for AddRequest {
     type Response = u32;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct AddHandler;
@@ -61,7 +60,6 @@ struct MultiplyRequest {
 impl Message for MultiplyRequest {}
 impl Request for MultiplyRequest {
     type Response = u32;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct MultiplyHandler;
@@ -79,7 +77,6 @@ struct TraceProbe;
 impl Message for TraceProbe {}
 impl Request for TraceProbe {
     type Response = Option<String>;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct TraceProbeHandler;
@@ -173,7 +170,6 @@ async fn mediator_state_returns_structured_error_for_unregistered_requests() {
     impl Message for Unknown {}
     impl Request for Unknown {
         type Response = ();
-        type TypeId = catga_core::DefaultMessageTypeId;
     }
 
     async fn unknown(mediator: MediatorState) -> Result<Json<()>, catga_axum::CatgaHttpError> {

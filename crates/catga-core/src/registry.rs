@@ -132,14 +132,12 @@ pub(crate) struct EventSlot {
 ///
 /// ```
 /// use async_trait::async_trait;
-/// use catga_core::{CatgaResult, Handler, Message, MessageTypeId, Registry, Request};
+/// use catga_core::{CatgaResult, Handler, Message, Registry, Request};
 ///
-/// struct PingTypeId;
-/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
 ///
 /// struct Ping;
 /// impl Message for Ping {}
-/// impl Request for Ping { type Response = &'static str; type TypeId = PingTypeId; }
+/// impl Request for Ping { type Response = &'static str; }
 ///
 /// struct PingHandler;
 /// #[async_trait]
@@ -215,14 +213,12 @@ impl Registry {
     /// [`ErrorCode::Conflict`] and preserves the original handler.
     ///
     /// ```
-    /// use catga_core::{CatgaResult, Command, ErrorCode, Message, MessageTypeId, Registry, command_handler};
+    /// use catga_core::{CatgaResult, Command, ErrorCode, Message, Registry, command_handler};
     ///
-    /// struct FlushTypeId;
-    /// impl MessageTypeId for FlushTypeId { const NAME: &'static str = "Flush"; }
     ///
     /// struct Flush;
     /// impl Message for Flush {}
-    /// impl Command for Flush { type TypeId = FlushTypeId; }
+    /// impl Command for Flush {}
     ///
     /// # fn run() -> CatgaResult<()> {
     /// let mut registry = Registry::new();
@@ -272,15 +268,13 @@ impl Registry {
     /// registered handlers in registration order.
     ///
     /// ```
-    /// use catga_core::{Event, Message, MessageTypeId, Registry, event_handler};
+    /// use catga_core::{Event, Message, Registry, event_handler};
     ///
-    /// struct TickTypeId;
-    /// impl MessageTypeId for TickTypeId { const NAME: &'static str = "Tick"; }
     ///
     /// #[derive(Clone)]
     /// struct Tick;
     /// impl Message for Tick {}
-    /// impl Event for Tick { type TypeId = TickTypeId; }
+    /// impl Event for Tick {}
     ///
     /// let mut registry = Registry::new();
     /// // Two handlers for one event coexist; both observe every published Tick.

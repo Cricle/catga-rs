@@ -29,10 +29,20 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize, de};
 
+use crate::codec::memorypack::{
+    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
+    MemoryPackWriter, MemoryPackable,
+};
+
 /// Maximum UTF-8 byte length retained for optional error details.
 pub const MAX_ERROR_DETAILS_BYTES: usize = 1024;
 
 /// Categories used to classify framework failures.
+///
+/// New variants may be added in future releases, so this enum is marked
+/// [`#[non_exhaustive]`][non_exhaustive]: code outside this crate must match it with a
+/// wildcard arm and map unrecognized categories to a conservative default (typically
+/// [`ErrorCode::Internal`] behavior such as HTTP 500).
 ///
 /// ```
 /// use catga_core::ErrorCode;
@@ -43,6 +53,7 @@ pub const MAX_ERROR_DETAILS_BYTES: usize = 1024;
 /// assert!(!ErrorCode::Validation.is_retryable());
 /// ```
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub enum ErrorCode {
     /// Input does not meet the handler's validation rules.
     Validation,
@@ -220,6 +231,11 @@ impl ErrorCode {
 /// detail string before the limit is applied. Protocol-specific compatibility for legacy error
 /// layouts belongs to the relevant codec boundary rather than this type's deserializer.
 ///
+/// A failure may also retain an optional causal source error for diagnostic chaining through
+/// [`std::error::Error::source`]. The source is process-local: it is never serialized by the
+/// RPC wire format or MemoryPack codecs, [`Clone`] does not copy it, and equality compares
+/// only the wire-visible fields.
+///
 /// ```
 /// use catga_core::{CatgaError, ErrorCode};
 ///
@@ -230,18 +246,52 @@ impl ErrorCode {
 /// assert_eq!(error.details(), Some("input: {}"));
 /// assert!(!error.is_retryable());
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct CatgaError {
     code: ErrorCode,
     message: Box<str>,
     #[serde(default)]
     details: Option<Box<str>>,
+    /// Explicit retryability assertion, kept distinct from [`ErrorCode::is_retryable`] so a
+    /// trusted producer (a constructor or a wire frame) may override the category default.
+    /// [`CatgaError::is_retryable`] falls back to the category default when a legacy frame
+    /// omits the field (`None`).
     #[serde(default)]
     retryable: Option<bool>,
+    /// Process-local causal source, exposed through [`std::error::Error::source`] and never
+    /// serialized across wire boundaries.
+    #[serde(skip)]
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
+impl Clone for CatgaError {
+    /// Clones the wire-visible fields. Error sources are not generically cloneable, so the
+    /// clone has no [`std::error::Error::source`].
+    fn clone(&self) -> Self {
+        Self {
+            code: self.code,
+            message: self.message.clone(),
+            details: self.details.clone(),
+            retryable: self.retryable,
+            source: None,
+        }
+    }
+}
+
+impl PartialEq for CatgaError {
+    /// Compares only the wire-visible fields; the process-local source is diagnostic-only.
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code
+            && self.message == other.message
+            && self.details == other.details
+            && self.retryable == other.retryable
+    }
+}
+
+impl Eq for CatgaError {}
+
 #[derive(Deserialize)]
-struct CatgaErrorWire {
+struct CatgaErrorSerdeWire {
     code: ErrorCode,
     message: Box<str>,
     #[serde(default)]
@@ -297,24 +347,61 @@ impl<'de> Deserialize<'de> for CatgaError {
     where
         D: de::Deserializer<'de>,
     {
-        let wire = CatgaErrorWire::deserialize(deserializer)?;
+        let wire = CatgaErrorSerdeWire::deserialize(deserializer)?;
         Ok(Self {
             code: wire.code,
             message: wire.message,
             details: wire.details.map(|details| details.0),
             retryable: wire.retryable,
+            source: None,
         })
     }
 }
 
 impl CatgaError {
     /// Creates an error with a stable category and an explanatory message.
+    ///
+    /// The error has no retained source; use [`Self::with_source`] to keep the causal error
+    /// for diagnostic chaining.
     pub fn new(code: ErrorCode, message: impl Into<Box<str>>) -> Self {
         Self {
             code,
             message: message.into(),
             details: None,
             retryable: Some(code.is_retryable()),
+            source: None,
+        }
+    }
+
+    /// Creates an error with a stable category, an explanatory message, and a retained causal
+    /// source error.
+    ///
+    /// The source is exposed through [`std::error::Error::source`] for diagnostic chaining but
+    /// is process-local: the RPC wire format and MemoryPack codecs transmit only the code,
+    /// message, details, and retryability.
+    ///
+    /// ```
+    /// use catga_core::{CatgaError, ErrorCode};
+    /// use std::error::Error;
+    ///
+    /// let io_error = std::io::Error::other("connection refused");
+    /// let error = CatgaError::with_source(
+    ///     ErrorCode::TransportFailed,
+    ///     "broker connection failed",
+    ///     io_error,
+    /// );
+    /// assert_eq!(error.code(), ErrorCode::TransportFailed);
+    /// assert_eq!(error.message(), "broker connection failed");
+    /// assert_eq!(error.source().expect("source retained").to_string(), "connection refused");
+    /// ```
+    pub fn with_source(
+        code: ErrorCode,
+        message: impl Into<Box<str>>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            source: Some(Box::new(source)),
+            ..Self::new(code, message)
         }
     }
 
@@ -322,6 +409,10 @@ impl CatgaError {
     ///
     /// The source's `Display` output becomes the error message. Adapters use this to
     /// classify backend failures that are safe to retry.
+    ///
+    /// This constructor is lossy: the argument is stringified and not retained as the
+    /// [`std::error::Error::source`]. When the argument is a concrete error type, prefer
+    /// [`Self::transient_from`], which retains it for diagnostic chaining.
     ///
     /// ```
     /// use catga_core::{CatgaError, ErrorCode};
@@ -333,6 +424,28 @@ impl CatgaError {
     /// ```
     pub fn transient(error: impl fmt::Display) -> Self {
         Self::new(ErrorCode::Transient, error.to_string())
+    }
+
+    /// Creates a retryable [`ErrorCode::Transient`] error that retains the source error.
+    ///
+    /// The source's `Display` output becomes the message and the error itself is retained as
+    /// the [`std::error::Error::source`] for diagnostic chaining. Prefer this over
+    /// [`Self::transient`] whenever the argument is a concrete error type.
+    ///
+    /// ```
+    /// use catga_core::{CatgaError, ErrorCode};
+    /// use std::error::Error;
+    ///
+    /// let io_error = std::io::Error::other("connection refused");
+    /// let error = CatgaError::transient_from(io_error);
+    /// assert_eq!(error.code(), ErrorCode::Transient);
+    /// assert_eq!(error.message(), "connection refused");
+    /// assert!(error.is_retryable());
+    /// assert!(error.source().is_some());
+    /// ```
+    pub fn transient_from(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        let message = error.to_string();
+        Self::with_source(ErrorCode::Transient, message, error)
     }
 
     /// Attaches optional diagnostic details, retaining at most
@@ -359,8 +472,10 @@ impl CatgaError {
 
     /// Returns whether callers may retry this error.
     ///
-    /// Errors constructed with [`Self::new`] derive this from their category. Legacy wire
-    /// frames that omit retryability derive the same value when this accessor is called.
+    /// An explicit retryability assertion (from a constructor or wire frame) wins; when the
+    /// assertion is absent — e.g. a legacy wire frame that omits the field — the value falls
+    /// back to the category default from [`ErrorCode::is_retryable`]. Errors constructed with
+    /// [`Self::new`] always carry the category-derived assertion.
     pub const fn is_retryable(&self) -> bool {
         match self.retryable {
             Some(retryable) => retryable,
@@ -375,7 +490,14 @@ impl fmt::Display for CatgaError {
     }
 }
 
-impl std::error::Error for CatgaError {}
+impl std::error::Error for CatgaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|source| {
+            let source: &(dyn std::error::Error + 'static) = source.as_ref();
+            source
+        })
+    }
+}
 
 /// Truncates details to [`MAX_ERROR_DETAILS_BYTES`] without splitting a UTF-8 character.
 pub fn bounded_details(details: &str) -> Box<str> {
@@ -388,3 +510,102 @@ pub fn bounded_details(details: &str) -> Box<str> {
 
 /// The result returned by Catga operations.
 pub type CatgaResult<T> = Result<T, CatgaError>;
+
+/// The single bounded MemoryPack wire representation of a [`CatgaError`].
+///
+/// Every MemoryPack boundary that persists or transmits Catga failures — RPC responses and
+/// durable flow records — shares this DTO so the wire layout, code mapping, and retryability
+/// validation stay defined exactly once.
+#[derive(Default, MemoryPackable)]
+pub(crate) struct CatgaErrorWire {
+    code: u8,
+    message: String,
+    details: Option<String>,
+    retryable: bool,
+}
+
+impl From<&CatgaError> for CatgaErrorWire {
+    fn from(error: &CatgaError) -> Self {
+        Self {
+            code: encode_error_code(error.code()),
+            message: error.message().to_owned(),
+            details: error.details().map(str::to_owned),
+            retryable: error.is_retryable(),
+        }
+    }
+}
+
+impl TryFrom<CatgaErrorWire> for CatgaError {
+    type Error = MemoryPackError;
+
+    fn try_from(wire: CatgaErrorWire) -> Result<Self, Self::Error> {
+        let code = decode_error_code(wire.code)?;
+        if wire.retryable != code.is_retryable() {
+            return Err(MemoryPackError::DeserializationError(
+                "error retryability does not match its error code".into(),
+            ));
+        }
+        let error = CatgaError::new(code, wire.message);
+        Ok(match wire.details {
+            Some(details) => error.with_details(details),
+            None => error,
+        })
+    }
+}
+
+pub(crate) fn encode_error_code(value: ErrorCode) -> u8 {
+    match value {
+        ErrorCode::Validation => 0,
+        ErrorCode::NotFound => 1,
+        ErrorCode::Conflict => 2,
+        ErrorCode::Unauthorized => 3,
+        ErrorCode::Forbidden => 4,
+        ErrorCode::Cancelled => 5,
+        ErrorCode::Timeout => 6,
+        ErrorCode::Unsupported => 7,
+        ErrorCode::Transient => 8,
+        ErrorCode::Unavailable => 9,
+        ErrorCode::Internal => 10,
+        ErrorCode::HandlerFailed => 11,
+        ErrorCode::HandlerNotFound => 12,
+        ErrorCode::PipelineFailed => 13,
+        ErrorCode::PersistenceFailed => 14,
+        ErrorCode::LockFailed => 15,
+        ErrorCode::TransportFailed => 16,
+        ErrorCode::SerializationFailed => 17,
+        ErrorCode::FlowFailed => 18,
+        ErrorCode::FlowCancelled => 19,
+        ErrorCode::FlowTimeout => 20,
+        ErrorCode::FlowCompensating => 21,
+    }
+}
+
+pub(crate) fn decode_error_code(value: u8) -> Result<ErrorCode, MemoryPackError> {
+    match value {
+        0 => Ok(ErrorCode::Validation),
+        1 => Ok(ErrorCode::NotFound),
+        2 => Ok(ErrorCode::Conflict),
+        3 => Ok(ErrorCode::Unauthorized),
+        4 => Ok(ErrorCode::Forbidden),
+        5 => Ok(ErrorCode::Cancelled),
+        6 => Ok(ErrorCode::Timeout),
+        7 => Ok(ErrorCode::Unsupported),
+        8 => Ok(ErrorCode::Transient),
+        9 => Ok(ErrorCode::Unavailable),
+        10 => Ok(ErrorCode::Internal),
+        11 => Ok(ErrorCode::HandlerFailed),
+        12 => Ok(ErrorCode::HandlerNotFound),
+        13 => Ok(ErrorCode::PipelineFailed),
+        14 => Ok(ErrorCode::PersistenceFailed),
+        15 => Ok(ErrorCode::LockFailed),
+        16 => Ok(ErrorCode::TransportFailed),
+        17 => Ok(ErrorCode::SerializationFailed),
+        18 => Ok(ErrorCode::FlowFailed),
+        19 => Ok(ErrorCode::FlowCancelled),
+        20 => Ok(ErrorCode::FlowTimeout),
+        21 => Ok(ErrorCode::FlowCompensating),
+        value => Err(MemoryPackError::DeserializationError(format!(
+            "invalid Catga error code: {value}"
+        ))),
+    }
+}

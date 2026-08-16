@@ -3,18 +3,17 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use catga_core::{CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Request};
 use catga_core::testing::{
     EventHandlerSpy, HandlerSpy, MessageCapture, assert_contains, assert_error_code,
     assert_failure, assert_success, assert_value,
 };
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Request};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Add(u32);
 impl catga_core::Message for Add {}
 impl Request for Add {
     type Response = u32;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct Doubler;
@@ -28,9 +27,7 @@ impl Handler<Add> for Doubler {
 #[derive(Clone, Debug, PartialEq)]
 struct Recorded(u32);
 impl catga_core::Message for Recorded {}
-impl Event for Recorded {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Event for Recorded {}
 
 struct EventCounter(Arc<std::sync::atomic::AtomicU32>);
 

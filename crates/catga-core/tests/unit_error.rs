@@ -235,3 +235,101 @@ fn catga_error_serialization_without_retryable() {
     assert_eq!(deserialized.code(), original.code());
     assert!(deserialized.is_retryable());
 }
+
+#[test]
+fn catga_error_new_has_no_source() {
+    use std::error::Error;
+
+    let error = CatgaError::new(ErrorCode::Internal, "failure");
+    assert!(error.source().is_none());
+}
+
+#[test]
+fn catga_error_with_source_retains_causal_error() {
+    use std::error::Error;
+
+    let io_error = std::io::Error::other("connection refused");
+    let error = CatgaError::with_source(
+        ErrorCode::TransportFailed,
+        "broker unavailable",
+        io_error,
+    );
+    assert_eq!(error.code(), ErrorCode::TransportFailed);
+    assert_eq!(error.message(), "broker unavailable");
+    assert!(error.is_retryable());
+
+    let source = error.source().expect("source should be retained");
+    assert_eq!(source.to_string(), "connection refused");
+    assert!(source.downcast_ref::<std::io::Error>().is_some());
+}
+
+#[test]
+fn catga_error_transient_from_retains_source() {
+    use std::error::Error;
+
+    let io_error = std::io::Error::other("connection refused");
+    let error = CatgaError::transient_from(io_error);
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(error.message(), "connection refused");
+    assert!(error.is_retryable());
+    assert!(error.source().is_some());
+}
+
+#[test]
+fn catga_error_transient_is_lossy() {
+    use std::error::Error;
+
+    let io_error = std::io::Error::other("connection refused");
+    let error = CatgaError::transient(io_error);
+    assert_eq!(error.code(), ErrorCode::Transient);
+    assert_eq!(error.message(), "connection refused");
+    assert!(error.source().is_none(), "transient() stringifies its argument");
+}
+
+#[test]
+fn catga_error_clone_drops_source_but_keeps_wire_fields() {
+    use std::error::Error;
+
+    let error = CatgaError::with_source(
+        ErrorCode::Internal,
+        "failure",
+        std::io::Error::other("io fault"),
+    )
+    .with_details("details");
+    let cloned = error.clone();
+    assert_eq!(cloned.code(), error.code());
+    assert_eq!(cloned.message(), error.message());
+    assert_eq!(cloned.details(), error.details());
+    assert_eq!(cloned.is_retryable(), error.is_retryable());
+    assert!(error.source().is_some());
+    assert!(cloned.source().is_none(), "sources are not generically cloneable");
+}
+
+#[test]
+fn catga_error_eq_ignores_source() {
+    let with_source = CatgaError::with_source(
+        ErrorCode::Internal,
+        "failure",
+        std::io::Error::other("io fault"),
+    );
+    let without_source = CatgaError::new(ErrorCode::Internal, "failure");
+    assert_eq!(with_source, without_source);
+}
+
+#[test]
+fn catga_error_source_is_not_serialized() {
+    use std::error::Error;
+
+    let error = CatgaError::with_source(
+        ErrorCode::Internal,
+        "failure",
+        std::io::Error::other("io fault"),
+    );
+
+    let json = serde_json::to_string(&error).expect("should serialize");
+    assert!(!json.contains("source"), "source must not cross the wire: {json}");
+
+    let deserialized: CatgaError = serde_json::from_str(&json).expect("should deserialize");
+    assert_eq!(deserialized, error);
+    assert!(deserialized.source().is_none());
+}

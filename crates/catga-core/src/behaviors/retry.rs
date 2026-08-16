@@ -19,17 +19,15 @@ use crate::{
 /// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 /// use std::time::Duration;
 /// use catga_core::{
-///     CatgaError, CatgaResult, ErrorCode, Mediator, Message, MessageTypeId, Pipeline, Registry,
+///     CatgaError, CatgaResult, ErrorCode, Mediator, Message, Pipeline, Registry,
 ///     Request, RetryBehavior, RetryJitter, request_handler,
 /// };
 ///
-/// struct PingTypeId;
-/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
 ///
 /// #[derive(Clone)]
 /// struct Ping;
 /// impl Message for Ping {}
-/// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+/// impl Request for Ping { type Response = u64; }
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> CatgaResult<()> {

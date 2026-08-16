@@ -1,12 +1,8 @@
 //! Behavioral contracts for `#[catga_request]`, `#[derive(catga_command)]`, and
-//! `#[derive(catga_event)]`: stable names, unique markers, generics, visibility, and dispatch.
-
-use std::any::TypeId;
-use std::collections::HashSet;
+//! `#[derive(catga_event)]`: response types, generics, visibility, and dispatch.
 
 use catga_core::{
-    CatgaResult, Command, Event, Mediator, MessageTypeId, Registry, Request, command_handler,
-    event_handler, request_handler,
+    CatgaResult, Mediator, Registry, Request, command_handler, event_handler, request_handler,
 };
 
 #[catga_core::catga_request(response = u64)]
@@ -88,42 +84,8 @@ pub struct BoundHappened<T: std::fmt::Debug> {
 }
 
 #[test]
-fn macro_emits_stable_names_and_unique_markers() {
-    assert_eq!(<GetPrice as Request>::TypeId::NAME, "GetPrice");
-    assert_eq!(<GetName as Request>::TypeId::NAME, "GetName");
-    assert_eq!(<GetList as Request>::TypeId::NAME, "GetList");
-    assert_eq!(<Choice as Request>::TypeId::NAME, "Choice");
-    assert_eq!(<SizedRequest<2> as Request>::TypeId::NAME, "SizedRequest");
-    assert_eq!(<Toggle as Command>::TypeId::NAME, "Toggle");
-    assert_eq!(<SizedCommand<3> as Command>::TypeId::NAME, "SizedCommand");
-    assert_eq!(<Envelope<u8> as Event>::TypeId::NAME, "Envelope");
-    assert_eq!(<SysEvent as Event>::TypeId::NAME, "SysEvent");
-    assert_eq!(<scoped_a::Ping as Command>::TypeId::NAME, "Ping");
-    assert_eq!(<scoped_b::Ping as Command>::TypeId::NAME, "Ping");
-    let _internal = scoped_c::Internal;
-
-    let ids = [
-        TypeId::of::<<GetPrice as Request>::TypeId>(),
-        TypeId::of::<<GetName as Request>::TypeId>(),
-        TypeId::of::<<GetList as Request>::TypeId>(),
-        TypeId::of::<<Choice as Request>::TypeId>(),
-        TypeId::of::<<Toggle as Command>::TypeId>(),
-        TypeId::of::<<Envelope<u8> as Event>::TypeId>(),
-        TypeId::of::<<SysEvent as Event>::TypeId>(),
-        TypeId::of::<scoped_a::PingTypeId>(),
-        TypeId::of::<scoped_b::PingTypeId>(),
-        TypeId::of::<scoped_c::InternalTypeId>(),
-    ];
-    let unique: HashSet<_> = ids.iter().collect();
-    assert_eq!(
-        unique.len(),
-        ids.len(),
-        "every generated marker is a distinct Rust type"
-    );
-}
-
-#[test]
 fn response_types_accept_paths_and_generics() {
+    let _internal = scoped_c::Internal;
     assert_eq!(
         std::any::type_name::<<GetPrice as Request>::Response>(),
         std::any::type_name::<u64>()

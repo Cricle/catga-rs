@@ -5,7 +5,7 @@ use std::{
     error::Error as _,
     marker::PhantomData,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
 
 use async_nats::jetstream::{self, kv};
@@ -14,6 +14,7 @@ use catga_core::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackSerializer, MemoryPackSnapshotCodec, MemoryPackWriter, MemoryPackable,
 };
+use catga_core::time::saturating_unix_millis;
 use catga_core::{
     CatgaError, CatgaResult, EnhancedSnapshotStore, ErrorCode, Snapshot, SnapshotCodec,
     SnapshotInfo, SnapshotStore,
@@ -144,7 +145,7 @@ where
     fn entry_from_snapshot(&self, snapshot: &Snapshot<S>) -> CatgaResult<StoredSnapshot> {
         Ok(StoredSnapshot {
             version: snapshot.version(),
-            timestamp_unix_ms: unix_millis(snapshot.timestamp()),
+            timestamp_unix_ms: saturating_unix_millis(snapshot.timestamp()),
             state: self.codec.encode_state(snapshot.state())?,
         })
     }
@@ -472,13 +473,4 @@ fn is_revision_conflict(error: &kv::UpdateError) -> bool {
         .is_some_and(|source| {
             source.kind() == jetstream::context::PublishErrorKind::WrongLastSequence
         })
-}
-
-fn unix_millis(time: SystemTime) -> u64 {
-    u64::try_from(
-        time.duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX)
 }

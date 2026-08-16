@@ -29,7 +29,7 @@ Catga 是纯 Rust 的 CQRS、事件溯源、工作流与分布式运行时工作
 | Redis 传输与存储 | `catga-redis = "0.2"` |
 | RobustMQ 传输（mq9 mailbox） | `catga-robustmq = "0.2"` |
 | Axum HTTP 集成 | `catga-axum = "0.2"` |
-| 集群/Raft、单例任务、leader-only 执行 | `catga-cluster = "0.2"` |
+| Raft 共识（gRPC multi-Raft） | `catga-sorock = "0.2"` |
 
 运行时需要 `tokio = { version = "1", features = ["macros", "rt-multi-thread"] }`；结构体处理器需要 `async-trait = "0.1"`。
 

@@ -17,7 +17,6 @@ impl Message for Double {}
 
 impl Request for Double {
     type Response = Doubled;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -45,7 +44,6 @@ impl Message for NestedDouble {}
 
 impl Request for NestedDouble {
     type Response = Doubled;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct NestedDoubleHandler {

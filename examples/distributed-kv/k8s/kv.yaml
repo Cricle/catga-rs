@@ -2,10 +2,10 @@
 #
 # No framework changes are required: the pods derive their Raft identity from
 # the StatefulSet ordinal (POD_NAME via the downward API) and discover peers
-# through the headless Service DNS records. The default consensus backend is
-# raft-rs over HTTP on the API port; with KV_BACKEND=sorock (see the commented
-# env var below) consensus runs over gRPC on port 10100 (API port + 1000) on
-# the same pod hostnames, while the API port keeps serving KV + probes.
+# through the headless Service DNS records. Consensus runs catga-raft over
+# gRPC on port 10100 on the pod hostnames, while port 9100 serves the KV
+# HTTP API + probes and port 10500 the KV gRPC fast path. State persists on
+# the pod PVC at /data (redb).
 #
 # Layout:
 #   - headless Service  : pod DNS kv-<i>.kv-headless for Raft + API traffic
@@ -28,9 +28,12 @@ spec:
   ports:
     - name: api
       port: 9100
-    # Consensus transport when KV_BACKEND=sorock (unused on the raft backend).
-    - name: sorock-grpc
+    # catga-raft gRPC transport.
+    - name: raft-grpc
       port: 10100
+    # KV gRPC fast path (raft port + 400).
+    - name: kv-grpc
+      port: 10500
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -70,15 +73,17 @@ spec:
               value: kv
             - name: KV_REPLICAS
               value: "3"
-            # Set to run consensus on the sorock gRPC backend (port 10100):
-            # - name: KV_BACKEND
-            #   value: sorock
+            - name: KV_DATA_DIR
+              value: /data
           ports:
             - name: api
               containerPort: 9100
-            # Consensus transport when KV_BACKEND=sorock (unused on the raft backend).
-            - name: sorock-grpc
+            # catga-raft gRPC transport.
+            - name: raft-grpc
               containerPort: 10100
+            # KV gRPC fast path (raft port + 400).
+            - name: kv-grpc
+              containerPort: 10500
           readinessProbe:
             # The node answers once the HTTP API and the Raft owner task are up.
             httpGet:

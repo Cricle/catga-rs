@@ -1,5 +1,5 @@
-//! Contract coverage for routing tables, schema versioning, typed stores and
-//! publishers, and the composable transport wrappers.
+//! Contract coverage for routing tables, schema versioning, and the composable
+//! transport wrappers.
 
 use std::{
     sync::{
@@ -12,27 +12,13 @@ use std::{
 use async_trait::async_trait;
 use catga_core::memory::{MemoryEventStore, MemoryTransport};
 use catga_core::{
-    Acknowledger, CatgaError, CatgaResult, Delivery, Destination, DestinationTransport,
-    DistributedIdGenerator, Envelope, EnvelopeHeaders, EnvelopePublisher, ErrorCode, Event,
-    EventStore, EventUpgrader, EventVersionRegistry, MemoryPackCodec, Message,
-    MessageDestinationRouter, MessageMetadata, MessageRouter, MessageTransport, MessageTypeId,
-    ResilienceExecutor, ResilienceOptions, ResilientTransport, SnowflakeIdGenerator,
-    SnowflakeLayout, TransportBatcher, TransportContext, TypedEventStore, TypedPublisher,
-    UpgradingEventStore, VersionedMessageTransport, assert_error_code, assert_failure,
-    assert_success, scope_transport_context_value,
-};
-use catga_core::{
-    MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
-    MemoryPackWriter, MemoryPackable,
+    Acknowledger, CatgaError, CatgaResult, Delivery, Destination, DestinationTransport, Envelope,
+    EnvelopeHeaders, ErrorCode, EventStore, EventUpgrader, EventVersionRegistry,
+    MessageDestinationRouter, MessageMetadata, MessageRouter, MessageTransport,
+    ResilienceExecutor, ResilienceOptions, ResilientTransport, TransportBatcher,
+    UpgradingEventStore, assert_error_code, assert_failure, assert_success,
 };
 use tokio_util::sync::CancellationToken;
-
-fn ids() -> Arc<dyn DistributedIdGenerator> {
-    Arc::new(assert_success(SnowflakeIdGenerator::new(
-        1,
-        SnowflakeLayout::default(),
-    )))
-}
 
 fn env(id: u64, message_type: &str, schema_version: u32) -> Envelope {
     Envelope::versioned(
@@ -396,142 +382,6 @@ async fn upgrading_event_store_upgrades_read_pages() {
         broken_view.read_page("orders-1", 0, 10).await,
         ErrorCode::Internal,
     );
-}
-
-// ---------------------------------------------------------------------------
-// Typed event store and typed publisher
-// ---------------------------------------------------------------------------
-
-struct OrderTypeId;
-impl MessageTypeId for OrderTypeId {
-    const NAME: &'static str = "orders::OrderCreated";
-}
-
-#[derive(Clone, MemoryPackable)]
-struct OrderCreated {
-    order_id: u64,
-}
-
-impl Message for OrderCreated {}
-impl Event for OrderCreated {
-    type TypeId = OrderTypeId;
-}
-
-#[tokio::test]
-async fn typed_event_store_appends_versioned_events() {
-    let store = Arc::new(MemoryEventStore::default());
-    let typed = TypedEventStore::new_with_codec(store.clone(), ids(), MemoryPackCodec::default());
-    let cloned = typed.clone();
-
-    let version = assert_success(
-        cloned
-            .append_event("orders-9", &OrderCreated { order_id: 1 }, None)
-            .await,
-    );
-    assert_eq!(version, 0);
-
-    // append_new_event only admits the first write for a stream.
-    assert_success(
-        cloned
-            .append_new_event("orders-10", &OrderCreated { order_id: 2 })
-            .await,
-    );
-    assert_error_code(
-        cloned
-            .append_new_event("orders-10", &OrderCreated { order_id: 3 })
-            .await,
-        ErrorCode::Conflict,
-    );
-
-    let page = assert_success(store.read_page("orders-9", 0, 10).await);
-    let envelope = page.stream().events()[0].envelope();
-    assert_eq!(
-        envelope.message_type(),
-        std::any::type_name::<OrderCreated>()
-    );
-    assert_eq!(envelope.schema_version(), 1);
-}
-
-#[tokio::test]
-async fn typed_publisher_encodes_messages_and_inherits_context() {
-    let transport = Arc::new(assert_success(MemoryTransport::new(8)));
-    let publisher =
-        TypedPublisher::new_with_codec(transport.clone(), ids(), MemoryPackCodec::default());
-    let cloned = publisher.clone();
-
-    // Plain publication carries the message type and schema version.
-    assert_success(cloned.publish(&OrderCreated { order_id: 1 }).await);
-    let delivery = assert_success(transport.receive().await);
-    assert_eq!(
-        delivery.envelope().message_type(),
-        std::any::type_name::<OrderCreated>()
-    );
-    assert!(delivery.envelope().header("x-tenant").is_none());
-    assert_success(delivery.acknowledge().await);
-
-    // Publication inside a transport context inherits its headers and priority.
-    let headers = assert_success(EnvelopeHeaders::try_new([("x-tenant", "acme")]));
-    let context = TransportContext::from_headers(headers);
-    let scoped = scope_transport_context_value(context, async {
-        publisher.publish(&OrderCreated { order_id: 2 }).await
-    });
-    assert_success(scoped.await);
-    let inherited = assert_success(transport.receive().await);
-    assert_eq!(inherited.envelope().header("x-tenant"), Some("acme"));
-    assert_success(inherited.acknowledge().await);
-
-    // The blanket EnvelopePublisher implementation forwards raw envelopes.
-    let raw = env(33, "raw::Envelope", 1);
-    assert_success(EnvelopePublisher::publish(&*transport, raw).await);
-    let raw_delivery = assert_success(transport.receive().await);
-    assert_eq!(raw_delivery.envelope().message_type(), "raw::Envelope");
-    assert_success(transport.ack(raw_delivery).await);
-
-    // A shared-codec construction path behaves identically.
-    let shared = TypedPublisher::new_with_shared_codec(
-        transport.clone(),
-        ids(),
-        Arc::new(MemoryPackCodec::default()),
-    );
-    assert_success(shared.publish(&OrderCreated { order_id: 4 }).await);
-}
-
-// ---------------------------------------------------------------------------
-// VersionedMessageTransport
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn versioned_transport_upgrades_received_envelopes() {
-    let inner = Arc::new(assert_success(MemoryTransport::new(4)));
-    let versions = Arc::new(EventVersionRegistry::default());
-    assert_success(versions.register(StepUpgrader::new(
-        "orders::Created",
-        "orders::CreatedV2",
-        1,
-        2,
-    )));
-    let versioned = VersionedMessageTransport::new(inner.clone(), versions.clone());
-
-    // Publish is a pass-through.
-    assert_success(MessageTransport::publish(&versioned, env(1, "orders::Created", 1)).await);
-    let delivery = assert_success(versioned.receive().await);
-    assert_eq!(delivery.envelope().message_type(), "orders::CreatedV2");
-    assert_eq!(delivery.envelope().schema_version(), 2);
-    assert_success(delivery.acknowledge().await);
-
-    // A failing upgrade surfaces the registry error without losing the ack token.
-    let failing_versions = Arc::new(EventVersionRegistry::default());
-    let failing = Arc::new(StepUpgrader {
-        source: "broken::Type".into(),
-        target: "broken::TypeV2".into(),
-        from: 1,
-        to: 2,
-        mode: UpgradeMode::Failing,
-    });
-    assert_success(failing_versions.register(failing));
-    let broken = VersionedMessageTransport::new(inner.clone(), failing_versions);
-    assert_success(MessageTransport::publish(&*inner, env(2, "broken::Type", 1)).await);
-    assert_error_code(broken.receive().await, ErrorCode::Internal);
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
+use catga_core::time::saturating_unix_millis;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Snapshot, SnapshotCodec, SnapshotStore};
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
@@ -110,7 +111,7 @@ where
         Script::new(SAVE)
             .key(self.key(snapshot.stream_id()))
             .arg(snapshot.version())
-            .arg(unix_millis(snapshot.timestamp()))
+            .arg(saturating_unix_millis(snapshot.timestamp()))
             .arg(payload)
             .invoke_async::<i64>(&mut connection)
             .await
@@ -171,15 +172,6 @@ where
             .await
             .map_err(CatgaError::transient)
     }
-}
-
-fn unix_millis(time: SystemTime) -> u64 {
-    u64::try_from(
-        time.duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX)
 }
 
 fn from_unix_millis(millis: u64) -> SystemTime {

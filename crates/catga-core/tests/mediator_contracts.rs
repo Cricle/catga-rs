@@ -9,66 +9,33 @@ use std::sync::{
 use async_trait::async_trait;
 use catga_core::{
     CatgaError, CatgaResult, Command, ErrorCode, Event, EventHandler, Mediator, MediatorHandle,
-    Message, MessageTypeId, Registry, Request, command_handler, event_handler, request_handler,
+    Message, Registry, Request, command_handler, event_handler, request_handler,
 };
-
-struct EchoTypeId;
-impl MessageTypeId for EchoTypeId {
-    const NAME: &'static str = "Echo";
-}
 
 struct Echo(u64);
 impl Message for Echo {}
 impl Request for Echo {
     type Response = u64;
-    type TypeId = EchoTypeId;
-}
-
-struct BumpTypeId;
-impl MessageTypeId for BumpTypeId {
-    const NAME: &'static str = "Bump";
 }
 
 struct Bump(usize);
 impl Message for Bump {}
-impl Command for Bump {
-    type TypeId = BumpTypeId;
-}
-
-struct TickTypeId;
-impl MessageTypeId for TickTypeId {
-    const NAME: &'static str = "Tick";
-}
+impl Command for Bump {}
 
 #[derive(Clone)]
 struct Tick;
 impl Message for Tick {}
-impl Event for Tick {
-    type TypeId = TickTypeId;
-}
-
-struct UnhandledRequestTypeId;
-impl MessageTypeId for UnhandledRequestTypeId {
-    const NAME: &'static str = "UnhandledRequest";
-}
+impl Event for Tick {}
 
 struct UnhandledRequest;
 impl Message for UnhandledRequest {}
 impl Request for UnhandledRequest {
     type Response = ();
-    type TypeId = UnhandledRequestTypeId;
-}
-
-struct UnhandledCommandTypeId;
-impl MessageTypeId for UnhandledCommandTypeId {
-    const NAME: &'static str = "UnhandledCommand";
 }
 
 struct UnhandledCommand;
 impl Message for UnhandledCommand {}
-impl Command for UnhandledCommand {
-    type TypeId = UnhandledCommandTypeId;
-}
+impl Command for UnhandledCommand {}
 
 /// Records its name into the shared fan-out log, then optionally fails with a prepared error.
 struct Recorder {

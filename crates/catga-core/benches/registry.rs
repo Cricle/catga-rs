@@ -30,7 +30,6 @@ macro_rules! define_types {
                 impl Message for [<Msg $n>] {}
                 impl Request for [<Msg $n>] {
                     type Response = u64;
-                    type TypeId = catga_core::DefaultMessageTypeId;
                 }
 
                 struct [<H $n>];
@@ -52,7 +51,6 @@ struct PingSingle;
 impl Message for PingSingle {}
 impl Request for PingSingle {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct HandlerSingle;

@@ -10,21 +10,15 @@
 //!
 //! For rapid prototyping, the opinionated [`catga_routes!`] and [`catga_application!`] macros
 //! remain available as convenience shortcuts. They are not required for integration.
-//!
-//! # Boundary assumptions
-//!
-//! Callers retain ownership of server lifecycle, request-size limits other than the bounded Raft
-//! ingress, and authentication. For outgoing requests, [`CorrelationHttpClient`] preserves
-//! caller-provided correlation and trace headers; ambient Catga context fills in only missing
-//! values. Treat inbound correlation headers as untrusted until application middleware validates
-//! or replaces them according to the deployment's trust boundary.
 
 mod client;
-mod cluster;
 mod compat;
 mod extract;
 mod layer;
 mod tls;
+
+/// Catga Axum unified prelude.
+pub mod prelude;
 mod validation;
 
 use std::{
@@ -55,21 +49,17 @@ use serde::Serialize;
 
 pub use client::{
     CorrelationHttpClient, DEFAULT_FORWARD_PATH_PREFIX,
-    DEFAULT_HTTP_CLUSTER_FORWARD_RESPONSE_LIMIT_BYTES, HttpClusterForwarder, HttpRaftTransport,
-};
-pub use cluster::{
-    ConsensusMachineBridge, DEFAULT_RAFT_HTTP_REQUEST_TIMEOUT, RAFT_HTTP_HEALTH_PATH,
-    RAFT_HTTP_STATUS_PATH, RaftHttpCluster, RaftHttpClusterBuilder, shutdown_signal,
+    DEFAULT_HTTP_CLUSTER_FORWARD_RESPONSE_LIMIT_BYTES, HttpClusterForwarder,
 };
 pub use compat::{
     event_route, event_route_with_method, leader_forward_route, leader_forward_route_at,
-    mediator_route, mediator_route_with_method, raft_message_route, raft_peer_identity_middleware,
+    mediator_route, mediator_route_with_method,
 };
 pub use extract::MediatorState;
 pub use layer::{CorrelationLayer, CorrelationService, TraceContextLayer, TraceContextService};
 pub use tls::{
     DevCertificateAuthority, DevNodeIdentity, MtlsAcceptor, PeerCertificateService,
-    TlsPeerCertificates, mtls_peer_identity_middleware, mtls_reqwest_client,
+    PeerIdentity, TlsPeerCertificates, mtls_peer_identity_middleware, mtls_reqwest_client,
     mtls_server_tls_config, peer_identity_from_certificate, serve_mtls,
 };
 pub use validation::{
@@ -89,24 +79,15 @@ pub use axum;
 /// Re-exported from [`catga_core::CORRELATION_ID_HEADER`] for backward compatibility.
 pub use catga_core::CORRELATION_ID_HEADER;
 
-/// Largest protobuf frame accepted by the Raft HTTP ingress route.
+/// Liveness probe path used by HTTP servers.
 ///
-/// This matches the native Raft node `max_size_per_msg` setting. Deployments carrying a larger
-/// snapshot must use the snapshot transport rather than bypassing this bounded route.
-pub const MAX_RAFT_MESSAGE_BYTES: usize = 1024 * 1024;
+/// Returns `200` while the server is healthy and `503` when it has stopped.
+pub const RAFT_HTTP_HEALTH_PATH: &str = "/healthz";
 
-/// HTTP endpoint used to receive raw protobuf Raft protocol messages.
-pub const RAFT_MESSAGE_PATH: &str = "/api/catga/raft";
-
-/// Header carrying the authenticated Raft peer identity on inbound protocol frames.
+/// Readiness/status probe path used by HTTP servers.
 ///
-/// [`HttpRaftTransport::with_peer_identity`](crate::HttpRaftTransport) sends it and
-/// [`raft_peer_identity_middleware`] turns it into
-/// the verified extension that [`raft_message_route`] policies
-/// require. A self-asserted header is only safe on trusted networks or demos; production
-/// deployments must derive the identity from the authenticated transport (for example an
-/// mTLS client-certificate SAN) with their own middleware instead.
-pub const RAFT_PEER_IDENTITY_HEADER: &str = "x-catga-peer";
+/// Reports server status as JSON.
+pub const RAFT_HTTP_STATUS_PATH: &str = "/status";
 
 // ---------------------------------------------------------------------------
 // CatgaError → HTTP response (zero-cost error mapping)
@@ -576,6 +557,35 @@ pub async fn endpoint_panic_middleware(request: AxumRequest, next: Next) -> Resp
 }
 
 // ---------------------------------------------------------------------------
+// Shutdown signal
+// ---------------------------------------------------------------------------
+
+/// Resolves on SIGINT (Ctrl-C) and, on Unix, on SIGTERM.
+///
+/// Use it directly as an application's graceful-shutdown trigger. If the SIGTERM handler
+/// cannot be installed, only SIGINT is honored.
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Macros
 // ---------------------------------------------------------------------------
 
@@ -731,7 +741,7 @@ macro_rules! catga_application {
 /// Builds routes for native Axum handlers from an existing [`axum::Router`] expression.
 ///
 /// This is separate from [`catga_routes!`], which registers Catga mediator request and event
-/// handlers. `axum_routes!` expands each entry directly to Axum's corresponding routing method.
+/// handlers. `axum_routes!` expands each entry directly to Axum's native routing method.
 #[macro_export]
 macro_rules! axum_routes {
     (

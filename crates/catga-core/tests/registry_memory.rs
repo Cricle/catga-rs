@@ -1,51 +1,29 @@
 //! Memory layout tests for Registry
 
 use catga_core::{
-    CatgaResult, Command, CommandHandler, ErrorCode, Handler, Message, MessageTypeId, Registry,
-    Request,
+    CatgaResult, Command, CommandHandler, ErrorCode, Handler, Message, Registry, Request,
 };
 
-struct PingTypeId;
-impl MessageTypeId for PingTypeId {
-    const NAME: &'static str = "Ping";
-}
 struct Ping;
 impl Message for Ping {}
 impl Request for Ping {
     type Response = String;
-    type TypeId = PingTypeId;
 }
 
-struct AddTypeId;
-impl MessageTypeId for AddTypeId {
-    const NAME: &'static str = "Add";
-}
 struct Add;
 impl Message for Add {}
-impl Command for Add {
-    type TypeId = AddTypeId;
-}
+impl Command for Add {}
 
-struct QueryTypeId;
-impl MessageTypeId for QueryTypeId {
-    const NAME: &'static str = "Query";
-}
 struct Query;
 impl Message for Query {}
 impl Request for Query {
     type Response = String;
-    type TypeId = QueryTypeId;
 }
 
-struct HeavyTypeId;
-impl MessageTypeId for HeavyTypeId {
-    const NAME: &'static str = "Heavy";
-}
 struct Heavy;
 impl Message for Heavy {}
 impl Request for Heavy {
     type Response = String;
-    type TypeId = HeavyTypeId;
 }
 
 struct PingHandler;

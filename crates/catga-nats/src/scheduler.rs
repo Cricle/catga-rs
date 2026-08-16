@@ -11,7 +11,7 @@ use catga_core::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackSerializer, MemoryPackWriter, MemoryPackable,
 };
-use catga_core::flow::{DueFlowScheduler, FlowScheduler, ScheduledResume};
+use catga_core::flow::{DueFlowScheduler, FlowScheduler, ScheduledResume, schedule_target_bytes};
 use catga_core::hash::sha256_digest;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use serde::{Deserialize, Serialize};
@@ -336,7 +336,7 @@ impl FlowScheduler for NatsFlowScheduler {
         due_at: SystemTime,
     ) -> CatgaResult<Box<str>> {
         let due_at_millis = to_millis(due_at)?;
-        let key = target_record_key(&target_bytes(flow_id, state_id)?);
+        let key = target_record_key(&schedule_target_bytes(flow_id, state_id)?);
         let schedule_id: Box<str> = format!("{key}:{}", Uuid::new_v4()).into();
         self.index_schedule(&key).await?;
         let schedule = StoredSchedule {
@@ -610,31 +610,6 @@ fn page_key(page: u64) -> String {
 
 fn marker_key(key: &str) -> String {
     format!("i{}", hex::encode(sha256_digest(key.as_bytes())))
-}
-
-fn target_bytes(flow_id: &str, state_id: &str) -> CatgaResult<Vec<u8>> {
-    let flow_len = u64::try_from(flow_id.len()).map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Validation,
-            "flow identifier is too long for NATS",
-        )
-    })?;
-    let state_len = u64::try_from(state_id.len()).map_err(|_| {
-        CatgaError::new(
-            ErrorCode::Validation,
-            "state identifier is too long for NATS",
-        )
-    })?;
-    let capacity = 16_usize
-        .checked_add(flow_id.len())
-        .and_then(|value| value.checked_add(state_id.len()))
-        .ok_or_else(|| CatgaError::new(ErrorCode::Validation, "scheduler target is too long"))?;
-    let mut target = Vec::with_capacity(capacity);
-    target.extend_from_slice(&flow_len.to_be_bytes());
-    target.extend_from_slice(flow_id.as_bytes());
-    target.extend_from_slice(&state_len.to_be_bytes());
-    target.extend_from_slice(state_id.as_bytes());
-    Ok(target)
 }
 
 fn next_cursor(index: &ScheduleIndex, consumed: bool) -> CatgaResult<ScheduleIndex> {

@@ -9,3 +9,4 @@
 
 # llvm-cov artifacts
 *.profraw
+kv-data-*/

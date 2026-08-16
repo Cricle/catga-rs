@@ -1,8 +1,13 @@
 # sorock 多 Raft 后端
 
+## catga-cluster 合并
+
+catga-cluster (raft-rs over HTTP) 已合并到 catga-sorock。
+所有功能现在由 sorock 提供，不再需要单独的 Raft HTTP 传输。
+
 ## 概述
 
-`catga-sorock` 是基于 [sorock](https://crates.io/crates/sorock) 0.12 的多点 Raft 共识后端：把一个 sorock 分片（shard）的 Raft 进程适配到 `catga-core` 的后端无关共识契约（`ConsensusStateMachine` / `ConsensusRuntime` / `ConsensusCoordinator`，见[集群模式](./cluster.md#后端无关共识抽象catga-core)）。与 `catga-cluster`(raft-rs over HTTP，应用自带传输与存储）不同，sorock 自带 gRPC 传输（tonic）与 redb 存储，应用不需要写任何传输代码。
+`catga-sorock` 是基于 [sorock](https://crates.io/crates/sorock) 0.12 的多点 Raft 共识后端：把一个 sorock 分片（shard）的 Raft 进程适配到 `catga-core` 的后端无关共识契约（`ConsensusStateMachine` / `ConsensusRuntime` / `ConsensusCoordinator`，见[集群模式](./distributed.md#后端无关共识抽象catga-core)）。sorock 自带 gRPC 传输（tonic）与 redb 存储，应用不需要写任何传输代码。
 
 ```toml
 [dependencies]

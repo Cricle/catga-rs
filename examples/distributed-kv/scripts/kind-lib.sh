@@ -148,7 +148,7 @@ wait_all_ready() { # <budget_s>
   done
 }
 
-# raft only: echo the ordinal whose /status reports is_leader, or nothing.
+# Echo the ordinal whose /status reports is_leader, or nothing.
 leader_ord() {
   local ord body
   for ord in 0 1 2; do

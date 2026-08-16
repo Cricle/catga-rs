@@ -1,36 +1,28 @@
-//! Mutual-TLS (mTLS) peer authentication for Raft-over-HTTP.
+//! Mutual-TLS (mTLS) peer authentication for HTTP servers.
 //!
-//! This module is the production answer to the demo-only
-//! [`crate::raft_peer_identity_middleware`]: instead of trusting a self-asserted HTTP header,
-//! the peer identity is derived from the **verified** TLS client certificate chain. The server
+//! This module provides mTLS peer authentication for HTTP servers. The server
 //! requires every client to present a certificate chaining to the configured client CA root
 //! (WebPKI), records the verified chain as a request extension, and
-//! [`mtls_peer_identity_middleware`] turns the leaf certificate into the
-//! [`RaftPeerIdentity`] that [`crate::raft_message_route`] policies authorize. Request headers
-//! and the protobuf payload are never consulted for identity.
+//! [`mtls_peer_identity_middleware`] turns the leaf certificate into a stable peer identity.
 //!
-//! A connection without a valid client certificate fails the TLS handshake, so no frame reaches
-//! the route at all. When the acceptor is instead built from a custom
+//! A connection without a valid client certificate fails the TLS handshake, so no request reaches
+//! the application. When the acceptor is instead built from a custom
 //! [`rustls::ServerConfig`] that tolerates missing client certificates, the middleware simply
-//! inserts no identity and the route answers `401`.
+//! inserts no identity and the application can decide how to handle unauthenticated requests.
 //!
 //! # Wiring
 //!
 //! ```no_run
-//! use std::{net::TcpListener, path::Path, sync::Arc};
+//! use std::{net::TcpListener, path::Path};
 //!
-//! use axum::middleware;
+//! use axum::Router;
 //! use catga_axum::{
-//!     MtlsAcceptor, mtls_peer_identity_middleware, raft_message_route, serve_mtls,
+//!     MtlsAcceptor, mtls_peer_identity_middleware, serve_mtls,
 //! };
-//! use catga_cluster::StaticRaftInboundPolicy;
 //!
-//! # async fn wiring(inbox: tokio::sync::mpsc::Sender<catga_cluster::RaftMessage>)
-//! #     -> catga_core::CatgaResult<()> {
-//! let policy = StaticRaftInboundPolicy::new(1, [(2, "spiffe://cluster/node-2")])
-//!     .expect("valid static policy");
-//! let app = raft_message_route(inbox, policy)
-//!     .layer(middleware::from_fn(mtls_peer_identity_middleware));
+//! # async fn wiring() -> catga_core::CatgaResult<()> {
+//! let app = Router::new()
+//!     .layer(axum::middleware::from_fn(mtls_peer_identity_middleware));
 //! let acceptor = MtlsAcceptor::from_pem_files(
 //!     Path::new("node-1.pem"),
 //!     Path::new("node-1-key.pem"),
@@ -53,16 +45,10 @@ use std::{
 
 use axum::{Router, extract::Request as AxumRequest, middleware::Next, response::Response};
 use axum_server::accept::Accept;
-use catga_cluster::RaftPeerIdentity;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use futures::future::BoxFuture;
 use http::Request;
-use rcgen::string::Ia5String;
-use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
-    Issuer, KeyPair, KeyUsagePurpose, SanType,
-};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
 use tokio::net::TcpStream;
@@ -106,8 +92,6 @@ pub fn mtls_server_tls_config(
         })?;
     }
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    // Every rustls builder takes the explicit provider: the implicit-provider variants panic
-    // once workspace feature unification enables both ring and aws-lc-rs on rustls.
     let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
         .build()
         .map_err(|error| {
@@ -248,8 +232,6 @@ pub async fn serve_mtls(
     acceptor: MtlsAcceptor,
     app: Router,
 ) -> CatgaResult<()> {
-    // tokio's `TcpListener::from_std` (inside `axum_server::from_tcp`) assumes non-blocking
-    // mode but does not set it; a blocking listener wedges the reactor thread on accept.
     listener.set_nonblocking(true).map_err(|error| {
         CatgaError::new(
             ErrorCode::Unavailable,
@@ -310,18 +292,43 @@ where
 // Peer identity extraction
 // ---------------------------------------------------------------------------
 
-/// Extracts the stable peer identity from a verified X.509 leaf certificate (DER).
+/// A stable peer identity derived from a verified TLS client certificate.
+///
+/// This type wraps a string identity (typically a SPIFFE URI, DNS name, or CN)
+/// that is extracted from a verified X.509 client certificate.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PeerIdentity(String);
+
+impl PeerIdentity {
+    /// Creates a new peer identity from a string value.
+    ///
+    /// Returns an error if the value is empty.
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.is_empty() {
+            Err("peer identity cannot be empty")
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    /// Returns the identity string value.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Extracts a stable peer identity from a verified X.509 leaf certificate (DER).
 ///
 /// The first SAN URI entry wins, which covers SPIFFE-style workload identities such as
 /// `spiffe://cluster/node-2`. When no SAN URI is present, the first DNS SAN is used, then the
 /// subject CN. Returns `None` when the certificate does not parse or carries none of these
-/// names (or the name is empty after trimming), in which case the connection is treated as
-/// unauthenticated.
+/// names (or the name is empty after trimming).
 ///
 /// Callers must only pass certificates that the TLS stack has already verified; this function
 /// performs no signature or chain validation itself.
 #[must_use]
-pub fn peer_identity_from_certificate(certificate: &[u8]) -> Option<RaftPeerIdentity> {
+pub fn peer_identity_from_certificate(certificate: &[u8]) -> Option<PeerIdentity> {
     let (_, certificate) = X509Certificate::from_der(certificate).ok()?;
     let sans = certificate.subject_alternative_name().ok().flatten();
     let san_name = |want_uri: bool| {
@@ -342,21 +349,16 @@ pub fn peer_identity_from_certificate(certificate: &[u8]) -> Option<RaftPeerIden
             .iter_common_name()
             .find_map(|attribute| attribute.attr_value().as_str().ok())
     })?;
-    RaftPeerIdentity::new(identity).ok()
+    PeerIdentity::new(identity).ok()
 }
 
-/// Axum middleware that derives [`RaftPeerIdentity`] from the verified client certificate.
+/// Axum middleware that derives [`PeerIdentity`] from the verified client certificate.
 ///
-/// Apply with `axum::middleware::from_fn(mtls_peer_identity_middleware)` on the router holding
-/// [`crate::raft_message_route`], served through [`MtlsAcceptor`]. The identity comes from the
-/// verified [`TlsPeerCertificates`] extension (SAN URI, then DNS SAN, then subject CN via
-/// [`peer_identity_from_certificate`]) and is inserted as the request extension the Raft
-/// ingress policy requires. A connection without a verified client certificate gets no
-/// extension, so the route answers `401`.
-///
-/// The identity is never derived from caller-controlled headers or the protobuf payload;
-/// deployments must not combine this middleware with
-/// [`crate::raft_peer_identity_middleware`] on the same router.
+/// Apply with `axum::middleware::from_fn(mtls_peer_identity_middleware)` on the router.
+/// The identity comes from the verified [`TlsPeerCertificates`] extension (SAN URI,
+/// then DNS SAN, then subject CN via [`peer_identity_from_certificate`]) and is inserted
+/// as the request extension. A connection without a verified client certificate gets no
+/// extension.
 pub async fn mtls_peer_identity_middleware(mut request: AxumRequest, next: Next) -> Response {
     let identity = request
         .extensions()
@@ -377,17 +379,7 @@ pub async fn mtls_peer_identity_middleware(mut request: AxumRequest, next: Next)
 ///
 /// `client_cert_chain` and `client_key` are the PEM identity this node presents (leaf first);
 /// `server_ca_root` is the PEM bundle of CA certificates trusted to sign peer server
-/// certificates. Server verification uses pure WebPKI against exactly those roots — platform
-/// trust stores are deliberately not consulted, so cluster peers are pinned to the cluster CA
-/// and verification never touches OS chain engines or the network. The resulting client works
-/// with the existing [`crate::HttpRaftTransport`] and [`crate::HttpClusterForwarder`]
-/// unchanged — both already accept a caller-supplied `reqwest::Client`, so no transport changes
-/// are needed.
-///
-/// # Errors
-///
-/// Returns [`ErrorCode::Validation`] when a PEM file is missing or malformed, or the identity
-/// or trust roots cannot be built.
+/// certificates. Server verification uses pure WebPKI against exactly those roots.
 pub fn mtls_reqwest_client(
     client_cert_chain: &Path,
     client_key: &Path,
@@ -395,26 +387,19 @@ pub fn mtls_reqwest_client(
 ) -> CatgaResult<reqwest::Client> {
     let mut identity_pem = read_pem_file(client_cert_chain, "client certificate chain")?;
     identity_pem.extend_from_slice(&read_pem_file(client_key, "client private key")?);
-    let identity = reqwest::Identity::from_pem(&identity_pem).map_err(|error| {
-        tls_config_error(format!(
-            "failed to parse client identity from {} and {}: {error}",
-            client_cert_chain.display(),
-            client_key.display()
-        ))
+    let identity = reqwest::Identity::from_pem(&identity_pem).map_err(|e| {
+        tls_config_error(format!("failed to parse client identity: {}", e))
     })?;
     let ca_pem = read_pem_file(server_ca_root, "server CA root")?;
-    let roots = reqwest::Certificate::from_pem_bundle(&ca_pem).map_err(|error| {
-        tls_config_error(format!(
-            "failed to parse server CA root {}: {error}",
-            server_ca_root.display()
-        ))
+    let roots = reqwest::Certificate::from_pem_bundle(&ca_pem).map_err(|e| {
+        tls_config_error(format!("failed to parse server CA root: {}", e))
     })?;
     reqwest::Client::builder()
         .use_rustls_tls()
         .identity(identity)
         .tls_certs_only(roots)
         .build()
-        .map_err(|error| tls_config_error(format!("failed to build mTLS HTTP client: {error}")))
+        .map_err(|e| tls_config_error(format!("failed to build mTLS HTTP client: {}", e)))
 }
 
 // ---------------------------------------------------------------------------
@@ -422,154 +407,76 @@ pub fn mtls_reqwest_client(
 // ---------------------------------------------------------------------------
 
 /// An in-memory certificate authority for tests, demos, and local development.
-///
-/// It issues per-node certificates carrying a SPIFFE-style SAN URI
-/// (`spiffe://{trust_domain}/{node_name}`), DNS `localhost` and IP `127.0.0.1` SANs, and both
-/// server and client authentication key usages, so one certificate can terminate and originate
-/// Raft connections. Production deployments must obtain certificates from their real PKI
-/// instead of generating them here.
 pub struct DevCertificateAuthority {
     cert_pem: String,
-    issuer_params: CertificateParams,
-    key_pair: KeyPair,
+    issuer_params: rcgen::CertificateParams,
+    key_pair: rcgen::KeyPair,
 }
 
 impl DevCertificateAuthority {
     /// Generates a new self-signed CA with an ECDSA P-256 key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ErrorCode::Internal`] when key generation or self-signing fails.
     pub fn generate() -> CatgaResult<Self> {
-        let mut issuer_params = CertificateParams::default();
-        issuer_params.distinguished_name = DistinguishedName::new();
-        issuer_params
-            .distinguished_name
-            .push(DnType::CommonName, "catga-dev-ca");
-        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        issuer_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-        let key_pair = KeyPair::generate().map_err(dev_pki_error)?;
-        let cert = issuer_params
-            .self_signed(&key_pair)
-            .map_err(dev_pki_error)?;
-        Ok(Self {
-            cert_pem: cert.pem(),
-            issuer_params,
-            key_pair,
-        })
+        let mut issuer_params = rcgen::CertificateParams::default();
+        issuer_params.distinguished_name = rcgen::DistinguishedName::new();
+        issuer_params.distinguished_name.push(rcgen::DnType::CommonName, "catga-dev-ca");
+        issuer_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        issuer_params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign, rcgen::KeyUsagePurpose::CrlSign];
+        let key_pair = rcgen::KeyPair::generate().map_err(dev_pki_error)?;
+        let cert = issuer_params.self_signed(&key_pair).map_err(dev_pki_error)?;
+        Ok(Self { cert_pem: cert.pem(), issuer_params, key_pair })
     }
 
-    /// Returns the PEM-encoded CA certificate used as the trust root on both sides.
-    #[must_use]
-    pub fn cert_pem(&self) -> &str {
-        &self.cert_pem
-    }
+    /// Returns the PEM-encoded CA certificate.
+    pub fn cert_pem(&self) -> &str { &self.cert_pem }
 
     /// Issues a node identity signed by this CA.
-    ///
-    /// The leaf certificate carries the SAN URI `spiffe://{trust_domain}/{node_name}` (the
-    /// value [`peer_identity_from_certificate`] extracts), `node_name` as subject CN, DNS
-    /// `localhost` and IP `127.0.0.1` SANs for hostname verification on loopback, and both
-    /// server and client authentication extended key usages.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ErrorCode::Validation`] when `trust_domain` or `node_name` contains non-ASCII
-    /// characters, and [`ErrorCode::Internal`] when key generation or signing fails.
-    pub fn issue_node_identity(
-        &self,
-        trust_domain: &str,
-        node_name: &str,
-    ) -> CatgaResult<DevNodeIdentity> {
-        let uri = format!("spiffe://{trust_domain}/{node_name}");
-        let uri = Ia5String::try_from(uri).map_err(|error| {
-            tls_config_error(format!("trust domain and node name must be ASCII: {error}"))
-        })?;
-        let mut params =
-            CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
-                .map_err(dev_pki_error)?;
-        params.distinguished_name = DistinguishedName::new();
-        params
-            .distinguished_name
-            .push(DnType::CommonName, node_name);
-        params.subject_alt_names.push(SanType::URI(uri));
-        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        params.extended_key_usages = vec![
-            ExtendedKeyUsagePurpose::ServerAuth,
-            ExtendedKeyUsagePurpose::ClientAuth,
-        ];
-        let key_pair = KeyPair::generate().map_err(dev_pki_error)?;
-        let issuer = Issuer::from_params(&self.issuer_params, &self.key_pair);
-        let cert = params
-            .signed_by(&key_pair, &issuer)
-            .map_err(dev_pki_error)?;
-        Ok(DevNodeIdentity {
-            certificate_chain_pem: cert.pem(),
-            private_key_pem: key_pair.serialize_pem(),
-        })
+    pub fn issue_node_identity(&self, trust_domain: &str, node_name: &str) -> CatgaResult<DevNodeIdentity> {
+        let uri = format!("spiffe://{}/{}", trust_domain, node_name);
+        let uri = rcgen::string::Ia5String::try_from(uri).map_err(|e| tls_config_error(e.to_string()))?;
+        let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).map_err(dev_pki_error)?;
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params.distinguished_name.push(rcgen::DnType::CommonName, node_name);
+        params.subject_alt_names.push(rcgen::SanType::URI(uri));
+        params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth, rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        let key_pair = rcgen::KeyPair::generate().map_err(dev_pki_error)?;
+        let issuer = rcgen::Issuer::from_params(&self.issuer_params, &self.key_pair);
+        let cert = params.signed_by(&key_pair, &issuer).map_err(dev_pki_error)?;
+        Ok(DevNodeIdentity { certificate_chain_pem: cert.pem(), private_key_pem: key_pair.serialize_pem() })
     }
 }
 
-/// A PEM-encoded node certificate and private key issued by a [`DevCertificateAuthority`].
+/// A PEM-encoded node certificate and private key issued by a DevCertificateAuthority.
 pub struct DevNodeIdentity {
     certificate_chain_pem: String,
     private_key_pem: String,
 }
 
 impl DevNodeIdentity {
-    /// Returns the PEM-encoded leaf certificate suitable for `*_cert_chain` parameters.
-    #[must_use]
-    pub fn certificate_chain_pem(&self) -> &str {
-        &self.certificate_chain_pem
-    }
-
-    /// Returns the PEM-encoded PKCS#8 private key suitable for `*_key` parameters.
-    #[must_use]
-    pub fn private_key_pem(&self) -> &str {
-        &self.private_key_pem
-    }
+    /// Returns the PEM-encoded certificate chain.
+    pub fn certificate_chain_pem(&self) -> &str { &self.certificate_chain_pem }
+    /// Returns the PEM-encoded private key.
+    pub fn private_key_pem(&self) -> &str { &self.private_key_pem }
 }
 
 // ---------------------------------------------------------------------------
 // PEM loading and error mapping
 // ---------------------------------------------------------------------------
 
-fn load_cert_chain(path: &Path) -> CatgaResult<Vec<CertificateDer<'static>>> {
+fn load_cert_chain(path: &Path) -> CatgaResult<Vec<rustls::pki_types::CertificateDer<'static>>> {
     let pem = read_pem_file(path, "certificate chain")?;
-    let chain = CertificateDer::pem_slice_iter(&pem)
+    rustls::pki_types::CertificateDer::pem_slice_iter(&pem)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            tls_config_error(format!(
-                "failed to parse certificate chain {}: {error}",
-                path.display()
-            ))
-        })?;
-    if chain.is_empty() {
-        return Err(tls_config_error(format!(
-            "certificate chain {} contains no certificates",
-            path.display()
-        )));
-    }
-    Ok(chain)
+        .map_err(|e| tls_config_error(format!("failed to parse certificate chain: {}", e)))
 }
 
-fn load_private_key(path: &Path) -> CatgaResult<PrivateKeyDer<'static>> {
+fn load_private_key(path: &Path) -> CatgaResult<rustls::pki_types::PrivateKeyDer<'static>> {
     let pem = read_pem_file(path, "private key")?;
-    PrivateKeyDer::from_pem_slice(&pem).map_err(|error| {
-        tls_config_error(format!(
-            "failed to parse private key {}: {error}",
-            path.display()
-        ))
-    })
+    rustls::pki_types::PrivateKeyDer::from_pem_slice(&pem).map_err(|e| tls_config_error(format!("failed to parse private key: {}", e)))
 }
 
 fn read_pem_file(path: &Path, kind: &str) -> CatgaResult<Vec<u8>> {
-    std::fs::read(path).map_err(|error| {
-        tls_config_error(format!(
-            "failed to read {kind} PEM file {}: {error}",
-            path.display()
-        ))
-    })
+    std::fs::read(path).map_err(|e| tls_config_error(format!("failed to read {} PEM file: {}", kind, e)))
 }
 
 fn tls_config_error(message: String) -> CatgaError {
@@ -577,8 +484,5 @@ fn tls_config_error(message: String) -> CatgaError {
 }
 
 fn dev_pki_error(error: rcgen::Error) -> CatgaError {
-    CatgaError::new(
-        ErrorCode::Internal,
-        format!("failed to generate development certificate: {error}"),
-    )
+    CatgaError::new(ErrorCode::Internal, format!("failed to generate development certificate: {}", error))
 }

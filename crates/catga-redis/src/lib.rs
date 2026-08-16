@@ -30,6 +30,9 @@
 //! # }
 //! ```
 
+/// Catga Redis unified prelude.
+pub mod prelude;
+
 mod acknowledgement;
 mod config;
 mod dead_letter;

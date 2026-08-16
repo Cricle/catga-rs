@@ -34,7 +34,6 @@ impl Message for PriceOrder {}
 
 impl Request for PriceOrder {
     type Response = PriceResponse;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 #[derive(Clone, Deserialize, Serialize)]

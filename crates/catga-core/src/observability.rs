@@ -66,23 +66,6 @@ pub(crate) fn event_span(event_type: &'static str, handler_count: usize) -> trac
     span
 }
 
-pub(crate) fn pipeline_span(request_type: &'static str) -> tracing::Span {
-    let span = tracing::info_span!(
-        target: TRACING_TARGET,
-        "catga.pipeline",
-        catga_kind = "pipeline",
-        request_type,
-        correlation_id = tracing::field::Empty,
-        success = tracing::field::Empty,
-        error = tracing::field::Empty,
-        duration_ms = tracing::field::Empty,
-    );
-    if let Some(correlation_id) = current_correlation_id() {
-        span.record("correlation_id", correlation_id);
-    }
-    span
-}
-
 pub(crate) fn record_request<T>(
     span: &tracing::Span,
     request_type: &'static str,

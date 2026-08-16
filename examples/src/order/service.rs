@@ -136,10 +136,10 @@ impl OrderService {
         }; steps {
             reserve => release;
         })
-        .run()
+        .run(&mut ())
         .await;
 
-        if result.is_success() {
+        if result.is_ok() {
             // Update state and emit event
             {
                 let mut orders = self.orders.write().await;
@@ -157,8 +157,7 @@ impl OrderService {
             Ok(())
         } else {
             Err(result
-                .error()
-                .cloned()
+                .err()
                 .unwrap_or_else(|| CatgaError::new(ErrorCode::Internal, "payment flow failed")))
         }
     }
@@ -216,7 +215,7 @@ impl OrderService {
     ) -> CatgaResult<()> {
         let data = serde_json::to_vec(event)
             .map_err(|_| CatgaError::new(ErrorCode::SerializationFailed, "serialize event"))?;
-        let event_type = <E::TypeId as catga_core::MessageTypeId>::NAME;
+        let event_type = catga_core::MessageTypeRegistry::canonical_name::<E>();
         let record = EventRecord {
             order_id: order_id.into(),
             event_type: event_type.into(),

@@ -20,19 +20,19 @@ redis = ["dep:catga-redis"]
 tls-rustls = ["sqlx?/tls-rustls-ring-webpki", "bb8-tiberius?/tls"]
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 bb8 = { version = "0.9", optional = true }
 bb8-tiberius = { version = "0.16", default-features = false, features = ["tds73", "with-tokio"], optional = true }
 catga-core = { workspace = true }
 catga-redis = { workspace = true, optional = true }
-sha2 = "0.11"
+sha2 = { workspace = true }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"], optional = true }
 tiberius = { version = "0.12", default-features = false, optional = true }
-uuid = { version = "1", features = ["v4"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-serde = { version = "1", features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde = { workspace = true, features = ["derive"] }
 url = "2"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{Router, extract::Path, routing::get};
 use catga_axum::MediatorState;
-use catga_core::{Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+use catga_core::{Mediator, Message, Registry, Request, request_handler};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -17,13 +17,8 @@ struct GetBalance {
     account: u64,
 }
 impl Message for GetBalance {}
-struct GetBalanceTypeId;
-impl MessageTypeId for GetBalanceTypeId {
-    const NAME: &'static str = "GetBalance";
-}
 impl Request for GetBalance {
     type Response = u64;
-    type TypeId = GetBalanceTypeId;
 }
 
 fn mediator() -> Arc<Mediator> {

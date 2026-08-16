@@ -13,10 +13,6 @@ use catga_core::{
 };
 use futures::TryStreamExt;
 
-const CLAIMED: u8 = 1;
-const COMPLETED_EMPTY: u8 = 2;
-const COMPLETED_RESULT: u8 = 3;
-const FAILED: u8 = 4;
 const RETRIES: usize = 8;
 
 /// JetStream KV-backed idempotency store with per-key revision CAS.
@@ -183,9 +179,9 @@ impl NatsIdempotency {
                 .map_or(1, |value| value.len().saturating_add(1)),
         );
         value.push(if result.is_some() {
-            COMPLETED_RESULT
+            ProcessingState::WIRE_COMPLETED_RESULT
         } else {
-            COMPLETED_EMPTY
+            ProcessingState::WIRE_COMPLETED_EMPTY
         });
         if let Some(result) = result {
             value.extend_from_slice(&result);
@@ -194,7 +190,8 @@ impl NatsIdempotency {
     }
 
     pub(crate) async fn fail_claim(&self, key: &str, generation: u64) -> CatgaResult<()> {
-        self.transition_claim(key, generation, vec![FAILED]).await
+        self.transition_claim(key, generation, vec![ProcessingState::WIRE_FAILED])
+            .await
     }
 
     async fn transition_claim(&self, key: &str, generation: u64, next: Vec<u8>) -> CatgaResult<()> {
@@ -271,7 +268,12 @@ impl IdempotencyStore for NatsIdempotency {
             for _ in 0..RETRIES {
                 match self.entry(&key).await? {
                     None => {
-                        if self.store.create(&key, vec![CLAIMED].into()).await.is_ok() {
+                        if self
+                            .store
+                            .create(&key, vec![ProcessingState::WIRE_CLAIMED].into())
+                            .await
+                            .is_ok()
+                        {
                             return Ok(true);
                         }
                     }
@@ -283,7 +285,11 @@ impl IdempotencyStore for NatsIdempotency {
                     {
                         if self
                             .store
-                            .update(&key, vec![CLAIMED].into(), entry.revision)
+                            .update(
+                                &key,
+                                vec![ProcessingState::WIRE_CLAIMED].into(),
+                                entry.revision,
+                            )
                             .await
                             .is_ok()
                         {
@@ -294,7 +300,11 @@ impl IdempotencyStore for NatsIdempotency {
                         ProcessingState::Failed => {
                             if self
                                 .store
-                                .update(&key, vec![CLAIMED].into(), entry.revision)
+                                .update(
+                                    &key,
+                                    vec![ProcessingState::WIRE_CLAIMED].into(),
+                                    entry.revision,
+                                )
                                 .await
                                 .is_ok()
                             {
@@ -321,9 +331,9 @@ impl IdempotencyStore for NatsIdempotency {
                     .map_or(1, |value| value.len().saturating_add(1)),
             );
             value.push(if result.is_some() {
-                COMPLETED_RESULT
+                ProcessingState::WIRE_COMPLETED_RESULT
             } else {
-                COMPLETED_EMPTY
+                ProcessingState::WIRE_COMPLETED_EMPTY
             });
             if let Some(result) = result {
                 value.extend_from_slice(&result);
@@ -335,7 +345,8 @@ impl IdempotencyStore for NatsIdempotency {
 
     async fn fail(&self, key: &str) -> CatgaResult<()> {
         telemetry::record_persistence("nats", "idempotency", "fail", async {
-            self.transition(key, vec![FAILED]).await
+            self.transition(key, vec![ProcessingState::WIRE_FAILED])
+                .await
         })
         .await
     }
@@ -361,8 +372,10 @@ impl IdempotencyStore for NatsIdempotency {
             let Some(entry) = self.entry(&kv_key(key)).await? else {
                 return Ok(None);
             };
-            Ok((entry.value.first() == Some(&COMPLETED_RESULT))
-                .then(|| Arc::from(&entry.value[1..])))
+            Ok(
+                (entry.value.first() == Some(&ProcessingState::WIRE_COMPLETED_RESULT))
+                    .then(|| Arc::from(&entry.value[1..])),
+            )
         })
         .await
     }
@@ -376,20 +389,16 @@ impl IdempotencyStore for NatsIdempotency {
 }
 
 fn state(value: &[u8]) -> CatgaResult<ProcessingState> {
-    match value.first() {
-        Some(&CLAIMED) => Ok(ProcessingState::Claimed),
-        Some(&COMPLETED_EMPTY | &COMPLETED_RESULT) => Ok(ProcessingState::Completed),
-        Some(&FAILED) => Ok(ProcessingState::Failed),
-        _ => Err(CatgaError::new(
-            ErrorCode::Internal,
-            "NATS idempotency record is malformed",
-        )),
-    }
+    value
+        .first()
+        .copied()
+        .and_then(ProcessingState::from_wire_tag)
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "NATS idempotency record is malformed"))
 }
 
 fn claimed_with_expiry(expires_at: u64) -> Vec<u8> {
     let mut value = Vec::with_capacity(1 + std::mem::size_of::<u64>());
-    value.push(CLAIMED);
+    value.push(ProcessingState::WIRE_CLAIMED);
     value.extend_from_slice(&expires_at.to_be_bytes());
     value
 }

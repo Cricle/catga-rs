@@ -9,32 +9,19 @@ use std::sync::{
 use async_trait::async_trait;
 use catga_core::{
     Behavior, CatgaError, CatgaResult, Command, CommandBehavior, CommandNext, CommandPipeline,
-    ErrorCode, MAX_PIPELINE_DEPTH, Mediator, Message, MessageTypeId, Next, Pipeline, Registry,
-    Request, command_handler, request_handler,
+    ErrorCode, MAX_PIPELINE_DEPTH, Mediator, Message, Next, Pipeline, Registry, Request,
+    command_handler, request_handler,
 };
-
-struct OrderTypeId;
-impl MessageTypeId for OrderTypeId {
-    const NAME: &'static str = "Order";
-}
 
 struct Order(u64);
 impl Message for Order {}
 impl Request for Order {
     type Response = u64;
-    type TypeId = OrderTypeId;
-}
-
-struct StepTypeId;
-impl MessageTypeId for StepTypeId {
-    const NAME: &'static str = "Step";
 }
 
 struct Step(usize);
 impl Message for Step {}
-impl Command for Step {
-    type TypeId = StepTypeId;
-}
+impl Command for Step {}
 
 type Trace = Arc<Mutex<Vec<String>>>;
 

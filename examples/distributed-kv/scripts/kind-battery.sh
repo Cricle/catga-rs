@@ -1,36 +1,32 @@
 #!/usr/bin/env bash
-# distributed-kv kind scenario battery for one consensus backend.
+# distributed-kv kind scenario battery (raft).
 #
-#   examples/distributed-kv/scripts/kind-battery.sh <raft|sorock>
+#   examples/distributed-kv/scripts/kind-battery.sh
 #
-# Deploys the backend's manifest to the kind cluster `catga-kv` from a clean
+# Deploys the raft manifest to the kind cluster `catga-kv` from a clean
 # slate (old StatefulSet/PVCs removed first), then runs:
-#   (a) all pods Ready + leader elected (raft: via /status; sorock: liveness
-#       only, sorock 0.12 exposes no leadership query)
+#   (a) all pods Ready + leader elected (via /status)
 #   (b) write via a follower pod, replicated to all three pods
 #   (c) delete the leader pod, measure failover until a service write succeeds
 #   (d) restarted pod catches up from its PVC and serves every recorded key
 #   (e) rolling restart of all three pods, data intact throughout
 #   (f) --bench-writes latency sample against the headless service
 #
-# Results: target/kind-battery/results-<backend>.txt (one `ts|be|scenario|PASS|detail`
-# line per scenario); full log: target/kind-battery/battery-<backend>.log.
+# Results: target/kind-battery/results-raft.txt (one `ts|be|scenario|PASS|detail`
+# line per scenario); full log: target/kind-battery/battery-raft.log.
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "${repo_root}"
 
-case "${1:-}" in
-  raft)
-    BACKEND_KEY=raft;     NAME=kv;        APP=distributed-kv
-    SVC=kv-headless;      YAML=examples/distributed-kv/k8s/kv.yaml
-    POD_PF_BASE=19101;    SVC_PF_PORT=19100 ;;
-  sorock)
-    BACKEND_KEY=sorock;   NAME=kv-sorock; APP=distributed-kv-sorock
-    SVC=kv-sorock-headless; YAML=examples/distributed-kv/k8s/kv-sorock.yaml
-    POD_PF_BASE=19111;    SVC_PF_PORT=19110 ;;
-  *) echo "usage: $0 <raft|sorock>" >&2; exit 2 ;;
-esac
+if [ -n "${1:-}" ]; then
+  echo "usage: $0 (raft is the only consensus backend; no arguments)" >&2
+  exit 2
+fi
+
+BACKEND_KEY=raft; NAME=kv; APP=distributed-kv
+SVC=kv-headless; YAML=examples/distributed-kv/k8s/kv.yaml
+POD_PF_BASE=19101; SVC_PF_PORT=19100
 
 LOG_DIR=target/kind-battery
 LOG_FILE="${LOG_DIR}/battery-${BACKEND_KEY}.log"
@@ -66,38 +62,23 @@ sleep 5 # let consensus settle before probing leadership
 # --- (a) readiness + leadership ----------------------------------------------
 log "=== (a) readiness + leadership ==="
 LEADER=""
-if [ "${BACKEND_KEY}" = raft ]; then
-  deadline=$((SECONDS + 90))
-  while [ "${SECONDS}" -lt "${deadline}" ] && [ -z "${LEADER}" ]; do
-    for ord in 0 1 2; do ensure_pod_pf "${ord}"; done
-    LEADER="$(leader_ord || true)"
-    [ -n "${LEADER}" ] || sleep 1
-  done
-  if [ -n "${LEADER}" ]; then
-    pass a "leader=${NAME}-${LEADER}"
-  else
-    fail a "no leader elected within 90s"
-  fi
+deadline=$((SECONDS + 90))
+while [ "${SECONDS}" -lt "${deadline}" ] && [ -z "${LEADER}" ]; do
+  for ord in 0 1 2; do ensure_pod_pf "${ord}"; done
+  LEADER="$(leader_ord || true)"
+  [ -n "${LEADER}" ] || sleep 1
+done
+if [ -n "${LEADER}" ]; then
+  pass a "leader=${NAME}-${LEADER}"
 else
-  ok=1
-  for ord in 0 1 2; do
-    ensure_pod_pf "${ord}" || ok=0
-    pod_status "${ord}" | grep -qF '"alive":true' || ok=0
-  done
-  # sorock 0.12 has no leadership query; liveness on all pods is the contract.
-  [ "${ok}" = 1 ] && pass a "all pods alive (leader query N/A on sorock)" \
-                  || fail a "not all pods alive"
+  fail a "no leader elected within 90s"
 fi
 [ "${FAILURES}" -eq 0 ] || { log "aborting battery: (a) failed"; exit 1; }
 
 # --- (b) follower write replicated everywhere --------------------------------
 log "=== (b) follower write replicated ==="
-if [ "${BACKEND_KEY}" = raft ]; then
-  WRITER=""
-  for ord in 0 1 2; do [ "${ord}" != "${LEADER}" ] && { WRITER="${ord}"; break; }; done
-else
-  WRITER=1 # pod 0 bootstraps the sorock group; pod 1 is a pure follower
-fi
+WRITER=""
+for ord in 0 1 2; do [ "${ord}" != "${LEADER}" ] && { WRITER="${ord}"; break; }; done
 bval="b$(date +%s)"
 wrote=0
 for _ in $(seq 1 20); do
@@ -123,7 +104,7 @@ fi
 
 # --- (c) leader kill -> failover ---------------------------------------------
 log "=== (c) leader kill -> failover ==="
-if [ "${BACKEND_KEY}" = raft ]; then VICTIM="${LEADER}"; else VICTIM=0; fi
+VICTIM="${LEADER}"
 VICTIM_UID="$(pod_uid "${VICTIM}")"
 ensure_svc_pf
 t0="$(now_s)"
@@ -140,16 +121,14 @@ t1="$(now_s)"
 if [ "${fok}" = 1 ]; then
   record_key "${fkey}" "${fval}"
   detail="failover=$(elapsed_s "${t0}" "${t1}")s victim=${NAME}-${VICTIM}"
-  if [ "${BACKEND_KEY}" = raft ]; then
-    new_leader=""
-    d2=$((SECONDS + 60))
-    while [ "${SECONDS}" -lt "${d2}" ] && [ -z "${new_leader}" ]; do
-      for ord in 0 1 2; do [ "${ord}" != "${VICTIM}" ] && ensure_pod_pf "${ord}"; done
-      new_leader="$(leader_ord || true)"
-      [ -n "${new_leader}" ] || sleep 1
-    done
-    detail="${detail} new_leader=${NAME}-${new_leader:-unknown}"
-  fi
+  new_leader=""
+  d2=$((SECONDS + 60))
+  while [ "${SECONDS}" -lt "${d2}" ] && [ -z "${new_leader}" ]; do
+    for ord in 0 1 2; do [ "${ord}" != "${VICTIM}" ] && ensure_pod_pf "${ord}"; done
+    new_leader="$(leader_ord || true)"
+    [ -n "${new_leader}" ] || sleep 1
+  done
+  detail="${detail} new_leader=${NAME}-${new_leader:-unknown}"
   pass c "${detail}"
 else
   fail c "no successful write within 90s of killing ${NAME}-${VICTIM}"

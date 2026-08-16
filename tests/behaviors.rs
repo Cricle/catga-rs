@@ -27,7 +27,6 @@ impl catga_core::Message for Work {}
 
 impl Request for Work {
     type Response = &'static str;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct FailsThenSucceeds(Arc<AtomicUsize>);
@@ -90,7 +89,6 @@ impl catga_core::Message for CorrelatedWork {}
 
 impl Request for CorrelatedWork {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl Correlated for CorrelatedWork {
@@ -115,7 +113,6 @@ impl catga_core::Message for IdempotentWork {}
 
 impl Request for IdempotentWork {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl IdempotencyKey for IdempotentWork {
@@ -192,7 +189,6 @@ impl catga_core::Message for InboxWork {}
 
 impl Request for InboxWork {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl InboxKey for InboxWork {
@@ -306,7 +302,6 @@ impl catga_core::Message for UnidentifiedInboxWork {}
 
 impl Request for UnidentifiedInboxWork {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl InboxKey for UnidentifiedInboxWork {
@@ -330,7 +325,6 @@ impl catga_core::Message for DeadWork {}
 
 impl Request for DeadWork {
     type Response = ();
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl DeadLetterEnvelope for DeadWork {
@@ -360,9 +354,7 @@ impl Handler<DeadWork> for PanickingDeadHandler {
 struct DeadCommand;
 
 impl catga_core::Message for DeadCommand {}
-impl Command for DeadCommand {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Command for DeadCommand {}
 
 impl DeadLetterEnvelope for DeadCommand {
     fn dead_letter_envelope(&self) -> Envelope {
@@ -632,7 +624,6 @@ impl catga_core::Message for LockedWork {}
 
 impl Request for LockedWork {
     type Response = u8;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl DistributedLockKey for LockedWork {

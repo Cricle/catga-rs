@@ -11,60 +11,25 @@ use crate::{
     EnvelopeRequestClient, ErrorCode, Event, Message, MessageMetadata, MessagePriority,
     OutboxMessage, OutboxStore, QualityOfService, RemoteRequest, Request, RequestClient,
     RequestTransport, SnapshotCodec, TransportContext, current_correlation_id,
-    current_transport_context,
+    current_transport_context, error::CatgaErrorWire,
 };
 
 use super::{
     MemoryPackCodec, MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackSerializer, MemoryPackWriter, envelope::EnvelopeWire,
 };
-use crate::codec::memorypack::MemoryPackable;
 
 /// A typed RPC payload encoded by [`MemoryPackCodec`].
 ///
-/// Failure values use a bounded MemoryPack-only wire DTO because `CatgaError` intentionally does
-/// not expose its Serde deserializer as the MemoryPack application trait contract.
+/// Failure values use the crate's single bounded MemoryPack error wire DTO because `CatgaError`
+/// intentionally does not expose its Serde deserializer as the MemoryPack application trait
+/// contract.
 #[derive(Debug, Eq, PartialEq)]
 pub enum MemoryPackRpcResponse<T> {
     /// A successful typed response.
     Success(T),
     /// A structured remote Catga failure.
     Failure(CatgaError),
-}
-
-#[derive(MemoryPackable)]
-struct RpcErrorWire {
-    code: String,
-    message: String,
-    details: Option<String>,
-}
-
-impl From<&CatgaError> for RpcErrorWire {
-    fn from(error: &CatgaError) -> Self {
-        Self {
-            code: error.code().as_stable_str().to_owned(),
-            message: error.message().to_owned(),
-            details: error.details().map(str::to_owned),
-        }
-    }
-}
-
-impl TryFrom<RpcErrorWire> for CatgaError {
-    type Error = MemoryPackError;
-
-    fn try_from(wire: RpcErrorWire) -> Result<Self, Self::Error> {
-        let code = ErrorCode::from_stable_str(&wire.code).ok_or_else(|| {
-            MemoryPackError::DeserializationError(format!(
-                "invalid Catga error code: {}",
-                wire.code
-            ))
-        })?;
-        let error = CatgaError::new(code, wire.message);
-        Ok(match wire.details {
-            Some(details) => error.with_details(details),
-            None => error,
-        })
-    }
 }
 
 impl<T: MemoryPackSerialize> MemoryPackSerialize for MemoryPackRpcResponse<T> {
@@ -76,7 +41,7 @@ impl<T: MemoryPackSerialize> MemoryPackSerialize for MemoryPackRpcResponse<T> {
             }
             Self::Failure(error) => {
                 writer.write_u8(1)?;
-                RpcErrorWire::from(error).serialize(writer)
+                CatgaErrorWire::from(error).serialize(writer)
             }
         }
     }
@@ -87,7 +52,7 @@ impl<T: MemoryPackDeserialize> MemoryPackDeserialize for MemoryPackRpcResponse<T
         match reader.read_u8()? {
             0 => Ok(Self::Success(T::deserialize(reader)?)),
             1 => Ok(Self::Failure(CatgaError::try_from(
-                RpcErrorWire::deserialize(reader)?,
+                CatgaErrorWire::deserialize(reader)?,
             )?)),
             tag => Err(MemoryPackError::DeserializationError(format!(
                 "invalid MemoryPack RPC response tag: {tag}"

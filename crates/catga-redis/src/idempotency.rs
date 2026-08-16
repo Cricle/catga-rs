@@ -10,10 +10,6 @@ use catga_core::{
 };
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
-const CLAIMED: u8 = 1;
-const COMPLETED_EMPTY: u8 = 2;
-const COMPLETED_RESULT: u8 = 3;
-const FAILED: u8 = 4;
 const MAX_RESULT_BYTES: usize = 1024 * 1024;
 const MAX_REDIS_RETENTION_MILLIS: i64 = 100 * 365 * 24 * 60 * 60 * 1_000;
 
@@ -167,9 +163,9 @@ impl IdempotencyStore for RedisIdempotency {
                     .map_or(1, |result| result.len().saturating_add(1)),
             );
             value.push(if result.is_some() {
-                COMPLETED_RESULT
+                ProcessingState::WIRE_COMPLETED_RESULT
             } else {
-                COMPLETED_EMPTY
+                ProcessingState::WIRE_COMPLETED_EMPTY
             });
             if let Some(result) = result {
                 value.extend_from_slice(&result);
@@ -182,7 +178,8 @@ impl IdempotencyStore for RedisIdempotency {
 
     async fn fail(&self, key: &str) -> CatgaResult<()> {
         telemetry::record_persistence("redis", "idempotency", "fail", async {
-            self.transition(key, &[FAILED], None).await
+            self.transition(key, &[ProcessingState::WIRE_FAILED], None)
+                .await
         })
         .await
     }
@@ -207,7 +204,8 @@ impl IdempotencyStore for RedisIdempotency {
                 .await
                 .map_err(CatgaError::transient)?;
             Ok(value.and_then(|value| {
-                (value.first() == Some(&COMPLETED_RESULT)).then(|| Arc::from(&value[1..]))
+                (value.first() == Some(&ProcessingState::WIRE_COMPLETED_RESULT))
+                    .then(|| Arc::from(&value[1..]))
             }))
         })
         .await
@@ -252,13 +250,11 @@ fn retention_millis(retention: Duration) -> CatgaResult<i64> {
 }
 
 fn state(value: &[u8]) -> CatgaResult<ProcessingState> {
-    match value.first() {
-        Some(&CLAIMED) => Ok(ProcessingState::Claimed),
-        Some(&COMPLETED_EMPTY | &COMPLETED_RESULT) => Ok(ProcessingState::Completed),
-        Some(&FAILED) => Ok(ProcessingState::Failed),
-        _ => Err(CatgaError::new(
-            ErrorCode::Internal,
-            "Redis idempotency record is malformed",
-        )),
-    }
+    value
+        .first()
+        .copied()
+        .and_then(ProcessingState::from_wire_tag)
+        .ok_or_else(|| {
+            CatgaError::new(ErrorCode::Internal, "Redis idempotency record is malformed")
+        })
 }

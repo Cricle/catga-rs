@@ -14,21 +14,21 @@ workspace = true
 streams-rpc = []
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 catga-core = { workspace = true }
-dashmap = "6"
-futures = "0.3"
+dashmap = { workspace = true }
+futures = { workspace = true }
 hex = "0.4"
 redis = { version = "1", features = ["connection-manager", "tokio-comp"] }
-serde = "1"
-sha2 = "0.11"
-tokio = { version = "1", features = ["time"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-uuid = { version = "1", features = ["v4"] }
+serde = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-criterion = "0.5"
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time"] }
+criterion = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
 
 [[bench]]
 name = "redis_throughput"

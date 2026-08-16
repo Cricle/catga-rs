@@ -8,13 +8,8 @@ use std::sync::Arc;
 use catga_core::{
     BatchKeyProvider, BatchOptions, BatchOptionsProvider, Correlated, DeadLetterEnvelope,
     DistributedLockKey, Envelope, IdempotencyKey, InboxKey, Message, MessageMetadata,
-    MessageTypeId, OutboxEnvelope, Registry, Request,
+    OutboxEnvelope, Registry, Request,
 };
-
-pub struct ReqTypeId;
-impl MessageTypeId for ReqTypeId {
-    const NAME: &'static str = "BehaviorReq";
-}
 
 /// Cloneable request carrying a stable identity, shard key, and correlation hint.
 #[derive(Clone)]
@@ -37,7 +32,6 @@ impl Default for Req {
 impl Message for Req {}
 impl Request for Req {
     type Response = u64;
-    type TypeId = ReqTypeId;
 }
 impl IdempotencyKey for Req {
     fn idempotency_key(&self) -> &str {

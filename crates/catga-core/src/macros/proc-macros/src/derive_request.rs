@@ -21,28 +21,18 @@ fn catga_request_impl(
 ) -> Result<proc_macro2::TokenStream> {
     let input = syn::parse2::<syn::DeriveInput>(input.clone())?;
     let name = &input.ident;
-    let vis = &input.vis;
     let generics = add_message_bounds(&input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Parse response type from attribute
     let response_type = parse_response_attr(&attr, name)?;
 
-    // Generate unique TypeId struct name
-    let type_id_name = syn::Ident::new(&format!("{name}TypeId"), name.span());
-
     Ok(quote! {
         #input
-
-        #vis struct #type_id_name;
-        impl ::catga_core::MessageTypeId for #type_id_name {
-            const NAME: &'static str = ::core::stringify!(#name);
-        }
 
         impl #impl_generics ::catga_core::Message for #name #ty_generics #where_clause {}
         impl #impl_generics ::catga_core::Request for #name #ty_generics #where_clause {
             type Response = #response_type;
-            type TypeId = #type_id_name;
         }
     })
 }

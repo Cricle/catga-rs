@@ -1,27 +1,8 @@
-//! Tests for simplified message traits with TypeId pattern.
+//! Tests for simplified message traits.
 
 #![allow(dead_code)]
 
-use catga_core::{
-    Command, DelayedMessage, Event, Message, MessagePriority, MessageTypeId, Request,
-};
-
-mod __catga_types {
-    pub struct GetUserTypeId;
-    impl catga_core::MessageTypeId for GetUserTypeId {
-        const NAME: &'static str = "GetUser";
-    }
-
-    pub struct CreditTypeId;
-    impl catga_core::MessageTypeId for CreditTypeId {
-        const NAME: &'static str = "Credit";
-    }
-
-    pub struct BalanceChangedTypeId;
-    impl catga_core::MessageTypeId for BalanceChangedTypeId {
-        const NAME: &'static str = "BalanceChanged";
-    }
-}
+use catga_core::{Command, DelayedMessage, Event, Message, MessagePriority, Request};
 
 #[derive(Clone, Debug)]
 struct GetUser(String);
@@ -37,7 +18,6 @@ impl Message for GetUser {
 
 impl Request for GetUser {
     type Response = String;
-    type TypeId = __catga_types::GetUserTypeId;
 }
 
 impl DelayedMessage for GetUser {}
@@ -56,9 +36,7 @@ impl Message for Credit {
     }
 }
 
-impl Command for Credit {
-    type TypeId = __catga_types::CreditTypeId;
-}
+impl Command for Credit {}
 
 #[derive(Clone, Debug)]
 struct BalanceChanged {
@@ -75,31 +53,9 @@ impl Message for BalanceChanged {
     }
 }
 
-impl Event for BalanceChanged {
-    type TypeId = __catga_types::BalanceChangedTypeId;
-}
+impl Event for BalanceChanged {}
 
 impl DelayedMessage for BalanceChanged {}
-
-// --- MessageTypeId tests ---
-
-#[test]
-fn message_type_id_name() {
-    let name = <GetUser as Request>::TypeId::NAME;
-    assert_eq!(name, "GetUser");
-}
-
-#[test]
-fn command_type_id_name() {
-    let name = <Credit as Command>::TypeId::NAME;
-    assert_eq!(name, "Credit");
-}
-
-#[test]
-fn event_type_id_name() {
-    let name = <BalanceChanged as Event>::TypeId::NAME;
-    assert_eq!(name, "BalanceChanged");
-}
 
 // --- Request tests ---
 

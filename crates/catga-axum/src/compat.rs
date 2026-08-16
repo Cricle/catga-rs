@@ -7,114 +7,15 @@
 
 use std::{future::Future, sync::Arc};
 
-use axum::{
-    Json, Router,
-    body::Bytes,
-    extract::{DefaultBodyLimit, Extension, Request as AxumRequest},
-    middleware::Next,
-    response::Response,
-    routing::{on, post},
-};
-use catga_cluster::{RaftInboundPolicy, RaftInboundRejection, RaftMessage, RaftPeerIdentity};
+use axum::{Json, Router, routing::on};
 use catga_core::{
     CatgaError, CatgaResult, Envelope, ErrorCode, Event, Mediator, MessageMetadata, Request,
     TraceContext, scope_transport_context,
 };
-use http::{HeaderMap, StatusCode, header::CONTENT_TYPE};
+use http::{HeaderMap, StatusCode};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::mpsc;
 
-use crate::{CatgaHttpError, EndpointMethod, MAX_RAFT_MESSAGE_BYTES};
-
-/// Builds the server route that decodes protobuf Raft frames into a runtime inbox.
-///
-/// The surrounding transport-authentication layer must insert a verified [`RaftPeerIdentity`]
-/// extension (for example, from an mTLS SAN or a signed-frame key ID). Never derive this value
-/// from a request header or the untrusted protobuf payload. `policy` then binds that identity to
-/// the message sender and the local node before the frame reaches Raft.
-///
-/// The route accepts only bounded `application/x-protobuf` bodies. It returns `401` for a missing
-/// authenticated identity, `403` for an untrusted sender or target, `429` for a full inbox, and
-/// `503` when the runtime has stopped. A full inbox therefore creates bounded peer backpressure
-/// rather than unbounded request tasks.
-pub fn raft_message_route<P>(inbox: mpsc::Sender<RaftMessage>, policy: P) -> Router
-where
-    P: RaftInboundPolicy + 'static,
-{
-    let policy = Arc::new(policy);
-    Router::new()
-        .route(
-            crate::RAFT_MESSAGE_PATH,
-            post(
-                move |headers: HeaderMap,
-                      peer: Option<Extension<RaftPeerIdentity>>,
-                      body: Bytes| {
-                    let inbox = inbox.clone();
-                    let policy = Arc::clone(&policy);
-                    async move {
-                        if !is_protobuf_content_type(&headers) {
-                            return StatusCode::UNSUPPORTED_MEDIA_TYPE;
-                        }
-                        let message = match RaftMessage::parse_from_bytes(&body) {
-                            Ok(message) => message,
-                            Err(_) => return StatusCode::BAD_REQUEST,
-                        };
-                        match policy.authorize(peer.as_ref().map(|peer| &peer.0), &message) {
-                            Ok(()) => {}
-                            Err(RaftInboundRejection::Unauthenticated) => {
-                                return StatusCode::UNAUTHORIZED;
-                            }
-                            Err(RaftInboundRejection::Forbidden) => return StatusCode::FORBIDDEN,
-                        }
-                        match inbox.try_send(message) {
-                            Ok(()) => StatusCode::NO_CONTENT,
-                            Err(mpsc::error::TrySendError::Full(_)) => {
-                                StatusCode::TOO_MANY_REQUESTS
-                            }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                StatusCode::SERVICE_UNAVAILABLE
-                            }
-                        }
-                    }
-                },
-            ),
-        )
-        .layer(DefaultBodyLimit::max(MAX_RAFT_MESSAGE_BYTES))
-}
-
-fn is_protobuf_content_type(headers: &HeaderMap) -> bool {
-    headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|media_type| {
-            media_type
-                .trim()
-                .eq_ignore_ascii_case("application/x-protobuf")
-        })
-}
-
-/// Copies the static peer-identity header into the extension [`raft_message_route`] requires.
-///
-/// Apply with `axum::middleware::from_fn(raft_peer_identity_middleware)` on the Raft ingress
-/// router and configure [`crate::HttpRaftTransport::with_peer_identity`] on every peer so the
-/// built-in client and server authenticate each other out of the box.
-///
-/// A self-asserted header is only safe on trusted networks or demos: any client can claim any
-/// identity. Production deployments must replace this with middleware that derives
-/// [`RaftPeerIdentity`] from the authenticated transport (for example an mTLS
-/// client-certificate SAN) and never from a caller-controlled value.
-pub async fn raft_peer_identity_middleware(mut request: AxumRequest, next: Next) -> Response {
-    if let Some(value) = request
-        .headers()
-        .get(crate::RAFT_PEER_IDENTITY_HEADER)
-        .and_then(|value| value.to_str().ok())
-        && let Ok(identity) = RaftPeerIdentity::new(value)
-    {
-        request.extensions_mut().insert(identity);
-    }
-    next.run(request).await
-}
+use crate::{CatgaHttpError, EndpointMethod};
 
 /// Builds the leader-side forwarding route for one explicitly registered request type.
 ///
@@ -163,14 +64,12 @@ where
 /// ```
 /// use std::sync::Arc;
 /// use catga_axum::mediator_route;
-/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+/// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler};
 ///
 /// #[derive(serde::Serialize, serde::Deserialize)]
 /// struct GetBalance;
 /// impl Message for GetBalance {}
-/// struct GetBalanceTypeId;
-/// impl MessageTypeId for GetBalanceTypeId { const NAME: &'static str = "GetBalance"; }
-/// impl Request for GetBalance { type Response = u64; type TypeId = GetBalanceTypeId; }
+/// impl Request for GetBalance { type Response = u64; }
 ///
 /// # fn run() -> CatgaResult<()> {
 /// let mut registry = Registry::new();
@@ -225,14 +124,12 @@ where
 /// ```
 /// use std::sync::Arc;
 /// use catga_axum::event_route;
-/// use catga_core::{CatgaResult, Event, Mediator, Message, MessageTypeId, Registry};
+/// use catga_core::{CatgaResult, Event, Mediator, Message, Registry};
 ///
 /// #[derive(Clone, serde::Serialize, serde::Deserialize)]
 /// struct BalanceChanged;
 /// impl Message for BalanceChanged {}
-/// struct BalanceChangedTypeId;
-/// impl MessageTypeId for BalanceChangedTypeId { const NAME: &'static str = "BalanceChanged"; }
-/// impl Event for BalanceChanged { type TypeId = BalanceChangedTypeId; }
+/// impl Event for BalanceChanged {}
 ///
 /// # fn run() -> CatgaResult<()> {
 /// let mediator = Arc::new(Mediator::new(Registry::new()));
@@ -352,5 +249,3 @@ pub(crate) async fn scope_inbound_trace_context<T>(
     .with_headers(headers);
     scope_transport_context(&envelope, future).await
 }
-
-use protobuf::Message as ProtobufMessage;

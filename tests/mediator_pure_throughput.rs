@@ -17,7 +17,6 @@ struct Ping(u64);
 impl Message for Ping {}
 impl Request for Ping {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct PingHandler;
@@ -32,9 +31,7 @@ impl Handler<Ping> for PingHandler {
 #[derive(Clone)]
 struct Tick(u64);
 impl Message for Tick {}
-impl Event for Tick {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Event for Tick {}
 
 struct TickHandler;
 

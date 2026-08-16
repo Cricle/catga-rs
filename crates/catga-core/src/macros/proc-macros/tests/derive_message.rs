@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use catga_core::{
-    AuthorizationRequirements, AuthorizedRequest, BatchKeyProvider, BatchOptionsProvider,
-    DefaultMessageTypeId, Message, MessagePriority, Request,
+    AuthorizationRequirements, AuthorizedRequest, BatchKeyProvider, BatchOptionsProvider, Message,
+    MessagePriority, Request,
 };
 
 #[derive(Message)]
@@ -74,7 +74,6 @@ pub struct SecurePing;
 
 impl Request for SecurePing {
     type Response = ();
-    type TypeId = DefaultMessageTypeId;
 }
 
 #[derive(Message)]
@@ -83,7 +82,6 @@ pub struct RolePing;
 
 impl Request for RolePing {
     type Response = ();
-    type TypeId = DefaultMessageTypeId;
 }
 
 #[derive(Message)]
@@ -92,7 +90,6 @@ pub struct PolicyPing;
 
 impl Request for PolicyPing {
     type Response = ();
-    type TypeId = DefaultMessageTypeId;
 }
 
 #[derive(Message)]
@@ -101,7 +98,6 @@ pub struct RolePolicyPing;
 
 impl Request for RolePolicyPing {
     type Response = ();
-    type TypeId = DefaultMessageTypeId;
 }
 
 #[test]
@@ -277,7 +273,6 @@ pub struct KitchenSink {
 
 impl Request for KitchenSink {
     type Response = ();
-    type TypeId = DefaultMessageTypeId;
 }
 
 #[test]

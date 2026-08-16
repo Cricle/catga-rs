@@ -24,6 +24,9 @@
 //! # }
 //! ```
 
+/// Catga NATS unified prelude.
+pub mod prelude;
+
 mod acknowledgement;
 mod config;
 mod dead_letter;
@@ -48,9 +51,9 @@ mod state_machine;
 mod subscription;
 mod suspended_flow;
 mod suspended_flow_timeout;
+mod transport;
 
 pub use catga_core::codec::memorypack::{MemoryPackRequestClient, MemoryPackRpcResponse};
-mod transport;
 
 pub use config::{
     DEFAULT_NATS_PULL_BATCH_SIZE, NatsConfig, NatsConsumerMode, NatsConsumerOptions,

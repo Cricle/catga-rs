@@ -7,7 +7,6 @@ struct TestRequest(u64);
 impl Message for TestRequest {}
 impl Request for TestRequest {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct TestHandler;

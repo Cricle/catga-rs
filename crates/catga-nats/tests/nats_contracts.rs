@@ -3011,15 +3011,9 @@ async fn request_server_handle_next_typed_handler() -> CatgaResult<()> {
     #[derive(Clone, Debug)]
     struct TestRequest(u64);
 
-    struct TestRequestTypeId;
-    impl catga_core::MessageTypeId for TestRequestTypeId {
-        const NAME: &'static str = "TestRequest";
-    }
-
     impl Message for TestRequest {}
     impl Request for TestRequest {
         type Response = u64;
-        type TypeId = TestRequestTypeId;
     }
 
     impl MemoryPackSerialize for TestRequest {

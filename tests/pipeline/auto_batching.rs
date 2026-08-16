@@ -25,7 +25,6 @@ struct BatchedWork {
 
 impl Request for BatchedWork {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct BatchHandler {

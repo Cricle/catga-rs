@@ -14,8 +14,8 @@ use catga_axum::{
 };
 use catga_core::{
     CatgaError, CatgaResult, EnvelopeHeaders, ErrorCode, Event, Mediator, MediatorHandle, Message,
-    MessageTypeId, Registry, Request, TraceContext, current_correlation_value, event_handler,
-    request_handler, scope_correlation_id, scope_correlation_value, scope_transport_context_value,
+    Registry, Request, TraceContext, current_correlation_value, event_handler, request_handler,
+    scope_correlation_id, scope_correlation_value, scope_transport_context_value,
 };
 use http::{HeaderMap, Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -25,25 +25,14 @@ struct Ping {
     value: u64,
 }
 impl Message for Ping {}
-struct PingTypeId;
-impl MessageTypeId for PingTypeId {
-    const NAME: &'static str = "Ping";
-}
 impl Request for Ping {
     type Response = u64;
-    type TypeId = PingTypeId;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Pinged;
 impl Message for Pinged {}
-struct PingedTypeId;
-impl MessageTypeId for PingedTypeId {
-    const NAME: &'static str = "Pinged";
-}
-impl Event for Pinged {
-    type TypeId = PingedTypeId;
-}
+impl Event for Pinged {}
 
 fn ping_mediator() -> Arc<Mediator> {
     let mut registry = Registry::new();

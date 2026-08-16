@@ -7,9 +7,8 @@ use std::time::Duration;
 
 use catga_core::{
     CatgaError, CatgaResult, Command, CommandBehavior, CommandHandler, CommandNext,
-    CommandPipeline, DefaultMessageTypeId, ErrorCode, Event, EventHandler, Handler,
-    MAX_MEDIATOR_BATCH_SIZE, MAX_PIPELINE_DEPTH, Mediator, MediatorHandle, Message, Registry,
-    Request,
+    CommandPipeline, ErrorCode, Event, EventHandler, Handler, MAX_MEDIATOR_BATCH_SIZE,
+    MAX_PIPELINE_DEPTH, Mediator, MediatorHandle, Message, Registry, Request,
 };
 
 #[test]
@@ -24,7 +23,6 @@ impl Message for TestRequest {}
 
 impl Request for TestRequest {
     type Response = String;
-    type TypeId = DefaultMessageTypeId;
 }
 
 #[derive(Clone)]
@@ -32,18 +30,14 @@ struct TestCommand;
 
 impl Message for TestCommand {}
 
-impl Command for TestCommand {
-    type TypeId = DefaultMessageTypeId;
-}
+impl Command for TestCommand {}
 
 #[derive(Clone)]
 struct TestEvent;
 
 impl Message for TestEvent {}
 
-impl Event for TestEvent {
-    type TypeId = DefaultMessageTypeId;
-}
+impl Event for TestEvent {}
 
 struct EchoHandler {
     prefix: String,

@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, Event, Message, MessageTypeId, SnapshotCodec,
+    CatgaError, CatgaResult, ErrorCode, Event, Message, SnapshotCodec,
     flow::{
         StateMachine, StateMachineEventRouter, StateMachineExecutor, StateMachineSnapshot,
         StateMachineState, StateMachineStore, decode_state_machine_snapshot,
@@ -53,53 +53,33 @@ impl StateMachineState<St> for Order {
 }
 
 macro_rules! sm_event {
-    ($name:ident, $marker:ident, $lit:expr) => {
-        struct $marker;
-        impl MessageTypeId for $marker {
-            const NAME: &'static str = $lit;
-        }
+    ($name:ident) => {
         #[derive(Clone)]
         struct $name;
         impl Message for $name {}
-        impl Event for $name {
-            type TypeId = $marker;
-        }
+        impl Event for $name {}
     };
-}
-
-struct PlacedMarker;
-impl MessageTypeId for PlacedMarker {
-    const NAME: &'static str = "SmPlaced";
 }
 
 /// Event carrying the placed order amount.
 #[derive(Clone)]
 struct Placed(u64);
 impl Message for Placed {}
-impl Event for Placed {
-    type TypeId = PlacedMarker;
-}
+impl Event for Placed {}
 
-sm_event!(PaidEvt, PaidMarker, "SmPaid");
-sm_event!(ShipEvt, ShipMarker, "SmShip");
-sm_event!(CancelEvt, CancelMarker, "SmCancel");
-sm_event!(Ignored, IgnoredMarker, "SmIgnored");
+sm_event!(PaidEvt);
+sm_event!(ShipEvt);
+sm_event!(CancelEvt);
+sm_event!(Ignored);
 
 /// Marker category declared by [`Audited`].
 struct AuditCat;
-
-struct AuditedMarker;
-impl MessageTypeId for AuditedMarker {
-    const NAME: &'static str = "SmAudited";
-}
 
 /// Event handled through an explicit category transition.
 #[derive(Clone)]
 struct Audited(u64);
 impl Message for Audited {}
 impl Event for Audited {
-    type TypeId = AuditedMarker;
-
     fn categories(&self) -> &'static [TypeId] {
         static CATS: std::sync::OnceLock<[TypeId; 1]> = std::sync::OnceLock::new();
         CATS.get_or_init(|| [TypeId::of::<AuditCat>()])

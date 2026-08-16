@@ -1,16 +1,15 @@
 //! Reusable mediator test harness components.
 
 use async_trait::async_trait;
-use catga_core::{CatgaResult, Event, EventHandler, Handler, Request};
 use catga_core::flow::{FlowDefinition, FlowRuntime, FlowStepOutcome};
 use catga_core::testing::CatgaTestHarness;
+use catga_core::{CatgaResult, Event, EventHandler, Handler, Request};
 
 #[derive(Clone, Debug, Eq, PartialEq, catga_core::Message)]
 struct Double(u32);
 
 impl Request for Double {
     type Response = u32;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct DoubleHandler;
@@ -25,9 +24,7 @@ impl Handler<Double> for DoubleHandler {
 #[derive(Clone, catga_core::Message, Debug, Eq, PartialEq)]
 struct Doubled(u32);
 
-impl Event for Doubled {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Event for Doubled {}
 
 struct Noop;
 

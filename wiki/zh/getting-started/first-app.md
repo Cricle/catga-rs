@@ -36,14 +36,12 @@ struct Add { lhs: i64, rhs: i64 }
 impl Message for Add {}
 impl Request for Add {
     type Response = i64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct Multiply { lhs: i64, rhs: i64 }
 impl Message for Multiply {}
 impl Request for Multiply {
     type Response = i64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 // 定义处理器

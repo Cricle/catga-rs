@@ -30,7 +30,6 @@ impl catga_core::Message for CreateOrder {}
 
 impl Request for CreateOrder {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl OutboxEnvelope for CreateOrder {
@@ -87,7 +86,6 @@ impl catga_core::Message for DeliveredOrder {}
 
 impl Request for DeliveredOrder {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 impl InboxKey for DeliveredOrder {

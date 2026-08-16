@@ -112,6 +112,31 @@ pub enum ProcessingState {
     Failed,
 }
 
+impl ProcessingState {
+    /// Persisted record tag for a claimed, still-owned key.
+    pub const WIRE_CLAIMED: u8 = 1;
+    /// Persisted record tag for a completed key without a cached result.
+    pub const WIRE_COMPLETED_EMPTY: u8 = 2;
+    /// Persisted record tag for a completed key whose cached result follows the tag byte.
+    pub const WIRE_COMPLETED_RESULT: u8 = 3;
+    /// Persisted record tag for a failed key that may be claimed again.
+    pub const WIRE_FAILED: u8 = 4;
+
+    /// Decodes the persisted record tag shared by inbox and idempotency stores.
+    ///
+    /// [`Self::Pending`] has no tag because pending keys are represented by the absence of a
+    /// record. Backends map [`None`] to their own malformed-record error so the message keeps
+    /// its store context.
+    pub const fn from_wire_tag(tag: u8) -> Option<Self> {
+        match tag {
+            Self::WIRE_CLAIMED => Some(Self::Claimed),
+            Self::WIRE_COMPLETED_EMPTY | Self::WIRE_COMPLETED_RESULT => Some(Self::Completed),
+            Self::WIRE_FAILED => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 /// An opaque, generation-fenced ownership record for one inbox message.
 ///
 /// A store returns this only to the worker that acquired the current processing lease. Passing a

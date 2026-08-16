@@ -19,7 +19,6 @@ impl Message for Ping {}
 
 impl Request for Ping {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 /// Handler that doubles the input value

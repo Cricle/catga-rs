@@ -8,8 +8,8 @@ use std::sync::{
 use std::time::Duration;
 
 use catga_core::{
-    CatgaError, CorrelationBehavior, ErrorCode, LoggingBehavior, Mediator, Pipeline, RetryBehavior,
-    RetryJitter, TimeoutBehavior, TracingBehavior, current_correlation_id,
+    CatgaError, CorrelationBehavior, ErrorCode, Mediator, Pipeline, RetryBehavior, RetryJitter,
+    TimeoutBehavior, current_correlation_id,
 };
 
 #[path = "support/behavior_support.rs"]
@@ -233,36 +233,4 @@ async fn correlation_behavior_scopes_the_correlation_identity() {
 
     // The scope does not leak beyond the request.
     assert_eq!(current_correlation_id(), None);
-}
-
-#[tokio::test]
-async fn logging_and_tracing_behaviors_pass_results_through() {
-    let (mediator, _) = attempt_mediator(usize::MAX, ErrorCode::Validation);
-    let pipeline = Pipeline::<Req>::new()
-        .with(LoggingBehavior)
-        .with(TracingBehavior);
-    let error = mediator
-        .send_with(
-            Req {
-                id: 1,
-                ..Default::default()
-            },
-            &pipeline,
-        )
-        .await
-        .expect_err("the failure passes through the observability chain");
-    assert_eq!(error.code(), ErrorCode::Validation);
-
-    let (mediator, _) = attempt_mediator(0, ErrorCode::Transient);
-    let value = mediator
-        .send_with(
-            Req {
-                id: 3,
-                ..Default::default()
-            },
-            &pipeline,
-        )
-        .await
-        .expect("the success passes through the observability chain");
-    assert_eq!(value, 3);
 }

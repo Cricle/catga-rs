@@ -15,14 +15,12 @@ use crate::{CatgaResult, Command, Event, Request};
 ///
 /// ```
 /// use async_trait::async_trait;
-/// use catga_core::{CatgaResult, Handler, Message, MessageTypeId, Request};
+/// use catga_core::{CatgaResult, Handler, Message, Request};
 ///
-/// struct PingTypeId;
-/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
 ///
 /// struct Ping;
 /// impl Message for Ping {}
-/// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+/// impl Request for Ping { type Response = u64; }
 ///
 /// struct PingHandler;
 /// #[async_trait]
@@ -42,14 +40,12 @@ pub trait Handler<M: Request>: Send + Sync {
 ///
 /// ```
 /// use async_trait::async_trait;
-/// use catga_core::{CatgaResult, Command, CommandHandler, Message, MessageTypeId};
+/// use catga_core::{CatgaResult, Command, CommandHandler, Message};
 ///
-/// struct ArchiveTypeId;
-/// impl MessageTypeId for ArchiveTypeId { const NAME: &'static str = "Archive"; }
 ///
 /// struct Archive;
 /// impl Message for Archive {}
-/// impl Command for Archive { type TypeId = ArchiveTypeId; }
+/// impl Command for Archive {}
 ///
 /// struct ArchiveHandler;
 /// #[async_trait]
@@ -69,15 +65,13 @@ pub trait CommandHandler<C: Command>: Send + Sync {
 ///
 /// ```
 /// use async_trait::async_trait;
-/// use catga_core::{CatgaResult, Event, EventHandler, Message, MessageTypeId};
+/// use catga_core::{CatgaResult, Event, EventHandler, Message};
 ///
-/// struct UserCreatedTypeId;
-/// impl MessageTypeId for UserCreatedTypeId { const NAME: &'static str = "UserCreated"; }
 ///
 /// #[derive(Clone)]
 /// struct UserCreated { pub user_id: u64 }
 /// impl Message for UserCreated {}
-/// impl Event for UserCreated { type TypeId = UserCreatedTypeId; }
+/// impl Event for UserCreated {}
 ///
 /// struct UserProjection;
 /// #[async_trait]
@@ -111,14 +105,12 @@ pub struct RequestHandlerFn<M, F> {
 /// [`crate::catga_handlers!`]:
 ///
 /// ```
-/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+/// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler};
 ///
-/// struct DoubleTypeId;
-/// impl MessageTypeId for DoubleTypeId { const NAME: &'static str = "Double"; }
 ///
 /// struct Double(u64);
 /// impl Message for Double {}
-/// impl Request for Double { type Response = u64; type TypeId = DoubleTypeId; }
+/// impl Request for Double { type Response = u64; }
 ///
 /// # async fn run() -> CatgaResult<()> {
 /// let mut registry = Registry::new();
@@ -150,14 +142,12 @@ where
 ///
 /// ```
 /// use std::sync::Arc;
-/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler_with};
+/// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler_with};
 ///
-/// struct DoubleTypeId;
-/// impl MessageTypeId for DoubleTypeId { const NAME: &'static str = "Double"; }
 ///
 /// struct Double(u64);
 /// impl Message for Double {}
-/// impl Request for Double { type Response = u64; type TypeId = DoubleTypeId; }
+/// impl Request for Double { type Response = u64; }
 ///
 /// async fn double(factor: Arc<u64>, value: Double) -> CatgaResult<u64> {
 ///     Ok(value.0.saturating_mul(*factor))

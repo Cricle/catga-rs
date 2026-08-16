@@ -12,11 +12,6 @@ use catga_core::{
 };
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
-const CLAIMED: u8 = 1;
-const COMPLETED_EMPTY: u8 = 2;
-const COMPLETED_RESULT: u8 = 3;
-const FAILED: u8 = 4;
-
 const CLAIM: &str = r#"
 local value = redis.call('GET', KEYS[1])
 local state = 0
@@ -191,9 +186,9 @@ impl InboxStore for RedisInbox {
                     .map_or(1, |value| value.len().saturating_add(1)),
             );
             value.push(if result.is_some() {
-                COMPLETED_RESULT
+                ProcessingState::WIRE_COMPLETED_RESULT
             } else {
-                COMPLETED_EMPTY
+                ProcessingState::WIRE_COMPLETED_EMPTY
             });
             if let Some(result) = result {
                 value.extend_from_slice(&result);
@@ -226,7 +221,8 @@ impl InboxStore for RedisInbox {
 
     async fn fail(&self, claim: InboxClaim) -> CatgaResult<()> {
         telemetry::record_persistence("redis", "inbox", "fail", async {
-            self.transition(claim, vec![FAILED]).await
+            self.transition(claim, vec![ProcessingState::WIRE_FAILED])
+                .await
         })
         .await
     }
@@ -251,7 +247,8 @@ impl InboxStore for RedisInbox {
                 .await
                 .map_err(CatgaError::transient)?;
             Ok(value.and_then(|value| {
-                (value.first() == Some(&COMPLETED_RESULT)).then(|| Arc::from(&value[1..]))
+                (value.first() == Some(&ProcessingState::WIRE_COMPLETED_RESULT))
+                    .then(|| Arc::from(&value[1..]))
             }))
         })
         .await
@@ -297,13 +294,9 @@ fn current_unix_ms() -> CatgaResult<u64> {
 }
 
 fn state(value: &[u8]) -> CatgaResult<ProcessingState> {
-    match value.first() {
-        Some(&CLAIMED) => Ok(ProcessingState::Claimed),
-        Some(&COMPLETED_EMPTY | &COMPLETED_RESULT) => Ok(ProcessingState::Completed),
-        Some(&FAILED) => Ok(ProcessingState::Failed),
-        _ => Err(CatgaError::new(
-            ErrorCode::Internal,
-            "Redis inbox record is malformed",
-        )),
-    }
+    value
+        .first()
+        .copied()
+        .and_then(ProcessingState::from_wire_tag)
+        .ok_or_else(|| CatgaError::new(ErrorCode::Internal, "Redis inbox record is malformed"))
 }

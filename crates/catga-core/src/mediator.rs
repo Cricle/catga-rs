@@ -12,14 +12,12 @@
 //! Construct a [`Registry`] at startup with all handlers, then create one [`Mediator`]:
 //!
 //! ```no_run
-//! use catga_core::{Mediator, Handler, Request, Message, MessageTypeId};
+//! use catga_core::{Mediator, Handler, Request, Message};
 //!
-//! struct QueryTypeId;
-//! impl MessageTypeId for QueryTypeId { const NAME: &'static str = "Query"; }
 //!
 //! struct Query;
 //! impl Message for Query {}
-//! impl Request for Query { type Response = String; type TypeId = QueryTypeId; }
+//! impl Request for Query { type Response = String; }
 //!
 //! # async fn run() -> catga_core::CatgaResult<()> {
 //! let mediator = Mediator::new(catga_core::Registry::new());
@@ -67,14 +65,12 @@ pub const MAX_MEDIATOR_BATCH_SIZE: usize = 1024;
 /// crate's [`TRACING_TARGET`](crate::TRACING_TARGET) spans and metrics.
 ///
 /// ```
-/// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+/// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler};
 ///
-/// struct PingTypeId;
-/// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
 ///
 /// struct Ping;
 /// impl Message for Ping {}
-/// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+/// impl Request for Ping { type Response = u64; }
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> CatgaResult<()> {
@@ -221,6 +217,11 @@ impl Mediator {
         }
     }
 
+    /// Returns a reference to the underlying registry.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// Routes a request to its sole registered handler.
     ///
     /// A handler panic is returned as [`ErrorCode::Internal`] when the Rust strategy is
@@ -231,14 +232,12 @@ impl Mediator {
     /// before any handler machinery runs:
     ///
     /// ```
-    /// use catga_core::{CatgaResult, ErrorCode, Mediator, Message, MessageTypeId, Registry, Request};
+    /// use catga_core::{CatgaResult, ErrorCode, Mediator, Message, Registry, Request};
     ///
-    /// struct PingTypeId;
-    /// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
     ///
     /// struct Ping;
     /// impl Message for Ping {}
-    /// impl Request for Ping { type Response = (); type TypeId = PingTypeId; }
+    /// impl Request for Ping { type Response = (); }
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> CatgaResult<()> {
@@ -297,14 +296,12 @@ impl Mediator {
     ///
     /// ```
     /// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
-    /// use catga_core::{CatgaResult, Command, Mediator, Message, MessageTypeId, Registry, command_handler};
+    /// use catga_core::{CatgaResult, Command, Mediator, Message, Registry, command_handler};
     ///
-    /// struct FlushTypeId;
-    /// impl MessageTypeId for FlushTypeId { const NAME: &'static str = "Flush"; }
     ///
     /// struct Flush;
     /// impl Message for Flush {}
-    /// impl Command for Flush { type TypeId = FlushTypeId; }
+    /// impl Command for Flush {}
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> CatgaResult<()> {
@@ -441,16 +438,14 @@ impl Mediator {
     /// ```
     /// use async_trait::async_trait;
     /// use catga_core::{
-    ///     Behavior, CatgaResult, Mediator, Message, MessageTypeId, Next, Pipeline, Registry,
+    ///     Behavior, CatgaResult, Mediator, Message, Next, Pipeline, Registry,
     ///     Request, request_handler,
     /// };
     ///
-    /// struct PingTypeId;
-    /// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
     ///
     /// struct Ping;
     /// impl Message for Ping {}
-    /// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+    /// impl Request for Ping { type Response = u64; }
     ///
     /// /// Adds one to whatever the downstream stage returns.
     /// struct AddOne;
@@ -579,14 +574,12 @@ impl Mediator {
     /// batch-level span covers the entire operation when a subscriber is active.
     ///
     /// ```
-    /// use catga_core::{CatgaResult, Mediator, Message, MessageTypeId, Registry, Request, request_handler};
+    /// use catga_core::{CatgaResult, Mediator, Message, Registry, Request, request_handler};
     ///
-    /// struct PingTypeId;
-    /// impl MessageTypeId for PingTypeId { const NAME: &'static str = "Ping"; }
     ///
     /// struct Ping(u64);
     /// impl Message for Ping {}
-    /// impl Request for Ping { type Response = u64; type TypeId = PingTypeId; }
+    /// impl Request for Ping { type Response = u64; }
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> CatgaResult<()> {
@@ -659,15 +652,13 @@ impl Mediator {
     ///
     /// ```
     /// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
-    /// use catga_core::{CatgaResult, Event, Mediator, Message, MessageTypeId, Registry, event_handler};
+    /// use catga_core::{CatgaResult, Event, Mediator, Message, Registry, event_handler};
     ///
-    /// struct TickTypeId;
-    /// impl MessageTypeId for TickTypeId { const NAME: &'static str = "Tick"; }
     ///
     /// #[derive(Clone)]
     /// struct Tick;
     /// impl Message for Tick {}
-    /// impl Event for Tick { type TypeId = TickTypeId; }
+    /// impl Event for Tick {}
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> CatgaResult<()> {
@@ -792,15 +783,13 @@ impl Mediator {
     ///
     /// ```
     /// use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
-    /// use catga_core::{CatgaResult, Event, Mediator, Message, MessageTypeId, Registry, event_handler};
+    /// use catga_core::{CatgaResult, Event, Mediator, Message, Registry, event_handler};
     ///
-    /// struct TickTypeId;
-    /// impl MessageTypeId for TickTypeId { const NAME: &'static str = "Tick"; }
     ///
     /// #[derive(Clone)]
     /// struct Tick;
     /// impl Message for Tick {}
-    /// impl Event for Tick { type TypeId = TickTypeId; }
+    /// impl Event for Tick {}
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> CatgaResult<()> {

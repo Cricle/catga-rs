@@ -156,18 +156,18 @@ async fn typed_mediator_dispatches_directly_to_service_methods() -> CatgaResult<
 
 #[tokio::test]
 async fn typed_mediator_services_also_build_dynamic_registries() -> CatgaResult<()> {
-    let app = catga_core::auto::AutoApp::from_registry(Bank::default().registry()?)?;
+    let mediator = catga_core::Mediator::new(Bank::default().registry()?);
 
-    app.mediator().send_command(messages::Log).await?;
-    assert_eq!(app.mediator().send(messages::Ask { value: 0 }).await?, 10);
+    mediator.send_command(messages::Log).await?;
+    assert_eq!(mediator.send(messages::Ask { value: 0 }).await?, 10);
     Ok(())
 }
 
 #[tokio::test]
 async fn services_without_request_methods_still_build_registries() -> CatgaResult<()> {
-    let app = catga_core::auto::AutoApp::from_registry(event_only_service::Notifier.registry()?)?;
+    let mediator = catga_core::Mediator::new(event_only_service::Notifier.registry()?);
 
-    app.mediator().send_command(messages::Log).await?;
-    app.mediator().publish(messages::Bell).await?;
+    mediator.send_command(messages::Log).await?;
+    mediator.publish(messages::Bell).await?;
     Ok(())
 }

@@ -1,0 +1,31 @@
+[package]
+name = "catga-raft"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+raft = "0.7"
+raft-engine = "0.4"
+protobuf = "2.28"
+tonic = "0.12"
+prost = "0.13"
+bytes = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "rt", "sync", "time", "macros", "fs", "io-util"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = "0.12"
+crossbeam = "0.8"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+slog = "2"
+futures = { workspace = true }
+catga-core = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+tonic-build = "0.12"

@@ -1,8 +1,13 @@
 # sorock Multi-Raft Backend
 
+## catga-cluster Merge
+
+catga-cluster (raft-rs over HTTP) has been merged into catga-sorock.
+All functionality is now provided by sorock; no separate Raft HTTP transport is needed.
+
 ## Overview
 
-`catga-sorock` is a multi-Raft consensus backend built on [sorock](https://crates.io/crates/sorock) 0.12: it adapts one shard of a sorock Raft process to the backend-agnostic consensus contracts in `catga-core` (`ConsensusStateMachine` / `ConsensusRuntime` / `ConsensusCoordinator`, see [Cluster Mode](./cluster.md#backend-agnostic-consensus-abstraction-catga-core)). Unlike `catga-cluster` (raft-rs over HTTP, where the application brings its own transport and storage), sorock ships with a gRPC transport (tonic) and redb storage — you write no transport code at all.
+`catga-sorock` is a multi-Raft consensus backend built on [sorock](https://crates.io/crates/sorock) 0.12: it adapts one shard of a sorock Raft process to the backend-agnostic consensus contracts in `catga-core` (`ConsensusStateMachine` / `ConsensusRuntime` / `ConsensusCoordinator`, see [Cluster Mode](./distributed.md#backend-agnostic-consensus-abstraction-catga-core)). sorock ships with a gRPC transport (tonic) and redb storage — you write no transport code at all.
 
 ```toml
 [dependencies]

@@ -11,15 +11,15 @@ description.workspace = true
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 catga-core = { workspace = true }
 robustmq = "1"
-serde = "1"
-tokio = { version = "1", features = ["sync", "time"] }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
-criterion = "0.5"
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+criterion = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
 
 [[bench]]
 name = "robustmq_throughput"

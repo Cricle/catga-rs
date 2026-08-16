@@ -10,11 +10,11 @@ use crate::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize,
     MemoryPackWriter, MemoryPackable,
 };
+use crate::error::{CatgaError, CatgaErrorWire};
 
 use crate::flow::{
     memorypack::{
-        DurationWire, ErrorWire, TimeWire, decode_duration, decode_error, decode_time,
-        encode_duration, encode_error, encode_time,
+        DurationWire, TimeWire, decode_duration, decode_time, encode_duration, encode_time,
     },
     state::FlowState,
     suspension::{
@@ -27,7 +27,7 @@ use crate::flow::{
 struct WaitResultWire {
     child_id: String,
     payload: Option<Vec<u8>>,
-    error: Option<ErrorWire>,
+    error: Option<CatgaErrorWire>,
 }
 
 #[derive(Default, MemoryPackable)]
@@ -78,7 +78,7 @@ impl From<&WaitResult> for WaitResultWire {
         Self {
             child_id: value.child_id.to_string(),
             payload: value.payload.as_deref().map(ToOwned::to_owned),
-            error: value.error.as_ref().map(encode_error),
+            error: value.error.as_ref().map(CatgaErrorWire::from),
         }
     }
 }
@@ -90,7 +90,7 @@ impl TryFrom<WaitResultWire> for WaitResult {
         Ok(Self {
             child_id: value.child_id.into_boxed_str(),
             payload: value.payload.map(Arc::from),
-            error: value.error.map(decode_error).transpose()?,
+            error: value.error.map(CatgaError::try_from).transpose()?,
         })
     }
 }

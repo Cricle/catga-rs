@@ -73,6 +73,36 @@ pub trait DueFlowScheduler: FlowScheduler {
     ) -> CatgaResult<bool>;
 }
 
+/// Encodes the `(flow_id, state_id)` schedule uniqueness target as a portable byte value.
+///
+/// Durable scheduler stores key their per-target deduplication index by this framing, so the
+/// encoding lives here to keep every backend byte-identical. Each identifier is prefixed with
+/// its big-endian `u64` byte length, making the concatenation unambiguous.
+pub fn schedule_target_bytes(flow_id: &str, state_id: &str) -> CatgaResult<Vec<u8>> {
+    let flow_len = u64::try_from(flow_id.len()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "flow identifier is too long for a schedule target",
+        )
+    })?;
+    let state_len = u64::try_from(state_id.len()).map_err(|_| {
+        CatgaError::new(
+            ErrorCode::Validation,
+            "state identifier is too long for a schedule target",
+        )
+    })?;
+    let capacity = 16_usize
+        .checked_add(flow_id.len())
+        .and_then(|value| value.checked_add(state_id.len()))
+        .ok_or_else(|| CatgaError::new(ErrorCode::Validation, "schedule target is too long"))?;
+    let mut target = Vec::with_capacity(capacity);
+    target.extend_from_slice(&flow_len.to_be_bytes());
+    target.extend_from_slice(flow_id.as_bytes());
+    target.extend_from_slice(&state_len.to_be_bytes());
+    target.extend_from_slice(state_id.as_bytes());
+    Ok(target)
+}
+
 /// One due flow-resume request emitted by [`MemoryFlowScheduler`].
 #[derive(Clone, Debug)]
 pub struct ScheduledResume {

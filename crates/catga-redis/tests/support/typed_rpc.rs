@@ -3,23 +3,17 @@
 use catga_core::codec::memorypack::{
     MemoryPackDeserialize, MemoryPackError, MemoryPackReader, MemoryPackSerialize, MemoryPackWriter,
 };
-use catga_core::{CatgaError, CatgaResult, ErrorCode, Handler, Message, MessageTypeId, Request};
+use catga_core::{CatgaError, CatgaResult, ErrorCode, Handler, Message, Request};
 
 /// A typed doubling request used by request/reply contract tests.
 pub struct DoubleRequest(pub u64);
 
 /// Compile-time marker for [`DoubleRequest`].
-pub struct DoubleRequestTypeId;
-
-impl MessageTypeId for DoubleRequestTypeId {
-    const NAME: &'static str = "catga.test.DoubleRequest";
-}
 
 impl Message for DoubleRequest {}
 
 impl Request for DoubleRequest {
     type Response = u64;
-    type TypeId = DoubleRequestTypeId;
 }
 
 impl MemoryPackSerialize for DoubleRequest {

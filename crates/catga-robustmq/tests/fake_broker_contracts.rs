@@ -15,18 +15,13 @@ use catga_core::codec::memorypack::{
 };
 use catga_core::{
     CatgaError, CatgaResult, Envelope, EnvelopeCodec, ErrorCode, MemoryPackable, Message,
-    MessageMetadata, MessagePriority, MessageTypeId, Request, RequestTransport, request_handler,
+    MessageMetadata, MessagePriority, Request, RequestTransport, request_handler,
 };
 use catga_robustmq::{MailboxClient, MailboxConfig, MailboxPriority, MailboxRequestServer};
 use fake_broker::FakeBroker;
 use tokio::sync::mpsc;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-struct PingTypeId;
-impl MessageTypeId for PingTypeId {
-    const NAME: &'static str = "catga.test.Ping";
-}
 
 /// Typed request used by the request/reply contracts.
 #[derive(Debug, PartialEq, Eq, MemoryPackable)]
@@ -36,12 +31,6 @@ struct Ping {
 impl Message for Ping {}
 impl Request for Ping {
     type Response = u64;
-    type TypeId = PingTypeId;
-}
-
-struct BulkTypeId;
-impl MessageTypeId for BulkTypeId {
-    const NAME: &'static str = "catga.test.Bulk";
 }
 
 /// Typed request whose response can exceed the codec's bounded frame limit.
@@ -52,7 +41,6 @@ struct Bulk {
 impl Message for Bulk {}
 impl Request for Bulk {
     type Response = Vec<u8>;
-    type TypeId = BulkTypeId;
 }
 
 /// A custom wire format that proves the adapter threads the configured codec through every

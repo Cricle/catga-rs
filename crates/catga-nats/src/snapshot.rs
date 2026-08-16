@@ -10,6 +10,7 @@ use std::{
 use async_nats::jetstream::{self, kv};
 use async_trait::async_trait;
 use catga_core::codec::memorypack::MemoryPackSnapshotCodec;
+use catga_core::time::saturating_unix_millis;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, Snapshot, SnapshotCodec, SnapshotStore};
 
 const METADATA_BYTES: usize = 16;
@@ -90,7 +91,7 @@ where
         let state = self.codec.encode_state(snapshot.state())?;
         let mut value = Vec::with_capacity(METADATA_BYTES.saturating_add(state.len()));
         value.extend_from_slice(&snapshot.version().to_be_bytes());
-        value.extend_from_slice(&unix_millis(snapshot.timestamp()).to_be_bytes());
+        value.extend_from_slice(&saturating_unix_millis(snapshot.timestamp()).to_be_bytes());
         value.extend_from_slice(&state);
         Ok(value)
     }
@@ -226,13 +227,4 @@ where
             .await
             .map_err(CatgaError::transient)
     }
-}
-
-fn unix_millis(time: SystemTime) -> u64 {
-    u64::try_from(
-        time.duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX)
 }

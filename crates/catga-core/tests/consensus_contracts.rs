@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use async_trait::async_trait;
 use catga_core::{CatgaResult, ConsensusCoordinator, ConsensusRuntime, ConsensusStateMachine};
 
 /// In-memory single-node state machine recording every applied entry.
@@ -96,6 +97,7 @@ impl DummyRuntime {
     }
 }
 
+#[async_trait]
 impl ConsensusRuntime for DummyRuntime {
     async fn propose(&self, data: Vec<u8>) -> CatgaResult<()> {
         let index = self.applied.fetch_add(1, Ordering::SeqCst) + 1;
@@ -129,7 +131,7 @@ impl ConsensusRuntime for DummyRuntime {
         self.alive.store(false, Ordering::SeqCst);
     }
 
-    async fn join(self) -> CatgaResult<()> {
+    async fn join(self: Box<Self>) -> CatgaResult<()> {
         Ok(())
     }
 }
@@ -144,8 +146,9 @@ fn assert_borrowed_futures_send<R: ConsensusRuntime>(runtime: &R) {
     assert_send(runtime.applied_index());
 }
 
-/// Static assertion: the owned `join` future is `Send`.
-fn assert_join_future_send<R: ConsensusRuntime>(runtime: R) {
+/// Static assertion: the owned `join` future (through its `Box<Self>`
+/// receiver) is `Send`.
+fn assert_join_future_send<R: ConsensusRuntime>(runtime: Box<R>) {
     assert_send(runtime.join());
 }
 
@@ -166,7 +169,7 @@ fn coordinator_is_object_safe() {
 fn runtime_futures_are_send() {
     let runtime = DummyRuntime::new();
     assert_borrowed_futures_send(&runtime);
-    assert_join_future_send(DummyRuntime::new());
+    assert_join_future_send(Box::new(DummyRuntime::new()));
 }
 
 #[tokio::test]
@@ -203,5 +206,33 @@ async fn propose_then_applied_index_observes_progress() {
     assert!(runtime.is_alive());
     runtime.shutdown();
     assert!(!runtime.is_alive());
-    runtime.join().await.expect("join");
+    Box::new(runtime).join().await.expect("join");
+}
+
+/// The trait is object-safe: a runtime erased behind
+/// `Arc<dyn ConsensusRuntime>` still serves every borrowed method.
+#[tokio::test]
+async fn runtime_is_object_safe_behind_arc_dyn() {
+    let runtime: Arc<dyn ConsensusRuntime> = Arc::new(DummyRuntime::new());
+
+    runtime.propose(b"set a=1".to_vec()).await.expect("propose");
+    assert_eq!(runtime.applied_index().await.expect("applied index"), 1);
+    assert_eq!(runtime.coordinator().node_id(), "node-1");
+    runtime
+        .add_member(2, "127.0.0.1:9002".to_owned())
+        .await
+        .expect("add member");
+    runtime.remove_member(2).await.expect("remove member");
+    assert!(runtime.is_alive());
+    runtime.shutdown();
+    assert!(!runtime.is_alive());
+}
+
+/// `join` is callable through the trait object itself via its `Box<Self>`
+/// receiver.
+#[tokio::test]
+async fn runtime_join_through_box_dyn() {
+    let runtime: Box<dyn ConsensusRuntime> = Box::new(DummyRuntime::new());
+    runtime.shutdown();
+    runtime.join().await.expect("join through the trait object");
 }

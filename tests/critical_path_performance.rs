@@ -16,7 +16,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use catga_core::flow::Flow;
+use catga_core::flow::DslFlow;
 use catga_core::memory::MemoryTransport;
 use catga_core::{
     CatgaResult, Envelope, Handler, Mediator, Message, MessageMetadata, MessageTransport, Registry,
@@ -35,7 +35,6 @@ impl Message for Quote {}
 
 impl Request for Quote {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct QuoteHandler;
@@ -128,16 +127,16 @@ async fn run_workflow(
     let release = Arc::clone(&reservations);
     let charge = Arc::clone(&charges);
     let refund = Arc::clone(&charges);
-    let flow = Flow::new("critical-performance-checkout")
-        .step(
-            move || {
+    let flow = DslFlow::<()>::new()
+        .compensate(
+            move |_| {
                 let reserve = Arc::clone(&reserve);
                 async move {
                     reserve.fetch_add(1, Ordering::AcqRel);
                     Ok(())
                 }
             },
-            move || {
+            move |_| {
                 let release = Arc::clone(&release);
                 async move {
                     release.fetch_sub(1, Ordering::AcqRel);
@@ -145,15 +144,15 @@ async fn run_workflow(
                 }
             },
         )
-        .step(
-            move || {
+        .compensate(
+            move |_| {
                 let charge = Arc::clone(&charge);
                 async move {
                     charge.fetch_add(1, Ordering::AcqRel);
                     Ok(())
                 }
             },
-            move || {
+            move |_| {
                 let refund = Arc::clone(&refund);
                 async move {
                     refund.fetch_sub(1, Ordering::AcqRel);
@@ -161,7 +160,7 @@ async fn run_workflow(
                 }
             },
         );
-    assert!(flow.run().await.is_success());
+    assert!(flow.run(&mut ()).await.is_ok());
 
     transport
         .publish(Envelope::new(

@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use catga_core::flow::{DueFlowScheduler, FlowScheduler, ScheduledResume};
+use catga_core::flow::{DueFlowScheduler, FlowScheduler, ScheduledResume, schedule_target_bytes};
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 use redis::{Script, aio::ConnectionManager};
 use uuid::Uuid;
@@ -163,7 +163,7 @@ impl FlowScheduler for RedisFlowScheduler {
         due_at: SystemTime,
     ) -> CatgaResult<Box<str>> {
         let due_at = unix_millis(due_at)?;
-        let target = target_key(flow_id, state_id)?;
+        let target = schedule_target_bytes(flow_id, state_id)?;
         let schedule_id: Box<str> = Uuid::new_v4().to_string().into();
         let mut connection = self.connection.clone();
         let existing_or_new: String = Script::new(SCHEDULE)
@@ -323,18 +323,6 @@ impl DueFlowScheduler for RedisFlowScheduler {
             .map_err(CatgaError::transient)?;
         Ok(renewed == 1)
     }
-}
-
-fn target_key(flow_id: &str, state_id: &str) -> CatgaResult<Vec<u8>> {
-    // usize always fits in u64 on supported targets, so these never truncate.
-    let flow_len = flow_id.len() as u64;
-    let state_len = state_id.len() as u64;
-    let mut key = Vec::with_capacity(16 + flow_id.len() + state_id.len());
-    key.extend_from_slice(&flow_len.to_be_bytes());
-    key.extend_from_slice(flow_id.as_bytes());
-    key.extend_from_slice(&state_len.to_be_bytes());
-    key.extend_from_slice(state_id.as_bytes());
-    Ok(key)
 }
 
 fn unix_millis(value: SystemTime) -> CatgaResult<i64> {

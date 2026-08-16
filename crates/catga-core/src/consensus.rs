@@ -6,7 +6,9 @@
 //! contracts and never on a concrete backend crate. A thin bridge in each
 //! backend crate adapts its runtime to these traits.
 
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
+
+use async_trait::async_trait;
 
 use crate::{CatgaError, CatgaResult, ErrorCode};
 
@@ -59,7 +61,9 @@ pub trait ConsensusCoordinator: Send + Sync {
 /// lifecycle.
 ///
 /// All consensus mutations are serialized by the backend's owner task, so the
-/// handle itself is `Sync` and cheap to share.
+/// handle itself is `Sync` and cheap to share. The trait is object-safe, so a
+/// backend can be erased behind `Arc<dyn ConsensusRuntime>`.
+#[async_trait]
 pub trait ConsensusRuntime: Send + Sync {
     /// Proposes one application command through the currently elected leader.
     ///
@@ -68,7 +72,7 @@ pub trait ConsensusRuntime: Send + Sync {
     /// observe durable progress through [`Self::applied_index`], typically
     /// combined with an application-level operation id inside `data`.
     /// Proposing on a node without leadership returns an error.
-    fn propose(&self, data: Vec<u8>) -> impl Future<Output = CatgaResult<()>> + Send;
+    async fn propose(&self, data: Vec<u8>) -> CatgaResult<()>;
 
     /// Proposes one application command and resolves with the applied index
     /// once the entry is committed and applied by the local state machine.
@@ -90,29 +94,23 @@ pub trait ConsensusRuntime: Send + Sync {
     /// The default implementation polls [`Self::applied_index`] every 10 ms
     /// once [`Self::propose`] accepts the entry; backends with an
     /// applied-notification path override it with a push-based wait.
-    fn propose_and_wait(
-        &self,
-        data: Vec<u8>,
-        timeout: Duration,
-    ) -> impl Future<Output = CatgaResult<u64>> + Send {
-        async move {
-            let baseline = self.applied_index().await?;
-            self.propose(data).await?;
-            let started = std::time::Instant::now();
-            loop {
-                let applied = self.applied_index().await?;
-                if applied > baseline {
-                    return Ok(applied);
-                }
-                let elapsed = started.elapsed();
-                if elapsed >= timeout {
-                    return Err(CatgaError::new(
-                        ErrorCode::Timeout,
-                        "consensus proposal was not applied before the deadline",
-                    ));
-                }
-                tokio::time::sleep(PROPOSE_AND_WAIT_POLL_INTERVAL.min(timeout - elapsed)).await;
+    async fn propose_and_wait(&self, data: Vec<u8>, timeout: Duration) -> CatgaResult<u64> {
+        let baseline = self.applied_index().await?;
+        self.propose(data).await?;
+        let started = std::time::Instant::now();
+        loop {
+            let applied = self.applied_index().await?;
+            if applied > baseline {
+                return Ok(applied);
             }
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                return Err(CatgaError::new(
+                    ErrorCode::Timeout,
+                    "consensus proposal was not applied before the deadline",
+                ));
+            }
+            tokio::time::sleep(PROPOSE_AND_WAIT_POLL_INTERVAL.min(timeout - elapsed)).await;
         }
     }
 
@@ -123,19 +121,18 @@ pub trait ConsensusRuntime: Send + Sync {
     /// because backends may silently drop a change proposed while another is
     /// pending. Learners, leadership transfer, and multi-member changes in a
     /// single step are intentionally not part of this contract.
-    fn add_member(&self, id: u64, endpoint: String)
-    -> impl Future<Output = CatgaResult<()>> + Send;
+    async fn add_member(&self, id: u64, endpoint: String) -> CatgaResult<()>;
 
     /// Proposes removing one member from the group.
     ///
     /// The same one-change-at-a-time discipline as [`Self::add_member`]
     /// applies. Removing the last member is rejected; removing this node
     /// itself is permitted, after which it can no longer campaign.
-    fn remove_member(&self, id: u64) -> impl Future<Output = CatgaResult<()>> + Send;
+    async fn remove_member(&self, id: u64) -> CatgaResult<()>;
 
     /// Returns the greatest log index applied to the application state
     /// machine.
-    fn applied_index(&self) -> impl Future<Output = CatgaResult<u64>> + Send;
+    async fn applied_index(&self) -> CatgaResult<u64>;
 
     /// Returns whether the backend's owner task is still running.
     fn is_alive(&self) -> bool;
@@ -146,9 +143,24 @@ pub trait ConsensusRuntime: Send + Sync {
     /// Requests a graceful stop of the owner task.
     fn shutdown(&self);
 
+    /// Requests shutdown and awaits the owner task without consuming the
+    /// handle (usable through `Arc`). The default implementation only
+    /// requests shutdown; backends with background tasks should override it.
+    async fn shutdown_and_join(&self) -> CatgaResult<()> {
+        self.shutdown();
+        Ok(())
+    }
+
     /// Waits for the owner task and returns its terminal status.
     ///
     /// Call [`Self::shutdown`] first for a graceful stop; `join` then
     /// resolves once the owner task has finished draining.
-    fn join(self) -> impl Future<Output = CatgaResult<()>> + Send;
+    ///
+    /// The receiver is `Box<Self>` rather than a bare `self` so the trait
+    /// stays object-safe: concrete runtimes join through
+    /// `Box::new(runtime).join().await`, and a boxed trait object
+    /// (`Box<dyn ConsensusRuntime>`) joins through the same call. Shared
+    /// `Arc` handles cannot be joined directly; call [`Self::shutdown`] and
+    /// drop them instead.
+    async fn join(self: Box<Self>) -> CatgaResult<()>;
 }

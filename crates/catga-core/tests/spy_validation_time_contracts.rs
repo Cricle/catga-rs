@@ -8,9 +8,8 @@ use std::{
 
 use async_trait::async_trait;
 use catga_core::{
-    CatgaError, CatgaResult, DefaultMessageTypeId, ErrorCode, Event, EventHandler, Handler,
-    Mediator, Message, MessageCapture, Pipeline, Registry, Request, assert_error_code,
-    assert_failure, assert_success,
+    CatgaError, CatgaResult, ErrorCode, Event, EventHandler, Handler, Mediator, Message,
+    MessageCapture, Pipeline, Registry, Request, assert_error_code, assert_failure, assert_success,
     time::{
         UnixMillisError, checked_unix_millis, now_unix_millis, now_unix_millis_or,
         signed_unix_millis,
@@ -29,7 +28,6 @@ impl Message for Ping {}
 
 impl Request for Ping {
     type Response = u8;
-    type TypeId = DefaultMessageTypeId;
 }
 
 struct Double;
@@ -41,19 +39,12 @@ impl Handler<Ping> for Double {
     }
 }
 
-struct NoticeTypeId;
-impl catga_core::MessageTypeId for NoticeTypeId {
-    const NAME: &'static str = "Notice";
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct Notice(u8);
 
 impl Message for Notice {}
 
-impl Event for Notice {
-    type TypeId = NoticeTypeId;
-}
+impl Event for Notice {}
 
 struct RejectOddNotice;
 

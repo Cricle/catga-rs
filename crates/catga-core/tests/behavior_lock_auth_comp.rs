@@ -9,7 +9,7 @@ use catga_core::{
     AuthorizationBehavior, AuthorizationPolicies, AuthorizationPolicy, CatgaError, CatgaResult,
     CommandPipeline, CompensationBehavior, DistributedLockBehavior, ErrorCode,
     EventCompensationPublisher, Fault, FaultPublisher, FaultPublishingBehavior, LeaseStore,
-    Mediator, Message, MessageTypeId, Pipeline, Registry, SecurityIdentity,
+    Mediator, Message, Pipeline, Registry, SecurityIdentity,
 };
 
 #[path = "support/behavior_support.rs"]
@@ -17,23 +17,11 @@ mod behavior_support;
 
 use behavior_support::{Req, req_mediator};
 
-struct CmdTypeId;
-impl MessageTypeId for CmdTypeId {
-    const NAME: &'static str = "BehaviorCmd";
-}
-
 /// Cloneable command used by command-behavior contracts.
 #[derive(Clone)]
 struct Cmd(pub u64);
 impl Message for Cmd {}
-impl catga_core::Command for Cmd {
-    type TypeId = CmdTypeId;
-}
-
-struct AuthPlainTypeId;
-impl MessageTypeId for AuthPlainTypeId {
-    const NAME: &'static str = "AuthPlain";
-}
+impl catga_core::Command for Cmd {}
 
 /// Request that only requires an authenticated identity.
 #[derive(Clone)]
@@ -41,17 +29,11 @@ struct AuthPlain;
 impl Message for AuthPlain {}
 impl catga_core::Request for AuthPlain {
     type Response = u64;
-    type TypeId = AuthPlainTypeId;
 }
 impl catga_core::AuthorizedRequest for AuthPlain {
     fn authorization() -> catga_core::AuthorizationRequirements {
         catga_core::AuthorizationRequirements::authenticated()
     }
-}
-
-struct AuthRoleTypeId;
-impl MessageTypeId for AuthRoleTypeId {
-    const NAME: &'static str = "AuthRole";
 }
 
 /// Request that requires one of the listed roles.
@@ -60,17 +42,11 @@ struct AuthRole;
 impl Message for AuthRole {}
 impl catga_core::Request for AuthRole {
     type Response = u64;
-    type TypeId = AuthRoleTypeId;
 }
 impl catga_core::AuthorizedRequest for AuthRole {
     fn authorization() -> catga_core::AuthorizationRequirements {
         catga_core::AuthorizationRequirements::with_roles(&["admin", "editor"])
     }
-}
-
-struct AuthPolicyTypeId;
-impl MessageTypeId for AuthPolicyTypeId {
-    const NAME: &'static str = "AuthPolicy";
 }
 
 /// Request that requires the named billing policy.
@@ -79,17 +55,11 @@ struct AuthPolicy;
 impl Message for AuthPolicy {}
 impl catga_core::Request for AuthPolicy {
     type Response = u64;
-    type TypeId = AuthPolicyTypeId;
 }
 impl catga_core::AuthorizedRequest for AuthPolicy {
     fn authorization() -> catga_core::AuthorizationRequirements {
         catga_core::AuthorizationRequirements::with_policy("billing")
     }
-}
-
-struct AuthRolePolicyTypeId;
-impl MessageTypeId for AuthRolePolicyTypeId {
-    const NAME: &'static str = "AuthRolePolicy";
 }
 
 /// Request that requires both a role and the named policy.
@@ -98,7 +68,6 @@ struct AuthRolePolicy;
 impl Message for AuthRolePolicy {}
 impl catga_core::Request for AuthRolePolicy {
     type Response = u64;
-    type TypeId = AuthRolePolicyTypeId;
 }
 impl catga_core::AuthorizedRequest for AuthRolePolicy {
     fn authorization() -> catga_core::AuthorizationRequirements {
@@ -584,17 +553,10 @@ async fn authorization_policy_errors_and_role_plus_policy_combinations() {
 // CompensationBehavior
 // ---------------------------------------------------------------------------
 
-struct CompensatedTypeId;
-impl MessageTypeId for CompensatedTypeId {
-    const NAME: &'static str = "Compensated";
-}
-
 #[derive(Clone)]
 struct Compensated(pub u64);
 impl Message for Compensated {}
-impl catga_core::Event for Compensated {
-    type TypeId = CompensatedTypeId;
-}
+impl catga_core::Event for Compensated {}
 
 /// Compensation publisher for commands.
 ///
@@ -740,17 +702,10 @@ async fn compensation_skips_successes_and_covers_panics_and_commands() {
 // FaultPublishingBehavior
 // ---------------------------------------------------------------------------
 
-struct RecordedFaultTypeId;
-impl MessageTypeId for RecordedFaultTypeId {
-    const NAME: &'static str = "RecordedFault";
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RecordedFault(u64, ErrorCode);
 impl Message for RecordedFault {}
-impl catga_core::Event for RecordedFault {
-    type TypeId = RecordedFaultTypeId;
-}
+impl catga_core::Event for RecordedFault {}
 
 struct RecordingPublisher {
     sink: Arc<Mutex<Vec<RecordedFault>>>,

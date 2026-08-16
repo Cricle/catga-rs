@@ -29,7 +29,7 @@ Start with the smallest crate that has the required contracts, and add more as n
 | Redis transport and storage | `catga-redis = "0.2"` |
 | RobustMQ transport (mq9 mailbox) | `catga-robustmq = "0.2"` |
 | Axum HTTP integration | `catga-axum = "0.2"` |
-| Cluster/Raft, singleton tasks, leader-only execution | `catga-cluster = "0.2"` |
+| Raft consensus (gRPC multi-Raft) | `catga-sorock = "0.2"` |
 
 Runtime requires `tokio = { version = "1", features = ["macros", "rt-multi-thread"] }`; struct handlers require `async-trait = "0.1"`.
 

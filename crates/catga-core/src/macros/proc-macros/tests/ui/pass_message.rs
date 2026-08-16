@@ -1,8 +1,7 @@
 //! A maximal valid `#[derive(Message)]` expansion compiles and honors every option.
 
 use catga_core::{
-    AuthorizedRequest, BatchKeyProvider, BatchOptionsProvider, DefaultMessageTypeId, Message,
-    MessagePriority, Request,
+    AuthorizedRequest, BatchKeyProvider, BatchOptionsProvider, Message, MessagePriority, Request,
 };
 
 #[derive(catga_core_macros::Message)]
@@ -31,7 +30,6 @@ pub struct Payment {
 
 impl Request for Payment {
     type Response = ();
-    type TypeId = DefaultMessageTypeId;
 }
 
 fn main() {

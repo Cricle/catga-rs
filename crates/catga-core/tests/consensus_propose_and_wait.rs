@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use catga_core::{CatgaResult, ConsensusCoordinator, ConsensusRuntime, ErrorCode};
 
 struct StubCoordinator;
@@ -47,6 +48,7 @@ impl StubRuntime {
     }
 }
 
+#[async_trait]
 impl ConsensusRuntime for StubRuntime {
     async fn propose(&self, _data: Vec<u8>) -> CatgaResult<()> {
         if self.applies {
@@ -77,7 +79,7 @@ impl ConsensusRuntime for StubRuntime {
 
     fn shutdown(&self) {}
 
-    async fn join(self) -> CatgaResult<()> {
+    async fn join(self: Box<Self>) -> CatgaResult<()> {
         Ok(())
     }
 }

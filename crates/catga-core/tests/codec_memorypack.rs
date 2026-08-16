@@ -20,9 +20,9 @@ use catga_core::codec::memorypack::{
 };
 use catga_core::memory::MemoryOutbox;
 use catga_core::{
-    CatgaError, CatgaResult, DefaultMessageTypeId, DelayedMessage, Envelope, EnvelopeCodec,
-    EnvelopeHeaders, ErrorCode, Event, Message, MessageMetadata, OutboxStore, PayloadDecoder,
-    PayloadEncoder, QualityOfService, Request, RequestTransport, SnapshotCodec,
+    CatgaError, CatgaResult, DelayedMessage, Envelope, EnvelopeCodec, EnvelopeHeaders, ErrorCode,
+    Event, Message, MessageMetadata, OutboxStore, PayloadDecoder, PayloadEncoder, QualityOfService,
+    Request, RequestTransport, SnapshotCodec,
 };
 
 fn round_trip<T>(value: T)
@@ -469,9 +469,7 @@ struct Notice {
     text: String,
 }
 impl Message for Notice {}
-impl Event for Notice {
-    type TypeId = DefaultMessageTypeId;
-}
+impl Event for Notice {}
 impl DelayedMessage for Notice {
     fn delay(&self) -> Option<Duration> {
         Some(Duration::from_millis(1))
@@ -571,7 +569,6 @@ struct Ping {
 impl Message for Ping {}
 impl Request for Ping {
     type Response = Pong;
-    type TypeId = DefaultMessageTypeId;
 }
 
 #[derive(MemoryPackable, Clone, Debug, PartialEq)]

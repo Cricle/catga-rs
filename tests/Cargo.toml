@@ -9,13 +9,12 @@ autotests = false
 [dependencies]
 async-trait = "0.1"
 async-nats = "0.50"
-axum = "0.8"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 bb8 = "0.9"
 bb8-tiberius = { version = "0.16", default-features = false, features = ["tds73", "with-tokio"] }
 catga-axum = { workspace = true }
 catga-core = { workspace = true }
 catga-flow-store = { workspace = true, features = ["sqlite", "mysql", "postgres", "mssql"] }
-catga-cluster = { workspace = true }
 catga-nats = { workspace = true }
 catga-redis = { workspace = true }
 catga-robustmq = { workspace = true }
@@ -35,7 +34,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-
 tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
 testcontainers = "0.27"
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
@@ -74,34 +73,6 @@ path = "message_types.rs"
 [[test]]
 name = "lifecycle"
 path = "lifecycle.rs"
-
-[[test]]
-name = "cluster"
-path = "cluster.rs"
-
-[[test]]
-name = "raft_cluster"
-path = "raft_cluster.rs"
-
-[[test]]
-name = "raft_runtime"
-path = "raft_runtime.rs"
-
-[[test]]
-name = "raft_state_machine"
-path = "raft_state_machine.rs"
-
-[[test]]
-name = "raft_state_machine_runtime"
-path = "raft_state_machine_runtime.rs"
-
-[[test]]
-name = "raft_config"
-path = "raft_config.rs"
-
-[[test]]
-name = "axum"
-path = "axum.rs"
 
 [[test]]
 name = "axum_composable"
@@ -146,10 +117,6 @@ path = "security.rs"
 [[test]]
 name = "compensation"
 path = "compensation.rs"
-
-[[test]]
-name = "observability"
-path = "observability.rs"
 
 [[test]]
 name = "batch_stream"
@@ -352,10 +319,6 @@ name = "flow_recovery"
 path = "flow/recovery.rs"
 
 [[test]]
-name = "cross_cqrs_raft"
-path = "cross_cqrs_raft.rs"
-
-[[test]]
 name = "mediator_pure_throughput"
 path = "mediator_pure_throughput.rs"
 
@@ -366,15 +329,3 @@ path = "dispatch_table.rs"
 [[test]]
 name = "typed_mediator_bench"
 path = "typed_mediator_bench.rs"
-
-[[test]]
-name = "e2e_axum"
-path = "e2e_axum.rs"
-
-[[test]]
-name = "e2e_cluster"
-path = "e2e_cluster.rs"
-
-[[test]]
-name = "cluster_cqrs_flow"
-path = "cluster_cqrs_flow.rs"

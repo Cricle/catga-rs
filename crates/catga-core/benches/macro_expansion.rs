@@ -29,7 +29,6 @@ macro_rules! define_macro_generated_types {
                 impl Message for [<Msg $n>] {}
                 impl Request for [<Msg $n>] {
                     type Response = u64;
-                    type TypeId = catga_core::DefaultMessageTypeId;
                 }
 
                 // Wrapper struct (simulates what #[catga_service] generates)

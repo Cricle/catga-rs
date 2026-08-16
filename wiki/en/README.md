@@ -51,7 +51,6 @@ struct Add(i64);
 impl Message for Add {}
 impl Request for Add {
     type Response = i64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct AddHandler;

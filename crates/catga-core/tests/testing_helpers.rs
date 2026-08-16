@@ -8,14 +8,9 @@ use async_trait::async_trait;
 use catga_core::ErrorCode;
 use catga_core::{
     CatgaError, CatgaResult, Event, EventHandler, EventHandlerSpy, Handler, HandlerSpy, Message,
-    MessageCapture, MessageTypeId, Request, assert_contains, assert_error_code, assert_failure,
-    assert_success, assert_value,
+    MessageCapture, Request, assert_contains, assert_error_code, assert_failure, assert_success,
+    assert_value,
 };
-
-struct PingTypeId;
-impl MessageTypeId for PingTypeId {
-    const NAME: &'static str = "test::Ping";
-}
 
 #[derive(Clone, Debug, PartialEq)]
 struct Ping {
@@ -25,12 +20,6 @@ struct Ping {
 impl Message for Ping {}
 impl Request for Ping {
     type Response = u64;
-    type TypeId = PingTypeId;
-}
-
-struct PongTypeId;
-impl MessageTypeId for PongTypeId {
-    const NAME: &'static str = "test::Pong";
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,9 +28,7 @@ struct Pong {
 }
 
 impl Message for Pong {}
-impl Event for Pong {
-    type TypeId = PongTypeId;
-}
+impl Event for Pong {}
 
 struct DoublingHandler;
 

@@ -1,0 +1,134 @@
+# Scale-test variant: 50-replica Raft cluster on one k3s node.
+# Derived from kv.yaml; resources trimmed for density. Apply with:
+#   kubectl apply -f examples/distributed-kv/k8s/kv-scale-50.yaml
+#
+# No framework changes are required: the pods derive their Raft identity from
+# the StatefulSet ordinal (POD_NAME via the downward API) and discover peers
+# through the headless Service DNS records. Consensus runs catga-raft over
+# gRPC on port 10100 on the pod hostnames, while port 9100 serves the KV
+# HTTP API + probes and port 10500 the KV gRPC fast path. State persists on
+# the pod PVC at /data (redb).
+#
+# Layout:
+#   - headless Service  : pod DNS kv-<i>.kv-headless for Raft + API traffic
+#   - StatefulSet       : 3 replicas, one PVC per pod for the raft-engine log
+#   - PodDisruptionBudget: budgeted evictions for the large voter set
+#
+# Apply:  kubectl apply -f examples/distributed-kv/k8s/
+# Verify: kubectl port-forward svc/kv-headless 9100:9100
+#         curl -X POST localhost:9100/kv -H 'content-type: application/json' -d '{"key":"a","value":"1"}'
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv-headless
+  labels:
+    app: distributed-kv
+spec:
+  clusterIP: None
+  selector:
+    app: distributed-kv
+  ports:
+    - name: api
+      port: 9100
+    # catga-raft gRPC transport.
+    - name: raft-grpc
+      port: 10100
+    # KV gRPC fast path (raft port + 400).
+    - name: kv-grpc
+      port: 10500
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kv
+  labels:
+    app: distributed-kv
+spec:
+  serviceName: kv-headless
+  replicas: 50
+  selector:
+    matchLabels:
+      app: distributed-kv
+  template:
+    metadata:
+      labels:
+        app: distributed-kv
+    spec:
+      # Spread Raft voters across nodes and zones so one node loss never kills quorum.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: distributed-kv
+      containers:
+        - name: kv
+          image: localhost/catga-distributed-kv:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KV_CLUSTER_NAME
+              value: kv
+            - name: KV_REPLICAS
+              value: "50"
+            - name: KV_DATA_DIR
+              value: /data
+          ports:
+            - name: api
+              containerPort: 9100
+            # catga-raft gRPC transport.
+            - name: raft-grpc
+              containerPort: 10100
+            # KV gRPC fast path (raft port + 400).
+            - name: kv-grpc
+              containerPort: 10500
+          readinessProbe:
+            # The node answers once the HTTP API and the Raft owner task are up.
+            httpGet:
+              path: /status
+              port: api
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            # /healthz returns 503 when the Raft owner task has stopped, so a
+            # zombie pod (alive process, dead consensus loop) gets restarted.
+            httpGet:
+              path: /healthz
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: raft-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: raft-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 32Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kv
+  labels:
+    app: distributed-kv
+spec:
+  # 50 voters tolerate many losses; budget 5 concurrent evictions.
+  maxUnavailable: 5
+  selector:
+    matchLabels:
+      app: distributed-kv

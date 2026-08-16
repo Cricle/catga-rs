@@ -15,8 +15,8 @@ use catga_core::flow::dsl_progress::{
     DslProgressKind, DslStateCodec, DslStepProgress, DslStepProgressStore,
 };
 use catga_core::{
-    CatgaError, CatgaResult, ErrorCode, Event, Mediator, Message, MessageTypeId, Registry, Request,
-    RequestClient, event_handler, request_handler,
+    CatgaError, CatgaResult, ErrorCode, Event, Mediator, Message, Registry, Request, RequestClient,
+    event_handler, request_handler,
 };
 use futures::{StreamExt, future::BoxFuture};
 
@@ -133,29 +133,16 @@ fn increment_action()
 // Mediator and remote request steps
 // ---------------------------------------------------------------------------
 
-struct GapEchoTypeId;
-impl MessageTypeId for GapEchoTypeId {
-    const NAME: &'static str = "GapEcho";
-}
-
 struct GapEcho(u64);
 impl Message for GapEcho {}
 impl Request for GapEcho {
     type Response = u64;
-    type TypeId = GapEchoTypeId;
-}
-
-struct GapTickTypeId;
-impl MessageTypeId for GapTickTypeId {
-    const NAME: &'static str = "GapTick";
 }
 
 #[derive(Clone)]
 struct GapTick;
 impl Message for GapTick {}
-impl Event for GapTick {
-    type TypeId = GapTickTypeId;
-}
+impl Event for GapTick {}
 
 struct StubClient;
 

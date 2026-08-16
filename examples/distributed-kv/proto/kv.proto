@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package distributed.kv;
+
+// KV application service over gRPC: the binary fast path that parallels the
+// HTTP/JSON API. Writes keep the same linearizable semantics (acknowledged
+// after raft commit + local apply); Get serves a ReadIndex-barriered read.
+service Kv {
+  rpc Put(PutRequest) returns (PutReply);
+  rpc PutBatch(PutBatchRequest) returns (PutBatchReply);
+  rpc Get(GetRequest) returns (GetReply);
+}
+
+message PutRequest {
+  string key = 1;
+  string value = 2;
+}
+
+message PutReply {
+  uint64 op_id = 1;
+  string key = 2;
+  string value = 3;
+  uint64 applied_index = 4;
+}
+
+message PutBatchRequest {
+  repeated PutRequest items = 1;
+}
+
+message PutBatchReply {
+  uint64 applied = 1;
+  uint64 applied_index = 2;
+}
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetReply {
+  string key = 1;
+  string value = 2;
+  bool found = 3;
+}

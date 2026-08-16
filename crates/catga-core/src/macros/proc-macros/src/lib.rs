@@ -11,11 +11,10 @@
 //! are marked `ignore` with an on-page reason; rejection contracts are covered by `compile_fail`
 //! doctests, which fail during macro expansion before any `catga_core` name is resolved.
 
-mod auto;
-mod catga_main;
 mod derive_command;
 mod derive_event;
 mod derive_request;
+mod handler;
 mod handlers;
 mod impl_handlers;
 mod message;
@@ -201,52 +200,6 @@ pub fn catga_typed_mediator(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Scans a module for handlers and generates registration code.
-///
-/// # Generated code
-///
-/// Applied to an inline `mod`, the macro re-emits the module and adds
-/// `pub fn __catga_auto_register(Registry) -> CatgaResult<Registry>` inside it. Discovered
-/// registrations:
-///
-/// - `impl Handler<M> for H`, `impl CommandHandler<M> for H`, and `impl EventHandler<M> for H`
-///   blocks register `M` with a unit-struct literal `H {}` — discovered handler types must
-///   therefore be unit structs,
-/// - free `async fn`s register as request handlers for their first (non-`self`) parameter type.
-///
-/// A module with no discoverable handlers is a compile-time error raised during expansion:
-///
-/// ```compile_fail
-/// // The module must contain at least one handler impl or async fn.
-/// use catga_core_macros::catga_auto;
-///
-/// #[catga_auto]
-/// mod handlers {
-///     pub struct NotAHandler;
-/// }
-/// ```
-///
-/// ```ignore
-/// // Ignored: the expansion references `::catga_core::Registry`, and this proc-macro crate
-/// // has no `catga-core` dependency to link a doctest against.
-/// use catga_core::{Registry, catga_auto};
-///
-/// #[catga_auto]
-/// mod handlers {
-///     pub struct PingHandler;
-///     #[async_trait::async_trait]
-///     impl catga_core::Handler<Ping> for PingHandler {
-///         async fn handle(&self, _: Ping) -> catga_core::CatgaResult<()> { Ok(()) }
-///     }
-/// }
-///
-/// let registry = handlers::__catga_auto_register(Registry::new())?;
-/// ```
-#[proc_macro_attribute]
-pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    auto::expand_auto(item.into())
-}
-
 /// Scans an impl block for async methods and generates handler registrations.
 ///
 /// # Automatic Type Detection
@@ -285,7 +238,7 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```ignore
 /// // Ignored: the expansion references `::catga_core` types, and this proc-macro crate
 /// // has no `catga-core` dependency to link a doctest against.
-/// use catga_core::{CatgaResult, auto::AutoApp, catga_request, catga_command, catga_service};
+/// use catga_core::{CatgaResult, Mediator, catga_request, catga_command, catga_service};
 ///
 /// #[catga_request(response = u64)]
 /// struct Double(u64);
@@ -306,8 +259,8 @@ pub fn catga_auto(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// }
 ///
 /// # async fn example() -> CatgaResult<()> {
-/// let app = AutoApp::from_registry(Calculator::registry()?)?;
-/// assert_eq!(app.mediator().send(Double(21)).await?, 42);
+/// let mediator = Mediator::new(Calculator::registry()?);
+/// assert_eq!(mediator.send(Double(21)).await?, 42);
 /// # Ok(())
 /// # }
 /// ```
@@ -330,8 +283,7 @@ pub fn catga_service(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Generated code
 ///
-/// The annotated item is re-emitted unchanged; the macro adds a `<Name>TypeId` unit struct with
-/// a `MessageTypeId` impl (`NAME` is the stringified type name), a marker `Message` impl, and a
+/// The annotated item is re-emitted unchanged; the macro adds a marker `Message` impl and a
 /// `Request` impl with `type Response` taken from the attribute. Every type parameter gains
 /// `Clone + Send + Sync + 'static` bounds so generic messages satisfy `Message` (existing
 /// bounds on a parameter are preserved). The response type accepts any syntactically valid type
@@ -365,10 +317,9 @@ pub fn catga_request(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Generated code
 ///
-/// The derive adds a `<Name>TypeId` unit struct with a `MessageTypeId` impl (`NAME` is the
-/// stringified type name), a marker `Message` impl, and a `Command` impl pointing at that
-/// `TypeId`. Every type parameter gains `Clone + Send + Sync + 'static` bounds so generic
-/// messages satisfy `Message` (existing bounds on a parameter are preserved).
+/// The derive adds a marker `Message` impl and an empty `Command` impl. Every type parameter
+/// gains `Clone + Send + Sync + 'static` bounds so generic messages satisfy `Message`
+/// (existing bounds on a parameter are preserved).
 ///
 /// ```ignore
 /// // Ignored: the expansion implements `::catga_core` traits, and this proc-macro crate
@@ -388,10 +339,9 @@ pub fn derive_command(input: TokenStream) -> TokenStream {
 ///
 /// # Generated code
 ///
-/// The derive adds a `<Name>TypeId` unit struct with a `MessageTypeId` impl (`NAME` is the
-/// stringified type name), a marker `Message` impl, and an `Event` impl pointing at that
-/// `TypeId`. Every type parameter gains `Clone + Send + Sync + 'static` bounds so events can be
-/// fanned out to every registered handler.
+/// The derive adds a marker `Message` impl and an empty `Event` impl. Every type parameter
+/// gains `Clone + Send + Sync + 'static` bounds so events can be fanned out to every
+/// registered handler.
 ///
 /// ```ignore
 /// // Ignored: the expansion implements `::catga_core` traits, and this proc-macro crate
@@ -406,49 +356,13 @@ pub fn derive_event(input: TokenStream) -> TokenStream {
     derive_event::expand_derive_event(input)
 }
 
-/// Zero-boilerplate application entry point with auto-handler discovery.
-///
-/// # Generated code
-///
-/// The annotated `async fn` is renamed to a private `__catga_main_inner`; the macro re-emits the
-/// original signature as a wrapper that first builds an `AutoApp`, keeps the application alive,
-/// and then awaits the user's body. The wrapper `.await`s the inner function, so the annotated
-/// function must be `async`. A failed application build panics with the `#[catga_main]` message
-/// rather than returning an error.
-///
-/// Attribute arguments are compile-time errors raised during expansion: `AutoAppBuilder` has no
-/// transport hook, so transports are bound with explicit application code inside the body:
-///
-/// ```compile_fail
-/// // `#[catga_main]` does not accept a `transport` argument.
-/// use catga_core_macros::catga_main;
-///
-/// #[catga_main(transport = ())]
-/// async fn main() -> catga_core::CatgaResult<()> {
-///     Ok(())
-/// }
-/// ```
-///
-/// ```ignore
-/// // Ignored: the expansion builds an `AutoApp`, and this proc-macro crate has no
-/// // application-runtime dependency to link a doctest against.
-/// #[catga_core::catga_main]
-/// async fn main() -> catga_core::CatgaResult<()> {
-///     Ok(())
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn catga_main(attr: TokenStream, input: TokenStream) -> TokenStream {
-    catga_main::expand_catga_main(attr, input)
-}
-
-/// Marks an impl block as a Catga handler for auto-registration.
+/// Marks an impl block as a Catga handler for explicit registration.
 ///
 /// # Generated code
 ///
 /// The impl block is validated and then re-emitted unchanged; the attribute itself emits no
-/// registration code. Handler discovery for registration is performed by the `#[catga_auto]`
-/// module macro, which scans impl blocks directly.
+/// registration code. Register the handler explicitly with a `Registry` (for example via
+/// `register_request`, `register_command`, or `register_event`).
 ///
 /// The impl block must implement exactly one of `Handler<M>`, `CommandHandler<M>`, or
 /// `EventHandler<M>` with an explicit message type; other traits, non-trait impl blocks, and
@@ -470,7 +384,7 @@ pub fn catga_handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => return e.into_compile_error().into(),
     };
 
-    match auto::expand_handler(impl_item) {
+    match handler::expand_handler(impl_item) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.into_compile_error().into(),
     }

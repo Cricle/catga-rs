@@ -5,9 +5,7 @@
 //! trailing type ascription, which can never compile.
 
 use async_trait::async_trait;
-use catga_core::{
-    CatgaResult, DefaultMessageTypeId, Handler, Mediator, Message, Registry, Request, catga_handler,
-};
+use catga_core::{CatgaResult, Handler, Mediator, Message, Registry, Request, catga_handler};
 
 struct Ping;
 
@@ -15,7 +13,6 @@ impl Message for Ping {}
 
 impl Request for Ping {
     type Response = u64;
-    type TypeId = DefaultMessageTypeId;
 }
 
 struct PingHandler;

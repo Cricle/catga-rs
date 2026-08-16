@@ -15,7 +15,6 @@ impl Message for Ping {}
 
 impl Request for Ping {
     type Response = u64;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 /// Creates a mediator with a simple identity handler

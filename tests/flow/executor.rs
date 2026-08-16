@@ -115,7 +115,7 @@ async fn executor_persists_terminal_results_and_deduplicates_completed_ids() {
         })
         .await
         .unwrap();
-    assert!(first.is_success());
+    assert!(first.is_ok());
 
     let second_count = Arc::clone(&invocations);
     let second = executor
@@ -129,7 +129,7 @@ async fn executor_persists_terminal_results_and_deduplicates_completed_ids() {
         .await
         .unwrap();
 
-    assert!(second.is_success());
+    assert!(second.is_ok());
     assert_eq!(second.completed_steps(), 2);
     assert_eq!(invocations.load(Ordering::Relaxed), 1);
     assert_eq!(
@@ -160,7 +160,7 @@ async fn executor_claims_stale_work_and_persists_action_failure() {
         .await
         .unwrap();
 
-    assert!(!result.is_success());
+    assert!(!result.is_ok());
     let persisted = store.get("flow-8").await.unwrap().unwrap();
     assert_eq!(persisted.status(), FlowStatus::Failed);
     assert_eq!(persisted.error().unwrap().message(), "charge failed");
@@ -206,7 +206,7 @@ async fn executor_completes_after_an_inflight_heartbeat() {
         .await
         .unwrap();
 
-    assert!(result.is_success());
+    assert!(result.is_ok());
     assert_eq!(
         store.get("flow-10").await.unwrap().unwrap().status(),
         FlowStatus::Done
@@ -240,7 +240,7 @@ async fn executor_retries_terminal_persistence_after_a_same_version_heartbeat_ra
         .await
         .unwrap();
 
-    assert!(result.is_success());
+    assert!(result.is_ok());
     assert_eq!(invocations.load(Ordering::Relaxed), 1);
     let persisted = inner
         .get("flow-terminal-heartbeat-race")
@@ -394,7 +394,7 @@ async fn supervised_executor_heartbeats_pending_work_before_persisting_its_resul
         .await
         .expect("supervised flow task must not panic")
         .expect("the heartbeat owner must retain its flow");
-    assert!(result.is_success());
+    assert!(result.is_ok());
     assert_eq!(
         store
             .inner

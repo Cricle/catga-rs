@@ -6,12 +6,7 @@ use catga_core::{
     DelayedEvent, DelayedMessage, DelayedRequest, ErrorCode, Message, Request, catga_event,
 };
 
-mod __catga_types {
-    pub struct DeferredRequestTypeId;
-    impl catga_core::MessageTypeId for DeferredRequestTypeId {
-        const NAME: &'static str = "DeferredRequest";
-    }
-}
+mod __catga_types {}
 
 #[derive(Clone)]
 struct Deferred {
@@ -38,7 +33,6 @@ impl Message for DeferredRequest {}
 
 impl Request for DeferredRequest {
     type Response = ();
-    type TypeId = __catga_types::DeferredRequestTypeId;
 }
 
 impl DelayedMessage for DeferredRequest {}

@@ -1,24 +1,24 @@
 //! Contract tests for the mTLS helpers: development CA issuance, peer-identity
-//! extraction precedence, PEM error mapping, and a full mutual-TLS Raft ingress
-//! round trip.
+//! extraction precedence, PEM error mapping, and a full mutual-TLS round trip
+//! with authenticated peer-identity extraction.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::{Router, middleware, routing::get};
-use catga_axum::{
-    DevCertificateAuthority, MtlsAcceptor, TlsPeerCertificates, mtls_peer_identity_middleware,
-    mtls_reqwest_client, mtls_server_tls_config, peer_identity_from_certificate,
-    raft_message_route, serve_mtls,
+use axum::{
+    Router, extract::Extension, middleware,
+    routing::{get, post},
 };
-use catga_cluster::{RaftMessage, StaticRaftInboundPolicy};
+use catga_axum::{
+    DevCertificateAuthority, MtlsAcceptor, PeerIdentity, TlsPeerCertificates,
+    mtls_peer_identity_middleware, mtls_reqwest_client, mtls_server_tls_config,
+    peer_identity_from_certificate, serve_mtls,
+};
 use catga_core::ErrorCode;
 use http::StatusCode;
-use protobuf::Message as ProtobufMessage;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
-use tokio::sync::mpsc;
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -237,7 +237,7 @@ fn tls_config_builders_map_missing_and_malformed_pem_files() {
 }
 
 #[tokio::test]
-async fn mtls_round_trip_delivers_frames_only_to_authenticated_peers() {
+async fn mtls_round_trip_extracts_the_authenticated_peer_identity() {
     let dir = TempPemDir::new();
     let ca = DevCertificateAuthority::generate().expect("CA must generate");
     let server_identity = ca
@@ -253,11 +253,17 @@ async fn mtls_round_trip_delivers_frames_only_to_authenticated_peers() {
     let client_key = dir.write("client-key.pem", client_identity.private_key_pem());
     let ca_path = dir.write("ca.pem", ca.cert_pem());
 
-    let (inbox, mut receiver) = mpsc::channel(4);
-    let policy =
-        StaticRaftInboundPolicy::new(1, [(2, "spiffe://cluster/node-2")]).expect("valid policy");
-    let app =
-        raft_message_route(inbox, policy).layer(middleware::from_fn(mtls_peer_identity_middleware));
+    let app = Router::new()
+        .route(
+            "/identity",
+            post(|identity: Option<Extension<PeerIdentity>>| async move {
+                match identity {
+                    Some(Extension(identity)) => (StatusCode::OK, identity.as_str().to_string()),
+                    None => (StatusCode::UNAUTHORIZED, String::new()),
+                }
+            }),
+        )
+        .layer(middleware::from_fn(mtls_peer_identity_middleware));
 
     let acceptor =
         MtlsAcceptor::from_pem_files(&server_cert, &server_key, &ca_path).expect("acceptor builds");
@@ -266,24 +272,11 @@ async fn mtls_round_trip_delivers_frames_only_to_authenticated_peers() {
     let server = tokio::spawn(serve_mtls(listener, acceptor, app));
 
     let client = mtls_reqwest_client(&client_cert, &client_key, &ca_path).expect("client builds");
-    let url = format!("https://127.0.0.1:{port}/api/catga/raft");
-    let frame = RaftMessage {
-        from: 2,
-        to: 1,
-        ..Default::default()
-    }
-    .write_to_bytes()
-    .expect("frame serializes");
+    let url = format!("https://127.0.0.1:{port}/identity");
 
     let mut response = None;
     for attempt in 0..50 {
-        match client
-            .post(&url)
-            .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
-            .body(frame.clone())
-            .send()
-            .await
-        {
+        match client.post(&url).send().await {
             Ok(ok) => {
                 response = Some(ok);
                 break;
@@ -295,18 +288,16 @@ async fn mtls_round_trip_delivers_frames_only_to_authenticated_peers() {
         }
     }
     let response = response.expect("response received");
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    let delivered = receiver.recv().await.expect("frame must arrive");
-    assert_eq!((delivered.from, delivered.to), (2, 1));
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.text().await.expect("identity body"),
+        "spiffe://cluster/node-2",
+        "the verified certificate identity must reach the handler"
+    );
 
     // A client without a certificate never completes the handshake.
     let anonymous = reqwest::Client::new();
-    let result = anonymous
-        .post(&url)
-        .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
-        .body(frame)
-        .send()
-        .await;
+    let result = anonymous.post(&url).send().await;
     assert!(result.is_err(), "anonymous clients fail the handshake");
 
     server.abort();

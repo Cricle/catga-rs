@@ -1,34 +1,26 @@
 #!/usr/bin/env bash
-# distributed-kv kind soak test for one consensus backend.
+# distributed-kv kind soak test (raft).
 #
-#   examples/distributed-kv/scripts/kind-soak.sh <raft|sorock> [duration_s=300] [interval_s=0.2]
+#   examples/distributed-kv/scripts/kind-soak.sh [duration_s=300] [interval_s=0.2]
 #
 # Continuously writes (1 per interval) through the headless Service with client
-# retries, deletes one pod mid-soak (raft: the current leader; sorock: the
-# bootstrap pod 0 — leadership is not observable), then asserts that zero
+# retries, deletes the current leader mid-soak, then asserts that zero
 # acknowledged writes were lost: every acked key is read back from a surviving
 # pod, and a 1/15 sample from the other two (including the restarted one).
 # applied_index from /status is recorded before and after.
 #
-# Result line: target/kind-battery/results-<backend>.txt, scenario `soak`.
+# Result line: target/kind-battery/results-raft.txt, scenario `soak`.
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "${repo_root}"
 
-case "${1:-}" in
-  raft)
-    BACKEND_KEY=raft;     NAME=kv;        APP=distributed-kv
-    SVC=kv-headless;      YAML=examples/distributed-kv/k8s/kv.yaml
-    POD_PF_BASE=19101;    SVC_PF_PORT=19100 ;;
-  sorock)
-    BACKEND_KEY=sorock;   NAME=kv-sorock; APP=distributed-kv-sorock
-    SVC=kv-sorock-headless; YAML=examples/distributed-kv/k8s/kv-sorock.yaml
-    POD_PF_BASE=19111;    SVC_PF_PORT=19110 ;;
-  *) echo "usage: $0 <raft|sorock> [duration_s] [interval_s]" >&2; exit 2 ;;
-esac
-DURATION="${2:-300}"
-INTERVAL="${3:-0.2}"
+DURATION="${1:-300}"
+INTERVAL="${2:-0.2}"
+
+BACKEND_KEY=raft; NAME=kv; APP=distributed-kv
+SVC=kv-headless; YAML=examples/distributed-kv/k8s/kv.yaml
+POD_PF_BASE=19101; SVC_PF_PORT=19100
 
 LOG_DIR=target/kind-battery
 LOG_FILE="${LOG_DIR}/soak-${BACKEND_KEY}.log"
@@ -82,9 +74,7 @@ while [ "${SECONDS}" -lt "${end}" ]; do
     log "write ${key} never acknowledged (counted, not verified)"
   fi
   if [ "${killed}" = 0 ] && [ $((SECONDS - start)) -ge "${mid}" ]; then
-    if [ "${BACKEND_KEY}" = raft ]; then
-      victim="$(leader_ord || true)"
-    fi
+    victim="$(leader_ord || true)"
     victim="${victim:-0}"
     log "mid-soak: deleting ${NAME}-${victim}"
     victim_uid="$(pod_uid "${victim}")"

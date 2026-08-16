@@ -20,7 +20,6 @@ impl Message for GetOrder {}
 
 impl Request for GetOrder {
     type Response = OrderPlaced;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 /// Query to get only the order status.
@@ -34,7 +33,6 @@ impl Message for GetOrderStatus {}
 
 impl Request for GetOrderStatus {
     type Response = OrderStatus;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 // ============================================================================
@@ -54,7 +52,6 @@ impl Message for PlaceOrder {}
 
 impl Request for PlaceOrder {
     type Response = OrderPlaced;
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 /// Command to confirm payment for an order.
@@ -68,9 +65,7 @@ pub struct ConfirmPayment {
 
 impl Message for ConfirmPayment {}
 
-impl Command for ConfirmPayment {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Command for ConfirmPayment {}
 
 /// Command to cancel a pending order.
 #[derive(Clone)]
@@ -81,9 +76,7 @@ pub struct CancelOrder {
 
 impl Message for CancelOrder {}
 
-impl Command for CancelOrder {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Command for CancelOrder {}
 
 // ============================================================================
 // Events — immutable facts that happened
@@ -104,9 +97,7 @@ pub struct OrderPlaced {
 
 impl Message for OrderPlaced {}
 
-impl Event for OrderPlaced {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Event for OrderPlaced {}
 
 /// Event emitted when payment is confirmed.
 #[derive(Clone, Serialize, Deserialize)]
@@ -119,9 +110,7 @@ pub struct PaymentConfirmed {
 
 impl Message for PaymentConfirmed {}
 
-impl Event for PaymentConfirmed {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Event for PaymentConfirmed {}
 
 /// Event emitted when an order is cancelled.
 #[derive(Clone, Serialize, Deserialize)]
@@ -134,9 +123,7 @@ pub struct OrderCancelled {
 
 impl Message for OrderCancelled {}
 
-impl Event for OrderCancelled {
-    type TypeId = catga_core::DefaultMessageTypeId;
-}
+impl Event for OrderCancelled {}
 
 // ============================================================================
 // Domain models

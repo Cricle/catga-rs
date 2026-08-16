@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package catga.raft;
+
+// Transport service for raft wire messages between cluster peers.
+//
+// The payload of each message is a `raft::prelude::Message` serialized with
+// the `protobuf` crate (protobuf 2.28 wire format), kept opaque here so the
+// proto stays decoupled from raft's own proto definitions.
+service Raft {
+  // Deliver one raft message to this node.
+  rpc Step(RaftMessage) returns (StepReply);
+
+  // Deliver a batch of raft messages to this node.
+  rpc StepBatch(RaftMessageBatch) returns (StepReply);
+}
+
+message RaftMessage {
+  // raft::prelude::Message encoded via protobuf::Message::write_to_bytes.
+  bytes payload = 1;
+}
+
+message RaftMessageBatch {
+  repeated bytes payloads = 1;
+}
+
+message StepReply {
+  // Reserved for future nack semantics; empty on success.
+}

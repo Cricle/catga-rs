@@ -3,10 +3,19 @@
 use std::time::Duration;
 
 use async_nats::jetstream::{self, kv, stream};
-use catga_core::{CatgaError, ErrorCode};
+use catga_core::{
+    CatgaError, CatgaResult, ErrorCode, ResilienceExecutor, ResilienceOptions, RetryJitter,
+};
+use tokio_util::sync::CancellationToken;
 
 /// Maximum read/compare/write attempts for a contested KV entry.
 pub(crate) const MAX_CAS_RETRIES: usize = 8;
+
+/// Additional visibility probes after a freshly provisioned bucket was not yet readable.
+const BUCKET_PROBE_RETRIES: u32 = 20;
+
+/// Fixed pause between bucket visibility probes.
+const BUCKET_PROBE_DELAY: Duration = Duration::from_millis(10);
 
 /// Reports exhaustion of a bounded KV revision compare-and-set retry loop.
 pub(crate) fn cas_error(component: &str, operation: &str) -> CatgaError {
@@ -17,10 +26,16 @@ pub(crate) fn cas_error(component: &str, operation: &str) -> CatgaError {
 }
 
 /// Opens a bucket or provisions the documented KV stream shape.
+///
+/// A freshly provisioned bucket can lag behind the stream creation that backs it, so the store
+/// lookup is driven through the core bounded-retry policy: one initial probe plus
+/// `BUCKET_PROBE_RETRIES` retries with a fixed `BUCKET_PROBE_DELAY` pause, matching the
+/// historical 20x10ms polling cadence. Every caller normalizes the failure to
+/// [`ErrorCode::Transient`] through its own mapping.
 pub(crate) async fn open_or_create(
     context: &jetstream::Context,
     bucket: &str,
-) -> Result<kv::Store, String> {
+) -> CatgaResult<kv::Store> {
     if let Ok(store) = context.get_key_value(bucket).await {
         return Ok(store);
     }
@@ -41,14 +56,22 @@ pub(crate) async fn open_or_create(
         })
         .await;
 
-    for _ in 0..20 {
-        if let Ok(store) = context.get_key_value(bucket).await {
-            return Ok(store);
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    context
-        .get_key_value(bucket)
+    let executor = ResilienceExecutor::with_jitter(
+        ResilienceOptions {
+            max_retries: BUCKET_PROBE_RETRIES,
+            retry_delay: BUCKET_PROBE_DELAY,
+            // Far above any broker round trip; bounds a wedged attempt instead of the policy.
+            timeout: Duration::from_secs(30),
+            ..ResilienceOptions::default()
+        },
+        RetryJitter::fixed(BUCKET_PROBE_DELAY),
+    )?;
+    executor
+        .execute(CancellationToken::new(), |_| async {
+            context
+                .get_key_value(bucket)
+                .await
+                .map_err(CatgaError::transient)
+        })
         .await
-        .map_err(|error| error.to_string())
 }

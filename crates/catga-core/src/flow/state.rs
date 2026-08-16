@@ -4,12 +4,10 @@ use crate::codec::memorypack::{
     MemoryPackDecodeLimits, MemoryPackDeserialize, MemoryPackError, MemoryPackReader,
     MemoryPackSerialize, MemoryPackWriter, MemoryPackable,
 };
-use crate::{CatgaError, CatgaResult, ErrorCode};
+use crate::{CatgaError, CatgaResult, ErrorCode, error::CatgaErrorWire};
 use serde::{Deserialize, Serialize};
 
-use super::memorypack::{
-    ErrorWire, TimeWire, decode_error, decode_time, encode_error, encode_time,
-};
+use super::memorypack::{TimeWire, decode_time, encode_time};
 use super::serde_helpers::{deserialize_arc_slice, serialize_arc_slice};
 
 /// Maximum accepted durable flow input payload size in bytes.
@@ -84,7 +82,7 @@ struct FlowStateWire {
     owner: Option<String>,
     heartbeat: TimeWire,
     data: Vec<u8>,
-    error: Option<ErrorWire>,
+    error: Option<CatgaErrorWire>,
 }
 
 impl MemoryPackSerialize for FlowState {
@@ -100,7 +98,7 @@ impl MemoryPackSerialize for FlowState {
             owner: self.owner.as_deref().map(str::to_owned),
             heartbeat: encode_time(self.heartbeat),
             data: self.data.to_vec(),
-            error: self.error.as_ref().map(encode_error),
+            error: self.error.as_ref().map(CatgaErrorWire::from),
         }
         .serialize(writer)
     }
@@ -118,7 +116,7 @@ impl MemoryPackDeserialize for FlowState {
             owner: wire.owner.map(String::into_boxed_str),
             heartbeat: decode_time(wire.heartbeat)?,
             data: Arc::from(wire.data),
-            error: wire.error.map(decode_error).transpose()?,
+            error: wire.error.map(CatgaError::try_from).transpose()?,
         };
         state.validate().map_err(|error| {
             MemoryPackError::DeserializationError(format!(

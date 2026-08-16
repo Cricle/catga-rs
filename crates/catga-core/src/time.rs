@@ -7,7 +7,7 @@
 //! report an error.
 
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Returns the current Unix epoch time in milliseconds.
 ///
@@ -84,6 +84,21 @@ pub fn checked_unix_millis(time: SystemTime) -> Result<u64, UnixMillisError> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| UnixMillisError::BeforeEpoch)?;
     u64::try_from(elapsed.as_millis()).map_err(|_| UnixMillisError::ExceedsRange)
+}
+
+/// Converts a system time to unsigned Unix epoch milliseconds, saturating at the bounds.
+///
+/// A clock preceding the epoch yields `0`; millisecond counts beyond the `u64` range saturate
+/// at [`u64::MAX`]. Snapshot stores persist the result alongside version headers where a
+/// lossy-but-total conversion keeps the write path infallible.
+#[must_use]
+pub fn saturating_unix_millis(time: SystemTime) -> u64 {
+    u64::try_from(
+        time.duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
 }
 
 /// Converts a system time to signed Unix epoch milliseconds for database

@@ -9,20 +9,22 @@ publish = false
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+bincode = { workspace = true }
 catga-axum = { workspace = true }
-catga-cluster = { workspace = true }
 catga-core = { workspace = true }
-# The only backend-specific dependency beyond the raft path: the sorock
-# multi-Raft consensus backend (gRPC transport). Application code still talks
-# to it exclusively through the catga-core consensus traits.
-catga-sorock = { path = "../../crates/catga-sorock" }
+catga-raft = { workspace = true }
 protobuf = "2.28"
+prost = "0.13"
+redb = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = "0.7"
-tracing = "0.1"
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { workspace = true }
+tonic = "0.12"
+tracing = { workspace = true }
 tracing-subscriber = "0.3"
+
+[build-dependencies]
+tonic-build = "0.12"

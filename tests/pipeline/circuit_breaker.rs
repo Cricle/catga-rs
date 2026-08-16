@@ -22,7 +22,6 @@ impl catga_core::Message for RemoteCall {}
 
 impl Request for RemoteCall {
     type Response = ();
-    type TypeId = catga_core::DefaultMessageTypeId;
 }
 
 struct IntermittentHandler {

@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [Unreleased]
+
+### Breaking Changes
+
+- **删除 catga-cluster**: Raft 实现统一到 catga-sorock。
+  移除了基于 raft-rs + HTTP 的 catga-cluster crate，
+  所有 Raft 功能现在由 sorock 提供。
+  - 移除: `catga-cluster` crate
+  - 移除: `HttpRaftTransport`, `RaftHttpCluster`
+  - 移除: `SingletonTaskRunner` (依赖 Leader 观测)
+  - 影响: Leader 不可直接观测，请参考 sorock 文档
+
 ## [0.2.0] - 2026-08-11
 
 本版本用真实三节点分布式集群应用（`examples/distributed-kv`）对框架做了实战验证，修复了两个数据路径级缺陷，并补齐运行时健康面、传输认证、动态成员与 mTLS。

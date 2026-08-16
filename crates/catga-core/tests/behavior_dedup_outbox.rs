@@ -16,19 +16,12 @@ mod behavior_support;
 
 use behavior_support::{Req, req_mediator};
 
-struct CmdTypeId;
-impl catga_core::MessageTypeId for CmdTypeId {
-    const NAME: &'static str = "BehaviorCmd";
-}
-
 /// Cloneable command used by command-behavior contracts.
 #[derive(Clone)]
 struct Cmd(pub u64);
 
 impl catga_core::Message for Cmd {}
-impl catga_core::Command for Cmd {
-    type TypeId = CmdTypeId;
-}
+impl catga_core::Command for Cmd {}
 impl catga_core::DeadLetterEnvelope for Cmd {
     fn dead_letter_envelope(&self) -> catga_core::Envelope {
         behavior_support::env(self.0)

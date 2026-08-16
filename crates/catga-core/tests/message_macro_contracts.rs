@@ -2,16 +2,14 @@
 //! `catga_event`, and the `catga_handlers!` registry builder.
 
 use std::any::TypeId;
-use std::collections::HashSet;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
 use catga_core::{
-    CatgaResult, Command, ErrorCode, Event, Mediator, Message, MessageTypeId, Registry, Request,
-    catga_command, catga_event, catga_handlers, catga_request, command_handler, event_handler,
-    request_handler,
+    CatgaResult, ErrorCode, Mediator, Message, Registry, catga_command, catga_event,
+    catga_handlers, catga_request, command_handler, event_handler, request_handler,
 };
 
 #[catga_request(response = u64)]
@@ -37,34 +35,11 @@ mod beta {
 }
 
 #[test]
-fn macros_generate_stable_names_and_unique_rust_type_ids() {
-    assert_eq!(<Double as Request>::TypeId::NAME, "Double");
-    assert_eq!(<EchoText as Request>::TypeId::NAME, "EchoText");
-    assert_eq!(<Reset as Command>::TypeId::NAME, "Reset");
-    assert_eq!(<ResetApplied as Event>::TypeId::NAME, "ResetApplied");
-
-    let ids = [
-        TypeId::of::<<Double as Request>::TypeId>(),
-        TypeId::of::<<EchoText as Request>::TypeId>(),
-        TypeId::of::<<Reset as Command>::TypeId>(),
-        TypeId::of::<<ResetApplied as Event>::TypeId>(),
-    ];
-    let unique: HashSet<_> = ids.iter().collect();
-    assert_eq!(
-        unique.len(),
-        ids.len(),
-        "every macro-generated type id is a distinct Rust type"
-    );
-}
-
-#[test]
 fn same_named_types_in_different_modules_get_independent_type_ids() {
-    assert_eq!(<alpha::Ping as Request>::TypeId::NAME, "Ping");
-    assert_eq!(<beta::Ping as Request>::TypeId::NAME, "Ping");
     assert_ne!(
-        TypeId::of::<<alpha::Ping as Request>::TypeId>(),
-        TypeId::of::<<beta::Ping as Request>::TypeId>(),
-        "dispatch keys on Rust type identity, so equal stable names cannot collide"
+        TypeId::of::<alpha::Ping>(),
+        TypeId::of::<beta::Ping>(),
+        "dispatch keys on Rust type identity, so equal names cannot collide"
     );
 }
 
