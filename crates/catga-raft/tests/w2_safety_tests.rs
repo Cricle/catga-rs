@@ -36,10 +36,12 @@ const MAX_PENDING_READS: usize = 4096;
 /// rejected) reads cannot expire into the counters meanwhile.
 const CAP_OBSERVATION_WINDOW: Duration = Duration::from_secs(6);
 
+type AppliedLog = Vec<(u64, Vec<u8>)>;
+
 /// State machine that records every applied entry.
 #[derive(Clone)]
 struct RecordingMachine {
-    applied: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    applied: Arc<Mutex<AppliedLog>>,
 }
 
 impl RecordingMachine {

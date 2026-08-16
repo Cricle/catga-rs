@@ -36,10 +36,12 @@ const MARGIN: u64 = 100;
 /// Fast compaction cadence so the tests do not have to wait a minute.
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
+type AppliedLog = Vec<(u64, Vec<u8>)>;
+
 /// State machine that records every applied entry.
 #[derive(Clone)]
 struct RecordingMachine {
-    applied: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    applied: Arc<Mutex<AppliedLog>>,
 }
 
 impl RecordingMachine {

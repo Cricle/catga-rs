@@ -25,10 +25,12 @@ use catga_core::{CatgaResult, ConsensusRuntime, ConsensusStateMachine, ErrorCode
 use catga_raft::{CatgaRaftRuntime, CatgaRaftRuntimeBuilder};
 use parking_lot::Mutex;
 
+type AppliedLog = Vec<(u64, Vec<u8>)>;
+
 /// State machine that records every applied entry.
 #[derive(Clone)]
 struct RecordingMachine {
-    applied: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    applied: Arc<Mutex<AppliedLog>>,
 }
 
 impl RecordingMachine {

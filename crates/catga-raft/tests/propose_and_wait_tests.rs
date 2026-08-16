@@ -8,9 +8,11 @@ use catga_core::{CatgaResult, ConsensusRuntime, ConsensusStateMachine};
 use catga_raft::CatgaRaftRuntimeBuilder;
 use parking_lot::Mutex;
 
+type AppliedLog = Vec<(u64, Vec<u8>)>;
+
 #[derive(Clone)]
 struct RecordingMachine {
-    applied: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    applied: Arc<Mutex<AppliedLog>>,
 }
 
 impl RecordingMachine {
