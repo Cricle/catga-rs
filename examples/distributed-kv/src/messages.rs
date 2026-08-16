@@ -191,9 +191,8 @@ impl KvService {
             .op_counter
             .fetch_add(items.len() as u64, Ordering::Relaxed);
         let count = items.len();
-        let mut proposed = 0usize;
-        for (offset, (key, value)) in items.iter().enumerate() {
-            let op_id = (self.node_id << 56) | (base_counter + offset as u64);
+        for (proposed, (key, value)) in items.iter().enumerate() {
+            let op_id = (self.node_id << 56) | (base_counter + proposed as u64);
             let command = KvCommand::Put {
                 op_id,
                 key: key.clone(),
@@ -206,7 +205,6 @@ impl KvService {
                     format!("consensus proposal rejected after {proposed}/{count} items: {error}"),
                 ));
             }
-            proposed += 1;
         }
         // Wait only for the LAST op id: proposals enter the log in order and
         // the state machine applies entries monotonically by raft index, so

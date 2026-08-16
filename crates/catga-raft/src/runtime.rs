@@ -102,7 +102,7 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
 
     /// Creates a runtime, optionally wired to an owner loop that answers
     /// ReadIndex and membership-change requests.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(private_interfaces, clippy::too_many_arguments)]
     pub fn with_read_channel(
         pipeline: PipelineManager,
         apply: ApplyThread<S>,

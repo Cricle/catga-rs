@@ -70,7 +70,7 @@ pub trait RaftCodec: Send + Sync {
 pub struct ProstCodec;
 
 impl RaftCodec for ProstCodec {
-    fn encode<T: serde::Serialize>(&self, value: &T) -> CatgaRaftResult<Vec<u8>> {
+    fn encode<T: serde::Serialize>(&self, _value: &T) -> CatgaRaftResult<Vec<u8>> {
         // For prost, we would use the generated protobuf types
         // This is a placeholder that requires proto generation
         Err(CatgaRaftError::Codec(

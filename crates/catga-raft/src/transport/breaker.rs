@@ -59,7 +59,7 @@ impl CircuitBreakerState {
     }
 
     /// Convert to raw u8 value.
-    fn to_u8(&self) -> u8 {
+    fn as_u8(&self) -> u8 {
         match self {
             CircuitBreakerState::Closed => STATE_CLOSED,
             CircuitBreakerState::Open => STATE_OPEN,
@@ -248,7 +248,7 @@ impl CircuitBreaker {
     /// This is useful for testing or administrative actions.
     pub fn transition_to(&self, new_state: CircuitBreakerState) {
         let old_state = self.state.load(Ordering::Acquire);
-        self.state.store(new_state.to_u8(), Ordering::Release);
+        self.state.store(new_state.as_u8(), Ordering::Release);
 
         // Use a simple counter for state change time (since Instant isn't wall clock time)
         let now = std::time::SystemTime::now()

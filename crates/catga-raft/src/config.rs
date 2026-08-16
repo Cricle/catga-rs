@@ -48,9 +48,9 @@ impl CatgaRaftConfig {
     /// runtime calls it automatically.
     pub fn for_cluster_size(n: u64) -> Self {
         let election_tick = match n {
-            ..=5 => 10,
-            ..=20 => 20,
-            ..=100 => 30,
+            1..=5 => 10,
+            6..=20 => 20,
+            21..=100 => 30,
             _ => 40,
         };
         Self {

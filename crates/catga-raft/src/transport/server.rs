@@ -74,6 +74,7 @@ where
 }
 
 /// Decode one opaque payload into a raft message.
+#[allow(clippy::result_large_err)]
 fn decode_payload(payload: &[u8]) -> Result<raft::prelude::Message, Status> {
     <raft::prelude::Message as protobuf::Message>::parse_from_bytes(payload)
         .map_err(|e| Status::invalid_argument(format!("invalid raft message payload: {}", e)))

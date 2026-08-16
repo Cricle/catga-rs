@@ -691,6 +691,7 @@ fn drain_and_propose(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_ready<S>(
     raw_node: &Arc<Mutex<RawNode<CatgaStorage>>>,
     storage: &CatgaStorage,
@@ -873,6 +874,7 @@ fn group_by_to(messages: Vec<Message>) -> HashMap<u64, Vec<Bytes>> {
 /// applies them strictly in order off the raft loop; conf-change entries
 /// reconfigure the raft group itself (see [`apply_conf_entry`]) and stay on
 /// the loop.
+#[allow(clippy::too_many_arguments)]
 async fn apply_committed<S>(
     raw_node: &Arc<Mutex<RawNode<CatgaStorage>>>,
     storage: &CatgaStorage,
@@ -946,6 +948,7 @@ enum DecodedConf {
 ///
 /// Every node runs this path — leaders and followers alike — so all members
 /// wire the same transport endpoint purely from the replicated entry.
+#[allow(clippy::too_many_arguments)]
 async fn apply_conf_entry<S>(
     raw_node: &Arc<Mutex<RawNode<CatgaStorage>>>,
     storage: &CatgaStorage,
@@ -1050,8 +1053,8 @@ async fn apply_conf_entry<S>(
                         "conf entry carries no endpoint; transport peer not added"
                     );
                 } else {
-                    if target_id != transport.local_node_id() {
-                        if let Err(e) = transport.add_peer(target_id, endpoint.clone()).await {
+                    if target_id != transport.local_node_id()
+                        && let Err(e) = transport.add_peer(target_id, endpoint.clone()).await {
                             warn!(
                                 target: "catga_raft::owner",
                                 index,
@@ -1060,13 +1063,12 @@ async fn apply_conf_entry<S>(
                                 "transport add_peer failed"
                             );
                         }
-                    }
                     peers.insert(target_id, endpoint);
                 }
             }
             ConfChangeType::RemoveNode => {
-                if transport.has_peer(target_id) {
-                    if let Err(e) = transport.remove_peer(target_id) {
+                if transport.has_peer(target_id)
+                    && let Err(e) = transport.remove_peer(target_id) {
                         warn!(
                             target: "catga_raft::owner",
                             index,
@@ -1075,7 +1077,6 @@ async fn apply_conf_entry<S>(
                             "transport remove_peer failed"
                         );
                     }
-                }
                 peers.remove(&target_id);
             }
         }

@@ -20,7 +20,7 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-use crate::{CatgaRaftError, CatgaRaftResult};
+use crate::CatgaRaftResult;
 
 /// Default batch size threshold.
 pub const DEFAULT_BATCH_SIZE: usize = 64;
@@ -82,6 +82,7 @@ impl MessageBatch {
 ///
 /// Aggregates outgoing messages and flushes them in batches
 /// to reduce network overhead and improve throughput.
+#[allow(dead_code)]
 pub struct BatchSender {
     /// Pending messages grouped by peer.
     pending: Arc<Mutex<HashMap<u64, Vec<Bytes>>>>,
@@ -141,7 +142,7 @@ impl BatchSender {
         // Add message to pending batch
         {
             let mut pending = self.pending.lock();
-            let batch = pending.entry(peer_id).or_insert_with(Vec::new);
+            let batch = pending.entry(peer_id).or_default();
             batch.push(msg);
         }
 
@@ -168,8 +169,8 @@ impl BatchSender {
             pending.remove(&peer_id)
         };
 
-        if let Some(messages) = batch {
-            if !messages.is_empty() {
+        if let Some(messages) = batch
+            && !messages.is_empty() {
                 tracing::trace!(
                     peer_id,
                     batch_size = messages.len(),
@@ -179,7 +180,6 @@ impl BatchSender {
                 // In a real implementation, this would send to the actual transport
                 // For now, we just drop the batch (fire-and-forget)
             }
-        }
 
         *self.last_flush.lock() = Instant::now();
         Ok(())

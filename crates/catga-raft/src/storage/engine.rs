@@ -254,8 +254,10 @@ impl EngineStorage {
             CatgaRaftError::Storage(format!("create data dir {}: {e}", dir.display()))
         })?;
 
-        let mut config = RaftEngineConfig::default();
-        config.dir = dir.join("engine").to_string_lossy().into_owned();
+        let config = RaftEngineConfig {
+            dir: dir.join("engine").to_string_lossy().into_owned(),
+            ..Default::default()
+        };
         let engine = Engine::open(config).map_err(|e| {
             CatgaRaftError::Storage(format!("open raft-engine at {}: {e}", dir.display()))
         })?;
@@ -273,11 +275,10 @@ impl EngineStorage {
         };
 
         let fresh = core.conf_state == ConfState::default();
-        if fresh {
-            if let Some(conf_state) = bootstrap_conf_state {
+        if fresh
+            && let Some(conf_state) = bootstrap_conf_state {
                 core.conf_state = conf_state;
             }
-        }
 
         let storage = Self {
             engine: Arc::new(engine),
@@ -801,8 +802,8 @@ impl Storage for EngineStorage {
                 return Ok(entries);
             }
         }
-        if let Some(offset) = overlay_offset {
-            if high > offset {
+        if let Some(offset) = overlay_offset
+            && high > offset {
                 let start = std::cmp::max(low, offset);
                 let lo = (start - offset) as usize;
                 let hi = (high - offset) as usize;
@@ -810,7 +811,6 @@ impl Storage for EngineStorage {
                     entries.extend_from_slice(slice);
                 }
             }
-        }
         drop(overlay);
         raft::util::limit_size(&mut entries, max_size);
         Ok(entries)

@@ -44,6 +44,7 @@ const DEFAULT_FLUSH_INTERVAL_MS: u64 = 1;
 /// Combines connection pooling, backpressure control, circuit breaker,
 /// and batch sending for robust message delivery.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct PeerClient {
     peer_id: u64,
     pool: ConnectionPool,
@@ -74,6 +75,7 @@ impl PeerClient {
     }
 
     /// Create a new PeerClient with custom configuration.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_config(
         peer_id: u64,
         endpoint: String,

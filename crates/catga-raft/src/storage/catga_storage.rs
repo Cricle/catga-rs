@@ -203,7 +203,7 @@ impl CatgaStorage {
                 match storage.wl().apply_snapshot(snapshot) {
                     Ok(()) => Ok(()),
                     Err(RaftError::Store(StorageError::SnapshotOutOfDate))
-                        if raft::Storage::first_index(storage).map_or(false, |f| f > index) =>
+                        if raft::Storage::first_index(storage).is_ok_and(|f| f > index) =>
                     {
                         // The boundary already sits past this snapshot.
                         Ok(())
