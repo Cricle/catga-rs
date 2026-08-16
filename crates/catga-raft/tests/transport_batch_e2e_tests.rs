@@ -25,13 +25,14 @@ fn message(
     term: u64,
     index: u64,
 ) -> raft::prelude::Message {
-    let mut msg = raft::prelude::Message::default();
-    msg.msg_type = msg_type;
-    msg.from = from;
-    msg.to = to;
-    msg.term = term;
-    msg.index = index;
-    msg
+    raft::prelude::Message {
+        msg_type,
+        from,
+        to,
+        term,
+        index,
+        ..Default::default()
+    }
 }
 
 /// Serialize a raft message with the same codec the wire contract mandates.
@@ -75,7 +76,7 @@ async fn send_grouped_delivers_all_messages_of_a_peer_in_order() {
     let transport = GrpcTransport::new(1);
     transport.add_peer(2, addr.to_string()).await.unwrap();
 
-    let sent = vec![
+    let sent = [
         message(MessageType::MsgAppend, 1, 2, 1, 5),
         message(MessageType::MsgAppend, 1, 2, 1, 8),
         message(MessageType::MsgHeartbeat, 1, 2, 2, 0),
@@ -104,11 +105,11 @@ async fn send_grouped_fans_out_to_multiple_peers() {
     transport.add_peer(2, addr_a.to_string()).await.unwrap();
     transport.add_peer(3, addr_b.to_string()).await.unwrap();
 
-    let to_a = vec![
+    let to_a = [
         message(MessageType::MsgAppend, 1, 2, 1, 5),
         message(MessageType::MsgHeartbeat, 1, 2, 1, 0),
     ];
-    let to_b = vec![message(MessageType::MsgRequestVote, 1, 3, 2, 9)];
+    let to_b = [message(MessageType::MsgRequestVote, 1, 3, 2, 9)];
     let mut grouped = HashMap::new();
     grouped.insert(2, to_a.iter().map(encode).collect::<Vec<_>>());
     grouped.insert(3, to_b.iter().map(encode).collect::<Vec<_>>());

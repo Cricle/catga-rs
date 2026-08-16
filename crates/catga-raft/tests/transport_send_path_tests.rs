@@ -30,13 +30,14 @@ fn message(
     term: u64,
     index: u64,
 ) -> raft::prelude::Message {
-    let mut msg = raft::prelude::Message::default();
-    msg.msg_type = msg_type;
-    msg.from = from;
-    msg.to = to;
-    msg.term = term;
-    msg.index = index;
-    msg
+    raft::prelude::Message {
+        msg_type,
+        from,
+        to,
+        term,
+        index,
+        ..Default::default()
+    }
 }
 
 /// Serialize a raft message with the same codec the wire contract mandates.
@@ -82,7 +83,7 @@ async fn send_grouped_partial_failure_still_delivers_successes() {
     let transport = GrpcTransport::new(1);
     transport.add_peer(2, addr.to_string()).await.unwrap();
 
-    let sent = vec![
+    let sent = [
         message(MessageType::MsgAppend, 1, 2, 1, 5),
         message(MessageType::MsgHeartbeat, 1, 2, 2, 0),
     ];
@@ -166,7 +167,7 @@ async fn send_grouped_self_skip_counts_as_success_in_mixed_group() {
     transport.add_peer(0, addr.to_string()).await.unwrap();
     transport.add_peer(2, addr.to_string()).await.unwrap();
 
-    let to_two = vec![message(MessageType::MsgAppend, 1, 2, 1, 5)];
+    let to_two = [message(MessageType::MsgAppend, 1, 2, 1, 5)];
     let mut grouped = HashMap::new();
     grouped.insert(
         0,
@@ -201,14 +202,8 @@ async fn start_dummy_listener() -> (tokio::task::JoinHandle<()>, String) {
         .await
         .expect("bind listener");
     let addr = listener.local_addr().expect("local addr");
-    let handle = tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((_socket, _peer)) => {}
-                Err(_) => break,
-            }
-        }
-    });
+    let handle =
+        tokio::spawn(async move { while let Ok((_socket, _peer)) = listener.accept().await {} });
     (handle, format!("http://{}", addr))
 }
 

@@ -392,7 +392,7 @@ fn discover_leader_index(
         else {
             continue;
         };
-        if port >= base_port && (port - base_port) % 100 == 0 {
+        if port >= base_port && (port - base_port).is_multiple_of(100) {
             let idx = ((port - base_port) / 100) as usize;
             if idx < runtimes.len() {
                 return Some(idx);

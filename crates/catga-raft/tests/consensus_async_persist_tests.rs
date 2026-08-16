@@ -372,7 +372,7 @@ async fn three_node_persistent_cluster_applies_200_sequential_proposes() {
     let log = read_log(&storage);
     for payload in &expected {
         assert!(
-            log.iter().any(|e| &e.data == payload),
+            log.iter().any(|e| e.data == payload),
             "payload {:?} must be durable after clean shutdown",
             String::from_utf8_lossy(payload)
         );

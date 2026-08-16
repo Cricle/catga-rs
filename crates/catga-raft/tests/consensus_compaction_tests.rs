@@ -329,7 +329,7 @@ async fn single_node_engine_compaction_moves_first_index_and_survives_restart() 
             "compaction boundary must not regress (first={first}, expected >= {expected_first})"
         );
         assert!(
-            last >= applied + 1,
+            last > applied,
             "post-restart entries must be durable (last={last})"
         );
         assert!(first <= last, "first/last must stay ordered");
@@ -351,7 +351,7 @@ async fn single_node_engine_compaction_moves_first_index_and_survives_restart() 
         }
         let hard_state = storage.hard_state();
         assert!(
-            hard_state.commit >= applied + 1,
+            hard_state.commit > applied,
             "commit must advance after run 2 (commit={})",
             hard_state.commit
         );
