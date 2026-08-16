@@ -30,7 +30,7 @@ use catga_raft::{ApplyThread, CatgaRaftError, CatgaRaftRuntimeBuilder};
 use parking_lot::Mutex;
 use raft::prelude::{ConfState, Entry, Snapshot};
 use raft::storage::GetEntriesContext;
-use raft::{Error as RaftError, StorageError, Storage as RaftStorage};
+use raft::{Error as RaftError, Storage as RaftStorage, StorageError};
 use tempfile::tempdir;
 
 /// Tiny margin so compaction (and hence the snapshot path) becomes reachable
@@ -107,7 +107,8 @@ impl ConsensusStateMachine for SnapMachine {
     fn restore(&mut self, data: &[u8]) -> CatgaResult<()> {
         let entries = decode_entries(data)?;
         *self.applied.lock() = entries;
-        self.restores.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.restores
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 }
@@ -170,7 +171,9 @@ async fn engine_provider_snapshot_compacts_and_survives_reopen() {
 
         // Log entries 1..=N+5 so the snapshot index N is covered by a real
         // entry (term lookup) and a live tail remains above it.
-        let entries: Vec<Entry> = (1..=N + 5).map(|i| new_entry(i, TERM, format!("e-{i}").into_bytes())).collect();
+        let entries: Vec<Entry> = (1..=N + 5)
+            .map(|i| new_entry(i, TERM, format!("e-{i}").into_bytes()))
+            .collect();
         storage.append(&entries).expect("append entries");
         assert_eq!(RaftStorage::last_index(&storage).unwrap(), N + 5);
         assert_eq!(RaftStorage::first_index(&storage).unwrap(), 1);
@@ -181,25 +184,48 @@ async fn engine_provider_snapshot_compacts_and_survives_reopen() {
 
         // raft asks for a snapshot (request_index 0 = leader-initiated).
         let snap = RaftStorage::snapshot(&storage, 0, 0).expect("snapshot must succeed");
-        assert_eq!(snap.get_data(), payload.as_slice(), "snapshot carries the provider bytes");
-        assert_eq!(snap.get_metadata().index, N, "metadata index is the applied index");
-        assert_eq!(snap.get_metadata().term, TERM, "metadata term is the entry term at N");
+        assert_eq!(
+            snap.get_data(),
+            payload.as_slice(),
+            "snapshot carries the provider bytes"
+        );
+        assert_eq!(
+            snap.get_metadata().index,
+            N,
+            "metadata index is the applied index"
+        );
+        assert_eq!(
+            snap.get_metadata().term,
+            TERM,
+            "metadata term is the entry term at N"
+        );
         assert_eq!(snap.get_metadata().get_conf_state().voters, vec![1, 2, 3]);
 
         // The snapshot marker becomes the new compaction boundary.
         assert_eq!(RaftStorage::first_index(&storage).unwrap(), N + 1);
         assert_eq!(RaftStorage::last_index(&storage).unwrap(), N + 5);
-        assert_eq!(RaftStorage::term(&storage, N).unwrap(), TERM, "boundary term stays readable");
+        assert_eq!(
+            RaftStorage::term(&storage, N).unwrap(),
+            TERM,
+            "boundary term stays readable"
+        );
 
         let err = RaftStorage::entries(&storage, 1, N + 1, None, GetEntriesContext::empty(false))
             .expect_err("entries below the boundary must fail");
         assert_is_compacted(&err, "entries");
-        let err = RaftStorage::term(&storage, N - 1).expect_err("term below the boundary must fail");
+        let err =
+            RaftStorage::term(&storage, N - 1).expect_err("term below the boundary must fail");
         assert_is_compacted(&err, "term");
 
         // The live tail above the boundary is intact.
-        let tail = RaftStorage::entries(&storage, N + 1, N + 6, None, GetEntriesContext::empty(false))
-            .expect("tail entries readable");
+        let tail = RaftStorage::entries(
+            &storage,
+            N + 1,
+            N + 6,
+            None,
+            GetEntriesContext::empty(false),
+        )
+        .expect("tail entries readable");
         assert_eq!(tail.len(), 5);
         assert_eq!(tail.first().unwrap().index, N + 1);
         assert_eq!(tail.last().unwrap().index, N + 5);
@@ -211,8 +237,14 @@ async fn engine_provider_snapshot_compacts_and_survives_reopen() {
     assert_eq!(RaftStorage::first_index(&reopened).unwrap(), N + 1);
     assert_eq!(RaftStorage::last_index(&reopened).unwrap(), N + 5);
     assert_eq!(RaftStorage::term(&reopened, N).unwrap(), TERM);
-    let tail = RaftStorage::entries(&reopened, N + 1, N + 6, None, GetEntriesContext::empty(false))
-        .expect("tail readable after reopen");
+    let tail = RaftStorage::entries(
+        &reopened,
+        N + 1,
+        N + 6,
+        None,
+        GetEntriesContext::empty(false),
+    )
+    .expect("tail readable after reopen");
     assert_eq!(tail.len(), 5);
     let err = RaftStorage::entries(&reopened, 1, N + 1, None, GetEntriesContext::empty(false))
         .expect_err("prefix stays compacted after reopen");
@@ -232,12 +264,14 @@ async fn hand_built_snapshot_installs_and_replays_on_top() {
     const SNAP_TERM: u64 = 9;
 
     // The state the leader would have shipped: entries 1..=SNAP_INDEX.
-    let base: Vec<EntryRec> = (1..=SNAP_INDEX).map(|i| (i, format!("v-{i}").into_bytes())).collect();
+    let base: Vec<EntryRec> = (1..=SNAP_INDEX)
+        .map(|i| (i, format!("v-{i}").into_bytes()))
+        .collect();
     let snap_bytes = encode_entries(&base).expect("encode base state");
 
     let dir = tempdir().unwrap();
-    let storage =
-        EngineStorage::open(dir.path().join("node"), 1, Some(bootstrap_conf_state())).expect("open");
+    let storage = EngineStorage::open(dir.path().join("node"), 1, Some(bootstrap_conf_state()))
+        .expect("open");
 
     let mut snap = Snapshot::default();
     snap.mut_metadata().index = SNAP_INDEX;
@@ -245,7 +279,9 @@ async fn hand_built_snapshot_installs_and_replays_on_top() {
     snap.mut_metadata().set_conf_state(bootstrap_conf_state());
     snap.set_data(snap_bytes.clone().into());
 
-    storage.apply_snapshot(&snap).expect("apply snapshot to storage");
+    storage
+        .apply_snapshot(&snap)
+        .expect("apply snapshot to storage");
     assert_eq!(RaftStorage::first_index(&storage).unwrap(), SNAP_INDEX + 1);
     assert_eq!(RaftStorage::term(&storage, SNAP_INDEX).unwrap(), SNAP_TERM);
     let err = RaftStorage::term(&storage, SNAP_INDEX - 1).expect_err("below boundary compacted");
@@ -255,19 +291,31 @@ async fn hand_built_snapshot_installs_and_replays_on_top() {
     let machine = SnapMachine::new();
     let recorder = machine.clone();
     let apply = ApplyThread::new(machine);
-    apply.restore(&snap_bytes, SNAP_INDEX).expect("restore machine");
+    apply
+        .restore(&snap_bytes, SNAP_INDEX)
+        .expect("restore machine");
     assert_eq!(apply.applied_index(), SNAP_INDEX);
     assert_eq!(recorder.entries().len(), SNAP_INDEX as usize);
 
     // Entries after the snapshot apply on top without a gap.
-    apply.apply_entry(SNAP_INDEX + 1, b"after-1").expect("apply next");
-    apply.apply_entry(SNAP_INDEX + 2, b"after-2").expect("apply next");
+    apply
+        .apply_entry(SNAP_INDEX + 1, b"after-1")
+        .expect("apply next");
+    apply
+        .apply_entry(SNAP_INDEX + 2, b"after-2")
+        .expect("apply next");
     assert_eq!(apply.applied_index(), SNAP_INDEX + 2);
 
     let entries = recorder.entries();
     assert_eq!(entries.len(), SNAP_INDEX as usize + 2);
-    assert_eq!(entries[SNAP_INDEX as usize], (SNAP_INDEX + 1, b"after-1".to_vec()));
-    assert_eq!(entries[SNAP_INDEX as usize + 1], (SNAP_INDEX + 2, b"after-2".to_vec()));
+    assert_eq!(
+        entries[SNAP_INDEX as usize],
+        (SNAP_INDEX + 1, b"after-1".to_vec())
+    );
+    assert_eq!(
+        entries[SNAP_INDEX as usize + 1],
+        (SNAP_INDEX + 2, b"after-2".to_vec())
+    );
     assert_eq!(entries.first().unwrap(), &(1, b"v-1".to_vec()));
 }
 
@@ -280,33 +328,38 @@ async fn hand_built_snapshot_installs_and_replays_on_top() {
 #[tokio::test(flavor = "current_thread")]
 async fn provider_error_surfaces_as_snapshot_temporarily_unavailable() {
     let dir = tempdir().unwrap();
-    let storage =
-        EngineStorage::open(dir.path().join("node"), 1, Some(bootstrap_conf_state())).expect("open");
+    let storage = EngineStorage::open(dir.path().join("node"), 1, Some(bootstrap_conf_state()))
+        .expect("open");
     let entries: Vec<Entry> = (1..=10).map(|i| new_entry(i, 1, vec![])).collect();
     storage.append(&entries).expect("append");
 
-    let provider: SnapshotProvider = Arc::new(|| {
-        Err(CatgaRaftError::Storage("machine snapshot failed".into()))
-    });
+    let provider: SnapshotProvider =
+        Arc::new(|| Err(CatgaRaftError::Storage("machine snapshot failed".into())));
     storage.set_snapshot_provider(provider);
 
     let err = RaftStorage::snapshot(&storage, 0, 0).expect_err("provider error must surface");
     assert!(
-        matches!(err, RaftError::Store(StorageError::SnapshotTemporarilyUnavailable)),
+        matches!(
+            err,
+            RaftError::Store(StorageError::SnapshotTemporarilyUnavailable)
+        ),
         "expected SnapshotTemporarilyUnavailable, got {err:?}"
     );
 
     // A provider reporting nothing applied yet (index 0) also defers cleanly,
     // since raft-rs rejects an index-0 snapshot.
-    let storage2 =
-        EngineStorage::open(dir.path().join("node2"), 1, Some(bootstrap_conf_state())).expect("open");
+    let storage2 = EngineStorage::open(dir.path().join("node2"), 1, Some(bootstrap_conf_state()))
+        .expect("open");
     let entries2: Vec<Entry> = (1..=3).map(|i| new_entry(i, 1, vec![])).collect();
     storage2.append(&entries2).expect("append");
     let provider0: SnapshotProvider = Arc::new(|| Ok((vec![1, 2, 3], 0)));
     storage2.set_snapshot_provider(provider0);
     let err = RaftStorage::snapshot(&storage2, 0, 0).expect_err("applied=0 must defer");
     assert!(
-        matches!(err, RaftError::Store(StorageError::SnapshotTemporarilyUnavailable)),
+        matches!(
+            err,
+            RaftError::Store(StorageError::SnapshotTemporarilyUnavailable)
+        ),
         "expected SnapshotTemporarilyUnavailable for applied=0, got {err:?}"
     );
 }
@@ -332,7 +385,11 @@ fn discover_leader_index(
         let Some(endpoint) = ConsensusRuntime::coordinator(rt).leader_endpoint() else {
             continue;
         };
-        let Some(port) = endpoint.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) else {
+        let Some(port) = endpoint
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+        else {
             continue;
         };
         if port >= base_port && (port - base_port) % 100 == 0 {
@@ -414,7 +471,9 @@ async fn stopped_node_catches_up_after_compaction_passes_it() {
     const CATCHUP: u64 = 7;
 
     let dir = tempdir().unwrap();
-    let data_dirs: Vec<_> = (0..3).map(|i| dir.path().join(format!("node{i}"))).collect();
+    let data_dirs: Vec<_> = (0..3)
+        .map(|i| dir.path().join(format!("node{i}")))
+        .collect();
 
     let machines: Vec<SnapMachine> = (0..3).map(|_| SnapMachine::new()).collect();
     let recorders: Vec<SnapMachine> = machines.clone();
@@ -449,9 +508,14 @@ async fn stopped_node_catches_up_after_compaction_passes_it() {
         found.unwrap()
     };
 
-    let warmup_payloads: Vec<Vec<u8>> =
-        (0..WARMUP).map(|i| format!("warm-{i:04}").into_bytes()).collect();
-    let warmup_recorders = vec![recorders[0].clone(), recorders[1].clone(), recorders[2].clone()];
+    let warmup_payloads: Vec<Vec<u8>> = (0..WARMUP)
+        .map(|i| format!("warm-{i:04}").into_bytes())
+        .collect();
+    let warmup_recorders = vec![
+        recorders[0].clone(),
+        recorders[1].clone(),
+        recorders[2].clone(),
+    ];
     propose_batch(
         &runtimes,
         &mut leader_idx,
@@ -474,9 +538,11 @@ async fn stopped_node_catches_up_after_compaction_passes_it() {
 
     // The surviving pair keeps writing. The margin is still large here, so the
     // helper never needs a snapshot and the pair commits reliably.
-    let catchup_payloads: Vec<Vec<u8>> =
-        (0..CATCHUP).map(|i| format!("catch-{i:04}").into_bytes()).collect();
-    let survivor_recorders: Vec<SnapMachine> = survivors.iter().map(|&i| recorders[i].clone()).collect();
+    let catchup_payloads: Vec<Vec<u8>> = (0..CATCHUP)
+        .map(|i| format!("catch-{i:04}").into_bytes())
+        .collect();
+    let survivor_recorders: Vec<SnapMachine> =
+        survivors.iter().map(|&i| recorders[i].clone()).collect();
     propose_batch(
         &runtimes,
         &mut leader_idx,
@@ -524,7 +590,10 @@ async fn stopped_node_catches_up_after_compaction_passes_it() {
     // by plain replication. Which split occurs is timing-dependent in a live
     // cluster, so we assert full, exact catch-up (the deterministic install-path
     // proof is `hand_built_snapshot_installs_and_replays_on_top`).
-    let caught_up = eventually(Duration::from_secs(45), || recorder_r.contains_all(&expected)).await;
+    let caught_up = eventually(Duration::from_secs(45), || {
+        recorder_r.contains_all(&expected)
+    })
+    .await;
     assert!(
         caught_up,
         "restarted follower must catch up to the cluster's applied state; has {} of {} payloads, {} snapshot restore(s)",
@@ -540,8 +609,14 @@ async fn stopped_node_catches_up_after_compaction_passes_it() {
         "restarted follower must apply exactly the committed entries (no drops, no duplicates)"
     );
 
-    runtime_r.shutdown_and_join().await.expect("join restarted follower");
+    runtime_r
+        .shutdown_and_join()
+        .await
+        .expect("join restarted follower");
     for i in survivors {
-        runtimes[i].shutdown_and_join().await.expect("join survivor");
+        runtimes[i]
+            .shutdown_and_join()
+            .await
+            .expect("join survivor");
     }
 }

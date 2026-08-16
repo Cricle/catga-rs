@@ -199,7 +199,10 @@ async fn runtime_propose_after_pipeline_stop_maps_transport_failed() {
     runtime.set_leader(Some("http://self-endpoint".to_string()));
 
     // Sanity: leader with a running pipeline accepts a proposal.
-    runtime.propose(b"warm-up".to_vec()).await.expect("warm-up ok");
+    runtime
+        .propose(b"warm-up".to_vec())
+        .await
+        .expect("warm-up ok");
 
     runtime.pipeline().stop();
     let err = runtime

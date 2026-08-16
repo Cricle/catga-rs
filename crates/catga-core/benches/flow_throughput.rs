@@ -23,8 +23,8 @@ fn dsl_flow_single_action_throughput(c: &mut Criterion) {
     c.bench_function("dsl_flow_single_action", |b| {
         b.iter(|| {
             let mut state = 0u32;
-            let flow = DslFlow::<u32>::new()
-                .action(|_s| Box::pin(async { Ok(()) }) as BoxFuture<'_, _>);
+            let flow =
+                DslFlow::<u32>::new().action(|_s| Box::pin(async { Ok(()) }) as BoxFuture<'_, _>);
             let result = rt.block_on(flow.run(&mut state));
             assert!(result.is_ok());
         });
@@ -83,8 +83,8 @@ fn dsl_flow_compensate_single_throughput(c: &mut Criterion) {
     c.bench_function("dsl_flow_compensate_single", |b| {
         b.iter(|| {
             let mut state = 0u32;
-            let mut flow = DslFlow::<u32>::new()
-                .compensate(|_s| async { Ok(()) }, |_s| async { Ok(()) });
+            let mut flow =
+                DslFlow::<u32>::new().compensate(|_s| async { Ok(()) }, |_s| async { Ok(()) });
             let result = rt.block_on(flow.run_compensatable(&mut state));
             assert!(result.is_ok());
         });
@@ -146,7 +146,10 @@ fn dsl_flow_failure_handling_throughput(c: &mut Criterion) {
             let mut state = 0u32;
             let flow = DslFlow::<u32>::new()
                 .action(|_s| Box::pin(async { Ok(()) }) as BoxFuture<'_, _>)
-                .action(|_s| Box::pin(async { Err(CatgaError::new(ErrorCode::Internal, "fail")) }) as BoxFuture<'_, _>);
+                .action(|_s| {
+                    Box::pin(async { Err(CatgaError::new(ErrorCode::Internal, "fail")) })
+                        as BoxFuture<'_, _>
+                });
             let result = rt.block_on(flow.run(&mut state));
             assert!(result.is_err());
         });

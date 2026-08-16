@@ -5,8 +5,8 @@
 //! variants implement `raft::Storage` and expose the small persist API the
 //! owner loop needs when processing `Ready`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -79,7 +79,10 @@ impl CatgaStorage {
     where
         raft::prelude::ConfState: From<T>,
     {
-        CatgaStorage::Memory(MemStorage::new_with_conf_state(conf_state), new_snapshot_slot())
+        CatgaStorage::Memory(
+            MemStorage::new_with_conf_state(conf_state),
+            new_snapshot_slot(),
+        )
     }
 
     /// Persistent storage opened (or created) under `dir`.

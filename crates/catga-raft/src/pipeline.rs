@@ -15,12 +15,12 @@
 //! `propose` can never wedge once `max_inflight` entries have flowed
 //! through the pipeline.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crossbeam::channel::{bounded, Receiver, Sender, TrySendError};
+use crossbeam::channel::{Receiver, Sender, TrySendError, bounded};
 use parking_lot::{Mutex, MutexGuard};
-use tokio::time::{interval, Instant};
+use tokio::time::{Instant, interval};
 
 use crate::config::PipelineConfig;
 use crate::error::{CatgaRaftError, CatgaRaftResult};
@@ -54,7 +54,10 @@ impl ProposalBatch {
     /// Consume the batch and return (context, payload) pairs in order.
     /// Contexts are empty for fire-and-forget proposals.
     pub fn into_items(self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        self.proposals.into_iter().map(|p| (p.ctx, p.data)).collect()
+        self.proposals
+            .into_iter()
+            .map(|p| (p.ctx, p.data))
+            .collect()
     }
 
     /// Number of proposals in this batch.
@@ -164,7 +167,15 @@ impl PipelineManager {
         let flusher_notify = Arc::clone(&self.flusher_notify);
 
         tokio::spawn(async move {
-            Self::flush_loop(state, batch_tx, config, running, flush_notify, flusher_notify).await;
+            Self::flush_loop(
+                state,
+                batch_tx,
+                config,
+                running,
+                flush_notify,
+                flusher_notify,
+            )
+            .await;
         });
     }
 

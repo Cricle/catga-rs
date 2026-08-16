@@ -15,7 +15,7 @@
 //! - `recovery_timeout`: Time to wait before attempting recovery
 //! - `half_open_max_calls`: Max requests in half-open state
 
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Circuit breaker is in normal state, requests pass through.

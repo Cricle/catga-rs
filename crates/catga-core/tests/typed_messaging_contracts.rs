@@ -14,9 +14,9 @@ use catga_core::memory::{MemoryEventStore, MemoryTransport};
 use catga_core::{
     Acknowledger, CatgaError, CatgaResult, Delivery, Destination, DestinationTransport, Envelope,
     EnvelopeHeaders, ErrorCode, EventStore, EventUpgrader, EventVersionRegistry,
-    MessageDestinationRouter, MessageMetadata, MessageRouter, MessageTransport,
-    ResilienceExecutor, ResilienceOptions, ResilientTransport, TransportBatcher,
-    UpgradingEventStore, assert_error_code, assert_failure, assert_success,
+    MessageDestinationRouter, MessageMetadata, MessageRouter, MessageTransport, ResilienceExecutor,
+    ResilienceOptions, ResilientTransport, TransportBatcher, UpgradingEventStore,
+    assert_error_code, assert_failure, assert_success,
 };
 use tokio_util::sync::CancellationToken;
 

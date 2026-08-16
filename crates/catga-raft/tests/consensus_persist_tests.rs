@@ -8,11 +8,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use catga_core::{CatgaResult, ConsensusRuntime, ConsensusStateMachine};
-use catga_raft::storage::EngineStorage;
 use catga_raft::CatgaRaftRuntimeBuilder;
+use catga_raft::storage::EngineStorage;
 use parking_lot::Mutex;
-use raft::storage::GetEntriesContext;
 use raft::Storage as RaftStorage;
+use raft::storage::GetEntriesContext;
 use tempfile::tempdir;
 
 /// State machine that records every applied entry.
@@ -29,7 +29,11 @@ impl RecordingMachine {
     }
 
     fn applied_payloads(&self) -> Vec<Vec<u8>> {
-        self.applied.lock().iter().map(|(_, data)| data.clone()).collect()
+        self.applied
+            .lock()
+            .iter()
+            .map(|(_, data)| data.clone())
+            .collect()
     }
 }
 
@@ -118,7 +122,10 @@ async fn single_node_log_and_hard_state_survive_restart() {
         assert_eq!(hard_state.vote, 1, "node voted for itself");
         assert!(hard_state.commit >= 1, "proposed entry must be committed");
         let log = read_log(&storage);
-        assert!(log.iter().any(|e| e.data == payload_1), "payload must persist");
+        assert!(
+            log.iter().any(|e| e.data == payload_1),
+            "payload must persist"
+        );
         RaftStorage::last_index(&storage).expect("last_index")
     };
 
@@ -141,7 +148,10 @@ async fn single_node_log_and_hard_state_survive_restart() {
         .await;
         assert!(leader, "restarted single node must become leader");
 
-        runtime.propose(payload_2.clone()).await.expect("propose after restart");
+        runtime
+            .propose(payload_2.clone())
+            .await
+            .expect("propose after restart");
         let applied = eventually(Duration::from_secs(5), || {
             recorder.applied_payloads().contains(&payload_2)
         })

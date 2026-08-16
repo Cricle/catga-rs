@@ -6,8 +6,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use catga_core::flow::suspension::FlowContinuation;
 use catga_core::flow::{
-    FlowCompletion, FlowResult, FlowState, FlowStore, MAX_FLOW_DATA_BYTES,
-    MAX_FLOW_STORE_BATCH, decode_continuation, encode_continuation, validate_flow_batch_size,
+    FlowCompletion, FlowResult, FlowState, FlowStore, MAX_FLOW_DATA_BYTES, MAX_FLOW_STORE_BATCH,
+    decode_continuation, encode_continuation, validate_flow_batch_size,
 };
 use catga_core::memory::MemoryFlows;
 use catga_core::{CatgaError, CatgaResult, ErrorCode, assert_error_code, assert_success};

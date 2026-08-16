@@ -4,11 +4,8 @@
 
 use std::time::Duration;
 
-use catga_raft::{
-    CatgaRaftRuntime, CatgaRaftRuntimeBuilder,
-    PipelineConfig, PipelineManager,
-};
 use catga_core::{CatgaResult, ConsensusCoordinator, ConsensusRuntime, ConsensusStateMachine};
+use catga_raft::{CatgaRaftRuntime, CatgaRaftRuntimeBuilder, PipelineConfig, PipelineManager};
 
 // ============================================================================
 // Builder tests
@@ -168,7 +165,10 @@ mod transport_tests {
     #[tokio::test]
     async fn test_broadcast_empty() {
         let transport = GrpcTransport::new(1);
-        transport.broadcast(Bytes::from(vec![1, 2, 3])).await.unwrap();
+        transport
+            .broadcast(Bytes::from(vec![1, 2, 3]))
+            .await
+            .unwrap();
     }
 }
 
@@ -200,5 +200,4 @@ mod pipeline_tests {
 
         manager.stop();
     }
-
 }

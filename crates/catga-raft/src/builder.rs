@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use catga_core::{ConsensusStateMachine};
+use catga_core::ConsensusStateMachine;
 use tracing::info;
 
 use crate::apply::ApplyThread;
@@ -122,7 +122,10 @@ impl CatgaRaftRuntimeBuilder {
             config,
             pipeline_config: PipelineConfig::default(),
             members,
-            self_endpoint: Some(format!("http://127.0.0.1:{}", base_port + (node as u16) * 100)),
+            self_endpoint: Some(format!(
+                "http://127.0.0.1:{}",
+                base_port + (node as u16) * 100
+            )),
             data_dir: None,
         })
     }
@@ -546,10 +549,7 @@ impl CatgaRaftRuntimeBuilder {
         runtime.register_task(owner);
         drop(msg_tx);
 
-        info!(
-            node_id,
-            "CatgaRaftRuntime started successfully"
-        );
+        info!(node_id, "CatgaRaftRuntime started successfully");
 
         Ok(runtime)
     }

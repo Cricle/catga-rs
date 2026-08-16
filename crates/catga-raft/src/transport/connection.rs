@@ -106,10 +106,7 @@ impl ConnectionPool {
             .connect()
             .await
             .map_err(|e| {
-                CatgaRaftError::Transport(format!(
-                    "failed to connect to {}: {}",
-                    endpoint_str, e
-                ))
+                CatgaRaftError::Transport(format!("failed to connect to {}: {}", endpoint_str, e))
             })?;
 
         tracing::debug!(endpoint = %endpoint_str, "new connection established");

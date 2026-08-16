@@ -387,13 +387,11 @@ pub fn mtls_reqwest_client(
 ) -> CatgaResult<reqwest::Client> {
     let mut identity_pem = read_pem_file(client_cert_chain, "client certificate chain")?;
     identity_pem.extend_from_slice(&read_pem_file(client_key, "client private key")?);
-    let identity = reqwest::Identity::from_pem(&identity_pem).map_err(|e| {
-        tls_config_error(format!("failed to parse client identity: {}", e))
-    })?;
+    let identity = reqwest::Identity::from_pem(&identity_pem)
+        .map_err(|e| tls_config_error(format!("failed to parse client identity: {}", e)))?;
     let ca_pem = read_pem_file(server_ca_root, "server CA root")?;
-    let roots = reqwest::Certificate::from_pem_bundle(&ca_pem).map_err(|e| {
-        tls_config_error(format!("failed to parse server CA root: {}", e))
-    })?;
+    let roots = reqwest::Certificate::from_pem_bundle(&ca_pem)
+        .map_err(|e| tls_config_error(format!("failed to parse server CA root: {}", e)))?;
     reqwest::Client::builder()
         .use_rustls_tls()
         .identity(identity)
@@ -418,31 +416,61 @@ impl DevCertificateAuthority {
     pub fn generate() -> CatgaResult<Self> {
         let mut issuer_params = rcgen::CertificateParams::default();
         issuer_params.distinguished_name = rcgen::DistinguishedName::new();
-        issuer_params.distinguished_name.push(rcgen::DnType::CommonName, "catga-dev-ca");
+        issuer_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "catga-dev-ca");
         issuer_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        issuer_params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign, rcgen::KeyUsagePurpose::CrlSign];
+        issuer_params.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::CrlSign,
+        ];
         let key_pair = rcgen::KeyPair::generate().map_err(dev_pki_error)?;
-        let cert = issuer_params.self_signed(&key_pair).map_err(dev_pki_error)?;
-        Ok(Self { cert_pem: cert.pem(), issuer_params, key_pair })
+        let cert = issuer_params
+            .self_signed(&key_pair)
+            .map_err(dev_pki_error)?;
+        Ok(Self {
+            cert_pem: cert.pem(),
+            issuer_params,
+            key_pair,
+        })
     }
 
     /// Returns the PEM-encoded CA certificate.
-    pub fn cert_pem(&self) -> &str { &self.cert_pem }
+    pub fn cert_pem(&self) -> &str {
+        &self.cert_pem
+    }
 
     /// Issues a node identity signed by this CA.
-    pub fn issue_node_identity(&self, trust_domain: &str, node_name: &str) -> CatgaResult<DevNodeIdentity> {
+    pub fn issue_node_identity(
+        &self,
+        trust_domain: &str,
+        node_name: &str,
+    ) -> CatgaResult<DevNodeIdentity> {
         let uri = format!("spiffe://{}/{}", trust_domain, node_name);
-        let uri = rcgen::string::Ia5String::try_from(uri).map_err(|e| tls_config_error(e.to_string()))?;
-        let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).map_err(dev_pki_error)?;
+        let uri =
+            rcgen::string::Ia5String::try_from(uri).map_err(|e| tls_config_error(e.to_string()))?;
+        let mut params =
+            rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+                .map_err(dev_pki_error)?;
         params.distinguished_name = rcgen::DistinguishedName::new();
-        params.distinguished_name.push(rcgen::DnType::CommonName, node_name);
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, node_name);
         params.subject_alt_names.push(rcgen::SanType::URI(uri));
         params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
-        params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth, rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        params.extended_key_usages = vec![
+            rcgen::ExtendedKeyUsagePurpose::ServerAuth,
+            rcgen::ExtendedKeyUsagePurpose::ClientAuth,
+        ];
         let key_pair = rcgen::KeyPair::generate().map_err(dev_pki_error)?;
         let issuer = rcgen::Issuer::from_params(&self.issuer_params, &self.key_pair);
-        let cert = params.signed_by(&key_pair, &issuer).map_err(dev_pki_error)?;
-        Ok(DevNodeIdentity { certificate_chain_pem: cert.pem(), private_key_pem: key_pair.serialize_pem() })
+        let cert = params
+            .signed_by(&key_pair, &issuer)
+            .map_err(dev_pki_error)?;
+        Ok(DevNodeIdentity {
+            certificate_chain_pem: cert.pem(),
+            private_key_pem: key_pair.serialize_pem(),
+        })
     }
 }
 
@@ -454,9 +482,13 @@ pub struct DevNodeIdentity {
 
 impl DevNodeIdentity {
     /// Returns the PEM-encoded certificate chain.
-    pub fn certificate_chain_pem(&self) -> &str { &self.certificate_chain_pem }
+    pub fn certificate_chain_pem(&self) -> &str {
+        &self.certificate_chain_pem
+    }
     /// Returns the PEM-encoded private key.
-    pub fn private_key_pem(&self) -> &str { &self.private_key_pem }
+    pub fn private_key_pem(&self) -> &str {
+        &self.private_key_pem
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -472,11 +504,13 @@ fn load_cert_chain(path: &Path) -> CatgaResult<Vec<rustls::pki_types::Certificat
 
 fn load_private_key(path: &Path) -> CatgaResult<rustls::pki_types::PrivateKeyDer<'static>> {
     let pem = read_pem_file(path, "private key")?;
-    rustls::pki_types::PrivateKeyDer::from_pem_slice(&pem).map_err(|e| tls_config_error(format!("failed to parse private key: {}", e)))
+    rustls::pki_types::PrivateKeyDer::from_pem_slice(&pem)
+        .map_err(|e| tls_config_error(format!("failed to parse private key: {}", e)))
 }
 
 fn read_pem_file(path: &Path, kind: &str) -> CatgaResult<Vec<u8>> {
-    std::fs::read(path).map_err(|e| tls_config_error(format!("failed to read {} PEM file: {}", kind, e)))
+    std::fs::read(path)
+        .map_err(|e| tls_config_error(format!("failed to read {} PEM file: {}", kind, e)))
 }
 
 fn tls_config_error(message: String) -> CatgaError {
@@ -484,5 +518,8 @@ fn tls_config_error(message: String) -> CatgaError {
 }
 
 fn dev_pki_error(error: rcgen::Error) -> CatgaError {
-    CatgaError::new(ErrorCode::Internal, format!("failed to generate development certificate: {}", error))
+    CatgaError::new(
+        ErrorCode::Internal,
+        format!("failed to generate development certificate: {}", error),
+    )
 }

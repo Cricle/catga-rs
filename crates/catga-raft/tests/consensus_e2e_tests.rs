@@ -24,7 +24,11 @@ impl RecordingMachine {
     }
 
     fn applied_payloads(&self) -> Vec<Vec<u8>> {
-        self.applied.lock().iter().map(|(_, data)| data.clone()).collect()
+        self.applied
+            .lock()
+            .iter()
+            .map(|(_, data)| data.clone())
+            .collect()
     }
 }
 
@@ -84,7 +88,9 @@ async fn single_node_proposes_and_applies() {
         .expect("single-node propose must be accepted");
 
     let applied = eventually(Duration::from_secs(5), || {
-        recorder.applied_payloads().contains(&b"hello-consensus".to_vec())
+        recorder
+            .applied_payloads()
+            .contains(&b"hello-consensus".to_vec())
     })
     .await;
     assert!(applied, "proposed entry must reach the state machine");
@@ -168,7 +174,10 @@ async fn single_node_read_index_resolves() {
         .expect("propose");
 
     let idx = runtime.read_index().await.expect("read index");
-    assert!(idx >= 1, "read index must cover the proposed entry, got {idx}");
+    assert!(
+        idx >= 1,
+        "read index must cover the proposed entry, got {idx}"
+    );
 
     runtime.shutdown();
     Box::new(runtime).join().await.expect("join");
@@ -214,7 +223,10 @@ async fn three_node_read_index_on_leader_and_follower() {
             .await
             .unwrap_or_else(|_| panic!("node {i} read index timed out"))
             .unwrap_or_else(|e| panic!("node {i} read index failed: {e}"));
-        assert!(idx >= 1, "node {i} read index must cover the committed entry");
+        assert!(
+            idx >= 1,
+            "node {i} read index must cover the committed entry"
+        );
     }
 
     for rt in runtimes {

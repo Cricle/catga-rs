@@ -199,7 +199,9 @@ fn json_encode_produces_readable_json_and_roundtrips() {
 #[test]
 fn json_decode_invalid_input_fails_with_codec_error() {
     let codec = JsonCodec;
-    let err = codec.decode::<RaftLikeMessage>(b"this is not json").unwrap_err();
+    let err = codec
+        .decode::<RaftLikeMessage>(b"this is not json")
+        .unwrap_err();
 
     match &err {
         CatgaRaftError::Codec(msg) => assert!(

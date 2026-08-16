@@ -3,11 +3,14 @@
 //! This runtime coordinates proposals through the PipelineManager,
 //! applies entries via ApplyThread, and provides access to the coordinator.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use std::sync::Arc;
 
-use catga_core::{CatgaError, CatgaResult, ConsensusCoordinator, ConsensusRuntime, ConsensusStateMachine, ErrorCode};
+use catga_core::{
+    CatgaError, CatgaResult, ConsensusCoordinator, ConsensusRuntime, ConsensusStateMachine,
+    ErrorCode,
+};
 use tracing::{debug, info};
 
 use crate::apply::ApplyThread;
@@ -178,9 +181,9 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
         }
 
         // Propose through the pipeline (fire-and-forget)
-        self.pipeline.propose(data).map_err(|e| {
-            CatgaError::new(ErrorCode::TransportFailed, e.to_string())
-        })
+        self.pipeline
+            .propose(data)
+            .map_err(|e| CatgaError::new(ErrorCode::TransportFailed, e.to_string()))
     }
 
     /// Sends one membership operation to the owner loop and waits for the
@@ -197,9 +200,8 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
             CatgaRaftError::Transport("membership change requires a running owner loop".into())
         })?;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        tx.send((op, reply_tx)).map_err(|_| {
-            CatgaRaftError::Transport("raft owner loop is gone".into())
-        })?;
+        tx.send((op, reply_tx))
+            .map_err(|_| CatgaRaftError::Transport("raft owner loop is gone".into()))?;
         reply_rx.await.map_err(|_| CatgaRaftError::Timeout)?
     }
 
@@ -253,9 +255,8 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
             .to_le_bytes()
             .to_vec();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        tx.send((ctx, reply_tx)).map_err(|_| {
-            CatgaRaftError::Transport("raft owner loop is gone".into())
-        })?;
+        tx.send((ctx, reply_tx))
+            .map_err(|_| CatgaRaftError::Transport("raft owner loop is gone".into()))?;
         reply_rx.await.map_err(|_| CatgaRaftError::Timeout)?
     }
 
@@ -292,7 +293,9 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
         timeout: Duration,
     ) -> crate::CatgaRaftResult<u64> {
         let tx = self.prop_wait_tx.as_ref().ok_or_else(|| {
-            crate::CatgaRaftError::Transport("propose_and_wait requires a running owner loop".into())
+            crate::CatgaRaftError::Transport(
+                "propose_and_wait requires a running owner loop".into(),
+            )
         })?;
         let ctx = self
             .read_ctx
@@ -302,9 +305,8 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         // Register the attribution BEFORE proposing so the commit can never
         // race past an unregistered waiter.
-        tx.send((ctx.clone(), reply_tx)).map_err(|_| {
-            crate::CatgaRaftError::Transport("raft owner loop is gone".into())
-        })?;
+        tx.send((ctx.clone(), reply_tx))
+            .map_err(|_| crate::CatgaRaftError::Transport("raft owner loop is gone".into()))?;
         self.pipeline.propose_with_context(data, ctx)?;
         match tokio::time::timeout(timeout, reply_rx).await {
             Ok(Ok(result)) => result,
@@ -319,7 +321,10 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
     ///
     /// `Codec` when serialization fails; otherwise the usual `propose`
     /// admission errors.
-    pub fn propose_serializable<T: serde::Serialize>(&self, value: &T) -> crate::CatgaRaftResult<()> {
+    pub fn propose_serializable<T: serde::Serialize>(
+        &self,
+        value: &T,
+    ) -> crate::CatgaRaftResult<()> {
         let data = bincode::serde::encode_to_vec(value, bincode::config::standard())
             .map_err(|e| crate::CatgaRaftError::Codec(format!("serialize proposal: {e}")))?;
         self.pipeline.propose(data)
@@ -343,7 +348,7 @@ impl<S: ConsensusStateMachine> CatgaRaftRuntime<S> {
         self.propose_attributed(data, timeout).await
     }
 
-        /// Shuts down and awaits every owned background task without consuming
+    /// Shuts down and awaits every owned background task without consuming
     /// the handle (usable through `Arc`). Safe to call once; later calls are
     /// no-ops.
     pub async fn shutdown_and_join(&self) -> crate::CatgaRaftResult<()> {
@@ -380,7 +385,9 @@ impl<S: ConsensusStateMachine + 'static> ConsensusRuntime for CatgaRaftRuntime<S
                 "propose_and_wait requires a running owner loop".to_string(),
             ));
         }
-        self.propose_attributed(data, timeout).await.map_err(CatgaError::from)
+        self.propose_attributed(data, timeout)
+            .await
+            .map_err(CatgaError::from)
     }
 
     /// Proposes adding one member with its externally reachable `endpoint`.

@@ -95,8 +95,16 @@ impl Kv for KvGrpcService {
             .await
             .map_err(grpc_status)?;
         let reply = match self.state.get(&request.key) {
-            Some(value) => GetReply { key: request.key, value, found: true },
-            None => GetReply { key: request.key, value: String::new(), found: false },
+            Some(value) => GetReply {
+                key: request.key,
+                value,
+                found: true,
+            },
+            None => GetReply {
+                key: request.key,
+                value: String::new(),
+                found: false,
+            },
         };
         Ok(Response::new(reply))
     }
@@ -104,7 +112,10 @@ impl Kv for KvGrpcService {
 
 /// Builds the tonic service wrapper around the shared API state.
 pub(crate) fn router(api: ApiState) -> KvServer<KvGrpcService> {
-    KvServer::new(KvGrpcService { service: api.service, state: api.state })
+    KvServer::new(KvGrpcService {
+        service: api.service,
+        state: api.state,
+    })
 }
 
 /// One-off gRPC `Get` probe (smoke-check helper): prints what the cluster
@@ -113,12 +124,27 @@ pub(crate) async fn probe(addr: &str, key: &str) -> CatgaResult<()> {
     use proto::kv_client::KvClient;
     let mut client = KvClient::connect(format!("http://{addr}"))
         .await
-        .map_err(|error| CatgaError::new(ErrorCode::Unavailable, format!("grpc connect to {addr}: {error}")))?;
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Unavailable,
+                format!("grpc connect to {addr}: {error}"),
+            )
+        })?;
     let reply = client
-        .get(Request::new(GetRequest { key: key.to_string() }))
+        .get(Request::new(GetRequest {
+            key: key.to_string(),
+        }))
         .await
-        .map_err(|error| CatgaError::new(ErrorCode::Unavailable, format!("grpc get {key:?} from {addr}: {error}")))?
+        .map_err(|error| {
+            CatgaError::new(
+                ErrorCode::Unavailable,
+                format!("grpc get {key:?} from {addr}: {error}"),
+            )
+        })?
         .into_inner();
-    println!("found={} key={} value={}", reply.found, reply.key, reply.value);
+    println!(
+        "found={} key={} value={}",
+        reply.found, reply.key, reply.value
+    );
     Ok(())
 }

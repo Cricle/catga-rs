@@ -1,9 +1,9 @@
-use raft::{Config, RawNode, Storage};
-use std::sync::Arc;
 use parking_lot::Mutex;
+use raft::{Config, RawNode, Storage};
 use slog::Logger;
+use std::sync::Arc;
 
-use crate::{CatgaRaftConfig, CatgaRaftResult, CatgaRaftError};
+use crate::{CatgaRaftConfig, CatgaRaftError, CatgaRaftResult};
 
 /// RaftNode wraps raft::RawNode with CatgaRaftConfig integration
 pub struct RaftNode<S: Storage> {
@@ -42,8 +42,8 @@ impl<S: Storage + 'static> RaftNode<S> {
             ..Default::default()
         };
 
-        let raw_node = RawNode::new(&cfg, storage, logger)
-            .map_err(|e| CatgaRaftError::Raft(e.to_string()))?;
+        let raw_node =
+            RawNode::new(&cfg, storage, logger).map_err(|e| CatgaRaftError::Raft(e.to_string()))?;
 
         Ok(Self {
             raw_node: Arc::new(Mutex::new(raw_node)),

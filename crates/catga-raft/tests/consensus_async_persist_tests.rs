@@ -17,11 +17,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use catga_core::{CatgaResult, ConsensusRuntime, ConsensusStateMachine};
-use catga_raft::storage::EngineStorage;
 use catga_raft::CatgaRaftRuntimeBuilder;
+use catga_raft::storage::EngineStorage;
 use parking_lot::Mutex;
-use raft::storage::GetEntriesContext;
 use raft::Storage as RaftStorage;
+use raft::storage::GetEntriesContext;
 use tempfile::tempdir;
 
 /// State machine that records every applied entry.
@@ -42,7 +42,11 @@ impl RecordingMachine {
     }
 
     fn applied_payloads(&self) -> Vec<Vec<u8>> {
-        self.applied.lock().iter().map(|(_, data)| data.clone()).collect()
+        self.applied
+            .lock()
+            .iter()
+            .map(|(_, data)| data.clone())
+            .collect()
     }
 }
 
@@ -133,7 +137,10 @@ async fn single_node_async_persist_survives_restart() {
         let hard_state = storage.hard_state();
         assert!(hard_state.term >= 1, "election must have bumped the term");
         assert_eq!(hard_state.vote, 1, "node voted for itself");
-        assert!(hard_state.commit >= 1, "applied entry must be committed in the persisted hard state");
+        assert!(
+            hard_state.commit >= 1,
+            "applied entry must be committed in the persisted hard state"
+        );
         let log = read_log(&storage);
         assert!(
             log.iter().any(|e| e.data == payload_1),
@@ -244,7 +251,10 @@ async fn three_node_memory_cluster_elects_replicates_and_reads() {
             .await
             .unwrap_or_else(|_| panic!("node {i} read index timed out"))
             .unwrap_or_else(|e| panic!("node {i} read index failed: {e}"));
-        assert!(idx >= 1, "node {i} read index must cover the committed entry");
+        assert!(
+            idx >= 1,
+            "node {i} read index must cover the committed entry"
+        );
     }
 
     for rt in runtimes {
@@ -357,8 +367,8 @@ async fn three_node_persistent_cluster_applies_200_sequential_proposes() {
     // Durability of the leader's log after the clean shutdown: reopen the
     // storage of the node we proposed through most and find every payload.
     let leader_dir = dir.path().join(format!("node-{}", leader_idx + 1));
-    let storage =
-        EngineStorage::open(&leader_dir, (leader_idx + 1) as u64, None).expect("reopen leader storage");
+    let storage = EngineStorage::open(&leader_dir, (leader_idx + 1) as u64, None)
+        .expect("reopen leader storage");
     let log = read_log(&storage);
     for payload in &expected {
         assert!(

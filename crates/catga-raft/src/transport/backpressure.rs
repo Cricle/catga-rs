@@ -11,8 +11,8 @@
 //! - Thread-safe operations
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use parking_lot::RwLock;
 
@@ -137,7 +137,12 @@ impl BackpressureController {
         let peer = self.get_or_create_peer(peer_id);
         let new_count = peer.increment();
         self.total_inflight.fetch_add(1, Ordering::AcqRel);
-        tracing::trace!(peer_id, count = new_count, limit = peer.limit(), "message sent");
+        tracing::trace!(
+            peer_id,
+            count = new_count,
+            limit = peer.limit(),
+            "message sent"
+        );
         new_count
     }
 
@@ -173,10 +178,7 @@ impl BackpressureController {
     /// Get the current in-flight count for a peer.
     pub fn current_inflight(&self, peer_id: u64) -> usize {
         let peers = self.peers.read();
-        peers
-            .get(&peer_id)
-            .map(|p| p.count())
-            .unwrap_or(0)
+        peers.get(&peer_id).map(|p| p.count()).unwrap_or(0)
     }
 
     /// Get the total in-flight count across all peers.
@@ -206,7 +208,12 @@ impl BackpressureController {
         let peer = self.get_or_create_peer(peer_id);
         let clamped = new_limit.clamp(MIN_INFLIGHT_LIMIT, MAX_INFLIGHT_LIMIT);
         peer.set_limit(clamped);
-        tracing::info!(peer_id, old_limit = peer.limit(), new_limit = clamped, "peer limit adjusted");
+        tracing::info!(
+            peer_id,
+            old_limit = peer.limit(),
+            new_limit = clamped,
+            "peer limit adjusted"
+        );
     }
 
     /// Adjust the default limit for new peers.
@@ -270,11 +277,7 @@ impl BackpressureController {
             .map(|p| {
                 let count = p.count() as f64;
                 let limit = p.limit() as f64;
-                if limit > 0.0 {
-                    count / limit
-                } else {
-                    0.0
-                }
+                if limit > 0.0 { count / limit } else { 0.0 }
             })
             .sum();
 

@@ -19,8 +19,8 @@
 //! Ports: 16100 (single node), 16500-16700 (healthy 3-node cluster),
 //! 16300/16400 (no-quorum nodes).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use catga_core::{CatgaResult, ConsensusRuntime, ConsensusStateMachine};
@@ -50,7 +50,11 @@ impl RecordingMachine {
     }
 
     fn applied_payloads(&self) -> Vec<Vec<u8>> {
-        self.applied.lock().iter().map(|(_, data)| data.clone()).collect()
+        self.applied
+            .lock()
+            .iter()
+            .map(|(_, data)| data.clone())
+            .collect()
     }
 
     fn applied_count(&self) -> usize {
@@ -238,14 +242,20 @@ async fn single_node_reads_and_writes_with_inline_persist_ack() {
             .await
             .expect("read index timed out")
             .expect("read index failed");
-        assert!(idx >= ENTRIES, "read index {idx} must cover {ENTRIES} entries");
+        assert!(
+            idx >= ENTRIES,
+            "read index {idx} must cover {ENTRIES} entries"
+        );
     }
 
     let barrier = runtime
         .read_barrier(Duration::from_secs(5))
         .await
         .expect("read barrier");
-    assert!(barrier >= ENTRIES, "barrier index {barrier} below {ENTRIES}");
+    assert!(
+        barrier >= ENTRIES,
+        "barrier index {barrier} below {ENTRIES}"
+    );
 
     runtime.shutdown();
     Box::new(runtime).join().await.expect("join");
@@ -297,7 +307,9 @@ async fn three_node_replication_and_reads_with_empty_ready_skip() {
     for (i, recorder) in recorders.iter().enumerate() {
         let recorder = recorder.clone();
         let applied = eventually(Duration::from_secs(10), || {
-            recorder.applied_payloads().contains(&b"w2-entry-19".to_vec())
+            recorder
+                .applied_payloads()
+                .contains(&b"w2-entry-19".to_vec())
         })
         .await;
         assert!(applied, "node {i} must apply the replicated entries");

@@ -71,7 +71,11 @@ async fn test_pipeline_batching_small() {
     tokio::time::sleep(Duration::from_millis(5)).await;
 
     // Pending should be 0 after batch_size flush
-    assert_eq!(manager.pending_count(), 0, "Pending should be 0 after flush");
+    assert_eq!(
+        manager.pending_count(),
+        0,
+        "Pending should be 0 after flush"
+    );
 
     manager.stop();
 }

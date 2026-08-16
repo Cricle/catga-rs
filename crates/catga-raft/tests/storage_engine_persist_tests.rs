@@ -30,7 +30,13 @@ fn entries(
     high: u64,
     max_size: impl Into<Option<u64>>,
 ) -> raft::Result<Vec<Entry>> {
-    RaftStorage::entries(storage, low, high, max_size, GetEntriesContext::empty(false))
+    RaftStorage::entries(
+        storage,
+        low,
+        high,
+        max_size,
+        GetEntriesContext::empty(false),
+    )
 }
 
 fn hard_state(term: u64, vote: u64, commit: u64) -> HardState {
@@ -51,7 +57,10 @@ fn fresh_open_bootstraps_conf_state_and_reopen_keeps_it() {
         let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1, 2])))
             .expect("open fresh storage");
         let state = RaftStorage::initial_state(&storage).expect("initial state");
-        assert!(state.initialized(), "bootstrapped storage must be initialized");
+        assert!(
+            state.initialized(),
+            "bootstrapped storage must be initialized"
+        );
         assert_eq!(state.conf_state.voters, vec![1, 2]);
         assert_eq!(state.hard_state, HardState::default());
         assert_eq!(RaftStorage::first_index(&storage).unwrap(), 1);
@@ -71,8 +80,8 @@ fn append_and_hard_state_survive_reopen() {
     let dir = tempdir().unwrap();
 
     {
-        let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1])))
-            .expect("open");
+        let storage =
+            EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1]))).expect("open");
         storage
             .append(&[
                 new_entry(1, 1, b"a"),
@@ -80,7 +89,9 @@ fn append_and_hard_state_survive_reopen() {
                 new_entry(3, 2, b"c"),
             ])
             .expect("append");
-        storage.set_hard_state(hard_state(2, 1, 2)).expect("hard state");
+        storage
+            .set_hard_state(hard_state(2, 1, 2))
+            .expect("hard state");
     }
 
     let storage = EngineStorage::open(dir.path(), REGION, None).expect("reopen");
@@ -122,8 +133,7 @@ fn append_and_hard_state_survive_reopen() {
 #[test]
 fn entries_respects_max_size_limit() {
     let dir = tempdir().unwrap();
-    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1])))
-        .expect("open");
+    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1]))).expect("open");
 
     let big = vec![0xAB; 1024];
     storage
@@ -136,7 +146,10 @@ fn entries_respects_max_size_limit() {
 
     // Unlimited: all three.
     assert_eq!(entries(&storage, 1, 4, None).unwrap().len(), 3);
-    assert_eq!(entries(&storage, 1, 4, raft::util::NO_LIMIT).unwrap().len(), 3);
+    assert_eq!(
+        entries(&storage, 1, 4, raft::util::NO_LIMIT).unwrap().len(),
+        3
+    );
 
     // Each entry encodes to ~1KB; a 1200-byte cap keeps only the first.
     let limited = entries(&storage, 1, 4, Some(1200u64)).unwrap();
@@ -149,15 +162,20 @@ fn entries_respects_max_size_limit() {
 #[test]
 fn compact_makes_prefix_reads_fail() {
     let dir = tempdir().unwrap();
-    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1])))
-        .expect("open");
+    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1]))).expect("open");
 
     storage
-        .append(&[new_entry(1, 1, b"a"), new_entry(2, 1, b"b"), new_entry(3, 2, b"c")])
+        .append(&[
+            new_entry(1, 1, b"a"),
+            new_entry(2, 1, b"b"),
+            new_entry(3, 2, b"c"),
+        ])
         .expect("append");
 
     // No-op cases mirror MemStorage::compact.
-    storage.compact(1).expect("compact at first index is a no-op");
+    storage
+        .compact(1)
+        .expect("compact at first index is a no-op");
     assert_eq!(
         storage.compact(9).unwrap_err().to_string(),
         "storage error: compact index 9 beyond last index 3"
@@ -189,11 +207,14 @@ fn compact_makes_prefix_reads_fail() {
 #[test]
 fn apply_snapshot_truncates_log_and_survives_reopen() {
     let dir = tempdir().unwrap();
-    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1])))
-        .expect("open");
+    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1]))).expect("open");
 
     storage
-        .append(&[new_entry(1, 1, b"a"), new_entry(2, 1, b"b"), new_entry(3, 1, b"c")])
+        .append(&[
+            new_entry(1, 1, b"a"),
+            new_entry(2, 1, b"b"),
+            new_entry(3, 1, b"c"),
+        ])
         .expect("append");
 
     let mut snapshot = Snapshot::default();
@@ -234,9 +255,14 @@ fn apply_snapshot_truncates_log_and_survives_reopen() {
     assert_eq!(state.hard_state.commit, 2);
 
     // New appends continue right after the snapshot.
-    reopened.append(&[new_entry(3, 2, b"d")]).expect("append after snapshot");
+    reopened
+        .append(&[new_entry(3, 2, b"d")])
+        .expect("append after snapshot");
     assert_eq!(RaftStorage::last_index(&reopened).unwrap(), 3);
-    assert_eq!(entries(&reopened, 3, 4, None).unwrap()[0].data.as_ref(), b"d");
+    assert_eq!(
+        entries(&reopened, 3, 4, None).unwrap()[0].data.as_ref(),
+        b"d"
+    );
 }
 
 /// A conflicting append (lower or equal index, different term) overwrites
@@ -244,13 +270,18 @@ fn apply_snapshot_truncates_log_and_survives_reopen() {
 #[test]
 fn conflicting_append_overwrites_tail() {
     let dir = tempdir().unwrap();
-    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1])))
-        .expect("open");
+    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1]))).expect("open");
 
     storage
-        .append(&[new_entry(1, 1, b"a"), new_entry(2, 1, b"b"), new_entry(3, 1, b"c")])
+        .append(&[
+            new_entry(1, 1, b"a"),
+            new_entry(2, 1, b"b"),
+            new_entry(3, 1, b"c"),
+        ])
         .expect("append");
-    storage.append(&[new_entry(2, 2, b"B")]).expect("conflicting append");
+    storage
+        .append(&[new_entry(2, 2, b"B")])
+        .expect("conflicting append");
 
     assert_eq!(RaftStorage::last_index(&storage).unwrap(), 2);
     assert_eq!(RaftStorage::term(&storage, 2).unwrap(), 2);
@@ -269,19 +300,28 @@ fn conflicting_append_overwrites_tail() {
 #[test]
 fn snapshot_uses_commit_index_and_conf_state() {
     let dir = tempdir().unwrap();
-    let storage = EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1, 2])))
-        .expect("open");
+    let storage =
+        EngineStorage::open(dir.path(), REGION, Some(conf_state(vec![1, 2]))).expect("open");
 
     storage
-        .append(&[new_entry(1, 1, b"a"), new_entry(2, 1, b"b"), new_entry(3, 2, b"c")])
+        .append(&[
+            new_entry(1, 1, b"a"),
+            new_entry(2, 1, b"b"),
+            new_entry(3, 2, b"c"),
+        ])
         .expect("append");
-    storage.set_hard_state(hard_state(2, 1, 2)).expect("hard state");
+    storage
+        .set_hard_state(hard_state(2, 1, 2))
+        .expect("hard state");
 
     let snap = RaftStorage::snapshot(&storage, 0, 0).expect("snapshot");
     assert_eq!(snap.get_metadata().index, 2);
     assert_eq!(snap.get_metadata().term, 1);
     assert_eq!(snap.get_metadata().get_conf_state().voters, vec![1, 2]);
-    assert!(snap.data.is_empty(), "empty-snapshot bootstrap carries no data");
+    assert!(
+        snap.data.is_empty(),
+        "empty-snapshot bootstrap carries no data"
+    );
 
     // Requests ahead of the commit are bumped to the request index.
     let snap = RaftStorage::snapshot(&storage, 5, 0).expect("snapshot");

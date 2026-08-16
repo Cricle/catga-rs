@@ -148,14 +148,20 @@ fn parse_args(k8s_mode: bool) -> CatgaResult<Args> {
             "--base-port" => base_port = parse_value("base-port", iter.next())?,
             "--bench-writes" => bench_writes = Some(parse_value("bench-writes", iter.next())?),
             "--bench-addr" => bench_addr = Some(parse_value("bench-addr", iter.next())?),
-            "--bench-concurrency" => bench_concurrency = parse_value("bench-concurrency", iter.next())?,
+            "--bench-concurrency" => {
+                bench_concurrency = parse_value("bench-concurrency", iter.next())?
+            }
             "--bench-batch" => bench_batch = parse_value("bench-batch", iter.next())?,
             "--bench-mode" => {
                 let raw = parse_value::<String>("bench-mode", iter.next())?;
                 bench_mode = match raw.as_str() {
                     "http" => BenchMode::Http,
                     "grpc" => BenchMode::Grpc,
-                    other => return Err(invalid(format!("--bench-mode must be http or grpc, got {other}"))),
+                    other => {
+                        return Err(invalid(format!(
+                            "--bench-mode must be http or grpc, got {other}"
+                        )));
+                    }
                 };
             }
             "--probe-grpc" => {
@@ -195,7 +201,9 @@ fn parse_args(k8s_mode: bool) -> CatgaResult<Args> {
     }
     // Raft, HTTP API, and KV gRPC each take a nodes*100 port band above base.
     if u64::from(base_port) + nodes * 300 > u64::from(u16::MAX) + 1 {
-        return Err(invalid("--base-port leaves no room for all raft + API + gRPC ports"));
+        return Err(invalid(
+            "--base-port leaves no room for all raft + API + gRPC ports",
+        ));
     }
     Ok(Args {
         node,
@@ -225,7 +233,14 @@ async fn main() -> CatgaResult<()> {
             .bench_addr
             .clone()
             .ok_or_else(|| invalid("--bench-writes requires --bench-addr"))?;
-        return node::bench(&addr, writes, args.bench_concurrency, args.bench_batch, args.bench_mode).await;
+        return node::bench(
+            &addr,
+            writes,
+            args.bench_concurrency,
+            args.bench_batch,
+            args.bench_mode,
+        )
+        .await;
     }
     node::run(args, k8s).await
 }

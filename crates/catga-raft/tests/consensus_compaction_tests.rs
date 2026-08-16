@@ -21,12 +21,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use catga_core::{CatgaResult, ConsensusRuntime, ConsensusStateMachine};
-use catga_raft::storage::{CatgaStorage, EngineStorage};
 use catga_raft::CatgaRaftRuntimeBuilder;
+use catga_raft::storage::{CatgaStorage, EngineStorage};
 use parking_lot::Mutex;
 use raft::prelude::Entry;
 use raft::storage::GetEntriesContext;
-use raft::{Error as RaftError, StorageError, Storage as RaftStorage};
+use raft::{Error as RaftError, Storage as RaftStorage, StorageError};
 use tempfile::tempdir;
 
 /// Small margin so compaction becomes observable with ~150 entries. All
@@ -54,7 +54,11 @@ impl RecordingMachine {
     }
 
     fn applied_payloads(&self) -> Vec<Vec<u8>> {
-        self.applied.lock().iter().map(|(_, data)| data.clone()).collect()
+        self.applied
+            .lock()
+            .iter()
+            .map(|(_, data)| data.clone())
+            .collect()
     }
 }
 
@@ -236,10 +240,17 @@ async fn single_node_engine_compaction_moves_first_index_and_survives_restart() 
         assert_eq!(last, applied, "compaction must not touch the log tail");
 
         // The discarded prefix reports the raft-standard error.
-        let err = RaftStorage::entries(&storage, 1, expected_first, None, GetEntriesContext::empty(false))
-            .expect_err("entries below the boundary must fail");
+        let err = RaftStorage::entries(
+            &storage,
+            1,
+            expected_first,
+            None,
+            GetEntriesContext::empty(false),
+        )
+        .expect_err("entries below the boundary must fail");
         assert_is_compacted(&err, "entries");
-        let err = RaftStorage::term(&storage, expected_first - 1).expect_err("term below the boundary must fail");
+        let err = RaftStorage::term(&storage, expected_first - 1)
+            .expect_err("term below the boundary must fail");
         assert_is_compacted(&err, "term");
 
         // The kept window is fully readable and intact.
@@ -253,7 +264,10 @@ async fn single_node_engine_compaction_moves_first_index_and_survives_restart() 
         .expect("entries in the kept window");
         assert_eq!(kept.len(), MARGIN as usize + 1);
         assert_eq!(kept.first().unwrap().index, expected_first);
-        assert_eq!(kept.first().unwrap().data, payload_at(expected_first).as_slice());
+        assert_eq!(
+            kept.first().unwrap().data,
+            payload_at(expected_first).as_slice()
+        );
         assert_eq!(kept.last().unwrap().data, payload_at(applied).as_slice());
 
         // HardState and conf state are unaffected by compaction.
@@ -293,7 +307,9 @@ async fn single_node_engine_compaction_moves_first_index_and_survives_restart() 
             .await
             .expect("propose after restart");
         let applied = eventually(Duration::from_secs(10), || {
-            recorder.applied_payloads().contains(&b"comp-post-restart".to_vec())
+            recorder
+                .applied_payloads()
+                .contains(&b"comp-post-restart".to_vec())
         })
         .await;
         assert!(applied, "entry proposed after restart must be applied");
@@ -317,13 +333,20 @@ async fn single_node_engine_compaction_moves_first_index_and_survives_restart() 
             "post-restart entries must be durable (last={last})"
         );
         assert!(first <= last, "first/last must stay ordered");
-        let kept = RaftStorage::entries(&storage, first, last + 1, None, GetEntriesContext::empty(false))
-            .expect("kept window readable after restart");
+        let kept = RaftStorage::entries(
+            &storage,
+            first,
+            last + 1,
+            None,
+            GetEntriesContext::empty(false),
+        )
+        .expect("kept window readable after restart");
         assert_eq!(kept.len() as u64, last - first + 1);
         assert!(kept.iter().any(|e| e.data == b"comp-post-restart".to_vec()));
         if first > 1 {
-            let err = RaftStorage::entries(&storage, 1, first, None, GetEntriesContext::empty(false))
-                .expect_err("prefix below the boundary must stay compacted");
+            let err =
+                RaftStorage::entries(&storage, 1, first, None, GetEntriesContext::empty(false))
+                    .expect_err("prefix below the boundary must stay compacted");
             assert_is_compacted(&err, "entries after restart");
         }
         let hard_state = storage.hard_state();
@@ -469,7 +492,9 @@ async fn maybe_compact_respects_margin_and_reports_compacted() {
 
     // applied at or below the margin: nothing may move.
     memory.maybe_compact(0).expect("compact at 0 is a no-op");
-    memory.maybe_compact(MARGIN).expect("compact at the margin is a no-op");
+    memory
+        .maybe_compact(MARGIN)
+        .expect("compact at the margin is a no-op");
     assert_eq!(RaftStorage::first_index(&memory).unwrap(), 1);
     assert_eq!(RaftStorage::last_index(&memory).unwrap(), 150);
 
@@ -477,10 +502,17 @@ async fn maybe_compact_respects_margin_and_reports_compacted() {
     memory.maybe_compact(150).expect("compact");
     assert_eq!(RaftStorage::first_index(&memory).unwrap(), 150 - MARGIN);
     assert_eq!(RaftStorage::last_index(&memory).unwrap(), 150);
-    let err = RaftStorage::entries(&memory, 1, 150 - MARGIN, None, GetEntriesContext::empty(false))
-        .expect_err("entries below the boundary must fail");
+    let err = RaftStorage::entries(
+        &memory,
+        1,
+        150 - MARGIN,
+        None,
+        GetEntriesContext::empty(false),
+    )
+    .expect_err("entries below the boundary must fail");
     assert_is_compacted(&err, "memory entries");
-    let err = RaftStorage::term(&memory, 150 - MARGIN - 1).expect_err("term below the boundary must fail");
+    let err = RaftStorage::term(&memory, 150 - MARGIN - 1)
+        .expect_err("term below the boundary must fail");
     assert_is_compacted(&err, "memory term");
     assert_eq!(RaftStorage::term(&memory, 150 - MARGIN).unwrap(), 1);
     let kept = RaftStorage::entries(
@@ -499,12 +531,20 @@ async fn maybe_compact_respects_margin_and_reports_compacted() {
 
     // Engine variant: same policy, durable boundary.
     let dir = tempdir().unwrap();
-    let engine_storage = CatgaStorage::engine(dir.path().join("unit"), 7, None).expect("engine open");
-    engine_storage.append_entries(&entries).expect("append to engine");
-    engine_storage.maybe_compact(MARGIN).expect("no-op at margin");
+    let engine_storage =
+        CatgaStorage::engine(dir.path().join("unit"), 7, None).expect("engine open");
+    engine_storage
+        .append_entries(&entries)
+        .expect("append to engine");
+    engine_storage
+        .maybe_compact(MARGIN)
+        .expect("no-op at margin");
     assert_eq!(RaftStorage::first_index(&engine_storage).unwrap(), 1);
     engine_storage.maybe_compact(150).expect("engine compact");
-    assert_eq!(RaftStorage::first_index(&engine_storage).unwrap(), 150 - MARGIN);
+    assert_eq!(
+        RaftStorage::first_index(&engine_storage).unwrap(),
+        150 - MARGIN
+    );
     assert_eq!(RaftStorage::last_index(&engine_storage).unwrap(), 150);
     let err = RaftStorage::entries(
         &engine_storage,
@@ -530,5 +570,8 @@ async fn maybe_compact_respects_margin_and_reports_compacted() {
     )
     .unwrap();
     assert_eq!(kept.len(), MARGIN as usize + 1);
-    assert_eq!(kept.first().unwrap().data, format!("mem-{:04}", 150 - MARGIN).into_bytes());
+    assert_eq!(
+        kept.first().unwrap().data,
+        format!("mem-{:04}", 150 - MARGIN).into_bytes()
+    );
 }

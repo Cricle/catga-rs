@@ -16,7 +16,7 @@ use catga_raft::node::RaftNode;
 use catga_raft::{CatgaRaftConfig, CatgaRaftError};
 use raft::prelude::{Message, MessageType};
 use raft::storage::MemStorage;
-use raft::{StateRole, INVALID_ID};
+use raft::{INVALID_ID, StateRole};
 use slog::Logger;
 
 /// A no-op logger suitable for constructing raft nodes in tests.
@@ -108,7 +108,10 @@ fn test_node_enables_pre_vote_and_check_quorum() {
     let node = new_single_node();
     let raw = node.raw_node();
     let rn = raw.lock();
-    assert!(rn.raft.pre_vote, "pre_vote must be enabled in RaftNode::new");
+    assert!(
+        rn.raft.pre_vote,
+        "pre_vote must be enabled in RaftNode::new"
+    );
     assert!(
         rn.raft.check_quorum,
         "check_quorum must be enabled in RaftNode::new"
@@ -276,7 +279,8 @@ fn test_node_step_heartbeat_adopts_new_leader_and_term() {
     msg.set_from(2);
     msg.set_term(7);
 
-    node.step(msg).expect("heartbeat from a higher term must be accepted");
+    node.step(msg)
+        .expect("heartbeat from a higher term must be accepted");
 
     let rn_guard = node.raw_node();
     let rn = rn_guard.lock();

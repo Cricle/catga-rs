@@ -198,11 +198,7 @@ impl BatchSender {
         let count = batches.len();
         for (peer_id, messages) in batches {
             if !messages.is_empty() {
-                tracing::trace!(
-                    peer_id,
-                    batch_size = messages.len(),
-                    "flushing batch"
-                );
+                tracing::trace!(peer_id, batch_size = messages.len(), "flushing batch");
             }
         }
 

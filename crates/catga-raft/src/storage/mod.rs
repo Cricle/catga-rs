@@ -5,8 +5,8 @@
 //! - [`catga_storage`] - CatgaStorage enum used by the builder/owner loop
 //! - [`engine`] - EngineStorage: persistent raft::Storage via raft-engine
 
-pub mod engine;
 pub mod catga_storage;
+pub mod engine;
 
-pub use engine::EngineStorage;
 pub use catga_storage::{CatgaStorage, SnapshotProvider};
+pub use engine::EngineStorage;

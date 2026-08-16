@@ -15,7 +15,9 @@ struct RecordingMachine {
 
 impl RecordingMachine {
     fn new() -> Self {
-        Self { applied: Arc::new(Mutex::new(Vec::new())) }
+        Self {
+            applied: Arc::new(Mutex::new(Vec::new())),
+        }
     }
     fn payloads(&self) -> Vec<Vec<u8>> {
         self.applied.lock().iter().map(|(_, d)| d.clone()).collect()
@@ -27,15 +29,23 @@ impl ConsensusStateMachine for RecordingMachine {
         self.applied.lock().push((index, data.to_vec()));
         Ok(())
     }
-    fn snapshot(&self) -> CatgaResult<Vec<u8>> { Ok(Vec::new()) }
-    fn restore(&mut self, _bytes: &[u8]) -> CatgaResult<()> { Ok(()) }
+    fn snapshot(&self) -> CatgaResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+    fn restore(&mut self, _bytes: &[u8]) -> CatgaResult<()> {
+        Ok(())
+    }
 }
 
 async fn eventually<F: FnMut() -> bool>(timeout: Duration, mut f: F) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if f() { return true; }
-        if std::time::Instant::now() >= deadline { return false; }
+        if f() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -114,7 +124,11 @@ async fn concurrent_propose_and_wait_all_attributed() {
     let mut indexes: Vec<u64> = results.iter().map(|(i, _)| *i).collect();
     indexes.sort_unstable();
     indexes.dedup();
-    assert_eq!(indexes.len(), 16, "each proposer must resolve its own entry");
+    assert_eq!(
+        indexes.len(),
+        16,
+        "each proposer must resolve its own entry"
+    );
 
     // Every payload was applied (asynchronously after commit-time
     // resolution; poll until the apply worker has caught up).
@@ -125,7 +139,10 @@ async fn concurrent_propose_and_wait_all_attributed() {
             .all(|(_, payload)| applied.contains(&payload.as_bytes().to_vec()))
     })
     .await;
-    assert!(all_applied, "every committed entry must reach the state machine");
+    assert!(
+        all_applied,
+        "every committed entry must reach the state machine"
+    );
 
     let rt = Arc::try_unwrap(runtime).unwrap_or_else(|_| panic!("runtime still shared"));
     rt.shutdown();
@@ -170,7 +187,9 @@ async fn propose_and_wait_on_three_node_cluster() {
     for (i, recorder) in recorders.iter().enumerate() {
         let recorder = recorder.clone();
         let ok = eventually(Duration::from_secs(30), || {
-            recorder.payloads().contains(&b"cluster-attributed".to_vec())
+            recorder
+                .payloads()
+                .contains(&b"cluster-attributed".to_vec())
         })
         .await;
         assert!(ok, "node {i} must apply the attributed entry");
@@ -187,7 +206,10 @@ async fn propose_serializable_round_trips_bincode() {
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-    struct Cmd { op: String, n: u64 }
+    struct Cmd {
+        op: String,
+        n: u64,
+    }
 
     let machine = RecordingMachine::new();
     let recorder = machine.clone();
@@ -203,7 +225,10 @@ async fn propose_serializable_round_trips_bincode() {
     .await;
     assert!(leader_known, "single node must become leader");
 
-    let cmd = Cmd { op: "put".into(), n: 42 };
+    let cmd = Cmd {
+        op: "put".into(),
+        n: 42,
+    };
     let index = runtime
         .propose_and_wait_serializable(&cmd, Duration::from_secs(5))
         .await
@@ -220,10 +245,18 @@ async fn propose_serializable_round_trips_bincode() {
         })
     })
     .await;
-    assert!(applied, "the committed entry must be applied and decode back to the original command");
+    assert!(
+        applied,
+        "the committed entry must be applied and decode back to the original command"
+    );
 
     // Fire-and-forget variant works too.
-    runtime.propose_serializable(&Cmd { op: "del".into(), n: 7 }).expect("propose_serializable");
+    runtime
+        .propose_serializable(&Cmd {
+            op: "del".into(),
+            n: 7,
+        })
+        .expect("propose_serializable");
 
     runtime.shutdown();
     Box::new(runtime).join().await.expect("join");

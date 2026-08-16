@@ -27,9 +27,9 @@ pub type CatgaRaftResult<T> = Result<T, CatgaRaftError>;
 impl From<CatgaRaftError> for catga_core::CatgaError {
     fn from(error: CatgaRaftError) -> Self {
         let code = match &error {
-            CatgaRaftError::Raft(_)
-            | CatgaRaftError::Storage(_)
-            | CatgaRaftError::Apply(_) => catga_core::ErrorCode::Internal,
+            CatgaRaftError::Raft(_) | CatgaRaftError::Storage(_) | CatgaRaftError::Apply(_) => {
+                catga_core::ErrorCode::Internal
+            }
             CatgaRaftError::Transport(_) => catga_core::ErrorCode::TransportFailed,
             CatgaRaftError::Codec(_) => catga_core::ErrorCode::SerializationFailed,
             // NotLeader maps to Unavailable rather than Conflict: the request did not clash

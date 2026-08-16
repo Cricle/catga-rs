@@ -111,7 +111,11 @@ fn builder_from_cli_node_index_beyond_cluster() {
 
     assert_eq!(builder.config().node_id, 6);
     let members = builder.members();
-    assert_eq!(members.len(), 3, "no peer is excluded when index is out of range");
+    assert_eq!(
+        members.len(),
+        3,
+        "no peer is excluded when index is out of range"
+    );
     let ids: Vec<u64> = members.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, vec![1, 2, 3]);
 }
@@ -401,7 +405,11 @@ async fn builder_start_single_node_runtime() {
     assert_eq!(runtime.config().cluster_id, 9);
 
     let coord = runtime.coordinator();
-    assert_eq!(coord.node_id(), "node-7", "coordinator id derives from node_id");
+    assert_eq!(
+        coord.node_id(),
+        "node-7",
+        "coordinator id derives from node_id"
+    );
     assert!(!coord.is_leader());
     assert!(coord.member_endpoints().is_empty());
 

@@ -33,9 +33,18 @@ fn endpoint_port(endpoint: &str) -> CatgaResult<u16> {
 }
 
 async fn shutdown_signal() {
-    let ctrl_c = async { signal::ctrl_c().await.expect("failed to install CTRL+C handler"); };
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install CTRL+C handler");
+    };
     #[cfg(unix)]
-    let terminate = async { signal::unix::signal(signal::unix::SignalKind::terminate()).expect("failed to install signal handler").recv().await; };
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
     tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
@@ -51,12 +60,21 @@ struct RaftStatus {
     applied_index: Option<u64>,
 }
 
-fn raft_probes(runtime: Arc<dyn ConsensusRuntime>, coordinator: Arc<dyn ConsensusCoordinator>) -> Router {
+fn raft_probes(
+    runtime: Arc<dyn ConsensusRuntime>,
+    coordinator: Arc<dyn ConsensusCoordinator>,
+) -> Router {
     let healthz = {
         let runtime = Arc::clone(&runtime);
         move || {
             let runtime = Arc::clone(&runtime);
-            async move { if runtime.is_alive() { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE } }
+            async move {
+                if runtime.is_alive() {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            }
         }
     };
     let status = {
@@ -75,7 +93,9 @@ fn raft_probes(runtime: Arc<dyn ConsensusRuntime>, coordinator: Arc<dyn Consensu
             }
         }
     };
-    Router::new().route(RAFT_HTTP_HEALTH_PATH, get(healthz)).route(RAFT_HTTP_STATUS_PATH, get(status))
+    Router::new()
+        .route(RAFT_HTTP_HEALTH_PATH, get(healthz))
+        .route(RAFT_HTTP_STATUS_PATH, get(status))
 }
 
 /// Tuned proposal pipeline: wide in-flight window + large batches so batch
@@ -89,22 +109,37 @@ fn tuned_pipeline_config() -> catga_raft::PipelineConfig {
     }
 }
 
-pub(super) async fn run_raft(args: &Args, k8s: Option<K8sTopology>, state: Arc<SharedState>, raft_dir: std::path::PathBuf) -> CatgaResult<()> {
+pub(super) async fn run_raft(
+    args: &Args,
+    k8s: Option<K8sTopology>,
+    state: Arc<SharedState>,
+    raft_dir: std::path::PathBuf,
+) -> CatgaResult<()> {
     let (builder, api_port, kv_grpc_port): (CatgaRaftRuntimeBuilder, u16, u16) = match k8s {
         Some(topology) => {
             let ordinal = topology.ordinal();
             let self_endpoint = topology.grpc_uri(ordinal);
             let kv_grpc_port = endpoint_port(&self_endpoint)? + KV_GRPC_PORT_OFFSET;
-            let builder = CatgaRaftRuntimeBuilder::from_cli(RAFT_API_PORT, ordinal, topology.replicas)?
-                .with_pipeline_config(tuned_pipeline_config())
-                .with_members((0..topology.replicas).filter(|i| *i != ordinal).map(|i| (i + 1, topology.grpc_uri(i))).collect())
-                .with_self_endpoint(self_endpoint);
+            let builder =
+                CatgaRaftRuntimeBuilder::from_cli(RAFT_API_PORT, ordinal, topology.replicas)?
+                    .with_pipeline_config(tuned_pipeline_config())
+                    .with_members(
+                        (0..topology.replicas)
+                            .filter(|i| *i != ordinal)
+                            .map(|i| (i + 1, topology.grpc_uri(i)))
+                            .collect(),
+                    )
+                    .with_self_endpoint(self_endpoint);
             (builder, RAFT_API_PORT, kv_grpc_port)
         }
         None => {
             let builder = CatgaRaftRuntimeBuilder::from_cli(args.base_port, args.node, args.nodes)?
                 .with_pipeline_config(tuned_pipeline_config());
-            let raft_port = endpoint_port(builder.self_endpoint().ok_or_else(|| map_err("builder has no raft self endpoint"))?)?;
+            let raft_port = endpoint_port(
+                builder
+                    .self_endpoint()
+                    .ok_or_else(|| map_err("builder has no raft self endpoint"))?,
+            )?;
             // Band layout, collision-free for any cluster size N: raft takes
             // [base, base + N*100), the HTTP API band starts at +N*100 and
             // the KV gRPC band at +2N*100, so the three bands are disjoint
@@ -128,7 +163,8 @@ pub(super) async fn run_raft(args: &Args, k8s: Option<K8sTopology>, state: Arc<S
     let coordinator: Arc<dyn ConsensusCoordinator> = coordinator;
     // The trait is object-safe: the probes run off the erased handle.
     let consensus_runtime = Arc::clone(&runtime) as Arc<dyn ConsensusRuntime>;
-    let (app_state, _mediator) = api_and_mediator(Arc::clone(&runtime), Arc::clone(&state), node_id)?;
+    let (app_state, _mediator) =
+        api_and_mediator(Arc::clone(&runtime), Arc::clone(&state), node_id)?;
     let grpc_service = kv_grpc::router(app_state.clone());
 
     let routes = Router::new()
@@ -137,14 +173,19 @@ pub(super) async fn run_raft(args: &Args, k8s: Option<K8sTopology>, state: Arc<S
         .with_state(app_state)
         .merge(raft_probes(Arc::clone(&consensus_runtime), coordinator));
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.map_err(map_err)?;
-    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{kv_grpc_port}").parse().map_err(map_err)?;
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(map_err)?;
+    let grpc_addr: std::net::SocketAddr =
+        format!("0.0.0.0:{kv_grpc_port}").parse().map_err(map_err)?;
     tracing::info!(%addr, %grpc_addr, node_id, "distributed-kv node listening (raft backend)");
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
     let server = tokio::spawn(async move {
         axum::serve(listener, routes)
-            .with_graceful_shutdown(async move { let _ = shutdown_rx.recv().await; })
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.recv().await;
+            })
             .await
             .map_err(|error| map_err(format!("raft http server: {error}")))
     });
@@ -152,7 +193,9 @@ pub(super) async fn run_raft(args: &Args, k8s: Option<K8sTopology>, state: Arc<S
     let grpc_server = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(grpc_service)
-            .serve_with_shutdown(grpc_addr, async move { let _ = grpc_shutdown_rx.recv().await; })
+            .serve_with_shutdown(grpc_addr, async move {
+                let _ = grpc_shutdown_rx.recv().await;
+            })
             .await
             .map_err(|error| map_err(format!("kv grpc server: {error}")))
     });
@@ -160,8 +203,12 @@ pub(super) async fn run_raft(args: &Args, k8s: Option<K8sTopology>, state: Arc<S
     shutdown_signal().await;
     let _ = shutdown_tx.send(());
     let _ = consensus_runtime.shutdown_and_join().await;
-    let http_result = server.await.map_err(|error| map_err(format!("raft http server task: {error}")))?;
-    let grpc_result = grpc_server.await.map_err(|error| map_err(format!("kv grpc server task: {error}")))?;
+    let http_result = server
+        .await
+        .map_err(|error| map_err(format!("raft http server task: {error}")))?;
+    let grpc_result = grpc_server
+        .await
+        .map_err(|error| map_err(format!("kv grpc server task: {error}")))?;
     http_result?;
     grpc_result
 }

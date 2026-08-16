@@ -249,7 +249,7 @@ impl<S: ConsensusStateMachine> ApplyThread<S> {
     /// index and `index` is harmless.
     ///
     /// The machine mutex is held across restore and the frontier update, so
-    /// a concurrent snapshot provider ([`Self::state_machine`] + 
+    /// a concurrent snapshot provider ([`Self::state_machine`] +
     /// [`Self::applied_index`]) always observes a consistent
     /// `(state, applied_index)` pair.
     pub fn restore(&self, data: &[u8], index: u64) -> CatgaResult<()> {

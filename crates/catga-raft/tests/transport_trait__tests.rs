@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
 use bytes::Bytes;
-use catga_raft::transport::trait_::Transport as TraitModuleTransport;
 use catga_raft::transport::Transport;
+use catga_raft::transport::trait_::Transport as TraitModuleTransport;
 use catga_raft::{CatgaRaftError, CatgaRaftResult};
 
 // ============================================================================
@@ -196,7 +196,10 @@ impl Transport for SnapshotOverrideTransport {
         _peer_id: u64,
         snapshot: Bytes,
     ) -> impl std::future::Future<Output = CatgaRaftResult<()>> + Send {
-        self.snapshot_payloads.lock().unwrap().push(snapshot.to_vec());
+        self.snapshot_payloads
+            .lock()
+            .unwrap()
+            .push(snapshot.to_vec());
         std::future::ready(Ok(()))
     }
 
@@ -280,8 +283,14 @@ fn transport_trait_new_transport_has_empty_peer_set() {
 async fn transport_trait_add_and_remove_peer_lifecycle() {
     let transport = MockTransport::new(1);
 
-    transport.add_peer(2, "127.0.0.1:0".to_string()).await.unwrap();
-    transport.add_peer(3, "127.0.0.1:0".to_string()).await.unwrap();
+    transport
+        .add_peer(2, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
+    transport
+        .add_peer(3, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
 
     assert!(transport.has_peer(2));
     assert!(transport.has_peer(3));
@@ -290,7 +299,10 @@ async fn transport_trait_add_and_remove_peer_lifecycle() {
     assert_eq!(transport.peer_ids(), vec![2, 3]);
 
     // Re-adding an existing peer updates it in place; count must not grow.
-    transport.add_peer(2, "127.0.0.1:1".to_string()).await.unwrap();
+    transport
+        .add_peer(2, "127.0.0.1:1".to_string())
+        .await
+        .unwrap();
     assert_eq!(transport.peer_count(), 2);
 
     transport.remove_peer(2).await.unwrap();
@@ -313,7 +325,10 @@ async fn transport_trait_remove_unknown_peer_is_node_not_found() {
 #[tokio::test]
 async fn transport_trait_send_message_records_payload_for_known_peer() {
     let transport = MockTransport::new(1);
-    transport.add_peer(2, "127.0.0.1:0".to_string()).await.unwrap();
+    transport
+        .add_peer(2, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
 
     // Goes through a generic `T: Transport` helper, exercising the trait bound.
     deliver_via_trait(&transport, 2, Bytes::from_static(b"hello peer 2"))
@@ -347,7 +362,10 @@ async fn transport_trait_send_message_unknown_peer_returns_node_not_found() {
 #[tokio::test]
 async fn transport_trait_default_send_snapshot_delegates_to_send_message() {
     let transport = MockTransport::new(1);
-    transport.add_peer(2, "127.0.0.1:0".to_string()).await.unwrap();
+    transport
+        .add_peer(2, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
 
     transport
         .send_snapshot(2, Bytes::from_static(b"snapshot-bytes"))
@@ -368,7 +386,10 @@ async fn transport_trait_default_send_snapshot_delegates_to_send_message() {
 #[tokio::test]
 async fn transport_trait_default_send_vote_request_delegates_to_send_message() {
     let transport = MockTransport::new(1);
-    transport.add_peer(3, "127.0.0.1:0".to_string()).await.unwrap();
+    transport
+        .add_peer(3, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
 
     transport
         .send_vote_request(3, Bytes::from_static(b"vote-req"))
@@ -387,7 +408,10 @@ async fn transport_trait_default_send_vote_request_delegates_to_send_message() {
 #[tokio::test]
 async fn transport_trait_default_impls_propagate_send_errors() {
     let transport = MockTransport::new(1);
-    transport.add_peer(2, "127.0.0.1:0".to_string()).await.unwrap();
+    transport
+        .add_peer(2, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
     transport.fail_peer(2);
 
     let snapshot_err = transport
@@ -409,7 +433,10 @@ async fn transport_trait_default_impls_propagate_send_errors() {
 #[tokio::test]
 async fn transport_trait_overridden_send_snapshot_bypasses_default() {
     let transport = SnapshotOverrideTransport::default();
-    transport.add_peer(2, "127.0.0.1:0".to_string()).await.unwrap();
+    transport
+        .add_peer(2, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
 
     transport
         .send_snapshot(2, Bytes::from_static(b"big-snapshot"))
@@ -433,7 +460,10 @@ async fn transport_trait_overridden_send_snapshot_bypasses_default() {
 async fn transport_trait_broadcast_delivers_to_every_peer() {
     let transport = MockTransport::new(1);
     for id in [2u64, 3, 4] {
-        transport.add_peer(id, "127.0.0.1:0".to_string()).await.unwrap();
+        transport
+            .add_peer(id, "127.0.0.1:0".to_string())
+            .await
+            .unwrap();
     }
 
     transport
@@ -444,9 +474,18 @@ async fn transport_trait_broadcast_delivers_to_every_peer() {
     assert_eq!(
         transport.records(),
         vec![
-            SentRecord { peer_id: 2, payload: b"heartbeat".to_vec() },
-            SentRecord { peer_id: 3, payload: b"heartbeat".to_vec() },
-            SentRecord { peer_id: 4, payload: b"heartbeat".to_vec() },
+            SentRecord {
+                peer_id: 2,
+                payload: b"heartbeat".to_vec()
+            },
+            SentRecord {
+                peer_id: 3,
+                payload: b"heartbeat".to_vec()
+            },
+            SentRecord {
+                peer_id: 4,
+                payload: b"heartbeat".to_vec()
+            },
         ]
     );
 }
@@ -469,7 +508,10 @@ async fn transport_trait_broadcast_with_no_peers_is_ok() {
 async fn transport_trait_send_many_routes_distinct_payloads_per_peer() {
     let transport = MockTransport::new(1);
     for id in [2u64, 3] {
-        transport.add_peer(id, "127.0.0.1:0".to_string()).await.unwrap();
+        transport
+            .add_peer(id, "127.0.0.1:0".to_string())
+            .await
+            .unwrap();
     }
 
     let mut messages = HashMap::new();
@@ -483,8 +525,14 @@ async fn transport_trait_send_many_routes_distinct_payloads_per_peer() {
     assert_eq!(
         records,
         vec![
-            SentRecord { peer_id: 2, payload: b"for-two".to_vec() },
-            SentRecord { peer_id: 3, payload: b"for-three".to_vec() },
+            SentRecord {
+                peer_id: 2,
+                payload: b"for-two".to_vec()
+            },
+            SentRecord {
+                peer_id: 3,
+                payload: b"for-three".to_vec()
+            },
         ]
     );
 }
@@ -499,7 +547,10 @@ async fn transport_trait_send_many_empty_map_is_ok() {
 #[tokio::test]
 async fn transport_trait_send_many_reports_failure_for_unknown_peer() {
     let transport = MockTransport::new(1);
-    transport.add_peer(2, "127.0.0.1:0".to_string()).await.unwrap();
+    transport
+        .add_peer(2, "127.0.0.1:0".to_string())
+        .await
+        .unwrap();
 
     let mut messages = HashMap::new();
     messages.insert(2u64, Bytes::from_static(b"ok"));
@@ -511,7 +562,10 @@ async fn transport_trait_send_many_reports_failure_for_unknown_peer() {
     // The valid peer still received its message despite the partial failure.
     assert_eq!(
         transport.records(),
-        vec![SentRecord { peer_id: 2, payload: b"ok".to_vec() }]
+        vec![SentRecord {
+            peer_id: 2,
+            payload: b"ok".to_vec()
+        }]
     );
 }
 

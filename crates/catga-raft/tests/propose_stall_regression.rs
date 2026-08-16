@@ -12,8 +12,8 @@
 //! through `ConsensusRuntime::propose` — comfortably above the 1024 default
 //! window — all of which must succeed and eventually be applied.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use catga_core::{CatgaResult, ConsensusRuntime, ConsensusStateMachine};

@@ -23,7 +23,13 @@ use catga_raft::{CatgaRaftError, GrpcTransport};
 use raft::prelude::MessageType;
 
 /// Build a distinct raft message for delivery assertions.
-fn message(msg_type: MessageType, from: u64, to: u64, term: u64, index: u64) -> raft::prelude::Message {
+fn message(
+    msg_type: MessageType,
+    from: u64,
+    to: u64,
+    term: u64,
+    index: u64,
+) -> raft::prelude::Message {
     let mut msg = raft::prelude::Message::default();
     msg.msg_type = msg_type;
     msg.from = from;
@@ -84,7 +90,10 @@ async fn send_grouped_partial_failure_still_delivers_successes() {
     grouped.insert(2, sent.iter().map(encode).collect::<Vec<_>>());
     // Peer 99 was never registered: it must fail without sinking the batch
     // destined for the healthy peer.
-    grouped.insert(99, vec![encode(&message(MessageType::MsgHeartbeat, 1, 99, 1, 0))]);
+    grouped.insert(
+        99,
+        vec![encode(&message(MessageType::MsgHeartbeat, 1, 99, 1, 0))],
+    );
 
     let err = transport
         .send_grouped(grouped)
@@ -117,14 +126,20 @@ async fn send_grouped_counts_every_failed_peer_in_summary() {
 
     let mut grouped = HashMap::new();
     // Unknown peer: NodeNotFound mapped into the summary.
-    grouped.insert(7, vec![encode(&message(MessageType::MsgHeartbeat, 1, 7, 1, 0))]);
+    grouped.insert(
+        7,
+        vec![encode(&message(MessageType::MsgHeartbeat, 1, 7, 1, 0))],
+    );
     // Registered but unreachable peer: invalid endpoint fails fast and
     // deterministically.
     transport
         .add_peer(8, "http://not a valid endpoint".to_string())
         .await
         .unwrap();
-    grouped.insert(8, vec![encode(&message(MessageType::MsgHeartbeat, 1, 8, 1, 0))]);
+    grouped.insert(
+        8,
+        vec![encode(&message(MessageType::MsgHeartbeat, 1, 8, 1, 0))],
+    );
 
     let err = transport
         .send_grouped(grouped)
@@ -153,7 +168,10 @@ async fn send_grouped_self_skip_counts_as_success_in_mixed_group() {
 
     let to_two = vec![message(MessageType::MsgAppend, 1, 2, 1, 5)];
     let mut grouped = HashMap::new();
-    grouped.insert(0, vec![encode(&message(MessageType::MsgHeartbeat, 1, 0, 1, 0))]);
+    grouped.insert(
+        0,
+        vec![encode(&message(MessageType::MsgHeartbeat, 1, 0, 1, 0))],
+    );
     grouped.insert(2, to_two.iter().map(encode).collect::<Vec<_>>());
 
     transport.send_grouped(grouped).await.unwrap();
@@ -164,7 +182,10 @@ async fn send_grouped_self_skip_counts_as_success_in_mixed_group() {
         to_two.len(),
         "only peer 2's batch may arrive; peer 0 is skipped"
     );
-    assert_eq!(got.iter().map(key).collect::<Vec<_>>(), to_two.iter().map(key).collect::<Vec<_>>());
+    assert_eq!(
+        got.iter().map(key).collect::<Vec<_>>(),
+        to_two.iter().map(key).collect::<Vec<_>>()
+    );
 
     handle.abort();
 }
@@ -209,7 +230,9 @@ async fn conn_pool_warm_path_serves_concurrent_reads_without_growing() {
         tasks.push(tokio::spawn(async move { p.get_channel().await }));
     }
     for t in tasks {
-        t.await.expect("task join").expect("warm get_channel succeeds");
+        t.await
+            .expect("task join")
+            .expect("warm get_channel succeeds");
     }
 
     assert_eq!(

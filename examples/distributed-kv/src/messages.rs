@@ -158,7 +158,10 @@ impl KvService {
     ///   the message reports how many items were proposed first.
     /// - [`ErrorCode::Timeout`]: the batch was not applied within the wait
     ///   budget.
-    pub(crate) async fn put_batch(&self, items: Vec<(String, String)>) -> CatgaResult<PutBatchResult> {
+    pub(crate) async fn put_batch(
+        &self,
+        items: Vec<(String, String)>,
+    ) -> CatgaResult<PutBatchResult> {
         if items.is_empty() {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
@@ -168,7 +171,10 @@ impl KvService {
         if items.len() > MAX_BATCH_ITEMS {
             return Err(CatgaError::new(
                 ErrorCode::Validation,
-                format!("batch has {} items; at most {MAX_BATCH_ITEMS} are allowed", items.len()),
+                format!(
+                    "batch has {} items; at most {MAX_BATCH_ITEMS} are allowed",
+                    items.len()
+                ),
             ));
         }
         for (position, (key, _)) in items.iter().enumerate() {
@@ -181,7 +187,9 @@ impl KvService {
         }
         // Reserve a contiguous op-id range in one atomic step so concurrent
         // writers cannot interleave their ids inside this batch's range.
-        let base_counter = self.op_counter.fetch_add(items.len() as u64, Ordering::Relaxed);
+        let base_counter = self
+            .op_counter
+            .fetch_add(items.len() as u64, Ordering::Relaxed);
         let count = items.len();
         let mut proposed = 0usize;
         for (offset, (key, value)) in items.iter().enumerate() {
@@ -205,7 +213,11 @@ impl KvService {
         // once the final item of the batch is applied every earlier item is
         // applied too. One wait therefore covers the whole batch.
         let last_op_id = (self.node_id << 56) | (base_counter + count as u64 - 1);
-        if !self.state.wait_applied(last_op_id, APPLY_WAIT_TIMEOUT).await {
+        if !self
+            .state
+            .wait_applied(last_op_id, APPLY_WAIT_TIMEOUT)
+            .await
+        {
             return Err(CatgaError::new(
                 ErrorCode::Timeout,
                 format!("batch committed but not applied within {APPLY_WAIT_TIMEOUT:?}"),
@@ -239,7 +251,9 @@ impl KvService {
 
 /// Registers the public write endpoints on the shared API router.
 pub(crate) fn write_route() -> Router<ApiState> {
-    Router::new().route("/kv", post(put_kv)).route("/kv/batch", post(put_kv_batch))
+    Router::new()
+        .route("/kv", post(put_kv))
+        .route("/kv/batch", post(put_kv_batch))
 }
 
 async fn put_kv(
@@ -257,7 +271,11 @@ async fn put_kv_batch(
     State(app): State<ApiState>,
     Json(body): Json<PutBatchBody>,
 ) -> Result<Json<PutBatchResult>, (StatusCode, String)> {
-    let items = body.items.into_iter().map(|item| (item.key, item.value)).collect();
+    let items = body
+        .items
+        .into_iter()
+        .map(|item| (item.key, item.value))
+        .collect();
     app.service
         .put_batch(items)
         .await

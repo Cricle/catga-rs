@@ -11,13 +11,13 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use catga_core::retry_delay;
 use catga_core::flow::dsl_lifecycle::{
     DslFlowLifecycleEvent, DslFlowLifecycleHooks, DslFlowLifecycleObserver,
 };
 use catga_core::flow::dsl_step::MAX_DSL_PARALLEL_BRANCHES;
 use catga_core::flow::flow_throttle::FlowThrottle;
 use catga_core::flow::{DslFlow, DslStep};
+use catga_core::retry_delay;
 use catga_core::{CatgaError, CatgaResult, ErrorCode};
 
 fn lifecycle_event_name(event: &DslFlowLifecycleEvent) -> String {

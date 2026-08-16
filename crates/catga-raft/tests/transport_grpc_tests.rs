@@ -201,7 +201,10 @@ async fn grpc_transport_broadcast_skips_local_node_entry() {
         .add_peer(9, UNREACHABLE_ENDPOINT.to_string())
         .await
         .unwrap();
-    transport.broadcast(Bytes::from_static(b"msg")).await.unwrap();
+    transport
+        .broadcast(Bytes::from_static(b"msg"))
+        .await
+        .unwrap();
 }
 
 // ============================================================================
@@ -280,10 +283,10 @@ async fn grpc_peer_client_with_config_custom_threshold() {
     let client = PeerClient::with_config(
         4,
         UNREACHABLE_ENDPOINT.to_string(),
-        2,                       // pool_size
-        16,                      // max_pending
-        32,                      // inflight_limit
-        8,                       // batch_size
+        2,                        // pool_size
+        16,                       // max_pending
+        32,                       // inflight_limit
+        8,                        // batch_size
         Duration::from_millis(1), // flush_interval
         config,
     );

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::{
-    Router, extract::Extension, middleware,
+    Router,
+    extract::Extension,
+    middleware,
     routing::{get, post},
 };
 use catga_axum::{

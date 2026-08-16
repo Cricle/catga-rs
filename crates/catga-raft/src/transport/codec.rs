@@ -58,10 +58,7 @@ pub trait RaftCodec: Send + Sync {
     /// Decode a snapshot.
     ///
     /// Default implementation uses `decode`.
-    fn decode_snapshot<T: serde::de::DeserializeOwned>(
-        &self,
-        data: &[u8],
-    ) -> CatgaRaftResult<T> {
+    fn decode_snapshot<T: serde::de::DeserializeOwned>(&self, data: &[u8]) -> CatgaRaftResult<T> {
         self.decode(data)
     }
 }

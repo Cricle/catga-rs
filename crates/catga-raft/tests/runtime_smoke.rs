@@ -6,9 +6,11 @@
 //! - Proposal handling (leader vs non-leader)
 //! - Coordinator state management
 
-use std::sync::Mutex;
-use catga_core::{CatgaResult, ConsensusCoordinator, ConsensusRuntime, ConsensusStateMachine, ErrorCode};
+use catga_core::{
+    CatgaResult, ConsensusCoordinator, ConsensusRuntime, ConsensusStateMachine, ErrorCode,
+};
 use catga_raft::CatgaRaftRuntimeBuilder;
+use std::sync::Mutex;
 
 /// A test state machine that records applied entries.
 #[derive(Default)]
@@ -144,7 +146,10 @@ async fn test_runtime_startup() {
     let coord = runtime.coordinator();
     assert_eq!(coord.node_id(), "node-1");
     assert!(!coord.is_leader(), "node should not be leader on startup");
-    assert!(coord.leader_endpoint().is_none(), "no leader known on startup");
+    assert!(
+        coord.leader_endpoint().is_none(),
+        "no leader known on startup"
+    );
 
     // Shutdown the runtime
     runtime.shutdown();
@@ -316,7 +321,10 @@ async fn test_runtime_not_leader() {
 
     let coord = runtime.coordinator();
     assert!(!coord.is_leader(), "should not be leader");
-    assert!(coord.leader_endpoint().is_none(), "no leader should be known");
+    assert!(
+        coord.leader_endpoint().is_none(),
+        "no leader should be known"
+    );
 
     // Propose should fail
     let result = runtime.propose(b"test data".to_vec()).await;
@@ -370,7 +378,10 @@ async fn test_runtime_set_leader_endpoint() {
 
     // We are the leader, so propose should succeed
     let result = runtime.propose(b"test data".to_vec()).await;
-    assert!(result.is_ok(), "propose should succeed when we are the leader");
+    assert!(
+        result.is_ok(),
+        "propose should succeed when we are the leader"
+    );
 
     runtime.shutdown();
     let _ = Box::new(runtime).join().await;
@@ -492,7 +503,10 @@ async fn test_runtime_applied_index() {
         .expect("start should succeed");
 
     // Initially applied index should be 0
-    let index = runtime.applied_index().await.expect("applied_index should succeed");
+    let index = runtime
+        .applied_index()
+        .await
+        .expect("applied_index should succeed");
     assert_eq!(index, 0);
 
     runtime.shutdown();
@@ -525,7 +539,9 @@ async fn test_runtime_membership_operations() {
         .expect("start should succeed");
 
     // Not the leader: membership requests are rejected honestly.
-    let result = runtime.add_member(4, "http://127.0.0.1:19903".to_string()).await;
+    let result = runtime
+        .add_member(4, "http://127.0.0.1:19903".to_string())
+        .await;
     let err = result.expect_err("add_member must fail when not leader");
     assert_eq!(err.code(), ErrorCode::Unavailable);
     assert!(err.message().contains("not leader"));

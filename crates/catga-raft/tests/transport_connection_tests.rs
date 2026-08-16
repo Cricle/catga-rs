@@ -19,7 +19,9 @@ use catga_raft::{CatgaRaftError, ConnectionPool};
 /// Bind an ephemeral TCP listener and spawn an accept loop that drops
 /// accepted sockets. Returns the endpoint URL and the accept task handle.
 async fn start_dummy_listener() -> (String, SocketAddr, tokio::task::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
     let addr = listener.local_addr().expect("local addr");
     let handle = tokio::spawn(async move {
         loop {
@@ -199,7 +201,11 @@ async fn conn_pool_concurrent_get_channel_stays_within_pool_size() {
     let mut ok = 0;
     for t in tasks {
         let result = t.await.expect("task join");
-        assert!(result.is_ok(), "concurrent get_channel failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "concurrent get_channel failed: {:?}",
+            result.err()
+        );
         ok += 1;
     }
     assert_eq!(ok, 8);
@@ -219,10 +225,17 @@ async fn conn_pool_get_channel_rejects_invalid_endpoint() {
     // Whitespace makes the URI unparseable by tonic's Endpoint::from_shared.
     let pool = ConnectionPool::new("not a valid uri".to_string(), 2);
 
-    let err = pool.get_channel().await.expect_err("must fail on invalid endpoint");
+    let err = pool
+        .get_channel()
+        .await
+        .expect_err("must fail on invalid endpoint");
     match err {
         CatgaRaftError::Transport(msg) => {
-            assert!(msg.contains("invalid endpoint"), "unexpected message: {}", msg);
+            assert!(
+                msg.contains("invalid endpoint"),
+                "unexpected message: {}",
+                msg
+            );
         }
         other => panic!("expected Transport error, got {:?}", other),
     }
@@ -234,17 +247,29 @@ async fn conn_pool_get_channel_rejects_invalid_endpoint() {
 async fn conn_pool_get_channel_fails_when_nothing_is_listening() {
     // Bind an ephemeral port, capture it, then drop the listener so the
     // subsequent connect attempt is refused on loopback (no long timeout).
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
     let addr = listener.local_addr().expect("local addr");
     drop(listener);
 
     let pool = ConnectionPool::new(format!("http://{}", addr), 2);
-    let err = pool.get_channel().await.expect_err("must fail on refused connection");
+    let err = pool
+        .get_channel()
+        .await
+        .expect_err("must fail on refused connection");
 
     match err {
         CatgaRaftError::Transport(msg) => {
-            assert!(msg.contains("failed to connect to"), "unexpected message: {}", msg);
-            assert!(msg.contains(&addr.to_string()), "message should name the endpoint");
+            assert!(
+                msg.contains("failed to connect to"),
+                "unexpected message: {}",
+                msg
+            );
+            assert!(
+                msg.contains(&addr.to_string()),
+                "message should name the endpoint"
+            );
         }
         other => panic!("expected Transport error, got {:?}", other),
     }

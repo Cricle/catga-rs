@@ -39,19 +39,19 @@ use protobuf::Message as ProtobufMessage;
 use raft::prelude::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, HardState, Message, RawNode,
 };
-use raft::{StateRole, INVALID_ID};
+use raft::{INVALID_ID, StateRole};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, warn};
 
 use catga_core::ConsensusStateMachine;
 
-use crate::{CatgaRaftError, CatgaRaftResult};
 use crate::apply::{ApplySender, ApplyThread};
 use crate::coordinator::CatgaRaftCoordinator;
 use crate::pipeline::{PipelineManager, ProposalBatch};
 use crate::storage::CatgaStorage;
 use crate::transport::GrpcTransport;
+use crate::{CatgaRaftError, CatgaRaftResult};
 
 const TICK_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -548,7 +548,6 @@ fn expire_pending_proposes(pending_props: &mut Vec<PendingPropose>) {
     }
 }
 
-
 /// Handles one membership-change request from the runtime.
 ///
 /// Leaders encode the request into a unique context, propose it as a raft
@@ -577,12 +576,18 @@ fn handle_conf_request(
     }
 
     let (change_type, op_tag, target_id, endpoint) = match &op {
-        crate::runtime::ConfChangeOp::Add { node_id, endpoint } => {
-            (ConfChangeType::AddNode, CONF_OP_ADD, *node_id, endpoint.clone())
-        }
-        crate::runtime::ConfChangeOp::Remove { node_id } => {
-            (ConfChangeType::RemoveNode, CONF_OP_REMOVE, *node_id, String::new())
-        }
+        crate::runtime::ConfChangeOp::Add { node_id, endpoint } => (
+            ConfChangeType::AddNode,
+            CONF_OP_ADD,
+            *node_id,
+            endpoint.clone(),
+        ),
+        crate::runtime::ConfChangeOp::Remove { node_id } => (
+            ConfChangeType::RemoveNode,
+            CONF_OP_REMOVE,
+            *node_id,
+            String::new(),
+        ),
     };
 
     let mut rn = raw_node.lock();
@@ -854,7 +859,9 @@ fn group_by_to(messages: Vec<Message>) -> HashMap<u64, Vec<Bytes>> {
         let to = msg.to;
         match ProtobufMessage::write_to_bytes(&msg) {
             Ok(bytes) => grouped.entry(to).or_default().push(bytes.into()),
-            Err(e) => warn!(target: "catga_raft::owner", to, error = %e, "raft message encode failed"),
+            Err(e) => {
+                warn!(target: "catga_raft::owner", to, error = %e, "raft message encode failed")
+            }
         }
     }
     grouped
@@ -1013,7 +1020,11 @@ async fn apply_conf_entry<S>(
         Ok(cs) => cs,
         Err(e) => {
             warn!(target: "catga_raft::owner", index, error = %e, "apply_conf_change failed");
-            resolve_pending(pending_confs, &entry_ctx, Some(CatgaRaftError::Raft(e.to_string())));
+            resolve_pending(
+                pending_confs,
+                &entry_ctx,
+                Some(CatgaRaftError::Raft(e.to_string())),
+            );
             // Advance anyway so one broken entry cannot wedge the frontier.
             apply.advance_applied_index(index);
             return;
@@ -1026,7 +1037,9 @@ async fn apply_conf_entry<S>(
 
     // Wire or unwire the transport peer carried in the entry's context.
     if target_id != 0 {
-        let endpoint = decode_conf_ctx(&cc_ctx).map(|ctx| ctx.endpoint).unwrap_or_default();
+        let endpoint = decode_conf_ctx(&cc_ctx)
+            .map(|ctx| ctx.endpoint)
+            .unwrap_or_default();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 if endpoint.is_empty() {

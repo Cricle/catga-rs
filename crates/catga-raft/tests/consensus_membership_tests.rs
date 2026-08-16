@@ -120,7 +120,10 @@ async fn run_membership(runtimes: &[Runtime], op: MemberOp, deadline: Instant) -
             Ok(Ok(())) => return idx,
             Ok(result) if MemberOp::is_not_leader_rejection(&result) => {
                 // Immediate rejection: probe the next node right away.
-                assert!(Instant::now() < deadline, "{op:?} found no accepting leader");
+                assert!(
+                    Instant::now() < deadline,
+                    "{op:?} found no accepting leader"
+                );
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             Ok(other) => {
@@ -197,15 +200,16 @@ async fn single_node_add_and_remove_member() {
 
     // Transport integration: the group now replicates to node 2, which must
     // eventually report a known leader endpoint from real heartbeats.
-    let sees_leader = eventually(Duration::from_secs(30), || {
-        match ConsensusRuntime::coordinator(&runtimes[1]).leader_endpoint() {
+    let sees_leader = eventually(
+        Duration::from_secs(30),
+        || match ConsensusRuntime::coordinator(&runtimes[1]).leader_endpoint() {
             Some(ep) => {
                 let ep = ep.to_string();
                 ep == node1_endpoint || ep == node2_endpoint
             }
             None => false,
-        }
-    })
+        },
+    )
     .await;
     assert!(
         sees_leader,
@@ -285,12 +289,13 @@ async fn three_node_cluster_adds_and_removes_fourth() {
 
     // Integration check: node 4 must eventually receive heartbeats and
     // report one of the cluster endpoints as the leader.
-    let sees_leader = eventually(Duration::from_secs(30), || {
-        match ConsensusRuntime::coordinator(&rt4).leader_endpoint() {
+    let sees_leader = eventually(
+        Duration::from_secs(30),
+        || match ConsensusRuntime::coordinator(&rt4).leader_endpoint() {
             Some(ep) => cluster_endpoints.contains(&ep.to_string()),
             None => false,
-        }
-    })
+        },
+    )
     .await;
     assert!(
         sees_leader,

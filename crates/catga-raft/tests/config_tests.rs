@@ -16,9 +16,7 @@
 
 use std::time::Duration;
 
-use catga_raft::{
-    CatgaRaftConfig, CatgaRaftRuntimeBuilder, PipelineConfig, PipelineManager,
-};
+use catga_raft::{CatgaRaftConfig, CatgaRaftRuntimeBuilder, PipelineConfig, PipelineManager};
 
 // ============================================================================
 // CatgaRaftConfig: defaults and construction
@@ -121,16 +119,16 @@ fn config_catga_accepts_extreme_values() {
 fn config_catga_for_cluster_size_scaling_table() {
     // (cluster size, expected election_tick)
     let cases: &[(u64, usize)] = &[
-        (0, 10),    // degenerate size keeps the default
+        (0, 10), // degenerate size keeps the default
         (1, 10),
         (3, 10),
-        (5, 10),    // boundary: <=5 keeps the default
+        (5, 10), // boundary: <=5 keeps the default
         (6, 20),
         (10, 20),
-        (20, 20),   // boundary: <=20
+        (20, 20), // boundary: <=20
         (21, 30),
-        (50, 30),   // the audit's election-storm cluster size
-        (100, 30),  // boundary: <=100
+        (50, 30),  // the audit's election-storm cluster size
+        (100, 30), // boundary: <=100
         (101, 40),
         (1000, 40),
         (u64::MAX, 40),
@@ -144,7 +142,10 @@ fn config_catga_for_cluster_size_scaling_table() {
         // Everything else must be the untouched default.
         assert_eq!(cfg.node_id, 0, "node_id stays default for size {n}");
         assert_eq!(cfg.cluster_id, 0, "cluster_id stays default for size {n}");
-        assert_eq!(cfg.heartbeat_tick, 3, "heartbeat_tick stays default for size {n}");
+        assert_eq!(
+            cfg.heartbeat_tick, 3,
+            "heartbeat_tick stays default for size {n}"
+        );
         assert_eq!(cfg.max_size_per_msg, 8 * 1024 * 1024);
         assert_eq!(cfg.max_inflight_msgs, 256);
     }

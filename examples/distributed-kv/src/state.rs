@@ -244,7 +244,11 @@ impl SharedState {
     pub(crate) fn get(&self, key: &str) -> Option<String> {
         let txn = self.inner.db.begin_read().ok()?;
         let table = txn.open_table(VALUES).ok()?;
-        table.get(key).ok().flatten().map(|guard| guard.value().to_string())
+        table
+            .get(key)
+            .ok()
+            .flatten()
+            .map(|guard| guard.value().to_string())
     }
 
     pub(crate) fn applied_index(&self) -> u64 {
@@ -422,12 +426,16 @@ impl ConsensusStateMachine for KvMachine {
                 }
                 let mut meta = write_txn.open_table(META).map_err(storage_error)?;
                 if let Some(index) = snap_applied {
-                    meta.insert(META_APPLIED_INDEX, index).map_err(storage_error)?;
+                    meta.insert(META_APPLIED_INDEX, index)
+                        .map_err(storage_error)?;
                 }
             }
             write_txn.commit().map_err(storage_error)?;
             if let Some(index) = snap_applied {
-                self.state.inner.applied_index.store(index, Ordering::Release);
+                self.state
+                    .inner
+                    .applied_index
+                    .store(index, Ordering::Release);
             }
             Ok(())
         })();

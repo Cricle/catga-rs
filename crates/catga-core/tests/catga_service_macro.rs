@@ -1,8 +1,6 @@
 //! Comprehensive tests for #[catga_service] macro
 
-use catga_core::{
-    CatgaResult, Mediator, catga_command, catga_event, catga_request, catga_service,
-};
+use catga_core::{CatgaResult, Mediator, catga_command, catga_event, catga_request, catga_service};
 
 #[catga_request(response = u64)]
 struct Double(u64);
@@ -58,8 +56,6 @@ async fn catga_service_detects_request_vs_command() -> CatgaResult<()> {
     let response: u64 = mediator.send(Double(5)).await?;
     assert_eq!(response, 10);
 
-    mediator
-        .send_command(Log("hello".to_string()))
-        .await?;
+    mediator.send_command(Log("hello".to_string())).await?;
     Ok(())
 }

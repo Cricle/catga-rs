@@ -64,13 +64,19 @@ fn error_display_unit_variants() {
 
 #[test]
 fn error_display_node_not_found() {
-    assert_eq!(CatgaRaftError::NodeNotFound(7).to_string(), "node not found: 7");
+    assert_eq!(
+        CatgaRaftError::NodeNotFound(7).to_string(),
+        "node not found: 7"
+    );
 }
 
 #[test]
 fn error_empty_message_payload() {
     // Edge case: empty string payloads are allowed and formatted verbatim.
-    assert_eq!(CatgaRaftError::Raft(String::new()).to_string(), "raft error: ");
+    assert_eq!(
+        CatgaRaftError::Raft(String::new()).to_string(),
+        "raft error: "
+    );
     assert_eq!(
         CatgaRaftError::Codec(String::new()).to_string(),
         "codec error: "
@@ -122,7 +128,10 @@ fn error_debug_formatting() {
         "NodeNotFound(9)"
     );
     let dbg = format!("{:?}", CatgaRaftError::Raft("oops".to_string()));
-    assert!(dbg.starts_with("Raft(") && dbg.contains("oops"), "got: {dbg}");
+    assert!(
+        dbg.starts_with("Raft(") && dbg.contains("oops"),
+        "got: {dbg}"
+    );
 }
 
 // ============================================================================

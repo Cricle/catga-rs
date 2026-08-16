@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use catga_raft::transport::batch::{
-    DEFAULT_BATCH_SIZE, DEFAULT_FLUSH_INTERVAL_MS, MAX_PENDING_BATCHES, BatchSender, MessageBatch,
+    BatchSender, DEFAULT_BATCH_SIZE, DEFAULT_FLUSH_INTERVAL_MS, MAX_PENDING_BATCHES, MessageBatch,
 };
 
 /// Shorthand for building a `Bytes` payload from a string.
@@ -91,7 +91,10 @@ fn transport_batch_constants_have_documented_values() {
 #[test]
 fn batch_sender_default_matches_constants() {
     let sender = BatchSender::default();
-    assert_eq!(sender.flush_interval(), Duration::from_millis(DEFAULT_FLUSH_INTERVAL_MS));
+    assert_eq!(
+        sender.flush_interval(),
+        Duration::from_millis(DEFAULT_FLUSH_INTERVAL_MS)
+    );
     assert_eq!(sender.max_batch_size(), DEFAULT_BATCH_SIZE);
     assert_eq!(sender.total_pending(), 0);
     assert_eq!(sender.pending_peers(), 0);
@@ -129,7 +132,11 @@ async fn batch_sender_send_accumulates_pending_per_peer() {
 
     assert_eq!(sender.pending_count(1), 2);
     assert_eq!(sender.pending_count(2), 1);
-    assert_eq!(sender.pending_count(3), 0, "unknown peers have no pending messages");
+    assert_eq!(
+        sender.pending_count(3),
+        0,
+        "unknown peers have no pending messages"
+    );
     assert_eq!(sender.total_pending(), 3);
     assert_eq!(sender.pending_peers(), 2);
 }
@@ -140,7 +147,11 @@ async fn batch_sender_size_threshold_forces_flush() {
 
     sender.send(1, b("a")).await.unwrap();
     sender.send(1, b("b")).await.unwrap();
-    assert_eq!(sender.pending_count(1), 2, "below the threshold messages accumulate");
+    assert_eq!(
+        sender.pending_count(1),
+        2,
+        "below the threshold messages accumulate"
+    );
 
     // The third message reaches max_batch_size and forces a flush of peer 1.
     sender.send(1, b("c")).await.unwrap();
@@ -172,7 +183,11 @@ async fn batch_sender_zero_flush_interval_drains_on_next_send() {
     // the new message is buffered.
     sender.send(9, b("second")).await.unwrap();
 
-    assert_eq!(sender.pending_count(9), 1, "only the most recent message should remain pending");
+    assert_eq!(
+        sender.pending_count(9),
+        1,
+        "only the most recent message should remain pending"
+    );
     assert_eq!(sender.total_pending(), 1);
 }
 
@@ -208,7 +223,11 @@ async fn batch_sender_flush_by_peer_isolates_peers() {
 
     sender.flush_by_peer(1).await.unwrap();
     assert_eq!(sender.pending_count(1), 0);
-    assert_eq!(sender.pending_count(2), 1, "flushing one peer must not touch the others");
+    assert_eq!(
+        sender.pending_count(2),
+        1,
+        "flushing one peer must not touch the others"
+    );
     assert_eq!(sender.pending_peers(), 1);
 
     // Flushing a peer with no pending messages is a no-op that succeeds.

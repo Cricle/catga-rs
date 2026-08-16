@@ -81,7 +81,9 @@ fn coordinator_set_leader_some() {
     coord.set_leader(Some("127.0.0.1:7001".to_string()));
 
     assert!(coord.is_leader());
-    let ep = coord.leader_endpoint().expect("leader endpoint must be set");
+    let ep = coord
+        .leader_endpoint()
+        .expect("leader endpoint must be set");
     assert_eq!(ep.as_ref(), "127.0.0.1:7001");
 }
 
@@ -194,17 +196,27 @@ fn coordinator_leader_and_members_are_independent() {
     let coord = CatgaRaftCoordinator::new("node-1".to_string());
 
     coord.set_leader(Some("127.0.0.1:7001".to_string()));
-    coord.set_members(vec!["127.0.0.1:7001".to_string(), "127.0.0.1:7002".to_string()]);
+    coord.set_members(vec![
+        "127.0.0.1:7001".to_string(),
+        "127.0.0.1:7002".to_string(),
+    ]);
 
     // Changing membership must not disturb leadership state and vice versa.
     assert!(coord.is_leader());
     assert_eq!(coord.member_endpoints().len(), 2);
 
     coord.set_leader(None);
-    assert_eq!(coord.member_endpoints().len(), 2, "members survive leader change");
+    assert_eq!(
+        coord.member_endpoints().len(),
+        2,
+        "members survive leader change"
+    );
 
     coord.set_members(Vec::new());
-    assert!(coord.leader_endpoint().is_none(), "cleared leader stays cleared");
+    assert!(
+        coord.leader_endpoint().is_none(),
+        "cleared leader stays cleared"
+    );
 }
 
 // ============================================================================

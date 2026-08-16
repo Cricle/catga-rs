@@ -18,7 +18,13 @@ use catga_raft::{CatgaRaftError, GrpcTransport};
 use raft::prelude::MessageType;
 
 /// Build a distinct raft message for delivery assertions.
-fn message(msg_type: MessageType, from: u64, to: u64, term: u64, index: u64) -> raft::prelude::Message {
+fn message(
+    msg_type: MessageType,
+    from: u64,
+    to: u64,
+    term: u64,
+    index: u64,
+) -> raft::prelude::Message {
     let mut msg = raft::prelude::Message::default();
     msg.msg_type = msg_type;
     msg.from = from;
@@ -111,8 +117,14 @@ async fn send_grouped_fans_out_to_multiple_peers() {
 
     let got_a = received_a.lock().expect("sink lock");
     let got_b = received_b.lock().expect("sink lock");
-    assert_eq!(got_a.iter().map(key).collect::<Vec<_>>(), to_a.iter().map(key).collect::<Vec<_>>());
-    assert_eq!(got_b.iter().map(key).collect::<Vec<_>>(), to_b.iter().map(key).collect::<Vec<_>>());
+    assert_eq!(
+        got_a.iter().map(key).collect::<Vec<_>>(),
+        to_a.iter().map(key).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        got_b.iter().map(key).collect::<Vec<_>>(),
+        to_b.iter().map(key).collect::<Vec<_>>()
+    );
 
     handle_a.abort();
     handle_b.abort();
@@ -129,7 +141,10 @@ async fn send_grouped_unknown_peer_yields_transport_error() {
     let transport = GrpcTransport::new(1);
 
     let mut grouped = HashMap::new();
-    grouped.insert(7, vec![encode(&message(MessageType::MsgHeartbeat, 1, 7, 1, 0))]);
+    grouped.insert(
+        7,
+        vec![encode(&message(MessageType::MsgHeartbeat, 1, 7, 1, 0))],
+    );
 
     let err = transport
         .send_grouped(grouped)
@@ -152,7 +167,10 @@ async fn send_grouped_skips_self_peer_zero() {
     transport.add_peer(0, addr.to_string()).await.unwrap();
 
     let mut grouped = HashMap::new();
-    grouped.insert(0, vec![encode(&message(MessageType::MsgHeartbeat, 1, 0, 1, 0))]);
+    grouped.insert(
+        0,
+        vec![encode(&message(MessageType::MsgHeartbeat, 1, 0, 1, 0))],
+    );
 
     transport.send_grouped(grouped).await.unwrap();
     assert!(

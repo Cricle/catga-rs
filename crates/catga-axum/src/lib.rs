@@ -58,8 +58,8 @@ pub use compat::{
 pub use extract::MediatorState;
 pub use layer::{CorrelationLayer, CorrelationService, TraceContextLayer, TraceContextService};
 pub use tls::{
-    DevCertificateAuthority, DevNodeIdentity, MtlsAcceptor, PeerCertificateService,
-    PeerIdentity, TlsPeerCertificates, mtls_peer_identity_middleware, mtls_reqwest_client,
+    DevCertificateAuthority, DevNodeIdentity, MtlsAcceptor, PeerCertificateService, PeerIdentity,
+    TlsPeerCertificates, mtls_peer_identity_middleware, mtls_reqwest_client,
     mtls_server_tls_config, peer_identity_from_certificate, serve_mtls,
 };
 pub use validation::{

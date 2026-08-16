@@ -249,11 +249,7 @@ fn catga_error_with_source_retains_causal_error() {
     use std::error::Error;
 
     let io_error = std::io::Error::other("connection refused");
-    let error = CatgaError::with_source(
-        ErrorCode::TransportFailed,
-        "broker unavailable",
-        io_error,
-    );
+    let error = CatgaError::with_source(ErrorCode::TransportFailed, "broker unavailable", io_error);
     assert_eq!(error.code(), ErrorCode::TransportFailed);
     assert_eq!(error.message(), "broker unavailable");
     assert!(error.is_retryable());
@@ -283,7 +279,10 @@ fn catga_error_transient_is_lossy() {
     let error = CatgaError::transient(io_error);
     assert_eq!(error.code(), ErrorCode::Transient);
     assert_eq!(error.message(), "connection refused");
-    assert!(error.source().is_none(), "transient() stringifies its argument");
+    assert!(
+        error.source().is_none(),
+        "transient() stringifies its argument"
+    );
 }
 
 #[test]
@@ -302,7 +301,10 @@ fn catga_error_clone_drops_source_but_keeps_wire_fields() {
     assert_eq!(cloned.details(), error.details());
     assert_eq!(cloned.is_retryable(), error.is_retryable());
     assert!(error.source().is_some());
-    assert!(cloned.source().is_none(), "sources are not generically cloneable");
+    assert!(
+        cloned.source().is_none(),
+        "sources are not generically cloneable"
+    );
 }
 
 #[test]
@@ -327,7 +329,10 @@ fn catga_error_source_is_not_serialized() {
     );
 
     let json = serde_json::to_string(&error).expect("should serialize");
-    assert!(!json.contains("source"), "source must not cross the wire: {json}");
+    assert!(
+        !json.contains("source"),
+        "source must not cross the wire: {json}"
+    );
 
     let deserialized: CatgaError = serde_json::from_str(&json).expect("should deserialize");
     assert_eq!(deserialized, error);

@@ -133,11 +133,15 @@ fn decode_core(bytes: &[u8]) -> CatgaRaftResult<PersistedCore> {
     let mut pos = 5;
     let hs_len = read_u32(pos)?;
     pos += 4;
-    let hs_bytes = bytes.get(pos..pos + hs_len).ok_or_else(|| err("truncated hard state"))?;
+    let hs_bytes = bytes
+        .get(pos..pos + hs_len)
+        .ok_or_else(|| err("truncated hard state"))?;
     pos += hs_len;
     let cs_len = read_u32(pos)?;
     pos += 4;
-    let cs_bytes = bytes.get(pos..pos + cs_len).ok_or_else(|| err("truncated conf state"))?;
+    let cs_bytes = bytes
+        .get(pos..pos + cs_len)
+        .ok_or_else(|| err("truncated conf state"))?;
     pos += cs_len;
     let snapshot_index = read_u64(pos, "truncated snapshot index")?;
     pos += 8;
@@ -264,7 +268,7 @@ impl EngineStorage {
                 return Err(CatgaRaftError::Storage(format!(
                     "read {}: {e}",
                     state_path.display()
-                )))
+                )));
             }
         };
 
