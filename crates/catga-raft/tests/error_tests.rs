@@ -172,11 +172,12 @@ fn error_is_send_sync_across_threads() {
 #[test]
 fn error_result_alias_ok_and_err() {
     let ok: CatgaRaftResult<u32> = Ok(7);
-    assert_eq!(ok.unwrap(), 7);
+    assert!(ok.is_ok());
+    assert_eq!(ok.unwrap_or(0), 7);
 
     let err: CatgaRaftResult<u32> = Err(CatgaRaftError::Storage("io".to_string()));
-    let payload = err.unwrap_err();
-    assert!(matches!(&payload, CatgaRaftError::Storage(m) if m == "io"));
+    assert!(err.is_err());
+    assert!(matches!(&err, Err(CatgaRaftError::Storage(m)) if m == "io"));
 }
 
 #[test]

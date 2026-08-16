@@ -24,10 +24,12 @@ use raft::Storage as RaftStorage;
 use raft::storage::GetEntriesContext;
 use tempfile::tempdir;
 
+type AppliedLog = Vec<(u64, Vec<u8>)>;
+
 /// State machine that records every applied entry.
 #[derive(Clone)]
 struct RecordingMachine {
-    applied: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    applied: Arc<Mutex<AppliedLog>>,
 }
 
 impl RecordingMachine {
