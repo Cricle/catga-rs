@@ -170,16 +170,17 @@ impl BatchSender {
         };
 
         if let Some(messages) = batch
-            && !messages.is_empty() {
-                tracing::trace!(
-                    peer_id,
-                    batch_size = messages.len(),
-                    total_bytes = messages.iter().map(|m| m.len()).sum::<usize>(),
-                    "flushing batch"
-                );
-                // In a real implementation, this would send to the actual transport
-                // For now, we just drop the batch (fire-and-forget)
-            }
+            && !messages.is_empty()
+        {
+            tracing::trace!(
+                peer_id,
+                batch_size = messages.len(),
+                total_bytes = messages.iter().map(|m| m.len()).sum::<usize>(),
+                "flushing batch"
+            );
+            // In a real implementation, this would send to the actual transport
+            // For now, we just drop the batch (fire-and-forget)
+        }
 
         *self.last_flush.lock() = Instant::now();
         Ok(())

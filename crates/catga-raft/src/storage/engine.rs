@@ -275,10 +275,9 @@ impl EngineStorage {
         };
 
         let fresh = core.conf_state == ConfState::default();
-        if fresh
-            && let Some(conf_state) = bootstrap_conf_state {
-                core.conf_state = conf_state;
-            }
+        if fresh && let Some(conf_state) = bootstrap_conf_state {
+            core.conf_state = conf_state;
+        }
 
         let storage = Self {
             engine: Arc::new(engine),
@@ -803,14 +802,15 @@ impl Storage for EngineStorage {
             }
         }
         if let Some(offset) = overlay_offset
-            && high > offset {
-                let start = std::cmp::max(low, offset);
-                let lo = (start - offset) as usize;
-                let hi = (high - offset) as usize;
-                if let Some(slice) = overlay.entries.get(lo..hi) {
-                    entries.extend_from_slice(slice);
-                }
+            && high > offset
+        {
+            let start = std::cmp::max(low, offset);
+            let lo = (start - offset) as usize;
+            let hi = (high - offset) as usize;
+            if let Some(slice) = overlay.entries.get(lo..hi) {
+                entries.extend_from_slice(slice);
             }
+        }
         drop(overlay);
         raft::util::limit_size(&mut entries, max_size);
         Ok(entries)

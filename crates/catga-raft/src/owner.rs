@@ -1054,29 +1054,31 @@ async fn apply_conf_entry<S>(
                     );
                 } else {
                     if target_id != transport.local_node_id()
-                        && let Err(e) = transport.add_peer(target_id, endpoint.clone()).await {
-                            warn!(
-                                target: "catga_raft::owner",
-                                index,
-                                node_id = target_id,
-                                error = %e,
-                                "transport add_peer failed"
-                            );
-                        }
-                    peers.insert(target_id, endpoint);
-                }
-            }
-            ConfChangeType::RemoveNode => {
-                if transport.has_peer(target_id)
-                    && let Err(e) = transport.remove_peer(target_id) {
+                        && let Err(e) = transport.add_peer(target_id, endpoint.clone()).await
+                    {
                         warn!(
                             target: "catga_raft::owner",
                             index,
                             node_id = target_id,
                             error = %e,
-                            "transport remove_peer failed"
+                            "transport add_peer failed"
                         );
                     }
+                    peers.insert(target_id, endpoint);
+                }
+            }
+            ConfChangeType::RemoveNode => {
+                if transport.has_peer(target_id)
+                    && let Err(e) = transport.remove_peer(target_id)
+                {
+                    warn!(
+                        target: "catga_raft::owner",
+                        index,
+                        node_id = target_id,
+                        error = %e,
+                        "transport remove_peer failed"
+                    );
+                }
                 peers.remove(&target_id);
             }
         }

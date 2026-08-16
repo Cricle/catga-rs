@@ -1024,13 +1024,14 @@ impl<S: Send> DslFlow<S> {
     async fn compensate_steps(state: &mut S, steps: &[Step<S>], completed: &[usize]) {
         for &index in completed.iter().rev() {
             if let Step::ActionWithCompensation { compensate, .. } = &steps[index]
-                && let Err(comp_error) = compensate(state).await {
-                    tracing::warn!(
-                        step_index = index,
-                        error = ?comp_error,
-                        "step compensation failed"
-                    );
-                }
+                && let Err(comp_error) = compensate(state).await
+            {
+                tracing::warn!(
+                    step_index = index,
+                    error = ?comp_error,
+                    "step compensation failed"
+                );
+            }
         }
     }
 

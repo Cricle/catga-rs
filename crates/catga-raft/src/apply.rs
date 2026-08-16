@@ -344,7 +344,7 @@ fn handle_apply_msg<S: ConsensusStateMachine>(apply: &ApplyThread<S>, msg: Apply
                 // Same semantics as the historical inline path: warn and move
                 // on. The frontier does not advance past a failed entry.
                 warn!(target: "catga_raft::apply", index, error = %e, "apply failed");
-            } 
+            }
         }
         ApplyMsg::Barrier(reply) => {
             // Everything queued before the barrier was consumed by now.
